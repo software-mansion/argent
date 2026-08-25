@@ -624,6 +624,115 @@ describe("keyboard clear — Android (adb input)", () => {
     expect(inputCmds().some((c) => c.includes("uiautomator"))).toBe(false);
   });
 
+  it("deletes what the select-all left behind, instead of trusting the chord", async () => {
+    // `input keycombination` exits 0 whether or not the selection took, and on a
+    // React Native `TextInput` it repeatedly does not: 15 of 85 clears driven
+    // through this tool on a Pixel 6 / API 34 left the field short by exactly
+    // the one character the DEL removed, every one of them reporting
+    // `cleared: true` over a value the next `text` then appended to. Nothing in
+    // the command's own output separates that from a clear that worked.
+    seedDump(dumpWith("Monda")); // "Monday", less the character the DEL took
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    const cmds = inputCmds();
+    expect(cmds[0]).toBe(SELECT_ALL_CMD);
+    expect(cmds[1]).toBe(DEL_CMD);
+    // The rescue is the same selection-free run the legacy level uses — it is
+    // the ONE clear that needs no selection to be correct.
+    expect(deleteRun(cmds[2]!)).toHaveLength(5 + 8);
+  });
+
+  it("leaves a clear that worked alone, rather than always running the delete run", async () => {
+    // The read-back has to discriminate, not merely fire: an empty focused field
+    // is the ordinary outcome, and appending a run to every clear would put a
+    // second `input` invocation and its key events on the wire for nothing.
+    seedDump(dumpWith(""));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+  });
+
+  it("leaves the fast path alone when the field cannot be read back at all", async () => {
+    // Not the same as measuring zero. An unreadable dump — a refused screen
+    // reports this in-band, exit 0 — is evidence in neither direction, and
+    // reading it as a failed clear would spend a blind MAX_DELETE_COUNT run on
+    // every clear taken on a screen uiautomator will not capture.
+    seedDump("ERROR: could not get idle state.");
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+  });
+
+  it("leaves a cleared password field alone instead of reading its blind floor as residue", async () => {
+    // The read-back must not inherit the sizing read's blind floor. A focused
+    // password field is unmeasurable — uiautomator reports the mask, not the
+    // value — and the sizing read floors it to BLIND_DELETE_COUNT because
+    // over-deleting there is a no-op. Read as a residue over the just-emptied
+    // credential box, that same floor fires a 158-keyevent run after every
+    // successful `{ clear: true, text: "{{secret:…}}" }`. Unmeasurable is
+    // unreadable here: evidence of nothing, like the refused dump above.
+    seedDump(dumpWith("", true));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+  });
+
+  it("does not retry the read-back dump the way the sizing read does", async () => {
+    // The sizing read retries past DUMP_RETRY_BACKOFF_MS because losing the
+    // UiAutomation race there means the blind count and a truncated field. The
+    // read-back's stake is only whether a rescue runs, so a retry would buy
+    // nothing and charge 2.5s to every clear on a screen that will not dump —
+    // including the one below, which never produces a hierarchy at all.
+    const started = Date.now();
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(adbExecOutBinary).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("measures the residue once, instead of dumping again inside the delete run", async () => {
+    // The rescue hands its measurement down. Re-measuring would cost a second
+    // dump — and read a field the first `MOVE_END` may already have moved on.
+    seedDump(dumpWith("Monda"));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(adbExecOutBinary).toHaveBeenCalledTimes(1);
+  });
+
+  it("hedges the field's state when the residue is too long to backspace away", async () => {
+    // The legacy path refuses before sending anything, so its message can say
+    // nothing was modified and offer a newer API level as the remedy. Reached
+    // from the select-all path neither holds: a DEL went out first, and the
+    // level demonstrably HAS `keycombination` — it just did not select. But the
+    // mutation cannot be ASSERTED either: the reading behind this refusal is the
+    // longest focused EditText on screen, which can be another window's field or
+    // an empty field's placeholder (see measureFocusedTextLength), so what the
+    // DEL actually took is unknowable from here. The message hedges instead.
+    seedDump(dumpWith("x".repeat(MAX_DELETE_COUNT + 1)));
+
+    const err: unknown = await makeAndroidImpl(registryWith({}))
+      .handler({}, { udid: ANDROID.id, clear: true }, ANDROID)
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect((err as Error).message).toContain("The field MAY have been modified");
+    expect((err as Error).message).toContain("removes one");
+    expect((err as Error).message).not.toContain("Nothing was modified");
+    expect((err as Error).message).not.toContain("HAS been modified");
+    expect((err as Error).message).not.toContain("newer API level");
+    // Refused rather than half-deleted: no run was started.
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+  });
+
   it("shares one deadline across the clear's legs instead of a timeout each", async () => {
     // The budget is what has to hold ON THE DEVICE, whatever the client waits
     // for: sizing each leg against the adapter's 30s independently is what
@@ -707,10 +816,12 @@ describe("keyboard clear — Android (adb input)", () => {
   });
 
   it("reports a killed modern DEL as INTERRUPTED, naming the surviving selection", async () => {
-    // The select-all has already landed when this leg runs, and it SURVIVES the
-    // kill — verified on API 36: the field still held its whole value and the
-    // next character typed into it replaced the lot. `adbShell`'s own error says
-    // only that `input keyevent 67` was killed, so a caller reads a transport
+    // When the select-all has landed, it SURVIVES the kill — verified on API 36:
+    // the field still held its whole value and the next character typed into it
+    // replaced the lot. Whether it landed is exactly what this device cannot be
+    // asked (`input` exits 0 either way), so the rewrap hedges rather than
+    // asserts the selection. `adbShell`'s own error says only that
+    // `input keyevent 67` was killed, so a caller reads a transport
     // fault and retries against a field it believes is untouched. The legacy
     // path's delete run has been rewrapped for this since it shipped; this leg
     // had no equivalent.
@@ -736,7 +847,7 @@ describe("keyboard clear — Android (adb input)", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_INTERRUPTED);
     // The kind is carried through, so a killed leg still reads as a timeout.
     expect(getFailureSignal(err)?.error_kind).toBe("timeout");
-    expect(err.message).toMatch(/all of it SELECTED/);
+    expect(err.message).toMatch(/selected or not/);
     expect(err.message).not.toMatch(/input keyevent/);
     // Refused before the typing: the replacement must not land on a selection.
     expect(inputCmds().some((cmd) => cmd.includes("input text"))).toBe(false);

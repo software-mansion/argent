@@ -39,8 +39,7 @@ export interface KeyboardResult {
    * Present (and `true`) only when `clear` was requested and the clear
    * completed without error.
    *
-   * How much that is worth depends on what the backend can observe, and only
-   * one of them can observe anything:
+   * How much that is worth depends on what the backend can observe:
    *
    * - Chromium reads the field before and after, and throws when it observes
    *   the value survive. It cannot always observe: a page it can't read (a
@@ -49,11 +48,12 @@ export interface KeyboardResult {
    *   "seen empty, or not observable" — never "seen NOT empty".
    * - Android parses the `input keycombination` output, so a level without the
    *   subcommand takes the measured delete path instead of silently degrading
-   *   to a one-character backspace. It does not read the field back, though, so
-   *   a widget that swallows the select-all chord on a level that HAS the
-   *   subcommand leaves the following delete acting as a plain backspace: the
-   *   field is left one character shorter and reported as cleared. That is a
-   *   mutated field, not a no-op.
+   *   to a one-character backspace. On a level that HAS the subcommand it also
+   *   reads the field back afterwards and deletes whatever the select-all left
+   *   behind — a widget that swallows the chord does not leave the field one
+   *   character shorter under a `cleared: true`. The read-back rides the
+   *   screen's view hierarchy: where that cannot be captured (a refused screen,
+   *   an unmeasurable password field) the clear stays best-effort like iOS.
    * - The iOS HID transport is fire-and-forget and cannot read the field at
    *   all: `cleared: true` means the chord was dispatched, nothing more.
    *

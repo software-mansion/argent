@@ -183,10 +183,12 @@ const DELETE_RUN_RESERVE_MS = 11_000;
  * Wall-clock budget for one whole clear, shared across every adb round trip it
  * makes.
  *
- * A clear is up to four sequential adb calls plus an in-process backoff: the
- * `keycombination` probe, then on a legacy level a `uiautomator dump`, a
- * DUMP_RETRY_BACKOFF_MS wait, a second dump (see {@link readHierarchy}) and the
- * delete run. One `text` OR `key` injection still follows it inside the same
+ * A clear is up to four sequential adb calls plus, on the legacy path only, an
+ * in-process backoff. Modern: the `keycombination` probe, the DEL, one dump to
+ * read the field back, and the delete run that dump can call for. Legacy: the
+ * probe, a `uiautomator dump`, a DUMP_RETRY_BACKOFF_MS wait, a second dump (see
+ * {@link readHierarchy}) and the delete run. The two never compose — a rescue
+ * carries its measurement down, so it does not dump again. One `text` OR `key` injection still follows it inside the same
  * request — the tool rejects both together — under its own ADB_INPUT_TIMEOUT_MS
  * cap, so a `{ clear, text }` worst case of ~41s still sums past the argent-mcp
  * adapter's 30s per-request fetch timeout
@@ -294,9 +296,9 @@ interface AndroidClearOptions {
  *
  * Ctrl+A is the Android select-all chord (it is what a hardware keyboard sends),
  * and `input keycombination` is the only `input` subcommand that can hold one
- * key while pressing another. Verified on a native `EditText` (Settings search)
- * and a React Native `TextInput` (Bluesky sign-in) — the field empties, the
- * placeholder returns and focus is retained.
+ * key while pressing another. On a native `EditText` (Settings search) it is
+ * exact — 104 runs, no miss. On a React Native `TextInput` it is not, which is
+ * why the result is read back rather than trusted; see the verify leg below.
  *
  * `keycombination` is a recent `input` subcommand; older levels do not have it
  * (measured absent on API 30, present on API 34 and 36) — and its absence
@@ -372,10 +374,11 @@ export async function injectAndroidClear(
     // retries against a field it believes is untouched.
     throw new FailureError(
       `keyboard clear: the delete did not finish on this device, so the focused field is ` +
-        `either empty or still holds its whole value with all of it SELECTED — the select-all ` +
-        `landed and survives, so the next character typed into it replaces the value. Nothing ` +
-        `was typed. Read the field's actual contents before continuing; do not treat it as ` +
-        `unchanged, and do not send a replacement that assumes it is empty.`,
+        `either empty or still holding its whole value — selected or not: \`input\` exits 0 ` +
+        `whether or not the select-all took, so the next character typed either replaces a ` +
+        `live selection or lands at the caret against the intact value. Nothing was typed. ` +
+        `Read the field's actual contents before continuing; do not treat it as unchanged, ` +
+        `and do not send a replacement that assumes it is empty.`,
       {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_INTERRUPTED,
         failure_stage: "keyboard_clear_delete_android",
@@ -383,6 +386,37 @@ export async function injectAndroidClear(
         error_kind: getFailureSignal(cause)?.error_kind ?? "subprocess",
       }
     );
+  }
+  // The chord lands; the SELECTION does not always follow it. Against a React
+  // Native `TextInput` 15 of 85 clears over this path left the field short by
+  // exactly the character the DEL took, every one of them returning
+  // `cleared: true` over a value the `text` then appended to (Expo dev-launcher
+  // URL field, Pixel 6 / API 34; the same 85 against a native `EditText` and the
+  // fixed path both ran clean). `input` exits 0 either way — the same silent
+  // no-op as the missing subcommand above, so the probe cannot catch it.
+  //
+  // Holding the chord longer is not the fix: `-t 100` still missed 2/30 and
+  // `-t 300` 7/30, worse rather than better. Reading the field back is, and a
+  // residue goes to the delete run, which needs no selection to be correct.
+  //
+  // Short fields are the ones that fail: 11 of 80 at 6 characters, 0 of 80 at
+  // 160 and 200 (settling time is not the variable — a 4s pause before the chord
+  // left the 6-character rate unchanged). So a residue reaching the delete run
+  // has always been far inside MAX_DELETE_COUNT, and its length refusal below is
+  // a guard, not a limit this path has been seen to hit.
+  //
+  // Only a POSITIVE reading redirects. Unreadable is evidence of nothing, and
+  // treating it as failure would spend a blind BLIND_DELETE_COUNT run on every
+  // clear taken where `measureFocusedTextLength` cannot see. A measurement that
+  // is really a placeholder costs a run that deletes nothing.
+  //
+  // `unmeasurableIsUnreadable` carries that rule to the fields the dump cannot
+  // read: without it a focused password field floors to BLIND_DELETE_COUNT (see
+  // the measurement), so every successful clear of a credential box would read
+  // 150 back and fire a 158-keyevent run into the field just emptied.
+  const residue = await measureFocusedTextLength(serial, deadline, options.readHierarchy, 1, true);
+  if (residue !== undefined && residue > 0) {
+    await clearByDeleting(serial, deadline, options, residue);
   }
 }
 
@@ -450,9 +484,14 @@ export const MAX_DELETE_COUNT = 150;
 const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
 
 /**
- * Empty the focused field on an Android level whose `input` has no
- * `keycombination`: move the caret to the end of the line, then backspace over
- * the contents.
+ * Empty the focused field without a selection: move the caret to the end of the
+ * line, then backspace over the contents.
+ *
+ * Two callers. A level whose `input` has no `keycombination` has no other clear
+ * available, and reaches this having sent nothing. The select-all path reaches
+ * it with `rescueFrom` set, having already measured the residue its chord failed
+ * to remove — so this must not dump a second time, and the over-length refusal
+ * below must not tell that caller the field is untouched.
  *
  * The count is measured where it can be. A `uiautomator dump` is read first and
  * the focused editable node's `text` gives the number of characters to remove,
@@ -464,23 +503,23 @@ const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
  * and BLIND_DELETE_COUNT for what it covers.
  *
  * Note the dump reports an EMPTY field's hint in the same `text` attribute, so a
- * measurement can be the placeholder rather than real content — and on the
- * levels this fallback actually serves there is nothing to tell them apart:
- * checked on API 30, whose dump carries no `hint` attribute at all. (API 36 does
+ * measurement can be the placeholder rather than real content. API 30 carries no
+ * `hint` attribute at all, so there is nothing to tell the two apart; API 36 does
  * emit one — a focused empty Settings search box dumps as `text="Search
- * settings" … hint="Search settings"` — but that level has `input
- * keycombination`, so it never reaches this path.) For the delete run the
+ * settings" … hint="Search settings"` — and since the rescue path reaches here
+ * on exactly the levels that HAVE `keycombination`, that signal is now within
+ * reach. It is unread: `measureFocusedTextLength` is the shared measurement and
+ * would have to gain a level-conditional rule to use it. For the delete run the
  * over-measurement is harmless — it only makes the run
  * slightly longer than needed, and backspace on an empty field does nothing. It
  * is NOT harmless for the MAX_DELETE_COUNT gate below, which turns any
  * over-measurement into a refusal: an empty field whose placeholder is longer
  * than the limit is refused with a length it does not hold. Accepted rather than
- * fixed, because nothing in the dump distinguishes the two on the levels this
- * fallback serves, and the alternative (delete first, judge after) can only
- * discover a real over-long field by having already truncated it. A placeholder
- * that long is also not a shape these single-line fields take.
+ * fixed, because the alternative (delete first, judge after) can only discover a
+ * real over-long field by having already truncated it. A placeholder that long is
+ * also not a shape these single-line fields take.
  *
- * Known limit, and the reason this is the fallback rather than the primary path:
+ * Known limit, and the reason the select-all is tried first rather than this:
  * `KEYCODE_MOVE_END` is end-of-LINE, not end-of-buffer, so a multi-line field
  * keeps whatever sits below the caret. Single-line inputs — every login, search
  * and form field — are emptied exactly.
@@ -492,10 +531,13 @@ const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
 async function clearByDeleting(
   serial: string,
   deadline: number,
-  options: AndroidClearOptions
+  options: AndroidClearOptions,
+  rescueFrom?: number
 ): Promise<void> {
   const count =
-    (await measureFocusedTextLength(serial, deadline, options.readHierarchy)) ?? BLIND_DELETE_COUNT;
+    rescueFrom ??
+    (await measureFocusedTextLength(serial, deadline, options.readHierarchy)) ??
+    BLIND_DELETE_COUNT;
   const keys = count + DELETE_MARGIN;
   // Refuse BEFORE touching the field, and on length alone. Time is deliberately
   // not a second ground: the run is already bounded by DELETE_RUN_RESERVE_MS,
@@ -513,24 +555,53 @@ async function clearByDeleting(
     const reports = options.secretText
       ? `reports more characters than`
       : `reports ${count} characters, more than`;
+    // Why backspaces are the only clear left, and what the field is holding now,
+    // both differ by caller: the legacy path is chosen because the level has no
+    // `keycombination` and refuses before sending anything, while the rescue is
+    // reached only after a select-all and a DEL went out. Telling a caller
+    // nothing was modified there would be unjustified — the DEL removes one
+    // character wherever it lands — and "use a newer API level" would be no
+    // remedy at all, since the level already has the subcommand. The mutation is
+    // hedged rather than asserted because the reading behind this refusal can be
+    // another window's field or a placeholder (see measureFocusedTextLength), so
+    // the code cannot know what the DEL actually took.
+    const why =
+      rescueFrom === undefined
+        ? `Without \`input keycombination\` (added after API 30) the only available clear is ` +
+          `one backspace per character, which is too slow to finish reliably past ` +
+          `${MAX_DELETE_COUNT}.`
+        : `The select-all did not take on this field, leaving one backspace per character as ` +
+          `the only clear available, which is too slow to finish reliably past ` +
+          `${MAX_DELETE_COUNT}.`;
+    const state =
+      rescueFrom === undefined
+        ? `Nothing was modified and nothing was typed.`
+        : `The field MAY have been modified: the delete sent after the select-all removes one ` +
+          `character where it lands, though a count this long can also be another window's ` +
+          `field or an empty field's placeholder. Nothing was typed.`;
+    const remedy =
+      rescueFrom === undefined
+        ? `Clear the field with the app's own affordance, or use an emulator on a newer API ` +
+          `level.`
+        : `Read the field's actual contents, then clear it with the app's own affordance.`;
     throw new InvalidToolInputError(
       `keyboard clear: a focused text field on this screen ${reports} ` +
-        `this Android level can clear. Without \`input keycombination\` (added after API ` +
-        `30) the only available clear is one backspace per character, which is too slow to ` +
-        `finish reliably past ${MAX_DELETE_COUNT}. The count comes from the screen's view ` +
+        `this Android level can clear. ${why} The count comes from the screen's view ` +
         `hierarchy, which reports an empty field's placeholder in the same attribute as its ` +
         `value and covers every window, so it may belong to a different focused field than ` +
-        `the one you meant. Nothing was modified and nothing was typed. Clear the field with ` +
-        `the app's own affordance, or use an emulator on a newer API level.`,
+        `the one you meant. ${state} ${remedy}`,
       {
-        // Its own code rather than KEYBOARD_CLEAR_INEFFECTIVE: this is a
-        // caller-fixable rejection (a 400) decided BEFORE anything was sent,
-        // whereas INEFFECTIVE is raised after the edit was attempted and
-        // observed not to take — a page-side cancellation of the key or the
+        // Its own code rather than KEYBOARD_CLEAR_INEFFECTIVE: both callers reach
+        // this with the same caller-fixable condition (a 400) — the field is
+        // longer than backspaces can clear, and the remedy is the app's own
+        // affordance — whereas INEFFECTIVE is raised after the edit was attempted
+        // and observed not to take, a page-side cancellation of the key or the
         // `beforeinput`, which is a 500 because the caller cannot fix it, not
         // because anything inside the tool went wrong. Sharing one code would
-        // mix "nothing happened, fix the request" with "the edit was refused by
-        // the app" in any dashboard slicing on it.
+        // mix "this field cannot be cleared this way" with "the edit was refused
+        // by the app" in any dashboard slicing on it. What differs between the
+        // two callers is only whether anything was sent first, and that is
+        // carried by the message rather than by a second code.
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_FIELD_TOO_LONG,
         failure_stage: "keyboard_clear_too_long_android",
         error_kind: "unsupported",
@@ -634,8 +705,14 @@ const hasNodes = (xml: string) => xml.includes("<hierarchy") && xml.includes("<n
  * waiting out the holder — two dumps plus the backoff still fit the read legs'
  * share of the budget.
  *
- * Returns undefined when neither attempt produced a hierarchy, or when there is
- * not enough budget left to try.
+ * Returns undefined when no attempt produced a hierarchy, or when there is not
+ * enough budget left to try.
+ *
+ * `maxDumps` is what the select-all's read-back turns down to 1. The retry is
+ * paid for by the sizing read above — there, failing means the blind count and a
+ * truncated field. The read-back has no such stake: an unreadable answer leaves
+ * the fast path exactly as it was, so a second dump only adds
+ * DUMP_RETRY_BACKOFF_MS to every clear on a screen that will not dump.
  *
  * `preferredRead` is tried first and is what makes the common case work at all:
  * the connection's usual holder is argent's own `android-devtools` helper, for
@@ -646,7 +723,8 @@ const hasNodes = (xml: string) => xml.includes("<hierarchy") && xml.includes("<n
 async function readHierarchy(
   serial: string,
   deadline: number,
-  preferredRead?: () => Promise<string | undefined>
+  preferredRead?: () => Promise<string | undefined>,
+  maxDumps = 2
 ): Promise<string | undefined> {
   // Withhold BOTH the delete run's reserve and one dump's worth of budget. The
   // helper's own `getHierarchy` RPC timeout is 15s — longer than this whole read
@@ -680,7 +758,7 @@ async function readHierarchy(
       clearTimeout(timer);
     }
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxDumps; attempt++) {
     const waitMs = attempt > 0 ? DUMP_RETRY_BACKOFF_MS : 0;
     // Withhold the delete run's reserve, and count the backoff BEFORE spending
     // it: sleeping first and checking after would let the wait itself come out
@@ -718,7 +796,10 @@ async function readHierarchy(
  * Undefined is returned when the dump fails or the device refuses it (locked
  * screen, secure overlay) or when no focused node is an `EditText`. A focused
  * password field is not measured either, but it does not make the whole result
- * undefined — it contributes BLIND_DELETE_COUNT, see below.
+ * undefined — it contributes BLIND_DELETE_COUNT, see below. Passing
+ * `unmeasurableIsUnreadable` inverts that: any unmeasurable focused editable
+ * makes the whole result undefined, which is what the select-all's read-back
+ * wants (see {@link injectAndroidClear}).
  *
  * Password fields are skipped because what uiautomator reports for them is not
  * the value: on API 36 it is the masked rendering (a 35-character password dumps
@@ -752,11 +833,13 @@ async function readHierarchy(
 async function measureFocusedTextLength(
   serial: string,
   deadline: number,
-  preferredRead?: () => Promise<string | undefined>
+  preferredRead?: () => Promise<string | undefined>,
+  maxDumps?: number,
+  unmeasurableIsUnreadable?: boolean
 ): Promise<number | undefined> {
   let xml: string | undefined;
   try {
-    xml = await readHierarchy(serial, deadline, preferredRead);
+    xml = await readHierarchy(serial, deadline, preferredRead, maxDumps);
   } catch {
     return undefined;
   }
@@ -765,6 +848,7 @@ async function measureFocusedTextLength(
   if (!root) return undefined;
 
   let longest: number | undefined;
+  let anyUnmeasurable = false;
   const stack = [root];
   while (stack.length > 0) {
     const node = stack.pop()!;
@@ -785,10 +869,18 @@ async function measureFocusedTextLength(
     // backspaces where the field alone would have got the blind count. Flooring
     // keeps `longest` monotonic, which is what makes the "over-deleting is a
     // no-op, under-deleting truncates" rule above actually hold.
+    //
+    // `unmeasurableIsUnreadable` opts out of the floor for the select-all's
+    // read-back, where the reading decides only whether a rescue runs and a
+    // floored password field would read as residue over a field that is empty.
+    // There the ambiguity must not delete, so any unmeasurable focused editable
+    // makes the whole reading undefined — evidence of nothing, like a failed
+    // dump.
     const text = attrIsTrue(attrs, "password") ? undefined : attrs.text;
+    if (text === undefined) anyUnmeasurable = true;
     longest = Math.max(longest ?? 0, text === undefined ? BLIND_DELETE_COUNT : [...text].length);
   }
-  return longest;
+  return unmeasurableIsUnreadable && anyUnmeasurable ? undefined : longest;
 }
 
 /**

@@ -5,16 +5,27 @@ import { Registry, type DeviceInfo } from "@argent/registry";
 // Keep `shellQuote` real (android-input relies on it) — only stub the transport
 // and the `isAndroidTv` runtime probe (so the phone/TV branch is deterministic).
 // `vi.hoisted` so the mock fns exist when the hoisted `vi.mock` factory runs.
-const { adbShell, isAndroidTv } = vi.hoisted(() => ({
+// `adbExecOutBinary` is mocked alongside `adbShell` because the hierarchy dump
+// the clear reads back does NOT go through `adbShell` — it rides `exec-out`,
+// hence the Buffer-shaped mock (see keyboard-clear.test.ts for why). Leaving it
+// real makes `SERIAL` below address whatever emulator happens to be attached:
+// these tests then dump a live device, and a clear's outcome depends on what is
+// on its screen — locally a rescue run appears in the middle of the asserted
+// command stream, while CI, with no emulator, sees none.
+const { adbShell, adbExecOutBinary, isAndroidTv } = vi.hoisted(() => ({
   // Typed params so `adbShell.mock.calls[0]` is a `[serial, cmd, opts?]` tuple
   // (an untyped `vi.fn(async () => "")` infers a zero-arg call and TS2493s on
   // destructuring — vitest transforms tests with esbuild, so only `tsc` catches it).
   adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+  adbExecOutBinary: vi.fn(
+    async (_serial: string, _cmd: string, _opts?: unknown): Promise<Buffer> => Buffer.from("")
+  ),
   isAndroidTv: vi.fn(async (_serial: string): Promise<boolean> => false),
 }));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   adbShell,
+  adbExecOutBinary,
   isAndroidTv,
 }));
 
@@ -351,6 +362,13 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // `vi.fn`, so the default transport still resolves. Matches `isAndroidTv`
     // on the next line.
     adbShell.mockReset();
+    // An empty dump: `readHierarchy` finds no `<hierarchy>` tag, so the clear's
+    // read-back measures nothing and never redirects to the delete run. That is
+    // the shape these tests want — they assert the modern clear's own command
+    // stream. The rescue itself is covered in keyboard-clear.test.ts, where the
+    // dump is given real XML.
+    adbExecOutBinary.mockReset();
+    adbExecOutBinary.mockImplementation(async () => Buffer.from(""));
     typeTv.mockClear();
     isAndroidTv.mockReset();
     isAndroidTv.mockResolvedValue(false);
