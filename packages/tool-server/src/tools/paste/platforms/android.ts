@@ -7,15 +7,13 @@ import { injectAndroidKeycode } from "../../../utils/android-input";
 import { setSimulatorClipboardText } from "../../../utils/simulator-client";
 import type { PasteParams, PasteResult, PasteServices } from "../types";
 
-/** `android.view.KeyEvent.KEYCODE_PASTE` — a dedicated paste key every `TextView` honours. */
+/** `android.view.KeyEvent.KEYCODE_PASTE`. */
 const KEYCODE_PASTE = 279;
 
 /**
- * The clipboard is filled through simulator-server's emulator gRPC bridge, and
- * the paste is a single `KEYCODE_PASTE` over `adb shell input` — the same
- * transport the keyboard tool uses, because the emulator drops HID key events
- * on `hw.keyboard = no` AVDs (issue #449) and a meta-key chord is not handled
- * by the emulator's HID path at all.
+ * The paste keystroke goes over `adb shell input`, like the keyboard tool, because
+ * the guest drops simulator-server's HID key events on `hw.keyboard = no` AVDs
+ * (issue #449).
  */
 export function makeAndroidImpl(
   registry: Registry
@@ -23,9 +21,8 @@ export function makeAndroidImpl(
   return {
     requires: ["adb"],
     async handler(_services, params, device: DeviceInfo) {
-      // An Android TV emulator is `android` / `emulator` by serial shape, so
-      // the matrix admits it; a leanback UI is focus-driven and its fields are
-      // typed into with `keyboard`.
+      // An Android TV emulator is `android` / `emulator` by serial shape, so the
+      // capability matrix cannot exclude it.
       if (await isAndroidTv(device.id)) {
         throw new UnsupportedOperationError(
           "paste",

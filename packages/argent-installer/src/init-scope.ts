@@ -12,10 +12,9 @@ export interface ScopeChoice {
   customRoot?: string;
 }
 
-// Step 1b — choose where the MCP config is written. Local install mode always
-// commits project-scoped files, so it forces "local" without prompting;
-// non-interactive also defaults to "local". Throws InitCancelled("scope") on
-// cancel.
+// Step 1b — where the MCP config is written. Local install mode commits
+// project-scoped files, so it forces "local"; non-interactive defaults to
+// "local" too.
 export async function chooseScope(opts: {
   installMode: InstallMode;
   nonInteractive: boolean;

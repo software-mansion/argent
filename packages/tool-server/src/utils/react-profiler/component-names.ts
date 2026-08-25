@@ -1,25 +1,22 @@
 /**
  * Component-name handling shared by the report renderer and the query tools.
  *
- * This codebase carries several component-name namespaces at once: React
- * DevTools display names in commit data (`Forget(Foo)`, `Memo(Foo)`), and bare
- * source identifiers in the tree-sitter AST index (`Foo`). The report prints
- * the stripped form for readability, so the name an agent reads is not the name
- * the commit data is keyed on — which is why the strip primitive and the
- * resolver that depends on it live together here rather than inside a render
- * stage. Two copies of the wrapper list is exactly how they drift apart.
+ * Commit data is keyed on DevTools names (`Forget(Foo)`), the tree-sitter AST
+ * index on bare source identifiers (`Foo`), and the report prints the stripped
+ * form — so the name an agent reads back is not the name anything is keyed on.
+ * The stripper and the resolver that depends on it live together so the wrapper
+ * list exists once.
  */
-
-/** Wrappers React DevTools adds around a component's own name. */
-const WRAPPER_PATTERNS = [/^Forget\((.+)\)$/, /^Memo\((.+)\)$/, /^ForwardRef\((.+)\)$/] as const;
 
 /**
- * Deliberately NOT stripped: `Animated(View)`, `AnimatedComponent(View)`,
- * `Motion(View)`, `Context.Provider`, and the expo-router `Screen(./path.tsx)`
- * form. The report never displays those stripped, so no agent will ever hold a
- * stripped form of them — and stripping `Animated(View)` would make a query for
- * `View` ambiguous in almost every session.
+ * Wrappers React DevTools adds around a component's own name.
+ *
+ * `Animated(View)`, `Motion(View)`, `Context.Provider` and the expo-router
+ * `Screen(./path.tsx)` form are deliberately absent: stripping `Animated(View)`
+ * would make a query for `View` ambiguous in almost every session.
  */
+const WRAPPER_PATTERNS = [/^Forget\((.+)\)$/, /^Memo\((.+)\)$/, /^ForwardRef\((.+)\)$/] as const;
+
 const MAX_WRAPPER_DEPTH = 4;
 
 export interface StrippedName {
@@ -54,9 +51,8 @@ export interface ComponentAnnotation {
 }
 
 /**
- * The display form used throughout the report. `rawName` is what commit data is
- * keyed on; `displayName` is what a reader sees — and therefore what they will
- * type back, which is why the resolver below accepts it.
+ * `rawName` keys commit data; `displayName` is what the report prints and
+ * therefore what a reader types back, which is why the resolver accepts it.
  */
 export function annotateComponentName(raw: string): ComponentAnnotation {
   const { baseName, hasForget, hasMemo, hasForwardRef } = stripComponentWrappers(raw);
@@ -77,18 +73,10 @@ export type ComponentNameResolution =
   | { kind: "missing"; query: string; suggestions: string[] };
 
 /**
- * Resolve a user-supplied component name against the names actually recorded in
- * a session.
- *
- * Matching is against each recorded name's DISPLAY form, not a stripped form of
- * the query. Stripping both sides would quietly cross-resolve wrappers — a query
- * for `Forget(Foo)` would land on `Memo(Foo)` when only the latter exists — and
- * it would not even be reliable, because the display stripper stops after
- * MAX_WRAPPER_DEPTH, so a deeply wrapped name's display form still carries a
- * wrapper. Comparing against the display form compares against exactly the
- * string the report printed.
- *
- * Exact matches always win and are never widened.
+ * Matching is against each recorded name's DISPLAY form, never a stripped
+ * query: stripping both sides would cross-resolve wrappers (`Forget(Foo)`
+ * landing on `Memo(Foo)`), and it would be unreliable anyway, since the display
+ * stripper gives up after MAX_WRAPPER_DEPTH. Exact matches are never widened.
  */
 export function resolveComponentName(
   query: string,
@@ -102,9 +90,8 @@ export function resolveComponentName(
   };
 
   if (names.includes(query)) {
-    // A wrapped sibling can share this display name (e.g. `StaticContainer` and
-    // `Memo(StaticContainer)` both exist). Resolve to what was asked for, but
-    // say the other one is there — otherwise the caller silently sees one of two.
+    // A wrapped sibling can share this display name (`StaticContainer` and
+    // `Memo(StaticContainer)`); name it, or the caller silently sees one of two.
     return { kind: "exact", rawName: query, alsoMatching: sharingDisplayName(query) };
   }
 
@@ -120,9 +107,8 @@ export function resolveComponentName(
 }
 
 /**
- * Loose, display-aware suggestions for a miss. Deliberately looser than the
- * matcher: a suggestion only costs a retry, whereas loose matching would return
- * data for a component nobody asked about.
+ * Deliberately looser than the matcher: a bad suggestion only costs a retry,
+ * whereas a loose match returns data for a component nobody asked about.
  */
 function suggestNames(query: string, names: string[], limit = 5): string[] {
   const needle = query.toLowerCase();
@@ -138,8 +124,8 @@ function suggestNames(query: string, names: string[], limit = 5): string[] {
 }
 
 /**
- * One-line note explaining a resolution that was not a plain exact hit, so the
- * numbers below it are attributable to a specific recorded name.
+ * Note for a resolution that was not a plain exact hit, so the numbers below it
+ * are attributable to a specific recorded name. Empty for a plain exact hit.
  */
 export function describeResolution(
   resolution: Extract<ComponentNameResolution, { kind: "exact" | "display" }>
@@ -199,10 +185,9 @@ export function renderComponentNameMiss(
  * Candidate keys for the tree-sitter AST index, which is keyed on bare source
  * identifiers. Ordered most- to least-specific; callers take the first hit.
  *
- * The third form drops an expo-router style file suffix — the report shows
- * `TabTwoScreen(./(tabs)/explore.tsx)` but the source declares `TabTwoScreen`.
- * Loosening is safe here in a way it is not for commit-data matching: a wrong
- * guess against the AST index simply misses and returns `found: false`.
+ * The third form drops an expo-router file suffix — the report shows
+ * `TabTwoScreen(./(tabs)/explore.tsx)`, the source declares `TabTwoScreen`.
+ * Guessing is safe here unlike in commit-data matching: a wrong key just misses.
  */
 export function astLookupCandidates(raw: string): string[] {
   const keys = [raw];

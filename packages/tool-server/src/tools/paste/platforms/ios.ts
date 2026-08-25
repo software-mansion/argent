@@ -12,16 +12,14 @@ import type { PasteParams, PasteResult, PasteServices } from "../types";
 const LEFT_GUI_KEYCODE = 0xe3;
 const V_KEYCODE = charToKeyPress("v")!.keyCode;
 
-/** Gap between the HID events of the ⌘V chord, matching the keyboard tool's cadence. */
 const CHORD_STEP_MS = 50;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * An Apple TV simulator is a plain UUID that `resolveDevice` classifies as
- * `ios` / `simulator`, indistinguishable from an iPhone by shape, so the
- * capability matrix cannot exclude it. tvOS has no text pasteboard a field
- * could paste from, and simulator-server does not drive a tvOS sim at all.
+ * An Apple TV simulator is a plain UUID that `resolveDevice` classifies as a
+ * simulator, indistinguishable from an iPhone by shape, so the capability
+ * matrix cannot exclude it.
  */
 function rejectTv(device: DeviceInfo): never {
   throw new UnsupportedOperationError(
@@ -32,10 +30,9 @@ function rejectTv(device: DeviceInfo): never {
 }
 
 /**
- * Fill the simulator pasteboard, then press ⌘V on the simulator's hardware
- * keyboard. UIKit maps the chord to the focused field's paste action — the same
- * path a user with a connected keyboard takes. The pasteboard fill is
- * synchronous on the server, so the chord can't land before the text does.
+ * ⌘V on the simulator's hardware keyboard is the path UIKit maps to the focused
+ * field's paste action. `setSimulatorClipboardText` resolves only once the
+ * device pasteboard holds the text, so the chord cannot race the fill.
  */
 async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<PasteResult> {
   await setSimulatorClipboardText(api, text);
@@ -46,10 +43,9 @@ async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<Pa
   api.pressKey("Up", V_KEYCODE);
   await sleep(CHORD_STEP_MS);
   api.pressKey("Up", LEFT_GUI_KEYCODE);
-  // `pressKey` is fire-and-forget (a line on the server's stdin). Give the
-  // final Up the same gap as the other events before reporting success, so the
-  // caller's next action — or the MCP auto-screenshot — never precedes the
-  // completed chord.
+  // `pressKey` only writes a line to the server's stdin, so the final Up needs
+  // the same gap before success is reported — otherwise the caller's next action,
+  // or the MCP auto-screenshot, precedes the completed chord.
   await sleep(CHORD_STEP_MS);
   return { pasted: true };
 }
@@ -58,8 +54,8 @@ export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<PasteServices, PasteParams, PasteResult> {
   return {
-    // `isTvOsSimulator` shells out to `simctl`; the simulator-server itself is
-    // resolved through the blueprint.
+    // `xcrun` is for the `isTvOsSimulator` probe; simulator-server comes from
+    // the blueprint.
     requires: ["xcrun"],
     async handler(_services, params, device) {
       if (await isTvOsSimulator(device.id)) rejectTv(device);
@@ -71,9 +67,9 @@ export function makeIosImpl(
 }
 
 /**
- * Remote simulators route through the MoQ transport's `paste` primitive, which
- * fills the remote pasteboard (`sim-remote simctl pbcopy`) and presses ⌘V over
- * the same control channel — the HTTP clipboard route does not exist there.
+ * Remote sims paste through the MoQ transport's `paste`: `sim-remote simctl
+ * pbcopy` fills the remote pasteboard, then ⌘V rides the MoQ control channel.
+ * The HTTP clipboard route does not exist for a remote sim.
  */
 export function makeIosRemoteImpl(
   registry: Registry

@@ -1,26 +1,22 @@
 #!/usr/bin/env bash
 # Phase 2 — Argument-matrix validation (offline, no device).
 #
-# For EVERY tool, generates rejection cases straight from its parsed schema:
-#   - missing-required : omit all required flags            -> must reject
-#   - bad-enum         : junk value for each enum flag      -> must reject (that path)
-#   - bad-type         : string where a number is required  -> must reject (that path)
+# Per tool, rejection cases generated from its parsed schema:
+#   - missing-required : omit every flag                 -> must reject
+#   - bad-enum         : junk value for each enum flag   -> must reject (that path)
+#   - bad-type         : string for a number flag        -> must reject (that path)
 #
-# Valid-typed dummies are filled for the *other* required flags so the single
-# intended violation is what trips the rejection. This is deterministic and
-# needs no hardware — it's the "every combination of arguments" guarantee at the
-# validation layer. Runs against the private tool-server started in phase 1.
+# The other required flags get valid-typed dummies, so the single intended
+# violation is what trips the rejection.
 
-# Tools with no required flags that would actually EXECUTE (touch a device /
-# network / state) if called empty — excluded from missing-required here and
-# covered by the device tiers instead. `stop-all-simulator-servers` gets its own
-# targeted cases below, since skipping it outright left its `.strict()`
-# rejection and its `unmatched` report with no coverage anywhere.
+# Excluded from the generated missing-required case: an empty call to a no-arg
+# device / network / state tool would really execute. `stop-all-simulator-servers`
+# gets targeted cases below instead.
 _VAL_EXCLUDE_MISSING="list-devices stop-all-simulator-servers stop-metro native-devtools-status update-argent"
 
-# Build a JSON object with valid dummies for every required flag in a model,
-# then apply overrides "field=raw-json" pairs. Emits the JSON on stdout.
-_build_args() { # model [field:rawjson ...]
+# Valid dummies for every required flag in a model, then "field=raw-json"
+# overrides applied on top. Emits the JSON on stdout.
+_build_args() {
   local model="$1"; shift
   python3 - "$model" "$@" <<'PY'
 import json, sys
@@ -57,12 +53,9 @@ PY
 
 run_phase() {
   local P=validation
-  # Every verdict here comes from the server's schema: `argent run` does no
-  # client-side validation, it posts the payload. With no server every call
-  # fails with a transport error, which is indistinguishable from a rejection
-  # unless something looks at why — so this tier scores exactly the same green
-  # against a dead server as against a live one. Refuse to run rather than
-  # report a result that cannot mean anything.
+  # With no server every call fails with a transport error, which assert_reject
+  # cannot tell from a rejection — the tier would score the same green against a
+  # dead server as against a live one. Refuse to run instead.
   if ! ensure_server; then
     fail "$P" harness tool-server "no tool-server: a rejection cannot be told from a transport error"
     return 0
@@ -77,11 +70,9 @@ run_phase() {
     [ -s "$model" ] || { skip "$P" "$t" schema "no flags to validate"; continue; }
 
     # run_tool addresses fields through the CLI's whole-payload `--args` escape
-    # hatch. A tool that declares its own `args` property takes that flag as
-    # that field's value instead (argent-cli/src/flag-parser.ts), so its other
-    # fields never arrive and every case below would be judged on a payload the
-    # tool did not receive — the rejection is real but always names the missing
-    # required field rather than the one under test.
+    # hatch, and a tool declaring its own `args` property takes that flag as
+    # that field's value instead (argent-cli/src/flag-parser.ts) — every case
+    # below would be judged on a payload the tool never received.
     if awk -F'\t' '$1=="args"{found=1} END{exit !found}' "$model"; then
       skip "$P" "$t" schema "declares its own 'args' field; not reachable through run_tool's --args payload"
       continue
@@ -89,42 +80,34 @@ run_phase() {
 
     local reqs; reqs="$(model_required_flags "$model")"
 
-    # --- missing-required ---------------------------------------------------
     if [ -n "$reqs" ]; then
       local first_req; first_req="$(printf '%s\n' "$reqs" | head -1)"
-      # omit everything -> the first required flag must be flagged undefined.
-      # An omitted enum is reported as invalid_value rather than invalid_type,
-      # because zod checks the value against the member list before it reports a
-      # type mismatch.
+      # zod 4 reports an omitted enum as invalid_value, not invalid_type.
       local first_code="invalid_type"
       [ "$(model_flag_kind "$model" "$first_req")" = "enum" ] && first_code="invalid_value"
       assert_reject "$P" "$t" missing-required '{}' "$first_req" "$first_code"
     else
       case " $_VAL_EXCLUDE_MISSING " in
-        *" $t "*) : ;;  # device/stateful no-arg tool: covered elsewhere
+        *" $t "*) : ;;
         *) skip "$P" "$t" missing-required "no required flags" ;;
       esac
     fi
 
-    # --- bad-enum (one case per enum flag) ---------------------------------
     local ef
     for ef in $(model_enum_flags "$model"); do
       local args; args="$(_build_args "$model" "$ef=\"__not_a_valid_enum__\"")"
       assert_reject "$P" "$t" "bad-enum:$ef" "$args" "$ef" "invalid_value"
     done
 
-    # --- stop-all-simulator-servers' strict schema and unmatched report -----
-    # It is on _VAL_EXCLUDE_MISSING (calling it empty would sweep the machine),
-    # so the generated matrix skips it entirely — leaving the two properties
-    # that make its `devices` scope safe with no E2E coverage at all.
+    # Called empty, stop-all-simulator-servers sweeps the machine, so it is on
+    # _VAL_EXCLUDE_MISSING and the generated matrix produces nothing for it:
+    # these two cases are the only coverage of its `devices` scope guards.
     if [ "$t" = "stop-all-simulator-servers" ]; then
-      # `.strict()`: `udids` is the natural slip (every sibling tool spells the
-      # device parameter `udid`), and under a stripping schema that typo would
-      # be a silent machine-wide sweep.
+      # `udids` is the natural slip (siblings spell it `udid`); under a
+      # stripping schema that typo would be a silent machine-wide sweep.
       assert_reject "$P" "$t" strict-unknown-key '{"udids":["nope"]}' "udids" "unrecognized_keys"
-      # `unmatched`: an id owning nothing must not read as a clean machine. A
-      # scope of one bogus id reaps nothing and touches no device, so this is
-      # safe to run here.
+      # An id owning nothing must not read as a clean machine. One bogus id
+      # reaps nothing and touches no device, so this is safe to run here.
       run_tool "$t" '{"devices":["__e2e_no_such_device__"]}'
       if [ "$RT_RC" -eq 0 ] && [ "$(printf '%s' "$RT_JSON" | jq -r '.unmatched[0] // ""')" = "__e2e_no_such_device__" ]; then
         pass "$P" "$t" unmatched "bogus id reported, not silently clean"
@@ -133,7 +116,7 @@ run_phase() {
       fi
     fi
 
-    # --- bad-type (first required number flag gets a string) ---------------
+    # First required number flag, else any number flag, gets a string.
     local nf
     nf="$(model_number_flags "$model" | while read -r f; do
             awk -F'\t' -v n="$f" '$1==n && $3==1{print n}' "$model"; done | head -1)"

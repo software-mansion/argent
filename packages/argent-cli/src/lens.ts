@@ -1,32 +1,27 @@
 /**
  * `argent lens` — open Argent Lens bound to a fresh coding-agent session.
  *
- * The problem this solves: the Lens preview window and the agent talk through a
- * shared, process-wide tool-server that carries no per-agent identity, so when
- * the user requests changes in the window there is no way to know WHICH agent to
- * route them to. This command sidesteps that by inverting ownership — the human
- * launches Lens, and Lens spawns (and therefore owns) exactly one agent. The
- * binding is 1:1 by construction.
+ * The tool-server the window and the agent share carries no per-agent identity,
+ * so a change requested in the window can't be routed to a particular agent.
+ * Inverting ownership fixes that: Lens spawns (and therefore owns) exactly one
+ * agent, so the binding is 1:1 by construction.
  *
- * Flow — there is NO detached bridge. The foreground process does everything and
- * lingers as a thin owner of the agent until it exits:
+ * The foreground process does everything and lingers as the agent's owner:
  *   1. Ensure a tool-server is up; decide the agent (resolved now for `--agent`
  *      or a single install, otherwise the window's picker chooses).
  *   2. Mark a CLI Lens session so the tool-server opens the preview window now
  *      (no `await_user_selection` needed). No device is force-booted — the window
  *      streams a running device or offers an in-window picker (which can boot one
  *      headless; see the tool-server's /preview/boot).
- *   3. TAKE OVER this terminal by running the agent inside a PTY this process
- *      proxies (see `lens-pty.ts`): stdin → PTY, PTY → stdout, resize → PTY. The
- *      agent's TUI appears right here in ANY terminal — Warp, VS Code, tmux,
- *      iTerm, Terminal — because we never depend on the host app being
- *      scriptable. Fallback (no interactive tty, or native `node-pty` missing):
- *      spawn a new iTerm/Terminal window via `osascript` (`lens-terminal.ts`).
- *   4. Relay feedback by PUSH: subscribe to the tool-server's SSE stream and, on
- *      each submitted round, inject a one-line summary into the agent over the
- *      same channel as the user's keystrokes (PTY write), or AppleScript
- *      `write text` in the fallback. Liveness is the agent's exit (the PTY child,
- *      or a `ps` poll for the fallback window).
+ *   3. Run the agent inside a PTY this process proxies (`lens-pty.ts`), so its
+ *      TUI appears in ANY terminal — Warp, VS Code, tmux — without depending on
+ *      the host app being scriptable. Fallback (no interactive tty, or native
+ *      `node-pty` missing): a new iTerm/Terminal window via `osascript`
+ *      (`lens-terminal.ts`).
+ *   4. Relay feedback by PUSH: subscribe to the tool-server's SSE stream and
+ *      inject each submitted round's summary over the same channel as the user's
+ *      keystrokes. Liveness is the agent's exit (the PTY child, or a `ps` poll
+ *      for the fallback window).
  *
  * macOS only: the new-window fallback drives `osascript`, and the PTY proxy uses
  * `node-pty` (an optional native dependency that degrades to the fallback).
@@ -69,8 +64,7 @@ export interface LensCommandOptions {
   paths: ToolsServerPaths;
 }
 
-/** Shape of the completed-round outcome the SSE stream / `GET /preview/outcome`
- * carry. */
+/** Completed-round outcome carried by the SSE stream and `GET /preview/outcome`. */
 interface LensOutcome {
   status: "completed";
   round: number;
@@ -86,34 +80,30 @@ interface LensOutcome {
   completedAt: number;
 }
 
-// New-window fallback liveness poll cadence (used ONLY there — the PTY path
-// observes the agent child's exit directly, with no poll).
+// New-window fallback only; the PTY path observes the child's exit directly.
 const LIVENESS_POLL_MS = 1_200;
-// A just-spawned session may not show in `ps` for a beat; don't call it dead
-// inside this window.
+// A just-spawned session may not show in `ps` for a beat.
 const SPAWN_GRACE_MS = 8_000;
-// Require this many consecutive "tty gone" reads (after the grace window) before
-// concluding the terminal closed — guards against a transient `ps` miss.
+// Consecutive "tty gone" reads (after the grace window) before declaring death —
+// guards against a transient `ps` miss.
 const DEATH_CONFIRMATIONS = 3;
-// After an SSE drop while the agent is still alive, wait this long before
-// reconnecting (the tool-server may be briefly restarting).
+// Pause before reconnecting a dropped SSE stream (the tool-server may be
+// briefly restarting).
 const SSE_RECONNECT_MS = 1_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// A first-run agent often opens on a "trust this folder?" confirmation whose
-// default option is "Yes, I trust" — match its on-screen text so we only press
-// Enter when it's actually showing (never on the agent's own later output).
+// Match the on-screen text of a first-run "trust this folder?" confirmation, so
+// Enter is only pressed while one is showing — never on the agent's own output.
 const TRUST_PROMPT_RE = /trust this folder|do you trust|yes,? i trust|trust the files in this/i;
 
 /**
- * Briefly watch the spawned session for a first-run "trust this folder?" prompt
- * and press Enter (its default is the trust-and-continue option) so the seeded
- * session starts without the user babysitting it. No-op when no such prompt
- * shows. If the terminal's text can't be read, falls back to a single best-
- * effort Enter once (harmless on an idle composer). Bounded so it never lingers.
+ * Press Enter on a first-run "trust this folder?" prompt (its default is
+ * trust-and-continue) so the seeded session starts unattended. When the
+ * terminal's text can't be read, falls back to one blind Enter (harmless on an
+ * idle composer). Bounded so it never lingers.
  */
 async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
   const deadline = Date.now() + 12_000;
@@ -121,7 +111,6 @@ async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
     await sleep(700);
     const text = readSessionText(session);
     if (text == null) {
-      // Can't introspect this terminal — one blind Enter, then stop.
       pressEnter(session);
       return;
     }
@@ -133,12 +122,10 @@ async function dismissTrustPrompt(session: TerminalSession): Promise<void> {
 }
 
 /**
- * PTY equivalent of `dismissTrustPrompt`: watch the agent's OUTPUT stream for a
- * first-run "trust this folder?" prompt and send a lone Enter (its default is
- * trust-and-continue) so the seeded session starts unattended. Unlike the
- * AppleScript path, we always have the real output here, so we only ever press
- * Enter on a clear match — never a blind one. Bounded so it can't linger or fire
- * on the agent's own later output.
+ * PTY equivalent of `dismissTrustPrompt`, watching the agent's output stream.
+ * The real output is always available here, so Enter is only ever sent on a
+ * clear match — never blind. Bounded so it can't linger or fire on the agent's
+ * own later output.
  */
 function dismissTrustPromptViaPty(proxy: PtyProxy): void {
   let acc = "";
@@ -158,16 +145,15 @@ function dismissTrustPromptViaPty(proxy: PtyProxy): void {
   });
 }
 
-/** Seed an inject-mode agent running under the PTY proxy: type the CLI-Lens
- * prompt once its TUI has settled after boot (mirrors `injectSeedAfterBoot`). */
+/** Seed an inject-mode agent under the PTY proxy, once its TUI has settled after
+ * boot. */
 async function injectSeedViaPty(proxy: PtyProxy): Promise<void> {
   await sleep(5_000);
   proxy.inject(buildSeedPrompt());
 }
 
-/** Whether we're attached to a real interactive terminal on both ends — the
- * precondition for the PTY proxy. Piped/CI/non-tty invocations fall back to a
- * new window. */
+/** Precondition for the PTY proxy; piped/CI invocations fall back to a new
+ * window. */
 function isInteractiveTty(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
@@ -175,10 +161,9 @@ function isInteractiveTty(): boolean {
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
- * Decide how the agent gets chosen. With `--agent`, validate it's known and
- * installed and resolve it now. Otherwise auto-resolve the only installed agent,
- * or defer to the window's picker when several are present (returning the
- * choices). Exits (nothing is open yet) when there's no usable agent.
+ * Decide how the agent gets chosen: `--agent` (validated as known and installed)
+ * or the only installed agent resolve now; several installs defer to the
+ * window's picker. Exits when there's no usable agent — nothing is open yet.
  */
 export function planAgent(
   agentId: string | undefined
@@ -208,9 +193,9 @@ export function planAgent(
     );
     process.exit(1);
   }
-  // A remembered pick (the picker's "Remember this choice") skips the window
-  // picker on later runs — but only if that agent is still installed. Clear
-  // `argent lens --forget` to choose again.
+  // A remembered pick (the picker's "Remember this choice") skips the picker on
+  // later runs, but only while that agent is still installed;
+  // `argent lens --forget` clears it.
   const remembered = getRememberedAgent();
   if (remembered) {
     const found = installed.find((a) => a.id === remembered);
@@ -221,14 +206,13 @@ export function planAgent(
 }
 
 /** Seed an inject-mode agent (its TUI takes no initial-prompt arg) by typing the
- * CLI-Lens prompt in once the terminal has settled after boot. */
+ * prompt in once the terminal has settled after boot. */
 async function injectSeedAfterBoot(session: TerminalSession): Promise<void> {
   await sleep(5_000);
   writeToSession(session, buildSeedPrompt());
 }
 
-/** The instruction the spawned agent starts with, establishing CLI-Lens
- * behaviour. Kept short and explicit. */
+/** The instruction the spawned agent starts with. */
 export function buildSeedPrompt(): string {
   return [
     "You are running inside an Argent Lens CLI session. The user has the Argent Lens",
@@ -254,12 +238,12 @@ export function buildSeedPrompt(): string {
   ].join(" ");
 }
 
-/** Build the one-line prompt typed into the agent's terminal for a submitted
- * round. Pure + exported for testing. */
+/** The one-line prompt typed into the agent's terminal for a submitted round.
+ * Exported for tests. */
 export function formatLensFeedback(o: LensOutcome): string {
   const parts: string[] = [];
-  // The element's match selector — how the agent locates it on screen and in
-  // source (e.g. [text=Sign in]). Always include it so feedback is actionable.
+  // The match selector (e.g. [text=Sign in]) — how the agent locates the element
+  // on screen and in source. Always included so feedback is actionable.
   const sel = (m: { by: string; value: string }): string => `[${m.by}=${m.value}]`;
 
   const chosen = o.selections.filter((s) => s.chosenVariant);
@@ -286,9 +270,8 @@ export function formatLensFeedback(o: LensOutcome): string {
     );
   }
 
-  // Elements that were proposed but neither picked nor commented — surfaced so
-  // the agent knows they were reviewed and deliberately left as-is, rather than
-  // re-proposing them blindly.
+  // Proposed but neither picked nor commented — surfaced so the agent knows they
+  // were reviewed and deliberately left alone, rather than re-proposing them.
   const touched = new Set([...chosen, ...notedNoPick].map((s) => s.element));
   const leftAsIs = o.unselected.map((u) => u.element).filter((e) => !touched.has(e));
   if (leftAsIs.length) {
@@ -308,11 +291,9 @@ export function formatLensFeedback(o: LensOutcome): string {
     ? parts.join(". ")
     : "No specific picks were made; review the current variants in the preview window.";
 
-  // Steer the next turn by what the feedback actually asks for, rather than
-  // demanding a fresh batch of variants every round. A pick with no attached
-  // direction is an approval — apply it and stop; only open-ended direction
-  // (a comment on a pick, an element note, or an on-screen annotation)
-  // warrants staging new variants.
+  // A pick with no attached direction is an approval — apply it and stop. Only
+  // open-ended direction (a comment on a pick, an element note, an on-screen
+  // annotation) warrants staging new variants.
   const chosenWithComment = chosen.filter((s) => s.comment);
   const hasDirection =
     chosenWithComment.length > 0 ||
@@ -354,9 +335,9 @@ function parseArgs(argv: string[]): {
     if (tok === "--help" || tok === "-h") help = true;
     else if (tok === "--forget") {
       forget = true;
-      // Mirrors the flow parser: `--forget false` would leave forget ON while
-      // the word was silently dropped. `argent run` accepts that syntax, so it
-      // has to be refused here rather than misread.
+      // Mirrors the flow parser: `argent run` accepts `--flag false`, so that
+      // form must be refused here rather than silently dropping the word and
+      // leaving forget ON.
       const next = argv[i + 1]?.trim().toLowerCase();
       if (next === "true" || next === "false") {
         process.stderr.write(`lens: --forget does not take a value; omit it to keep the state\n`);
@@ -433,16 +414,14 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Decide the agent FIRST, before touching the tool-server: resolved now for
-  // --agent / a single install, otherwise the window's picker chooses. Doing
-  // this before `createToolsClient` means a bad `--agent <id>` (or no installed
-  // agent) fails fast with a clear message and exit code, without spawning or
-  // contacting a tool-server. It only probes PATH — nothing is open yet.
+  // Before `createToolsClient`, so a bad `--agent <id>` (or no installed agent)
+  // fails fast without spawning or contacting a tool-server. This only probes
+  // PATH — nothing is open yet.
   const plan = planAgent(agentId);
   const choices = "choose" in plan ? plan.choose : [];
 
   // Resolve (spawning if needed) the shared tool-server. `/preview/*` is
-  // token-exempt, so the handle's token isn't needed for the calls below.
+  // token-exempt, so the handle's token isn't needed below.
   const client = createToolsClient({ paths: options.paths });
   let baseUrl: string;
   try {
@@ -454,8 +433,8 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
 
   const previewUrl = `${baseUrl}/preview/`;
 
-  // Begin the CLI session — opens the preview window and, when the user must
-  // choose, hands it the agent list to render the picker.
+  // Opens the preview window and, when the user must choose, hands it the agent
+  // list to render the picker.
   try {
     const res = await fetch(`${baseUrl}/preview/cli-session`, {
       method: "POST",
@@ -471,8 +450,8 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Resolve the agent: a pre-chosen one, or whichever the human clicks in the
-  // window's picker (delivered over the SSE stream — no polling).
+  // A pre-chosen agent, or whichever the human clicks in the window's picker
+  // (delivered over the SSE stream — no polling).
   let agent = "agent" in plan ? plan.agent : undefined;
   if (!agent) {
     process.stdout.write(
@@ -481,8 +460,8 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     const picked = await awaitAgentChoiceViaStream(baseUrl);
     if (picked) {
       agent = findAgentById(picked.id);
-      // Persist the pick only once it resolved to a real agent, so a bad id
-      // can't poison the remembered value.
+      // Persist only once the pick resolved to a real agent, so a bad id can't
+      // poison the remembered value.
       if (agent && picked.remember) setRememberedAgent(agent.id);
     }
   }
@@ -492,14 +471,13 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     process.exit(1);
   }
 
-  // Seed prompt for the agent (arg-mode CLIs read it on boot; inject-mode CLIs
-  // get it typed in after the TUI is up).
+  // Arg-mode CLIs read the seed file on boot; inject-mode CLIs get it typed in
+  // after the TUI is up.
   const seedFile = path.join(os.tmpdir(), `argent-lens-seed-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(seedFile, buildSeedPrompt(), "utf8");
   const launchCmd = agent.launch(shellQuote(process.cwd()), shellQuote(seedFile));
-  // Remove the seed temp file. Called from the two spawn-failure paths below
-  // (which exit before `teardown` — the usual remover — is wired) so a failed
-  // launch doesn't leak the file into tmpdir. Best-effort and idempotent.
+  // Also called from the two spawn-failure paths below, which exit before
+  // `teardown` — the usual remover — is wired.
   const removeSeedFile = (): void => {
     try {
       fs.rmSync(seedFile, { force: true });
@@ -508,16 +486,13 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     }
   };
 
-  // Spawn the agent. Preferred path: a PTY this process proxies, which takes
-  // over THIS terminal in ANY app (Warp / VS Code / tmux / iTerm / Terminal) and
-  // lets the relay inject feedback over the same channel as the user's keys.
-  // Fallback (no interactive tty, or node-pty unavailable): a new iTerm/Terminal
-  // window driven by AppleScript. `quiet` suppresses our own stdout once the
-  // agent owns this terminal, so we don't corrupt its TUI.
+  // Preferred: a PTY this process proxies, which takes over THIS terminal in ANY
+  // app (Warp / VS Code / tmux / iTerm / Terminal) and lets the relay inject
+  // feedback over the same channel as the user's keys. Fallback (no interactive
+  // tty, or node-pty unavailable): a new iTerm/Terminal window via AppleScript.
   const ptyMod = isInteractiveTty() ? loadNodePty() : null;
 
-  // The relay's two terminal-specific seams: how feedback is injected, and how
-  // the agent's death is observed. Filled in per spawn path below.
+  // The relay's two terminal-specific seams, filled in per spawn path below.
   let inject: (text: string) => boolean;
   let registerDeath: (onDeath: () => void) => void;
   let quiet = false;
@@ -534,7 +509,7 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
       await endSession(baseUrl);
       process.exit(1);
     }
-    quiet = true; // the agent owns this terminal now
+    quiet = true; // the agent owns this terminal — our stdout would corrupt its TUI
     dismissTrustPromptViaPty(proxy);
     if (agent.injectSeed) void injectSeedViaPty(proxy);
     inject = (text) => proxy.inject(text);
@@ -565,16 +540,13 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
     registerDeath = (onDeath) => pollSessionDeath(session, onDeath);
   }
 
-  // Teardown is idempotent and reachable from three places: the agent exiting,
-  // the relay ending for another reason (e.g. a `session-end` event while the
-  // agent is still alive), or a signal. `killAgent()` runs FIRST and
-  // synchronously: on the PTY path it restores the terminal (raw mode off,
-  // listeners removed — Node does NOT auto-revert setRawMode on exit) and kills
-  // the child, so the user's shell isn't left broken and the agent isn't
-  // orphaned. It's idempotent (dispose guards re-entry) and a no-op on the
-  // new-window path, so calling it here on every teardown is safe even when the
-  // agent already exited on its own. Then we end the server-side session (closes
-  // the window, shuts down any Lens-booted simulator) and exit.
+  // Idempotent and reachable from three places: the agent exiting, the relay
+  // ending for another reason (e.g. a `session-end` event while the agent is
+  // still alive), or a signal. `killAgent()` runs FIRST and synchronously so the
+  // PTY path restores the terminal (raw mode off, listeners removed) and kills
+  // the child — no broken shell, no orphaned agent. It's a no-op on the
+  // new-window path and when the agent already exited. Then end the server-side
+  // session (closes the window, shuts down any Lens-booted simulator) and exit.
   let tearingDown = false;
   const teardown = (code: number): void => {
     if (tearingDown) return;
@@ -595,20 +567,16 @@ export async function lens(argv: string[], options: LensCommandOptions): Promise
   teardown(0);
 }
 
-// The window can stay open indefinitely while the human decides, so waiting for
-// the pick must survive a transient SSE drop (a brief tool-server restart, a
-// half-open socket) rather than giving up on the first one — mirroring
-// runRelaySession's reconnect. Bounded by CONSECUTIVE failed reconnects (reset
-// whenever a live stream delivers an event) so a permanently-gone server still
-// gives up instead of looping forever; ~this many × SSE_RECONNECT_MS of slack.
+// The window can stay open indefinitely while the human decides, so the wait
+// must survive a transient SSE drop (a brief tool-server restart, a half-open
+// socket). Bounded by CONSECUTIVE failed reconnects — reset whenever a live
+// stream delivers an event — so a permanently-gone server still gives up.
 const AGENT_CHOICE_MAX_RECONNECTS = 60;
 
 /**
- * Wait for the human to pick an agent in the window, delivered over the SSE
- * stream. Reconnects across transient stream drops while the window is open.
- * Returns the picked id, or null when the session ends (`session-end`) or the
- * stream stays unreachable past the reconnect budget (caller closes the
- * session).
+ * Wait for the human's agent pick, delivered over the SSE stream. Returns the
+ * picked id, or null when the session ends (`session-end`) or the stream stays
+ * unreachable past the reconnect budget.
  */
 async function awaitAgentChoiceViaStream(
   baseUrl: string
@@ -634,7 +602,7 @@ async function awaitAgentChoiceViaStream(
         }
         // Stream ended cleanly (server closed it / is restarting) — reconnect.
       } catch {
-        // Transient stream/network error — reconnect after a short pause.
+        // Transient stream/network error — reconnect.
       }
       reconnects++;
       if (ac.signal.aborted || reconnects > AGENT_CHOICE_MAX_RECONNECTS) break;
@@ -647,9 +615,8 @@ async function awaitAgentChoiceViaStream(
 }
 
 /**
- * Watch a new-window fallback session for the agent's death by polling `ps` for
- * its tty, calling `onDeath` once it's confirmed gone. Used only when the agent
- * runs in a separate window (the PTY path observes the child's exit directly).
+ * Poll `ps` for a fallback session's tty, calling `onDeath` once it's confirmed
+ * gone. New-window path only — the PTY path observes the child's exit directly.
  */
 function pollSessionDeath(session: TerminalSession, onDeath: () => void): void {
   const spawnedAt = Date.now();
@@ -672,8 +639,8 @@ function pollSessionDeath(session: TerminalSession, onDeath: () => void): void {
  * Relay submitted feedback into the agent by PUSH: subscribe to the SSE stream
  * and inject each new round's summary. `inject` and `registerDeath` are the
  * terminal-specific seams the caller fills (PTY write + child exit, or
- * AppleScript write + `ps` poll). Returns once the agent dies. Reconnects the
- * stream if it drops while the agent is still alive.
+ * AppleScript write + `ps` poll). Returns once the agent dies; reconnects the
+ * stream while it lives.
  */
 export async function runRelaySession(
   baseUrl: string,
@@ -697,8 +664,7 @@ export async function runRelaySession(
     stop();
   });
 
-  // Don't relay anything submitted before now (a stale outcome from a previous
-  // session must not fire on launch).
+  // Baseline: a stale outcome from a previous session must not fire on launch.
   let lastCompletedAt = 0;
   try {
     const seed = await fetchOutcomeOnce(baseUrl);
@@ -730,8 +696,7 @@ export async function runRelaySession(
           }
         }
       }
-      // Stream ended cleanly (server closed it). If the agent is still alive,
-      // reconnect after a short pause.
+      // Stream ended cleanly (server closed it) — reconnect while the agent lives.
     } catch {
       // Transient stream/network error — reconnect while the agent lives.
     }

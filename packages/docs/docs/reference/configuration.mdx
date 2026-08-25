@@ -33,12 +33,12 @@ argent config get ios.additionalDeviceSets
 
 ### Available keys
 
-| Key                        | Scopes          | Merge            | Description                                                                                                                           |
-| -------------------------- | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `telemetry.enabled`        | global          | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` to change it                                |
-| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                        |
-| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths |
-| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                     |
+| Key                        | Scopes          | Merge            | Description                                                                                                                             |
+| -------------------------- | --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file) |
+| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                          |
+| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths   |
+| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                       |
 
 A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
 
@@ -57,11 +57,11 @@ The two files share the shape of the key. `ios.additionalDeviceSets` lives at `{
 
 Argent reads both files at each request. Thus a change takes effect immediately. The merge column above decides the effective value when both files set the same key:
 
-| Merge            | Result                                                                        |
-| ---------------- | ----------------------------------------------------------------------------- |
-| project wins     | The project value replaces the global value                                   |
-| union            | The global entries come first, then the project entries, without duplicates   |
-| restrictive wins | The more restrictive value wins. Thus a project file cannot turn telemetry on |
+| Merge            | Result                                                                      |
+| ---------------- | --------------------------------------------------------------------------- |
+| project wins     | The project value replaces the global value                                 |
+| union            | The global entries come first, then the project entries, without duplicates |
+| restrictive wins | The more restrictive value wins. `false` in either file turns telemetry off |
 
 Argent finds the project root at the nearest parent directory that contains `.argent`, `.git` or `package.json`. The feature flags below use the same two directories and the same project root.
 
@@ -93,6 +93,7 @@ argent enable argent-lens --scope project    # this project only
 | `disable-auto-screenshot` | Off     | Stop the automatic screenshot that Argent captures after each interaction tool                                                |
 | `artifacts-list-endpoint` | Off     | Expose the `GET /artifacts` endpoint of the tool-server for remote artifact consumers                                         |
 | `tool-server-event-log`   | Off     | Write the lifecycle events of the tool-server to a JSONL file                                                                 |
+| `boot-sound`              | Off     | Default the `sound` argument of `boot-device` to true, so Android emulators boot with audio output instead of muted           |
 | `microinteractions`       | Off     | Animate the host window to match device actions. Cosmetic only, macOS only                                                    |
 | `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                             |
 
@@ -207,4 +208,4 @@ An environment variable changes the behavior of the process that reads it. Expor
 | -------------- | ------------------------------------------------------------------------------------------ |
 | `DO_NOT_TRACK` | Set `1` to turn telemetry off for this process. `argent telemetry status` shows the result |
 
-See [Telemetry and privacy](/docs/reference/telemetry) for the opt-out command.
+See [Telemetry and privacy](/docs/reference/telemetry) for the opt-out command and the committed project opt-out.

@@ -60,6 +60,17 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// boot-device resolves the `sound` argument's default from the `boot-sound`
+// flag via isFlagEnabled, which reads real flags.json files on disk. Pin it to
+// false so a developer's enabled flag can't flip the emulator args these tests
+// assert on. (boot-device-sound.test.ts covers the flag-driven behavior.)
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, isFlagEnabled: () => false };
+});
+
 import {
   __resetInFlightBootsForTesting,
   createBootDeviceTool,

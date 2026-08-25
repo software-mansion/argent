@@ -7,9 +7,9 @@ export interface AndroidScreenSize {
 }
 
 /**
- * Read the device's current logical screen size via `wm size`. Used by
- * `describe` to normalize uiautomator's absolute-pixel bounds into the
- * 0–1 coordinate space shared with the rest of the tools.
+ * Logical screen size via `wm size`, used as the divisor that normalizes
+ * uiautomator's absolute-pixel bounds into the 0–1 coordinate space the tools
+ * share. The reported "Override size" wins over "Physical size" when present.
  *
  * `wm size` reports "Physical size: WxH\nOverride size: WxH"; the override
  * wins when present (set by emulators and some system configs).
@@ -18,14 +18,13 @@ export interface AndroidScreenSize {
  * (API 36) whose display really was 2424x1080: `wm size` still answered
  * "Physical size: 1080x2424" with no Override line. So the returned size must be
  * oriented by the caller — see `orientScreenSize` — before it is used as a
- * divisor for rotated bounds. An earlier revision of this comment assumed the
- * opposite and that assumption is what made the legacy describe path wrong on a
- * rotated device (#609).
+ * divisor for rotated bounds; assuming the opposite is what made the legacy
+ * describe path wrong on a rotated device (#609).
  *
- * NOT cached: a 5 s TTL would have served stale dimensions for several
- * describes after a rotation (rotation completes in <500 ms). One extra
- * `adb shell` per `describe` is cheap compared to the uiautomator dump exec-out
- * it sits next to.
+ * Deliberately uncached: rotation changes the size within a describe's
+ * lifetime (it completes in <500 ms), and a stale divisor yields frames with x
+ * or width above 1. One extra `adb shell` per `describe` is cheap next to the
+ * uiautomator dump it sits beside.
  */
 export async function getAndroidScreenSize(serial: string): Promise<AndroidScreenSize> {
   const out = await adbShell(serial, "wm size", { timeoutMs: 5_000 });

@@ -14,22 +14,13 @@ import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
-// NOTE on mutual exclusion: `text` and `key` are at-most-one. Two house rules
-// decide where that constraint can live, and neither leaves room for the
-// generated JSON Schema:
-//
-//   - zod's `.refine()` returns a ZodEffects the Registry ToolDefinition type
-//     does not accept (it requires a ZodObject so the JSON Schema generator can
-//     walk `.shape`), so the check runs inside `execute` — as on `boot-device`.
-//   - A hand-written `inputSchema` cannot carry it either. `not` is one of the
-//     top-level keys #782 banned repo-wide, and
-//     `tool-input-schema-contract.test.ts` fails any tool that declares one: the
-//     Messages API rejects a request whose schemas carry a top-level combinator,
-//     and that 400 fails EVERY tool in the request, not just this one.
-//
-// So the constraint reaches a client only as prose, and it is restated in BOTH
-// fields' `.describe()` as well as in the tool description — a caller reading
-// either parameter alone still sees it.
+// `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
+// so: `not` is one of the top-level combinators #782 banned repo-wide, and
+// `tool-input-schema-contract.test.ts` fails any tool declaring one — the
+// Messages API rejects such a request with a 400 that fails EVERY tool in it.
+// The check therefore runs in `execute`, and the constraint reaches a client
+// only as prose: both fields' `.describe()` and the tool description each
+// restate it, so a caller reading either parameter alone still sees it.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -76,16 +67,14 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// `keyboard` goes through `dispatchByPlatform`. The chromium branch resolves the
-// CDP session and the vega branch injects over `adb` (`inputd-cli`); the
-// ios/android branches runtime-probe their TV kind (TV is a `runtimeKind`, not a
-// `platform`, so a tvOS sim is "ios" and an Android TV "android" by id shape)
-// and route a TV target to the focus-driven backend. A non-TV target goes to the
-// simulator-server on iOS, but to `adb shell input` on Android (phones/tablets —
-// the HID transport is silently dropped on `hw.keyboard = no` AVDs, issue #449;
-// see platforms/{ios,android,chromium,vega,tv}.ts). No service is declared
-// eagerly: distinguishing a TV target is async, and declaring simulator-server up
-// front would also spawn it for a tvOS udid it can't drive.
+// TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
+// an Android TV as "android" by id shape — so those two branches probe the kind
+// at runtime and route a TV target to the focus-driven backend. A non-TV target
+// types over the simulator-server on iOS but over `adb shell input` on Android:
+// the HID transport is silently dropped on `hw.keyboard = no` AVDs (#449).
+// Nothing is declared in `services`, because the registry resolves declared
+// services before `execute` — the TV probe is async, and simulator-server would
+// then be spawned even for a tvOS udid it cannot drive.
 export function createKeyboardTool(registry: Registry): ToolDefinition<Params, KeyboardResult> {
   const dispatch = dispatchByPlatform<
     Record<string, unknown>,
@@ -106,16 +95,13 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   return {
     id: "keyboard",
     interaction: {
-      // Treat both text and key as sensitive. `key` is an unrestricted string at
-      // this boundary, so a value must not reach the event log before execution
-      // validates whether it is a supported named key.
+      // Never quote the parameters: `text` may hold a plaintext credential and
+      // `key` is an unvalidated free string here, yet these messages reach the
+      // event log before `execute` runs.
       //
-      // `startedMsg` still words a text+key request because it renders BEFORE
-      // `execute` rejects the combination — and likewise words `{ key: "" }` as
-      // a key press, which `execute` also rejects. `completedMsg` runs only
-      // after a call that succeeded, so it sees neither. Each formatter
-      // therefore has to word a different set of shapes, and the empty
-      // request — neither parameter, a documented no-op — reaches both.
+      // That ordering also makes `startedMsg` word requests `execute` then
+      // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
+      // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
@@ -136,46 +122,33 @@ One call does one action: pass text OR key, never both. To type and then press a
     capability,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
-    // No eager service: each branch resolves its backend lazily (TV control,
-    // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
-    // async and a tvOS udid must never resolve simulator-server.
     services: () => ({}),
     execute: async (services, params, options) => {
-      // `text` and `key` are mutually exclusive. A combined call has no meaning a
-      // caller can rely on: `key: "enter"` reads as "type, then submit", while
-      // `key: "backspace"` reads just as naturally as "delete, then type" — and
-      // whichever order a backend picks, the other reading silently corrupts the
-      // field (#579). One call, one action; a sequence is expressed by making two
-      // calls, batched into one `run-sequence` when the round-trip matters.
-      //
-      // Rejected here, ahead of the secret resolution and the platform dispatch
-      // below, so a combined request never resolves an `ARGENT_SECRET_*` value
-      // and never reaches a device — no backend has to defend against the shape.
+      // A combined call has no meaning a caller can rely on: `key: "enter"` reads
+      // as "type, then submit", `key: "backspace"` just as naturally as "delete,
+      // then type" — and whichever order a backend picks, the other reading
+      // silently corrupts the field (#579). Rejected ahead of the secret
+      // resolution and the dispatch below, so a combined request resolves no
+      // `ARGENT_SECRET_*` value and reaches no device.
       if (params.text !== undefined && params.key !== undefined) {
-        // `undefined`-based, not truthiness: the rule is about the shape of the
-        // request, so `{ text: "", key: "enter" }` is rejected too rather than
-        // carving out an empty string nobody would have to document.
+        // `undefined`, not truthiness: the rule is about the shape of the
+        // request, so `{ text: "", key: "enter" }` is rejected too.
         throw new InvalidToolInputError(
           // Says what did NOT happen, so the caller retries instead of first
-          // inspecting the field — and spells the retry out with a literal
-          // example rather than an ellipsis the Android backend can't type.
+          // inspecting the field. The example is literal because an ellipsis is
+          // non-ASCII and the Android backend rejects it.
           //
-          // The TV caveat is carried statically rather than by probing the
-          // target: this guard runs above the dispatch precisely so a combined
-          // request reaches no device, and distinguishing a TV kind is an async
-          // probe. Without it the prescribed `{ key: "enter" }` is a retry that
-          // cannot succeed on a TV, where `key` is rejected outright
-          // (platforms/tv.ts) — which is the diagnosis this guard would
-          // otherwise pre-empt.
+          // The TV caveat is static, not probed: this guard runs above the
+          // dispatch, so the target kind is unknown here — yet without it the
+          // prescribed `{ key: "enter" }` is a retry that cannot succeed on a
+          // TV, where `key` is rejected outright (platforms/tv.ts).
           "keyboard takes `text` or `key`, not both — nothing was typed. To type and then press " +
             'a key, send two `keyboard` steps in one `run-sequence`: { text: "hello" } followed by ' +
             '{ key: "enter" }. On a TV target (Apple TV / Android TV) `key` is not supported at ' +
             "all — type with `text` and move focus with `tv-remote` (up/down/left/right/select)." +
-            // The one-`run-sequence` form and two bare calls are NOT equivalent
-            // once the text carries a placeholder, and this message is where an
-            // agent converts a combined secret call — the tool description's
-            // caveat is read long before that moment, if at all. The check is
-            // syntactic (the same `.includes` flow-utils.ts uses), so the guard
+            // One `run-sequence` and two bare calls are NOT equivalent once the
+            // text carries a placeholder, and this message is where an agent
+            // converts a combined secret call. Syntactic check, so the guard
             // still resolves nothing.
             (params.text.includes(SECRET_PLACEHOLDER_MARKER)
               ? " This `text` carries a `" +
@@ -192,38 +165,35 @@ One call does one action: pass text OR key, never both. To type and then press a
           }
         );
       }
-      // An empty `key` is rejected; an empty `text` is not. The two parameters
-      // hold different kinds of value: `key` names one member of a closed set,
-      // and `""` is not a member — exactly the case the tool description already
-      // promises to fail on ("if an unsupported key name is provided"). `text`
-      // is a payload, so an empty one means the same thing as omitting it and
-      // stays the documented no-op.
+      // An empty `key` is rejected, an empty `text` is not: `key` names one
+      // member of a closed set and `""` is not a member, while `text` is a
+      // payload whose empty value means the same as omitting it (the no-op).
       //
-      // Without this the empty name slips between both layers. This tool decides
-      // `key` by presence, every backend dispatches it by truthiness
-      // (`if (params.key)`), so `{ key: "" }` reached a device, pressed nothing,
-      // and still returned `{ typed: "", keys: 0 }` — a success the caller
-      // cannot tell apart from a real press.
+      // Without this the empty name slips between both layers — this tool
+      // decides `key` by presence, every backend dispatches it by truthiness
+      // (`if (params.key)`) — so `{ key: "" }` reached a device, pressed
+      // nothing, and returned `{ typed: "", keys: 0 }`, which the caller cannot
+      // tell apart from a real press.
       if (params.key === "") {
         throw new InvalidToolInputError(
-          // Names the omission as the alternative, because a caller that sent an
-          // empty string usually built the value from something absent.
+          // Names the omission as the alternative: a caller that sent an empty
+          // string usually built the value from something absent.
           "`key` is an empty string, which names no key — nothing was pressed. Pass a named key " +
             "(enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, " +
             "f1–f12), or omit `key` if there is nothing to press.",
           {
-            // The same code an unknown name gets, because that is what this is:
-            // one telemetry bucket for every unusable `key` value.
+            // The same code an unknown name gets: one telemetry bucket for
+            // every unusable `key` value.
             error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
             failure_stage: "keyboard_named_key_empty",
             error_kind: "unsupported",
           }
         );
       }
-      // Secret placeholders resolve here — inside execute, after every logging
-      // boundary (agent transcript, mcp-calls.log, the event log, recorded
-      // flow YAMLs all see only the placeholder) and before the platform
-      // dispatch, so run-sequence and flow `type` steps are covered for free.
+      // Resolve inside `execute`: after every logging boundary (agent
+      // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
+      // see only the placeholder) and before the dispatch, so run-sequence and
+      // flow `type` steps are covered for free.
       if (params.text === undefined) return dispatch(services, params, options);
       const { text, secrets } = resolveSecretPlaceholders(params.text);
       if (secrets.length === 0) return dispatch(services, params, options);

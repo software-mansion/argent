@@ -4,8 +4,6 @@ import type { ArtifactStore } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 import type { FailureSignal } from "./errors";
 
-// ── Service Types ──
-
 export enum ServiceState {
   IDLE = "IDLE",
   STARTING = "STARTING",
@@ -15,12 +13,10 @@ export enum ServiceState {
 }
 
 /**
- * True when a service node is (or is becoming) a live, disposable process —
- * i.e. there is something real to tear down. ERROR and TERMINATING nodes hold
- * no running instance: a start that threw (e.g. SimulatorServer rejecting a
- * tvOS UDID) leaves an ERROR node behind, and reporting that as "stopped" is
- * misleading. The stop tools use this so `stopped: true` means a server was
- * actually running.
+ * True when a node holds (or is acquiring) a real process to tear down. ERROR
+ * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
+ * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
+ * tools use this to report `stopped` only for servers that were really running.
  */
 export function isLiveServiceState(state: ServiceState): boolean {
   return state === ServiceState.RUNNING || state === ServiceState.STARTING;
@@ -36,14 +32,10 @@ export interface ServiceInstance<T = unknown> {
   events: TypedEventEmitter<ServiceEvents>;
 }
 
-/** URN (Uniform Resource Name) for parameterized service instances, e.g. "sim-server:device1". */
+/** Service instance id, `namespace:payload` (e.g. "SimulatorServer:<udid>"). */
 export type URN = string;
 
-/**
- * Service blueprint: template for creating context-aware service instances.
- * getURN(context) produces the instance URN; getDependencies(context) returns alias→URN for deps;
- * factory receives resolved deps, context payload, and optional resolve options.
- */
+/** Template for context-aware service instances; `getDependencies` returns alias → URN. */
 export interface ServiceBlueprint<T = unknown, C = unknown> {
   namespace: string;
   getURN(context: C): URN;
@@ -54,25 +46,18 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
     options?: Record<string, unknown>
   ): Promise<ServiceInstance<T>>;
   /**
-   * Optional: decide whether an error thrown by a tool that used this service's
-   * instance means the instance is dead and should be torn down + re-created.
+   * Whether an error thrown by a tool that used this instance means the instance
+   * is dead. The registry disposes every resolved service that answers `true` and
+   * retries the tool once against fresh instances, so a cached instance whose
+   * process is alive but no longer serving (e.g. an un-booted simulator's
+   * simulator-server) self-heals instead of failing identically forever.
    *
-   * When a tool fails, the registry asks each of that tool's resolved services
-   * this question; any that answer `true` are disposed and the tool is retried
-   * once against freshly-resolved instances. This is how a cached instance whose
-   * underlying process is still alive but no longer serving (e.g. a simulator
-   * that was un-booted, so its simulator-server stopped listening) self-heals
-   * instead of returning the same connection error on every subsequent call.
-   *
-   * Keep this conservative: only return `true` for errors that prove the request
-   * never took effect (so retrying can't double-apply a side effect).
+   * Keep it conservative: only errors that prove the request never took effect,
+   * so the retry can't double-apply a side effect.
    */
   recoverable?(error: unknown): boolean;
 }
 
-/**
- * Service node: URN-keyed instance. Keys in the registry are full URNs; node holds blueprint + urn.
- */
 export interface ServiceNode<T = unknown> {
   urn: URN;
   blueprint: ServiceBlueprint<T, unknown>;
@@ -82,69 +67,53 @@ export interface ServiceNode<T = unknown> {
   dependents: Set<string>;
 }
 
-/** Per-service reference: URN string or URN + resolve options for factory. */
+/** URN, optionally with options forwarded to the blueprint factory. */
 export type ServiceRef = string | { urn: string; options?: Record<string, unknown> };
 
-/** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
   /**
-   * Resolution outcome for each declared {@link ToolDefinition.fileInputs}
-   * target the caller sent as a file-input wrapper, keyed by target arg name.
-   * Populated by the HTTP layer (which resolves wrappers before validation)
-   * and forwarded to the tool via {@link ToolContext}. Absent for plain-string
-   * args (older clients, direct invocations), so a missing entry means
-   * "legacy caller — behave exactly as before the file boundary existed".
+   * Resolution outcome for each declared {@link ToolDefinition.fileInputs} target
+   * the caller sent as a file-input wrapper, keyed by target arg name. Populated
+   * by the HTTP layer, which resolves wrappers before validation. Absent for
+   * plain-string args (older clients, direct invocations).
    */
   fileInputs?: Record<string, ResolvedFileInput>;
-  /** Optional caller-provided id used to correlate outer request metadata. */
+  /** Correlates this call with outer request metadata; the registry mints one when absent. */
   toolInvocationId?: string;
   /**
    * Registers a freshly-minted invocation id against the outer request's
    * telemetry attribution, returning a release fn. Set by the tool-server's HTTP
-   * layer (bound to the request's metadata) and forwarded verbatim into
-   * {@link ToolContext}. Orchestrator tools (run-sequence, flow-execute,
-   * flow-add-step) call it for every sub-tool they dispatch through
-   * {@link Registry.invokeTool} so nested invocations inherit attribution
-   * instead of being recorded as anonymous; they also pass it back down here so
-   * propagation survives arbitrary nesting.
+   * layer; orchestrators (run-sequence, flow-execute, flow-add-step) call it for
+   * every sub-tool they dispatch and pass it back down so attribution survives
+   * arbitrary nesting.
    *
-   * The outer request's AI client is inherited unchanged. The platform is
-   * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
-   * `devices` / `avdName`), falling back to the outer request's platform when the
-   * sub-tool carries no device arg — an orchestrator like flow-execute has no
-   * platform of its own and a single flow can target several devices, so the
-   * child's device arg is the only correct platform source. (A replayed
-   * `stop-all-simulator-servers` step carries `devices`, injected by
-   * `bindDeviceArgs`, so it resolves rather than falling back.) Opaque to the
-   * registry — it neither reads nor validates the recorded metadata.
+   * The AI client is inherited unchanged; the platform is re-derived from the
+   * sub-tool's own device arg (`udid` / `device_id` / `devices` / `avdName`) and
+   * falls back to the outer request's — an orchestrator has no platform of its
+   * own and a single flow can target several devices. Opaque to the registry.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
   /**
-   * Fire-and-forget progress events emitted by a long-running tool while it
-   * executes (e.g. flow-execute streaming one report per completed step). Set
-   * by transports that can deliver increments — the HTTP layer's NDJSON mode —
-   * and absent when the caller can only consume a final result. Tools must
-   * treat it as optional and never behave differently based on its presence;
-   * the final return value remains the complete, authoritative result.
+   * Fire-and-forget progress events from a long-running tool (e.g. flow-execute
+   * streaming one report per completed step). Set only by transports that can
+   * deliver increments — the HTTP layer's NDJSON mode. Tools must never behave
+   * differently based on its presence; the return value stays the complete,
+   * authoritative result.
    */
   emitProgress?: (event: unknown) => void;
 }
 
 /**
- * What a tool's `execute` receives as its third argument. The registry builds
- * this for every invocation: it carries the caller's {@link InvokeToolOptions}
- * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
- * {@link ArtifactStore}, so any tool that produces a host file can register it
- * (`ctx.artifacts.register(path)`) without declaring a per-tool service. The
- * registry always populates `artifacts`; it is only ever absent when `execute`
- * is called directly (bypassing `invokeTool`), e.g. in a unit test.
+ * Third argument to a tool's `execute`: the caller's {@link InvokeToolOptions}
+ * plus registry-owned context — the {@link ArtifactStore}, so any tool producing
+ * a host file can register it (`ctx.artifacts.register({ hostPath, kind })`)
+ * without declaring a per-tool service. Absent only when `execute` is called
+ * directly, bypassing `invokeTool` (e.g. in a unit test).
  */
 export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
-
-// ── Device + Capability Types ──
 
 export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega";
 
@@ -152,7 +121,7 @@ export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
- * a `DeviceInfo` and use it to dispatch to the right per-platform implementation.
+ * one and dispatch on it to the right per-platform implementation.
  */
 export interface DeviceInfo {
   id: string;
@@ -167,7 +136,6 @@ export interface DeviceInfo {
 /**
  * Per-platform support matrix. A tool with no `apple` block does not run on
  * iOS; a tool with `apple: { simulator: true }` runs on iOS simulators only.
- * The optional `supports` predicate refines further (e.g. exclude tvOS).
  */
 export interface ToolCapability {
   apple?: {
@@ -175,10 +143,9 @@ export interface ToolCapability {
     device?: boolean;
   };
   /**
-   * Remote-iOS support, driven via `sim-remote`. Independent matrix from
-   * `apple` because remote sims have different host-binary requirements
-   * (`sim-remote` instead of `xcrun`) and a different transport stack
-   * (MoQ + TCP proxy instead of local WebSocket + Unix sockets).
+   * Remote-iOS support. A matrix separate from `apple` because remote sims need
+   * the `sim-remote` binary instead of `xcrun` and a MoQ transport instead of the
+   * local WebSocket + HTTP one.
    */
   appleRemote?: {
     simulator?: boolean;
@@ -195,33 +162,22 @@ export interface ToolCapability {
     vvd?: boolean;
     device?: boolean;
   };
-  /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
 }
 
 /**
- * Host binaries (e.g. `xcrun`, `adb`) that a tool — or a per-platform branch
- * of a tool — cannot run without.
+ * Host binaries (e.g. `xcrun`, `adb`) that a tool — or one platform branch of a
+ * tool — cannot run without. `ToolDefinition.requires` is probed by the HTTP
+ * dispatcher before any execution, so it fits only tools that need the binary on
+ * *every* invocation regardless of the resolved device; `PlatformImpl.requires`
+ * is probed inside `dispatchByPlatform` once the device resolves, so an iOS-only
+ * environment never trips an `adb` preflight for a tool that merely *could* run
+ * on Android.
  *
- * Two declaration sites:
- *
- * - `ToolDefinition.requires` (global): probed by the HTTP dispatcher BEFORE
- *   any execution. Use only for tools that need this binary on *every*
- *   invocation regardless of the resolved device — rare; usually true only
- *   for analysis / no-device tools that always shell out.
- *
- * - `PlatformImpl.requires` (per-platform branch): probed by `dispatchByPlatform`
- *   AFTER the device is classified, so an iOS-only environment never trips an
- *   `adb` preflight just because a tool *could* run on Android. This is the
- *   right place for cross-platform tools where iOS needs `xcrun` and Android
- *   needs `adb`.
- *
- * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
- * install hint the agent can surface verbatim.
+ * A missing binary answers 424 Failed Dependency with an install hint the agent
+ * can surface verbatim.
  */
 export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega";
-
-// ── Tool Types ──
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
@@ -235,81 +191,75 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
     }) => string;
   };
   description?: string;
-  /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
+  /** Runtime input validation; `inputSchema` is derived from it at registration. */
   zodSchema?: z.ZodObject<any>;
   /**
-   * JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not
-   * explicitly set — and it should never need to be set. A hand-written schema is how top-level
-   * `oneOf`/`allOf`/`anyOf` reached clients once before (#773): the Anthropic Messages API rejects
-   * those outright with a 400 that fails the WHOLE request, every tool in it. Express a cross-field
-   * rule as a zod `.refine()`/`.superRefine()` plus a sentence in `description` instead. Combinators
-   * nested inside `properties` (e.g. a `z.union` field) are fine.
+   * JSON Schema advertised by `GET /tools`. Derived from `zodSchema` and should
+   * never need setting by hand: a hand-written top-level `oneOf`/`allOf`/`anyOf`
+   * reached clients once (#773), and the Anthropic Messages API rejects those
+   * with a 400 that fails the WHOLE request, every tool in it. Express a
+   * cross-field rule as a zod `.refine()`/`.superRefine()` plus a sentence in
+   * `description` instead; combinators nested inside `properties` (e.g. a
+   * `z.union` field) are fine.
    * Enforced by tool-server/test/tool-input-schema-contract.test.ts.
    */
   inputSchema?: Record<string, unknown>;
-  /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */
+  /** Hint for adapters (e.g. "image" makes MCP return base64 image content). */
   outputHint?: string;
   /**
-   * When true, the MCP adapter marks the tool with `_meta["anthropic/alwaysLoad"] = true`
-   * so Claude Code opts it out of progressive tool loading (ToolSearch). Use for the
-   * handful of tools the model needs on every turn (discovery + core interactions).
+   * Sets `_meta["anthropic/alwaysLoad"]` in the MCP adapter, opting the tool out
+   * of Claude Code's progressive tool loading (ToolSearch). For the handful of
+   * tools the model needs on every turn.
    */
   alwaysLoad?: boolean;
   /**
-   * Short phrase used by Claude Code's ToolSearch BM25 ranker to surface the tool
-   * for relevant queries without needing the full description in context. Forwarded
-   * via `_meta["anthropic/searchHint"]`.
+   * Short phrase forwarded as `_meta["anthropic/searchHint"]`, so Claude Code's
+   * ToolSearch BM25 ranker surfaces the tool without its full description in
+   * context.
    */
   searchHint?: string;
   /**
-   * When true, signals that an invocation may legitimately run for a long time
-   * (e.g. orchestrators that replay many sub-tools). The MCP adapter disables
-   * its per-request fetch timeout for these so long invocations don't get
-   * aborted mid-flight.
+   * Marks invocations that may legitimately run for a long time (e.g.
+   * orchestrators replaying many sub-tools): the MCP adapter drops its
+   * per-request fetch timeout, and the HTTP layer keeps the idle-shutdown timer
+   * warm for the call's duration.
    */
   longRunning?: boolean;
   /**
-   * Gates this tool behind a feature flag (a name in @argent/configuration-core's
-   * FLAG_REGISTRY). Enforced in TWO places, both re-checked on every request so
+   * Gates this tool behind a flag name in @argent/configuration-core's
+   * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so
    * `argent enable/disable <flag>` takes effect without restarting the long-lived
-   * tool-server: (1) the HTTP layer hides the tool from `GET /tools` and rejects
-   * `POST /tools/:name` with 404, and (2) `Registry.invokeTool` rejects it so
-   * internal dispatch paths (flows, run-sequence) can't bypass the gate. The tool
-   * is still registered; gating happens at invocation, not at registration.
+   * tool-server: the HTTP layer (hidden from `GET /tools`, 404 from
+   * `POST /tools/:name`) and `Registry.invokeTool` (so flows and run-sequence
+   * can't bypass the gate). Registration itself is never gated.
    */
   featureFlag?: string;
   /**
-   * Runtime predicate to hide this tool from exposure even when its feature flag
-   * (if any) is on. Evaluated at the HTTP edge on every `GET /tools` and
-   * `POST /tools/:name` — the same cadence as the feature-flag check — so a tool
-   * can appear/disappear with live server state without restarting the
-   * long-lived tool-server. Returning true hides the tool (absent from the list,
-   * 404 on invocation). Use for tools valid only in one server mode; e.g.
-   * `await_user_selection` is hidden while an `argent lens` CLI session owns the
-   * preview window, because feedback is relayed into the agent's terminal
-   * instead of through a blocking await — so the tool should not be offered at
-   * all rather than offered-but-forbidden.
+   * Hides the tool even when its feature flag is on, re-checked at the HTTP edge
+   * on every `GET /tools` and `POST /tools/:name` so exposure tracks live server
+   * state (absent from the list, 404 on invocation). For tools valid only in one
+   * server mode: `await_user_selection` is hidden while an `argent lens` CLI
+   * session owns the preview window, because picks are relayed into the agent's
+   * terminal rather than awaited — better not offered than offered-but-forbidden.
    */
   hideWhen?: () => boolean;
-  /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
+  /** Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
-   * Host binaries that must be on PATH for *every* invocation of this tool.
-   * Probed by the HTTP dispatcher before `execute` runs; rejects with 424.
-   * For cross-platform tools whose binary requirements differ per branch
-   * (iOS → `xcrun`, Android → `adb`), declare `requires` on each
-   * `PlatformImpl` instead — `dispatchByPlatform` will probe only the
-   * resolved branch's deps after `classifyDevice`.
+   * Host binaries needed by *every* invocation, probed by the HTTP dispatcher
+   * before `execute` runs (424 on a miss). When the requirement differs per
+   * branch (iOS → `xcrun`, Android → `adb`), declare it on each `PlatformImpl`
+   * instead, so only the resolved branch's deps are probed.
    */
   requires?: ToolDependency[];
   /**
    * Args that name files/directories on the CALLER's machine. Surfaced through
-   * `GET /tools` so the client can wrap them for the file boundary, and
-   * resolved back to server-readable paths before zod validation. See
-   * `file-inputs.ts` for the wire contract and kind semantics.
+   * `GET /tools` so the client can wrap them for the file boundary, and resolved
+   * back to server-readable paths before zod validation. See `file-inputs.ts`
+   * for the wire contract and kind semantics.
    */
   fileInputs?: FileInputSpec[];
-  /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
+  /** Alias → URN or { urn, options }; the registry resolves each, passing alias → API to execute */
   services: (params: TParams) => Record<string, ServiceRef>;
   execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
 }
@@ -317,8 +267,6 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
 export interface ToolRecord {
   definition: ToolDefinition<any, any>;
 }
-
-// ── Registry Events ──
 
 export type RegistryEvents = {
   serviceStateChange: (serviceId: string, from: ServiceState, to: ServiceState) => void;

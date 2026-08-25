@@ -80,10 +80,9 @@ Returns { status: "recording", timeLimitSeconds, outputFile } — the video is r
 Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
-    // simulator-server is resolved inside execute, not declared here: a tvOS
-    // udid classifies as iOS by shape, and an eager service would spawn
-    // simulator-server for a device it cannot drive and hang on its ready
-    // timeout (same reasoning as `screenshot`).
+    // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
+    // iOS by shape, so an eager service would spawn simulator-server for a
+    // device it cannot drive and hang on its ready timeout (as in `screenshot`).
     services: (params) => ({
       session: screenRecordingSessionRef(resolveDevice(params.udid)),
     }),
@@ -108,9 +107,8 @@ Fails if a recording is already running on the device, the device is not booted,
 
       const timeLimitSeconds = params.timeLimitSeconds ?? DEFAULT_TIME_LIMIT_SECONDS;
 
-      // Frames come from the same simulator-server instance that already serves
-      // `screenshot` and every input tool; resolving it here attaches to that
-      // instance (or starts it, if this tool is the first to need it).
+      // The same simulator-server instance `screenshot` and the input tools use;
+      // resolving here attaches to it, or starts it if nothing else needed it yet.
       const ref = simulatorServerRef(device);
       const simulator = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
       const streamUrl = simulator.streamUrl;
@@ -129,11 +127,9 @@ Fails if a recording is already running on the device, the device is not booted,
         );
       }
 
-      // Touch visualizer: capture.ts arms it right after the encoder is live and
-      // restores it to off when the recording ends. It drives the same
-      // simulator-server instance resolved above; the toggles are best-effort
-      // (a failure only costs the overlay, surfaced as a warning at stop), and
-      // remote sims never reach here — they are gated out by the stream check.
+      // capture.ts arms the visualizer once the encoder is live and restores it
+      // to off when the recording ends. The toggles are best-effort: a failure
+      // only costs the overlay, surfaced as a warning at stop.
       const showTouches = params.showTouches ?? true;
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
@@ -153,21 +149,14 @@ Fails if a recording is already running on the device, the device is not booted,
 }
 
 /**
- * Build the touch-visualizer control capture.ts arms for the life of a
- * recording. `enable` sets the comet trail, then flips the overlay on; the
- * returned success reflects the show toggle (the overlay itself), since the
- * trail is only a cosmetic enhancement.
+ * Touch-visualizer control for the life of a recording. `enable`'s result
+ * reflects only the `show` toggle; the trail is cosmetic.
  *
- * `disable` waits for any in-flight `enable` to settle before sending its own
- * `show:false`. Enabling is the one suspension point after a recording is
- * stamped, so a dispose (shutdown, or a stop-all-simulator-servers teardown of
- * this device) can call `disable` while `enable`'s
- * `show:true` request is still outstanding. Without this barrier the two
- * requests race and the earlier-issued `show:false` can be overtaken by the
- * later `show:true`, leaving simulator-server's overlay stuck on after the
- * recording is gone — where it then draws touch markers into subsequent
- * non-recording screenshots. Serializing the two guarantees `show:false` is
- * both issued and applied last, so the overlay always ends off.
+ * `disable` waits for an in-flight `enable` first: enabling is the one
+ * suspension point after a recording is stamped, so a dispose can call
+ * `disable` while `show:true` is still outstanding, and unserialized the later
+ * `show:true` overtakes `show:false` — leaving the overlay stuck on and drawing
+ * markers into subsequent non-recording screenshots.
  */
 export function makePointerControl(simulator: SimulatorServerApi): PointerControl {
   let enabling: Promise<unknown> | null = null;

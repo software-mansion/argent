@@ -1,25 +1,20 @@
 /**
- * JS script injected via Runtime.evaluate to walk the React fiber tree.
- * Returns a JSON string with screen dimensions and component entries,
- * each carrying a name, bounding rect, parent index, and useful props
- * (testID, accessibilityLabel, visible text).
+ * Builds the JS injected via Runtime.evaluate that walks the React fiber tree and
+ * reports `{ screenW, screenH, components }` as a JSON string over the
+ * `__argent_callback` binding; each component carries a name, rect, parent index,
+ * testID, accessibilityLabel and visible text.
  *
- * Supports both Fabric (new architecture) and Paper (old architecture).
- * On Fabric, measures via the public host instance (ReactNativeElement)
- * measureInWindow, falling back to nativeFabricUIManager.measure with the
- * shadow node. On Paper, falls back to UIManager.measureInWindow with native tags.
+ * Every renderer is enumerated and the mounted root with the largest fiber subtree
+ * wins, because a secondary reconciler (react-native-skia, react-native-svg) can own
+ * renderer id 1.
  *
- * Renderer selection is renderer-agnostic: apps that use a secondary reconciler
- * (react-native-skia, react-native-svg, etc.) register their own renderer, so we
- * enumerate every renderer and walk the mounted root with the largest fiber
- * subtree rather than assuming the React Native renderer is id 1.
+ * Fabric measures through the public host instance (ReactNativeElement) measureInWindow,
+ * falling back to nativeFabricUIManager.measure with the shadow node; Paper uses
+ * UIManager.measureInWindow with native tags. Measurement is batched via Promise.all
+ * with a per-host cache because Paper's measureInWindow is async.
  *
- * Measurement is async-safe: on Paper (where measureInWindow is async),
- * the script collects all candidates first, then batch-measures them via
- * Promise.all, with a per-host-tag cache to avoid redundant bridge calls.
- *
- * When includeSkipped is true, the script also tracks totalFibers walked
- * and a per-name count of JS-side skipped components.
+ * includeSkipped additionally reports totalFibers and a per-name count of skipped
+ * components.
  */
 export function makeComponentTreeScript(opts: {
   includeSkipped?: boolean;

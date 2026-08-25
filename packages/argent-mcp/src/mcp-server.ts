@@ -6,6 +6,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   ensureToolsServer,
+  errorBodyMessage,
   getResolvedToolsUrl,
   isRemoteRouted,
   getDeviceIdFromArgs,
@@ -86,19 +87,16 @@ export async function fetchWithReconnect(
 
 export interface StartMcpServerOptions {
   /**
-   * Locations of bundled artifacts in the published package. Required when
-   * ARGENT_TOOLS_URL is not set, since the MCP server may need to spawn
-   * tool-server itself.
+   * Locations of bundled artifacts in the published package, used when no
+   * remote target is configured and this process must spawn tool-server itself.
    */
   paths: ToolsServerPaths;
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
-  // First-run telemetry notice, once per installation, for users who reach a
-  // telemetry-enabled build via an update: `argent update` runs the OLD binary,
-  // so the editor relaunching `argent mcp` is often the first time the new
-  // code runs. stdout is the JSON-RPC channel — the notice MUST go to stderr
-  // to avoid corrupting it.
+  // Once per installation. `argent update` runs the OLD binary, so the editor
+  // relaunching `argent mcp` is often the first run of the new code. stdout is
+  // the JSON-RPC channel — the notice MUST go to stderr.
   if (shouldShowFirstRunNotice()) {
     process.stderr.write(`[argent] ${FIRST_RUN_NOTICE}\n`);
     markFirstRunNoticeShown();
@@ -111,8 +109,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
   // Honor a configured remote target (ARGENT_TOOLS_URL env or ~/.argent/link.json)
-  // before auto-spawning. The token for a remote server comes from
-  // ARGENT_AUTH_TOKEN; the local auto-spawn path mints and returns its own.
+  // before auto-spawning; it carries its own token, while the local auto-spawn
+  // path mints one.
   const resolved = await getResolvedToolsUrl();
   if (resolved.url) {
     TOOLS_URL = resolved.url;
@@ -132,11 +130,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
   }
 
-  // Coarse identity of the AI tool driving this MCP server, forwarded to the
-  // tool-server (a separate process that owns tool telemetry) as a request header.
-  // The signal is the MCP handshake clientInfo.name; unrecognized tools are
-  // reported as the coarse `other` bucket — we never forward the raw client name.
-  // Never carries prompts, model output, or tool args.
+  // Coarse identity of the AI tool driving this MCP server, taken from the MCP
+  // handshake clientInfo.name and forwarded to the tool-server, which owns tool
+  // telemetry. Unrecognized names collapse to `other`; the raw name is never sent.
   function aiClientHeaders(): Record<string, string> {
     const rawName = server.getClientVersion()?.name?.trim() || undefined;
     const aiClient = canonicalizeAiClient(rawName);
@@ -189,6 +185,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     data?: unknown;
     error?: string;
     message?: string;
+    issues?: unknown;
     note?: string;
   }
 
@@ -201,14 +198,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
     // File boundary, outbound: wrap declared file-path args so the tool-server
     // can read them in place (co-located) or from inlined content (remote).
-    // Metadata-driven: an older server that doesn't declare fileInputs gets
-    // the args verbatim.
+    // An older server that declares no fileInputs gets the args verbatim.
     let finalArgs = args;
     if (meta?.fileInputs?.length) {
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-        // `resolved` is the startup routing decision that picked TOOLS_URL —
-        // an external target means this process may not share the server's
-        // filesystem, so file bytes must ride along.
+        // An external target may not share this process's filesystem, so the
+        // file bytes have to ride along.
         includeContent: resolved.url !== null,
       });
     }
@@ -224,7 +219,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
     const json = (await res.json()) as ToolAPIResponse;
 
-    if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
+    if (!res.ok) throw new Error(errorBodyMessage(json) ?? res.statusText);
 
     // File boundary, inbound: persist any client-write directives (files that
     // belong in the agent's project, e.g. recorded flow YAMLs) and rewrite
@@ -312,23 +307,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         containsSecretPlaceholder(params.arguments)
       ) {
         // The tool-server typed the *resolved* secret; a screenshot of a
-        // non-secure-entry field would hand the plaintext back to the model
-        // as pixels. Tell the agent why there is no image instead.
-        //
-        // Every instruction here has to be safe to follow AFTER the typing,
-        // because that is the only moment this note appears: the branch needs a
-        // `{{secret:…}}` in the arguments, and any call carrying one has already
-        // typed the value. So the note forbids re-sending the typing step — a
-        // `run-sequence` rebuilt around it would resolve and type the secret a
-        // second time on top of the copy already in the field, and Enter would
-        // submit the doubled credential. The batching advice is kept, worded for
-        // the NEXT such request rather than as a remedy for this one.
-        //
-        // The skip is decided per tool call from that call's whole arguments, so
-        // a bare follow-up `{ key: "enter" }` carries no placeholder and is
-        // screenshotted as usual. Nothing here can extend the skip over it after
-        // the fact, so the note states that plainly instead of prescribing a
-        // form that would re-type.
+        // non-secure-entry field would hand the plaintext back to the model as
+        // pixels. Every instruction in the note must be safe to follow AFTER the
+        // typing, since this branch only fires on a call that already typed it:
+        // hence it forbids re-sending the typing step (a rebuilt `run-sequence`
+        // would type the secret a second time on top of the first) and states
+        // that only this call is skipped, the decision being per call's args.
         content = [
           ...content,
           {
@@ -337,13 +321,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           },
         ];
       } else if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
-        // Wait until the screen has settled before capturing, bounded by the
-        // per-tool budget. Replaces a blind `setTimeout(delayMs)`: the
-        // `await-screen-idle` tool polls the AX tree server-side and returns as
-        // soon as the screen renders and holds still, so a relaunch that used to
-        // always cost the full 3000ms usually returns in a fraction of it. The
-        // per-tool delay is now the cap. If the tool is unavailable (older or
-        // remote tool-server), fall back to the previous fixed settle.
+        // Let the screen settle before capturing, bounded by the per-tool
+        // budget: `await-screen-idle` polls the tree server-side and usually
+        // returns well under the cap. If the call fails (e.g. a tool-server
+        // without that tool), fall back to sleeping the full budget.
         const maxWaitMs = getAutoScreenshotDelayMs(params.name);
         if (maxWaitMs > 0) {
           try {
@@ -379,7 +360,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             ];
           }
         } catch {
-          // Auto-screenshot failed — silently drop it.
+          /* best-effort */
         }
       }
 
@@ -411,9 +392,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   await server.connect(new StdioServerTransport());
 
-  // Proactive health monitoring — restart tool server if it dies between requests.
-  // Only run for auto-spawned servers; remote-routed targets (env var or link)
-  // are the user's responsibility, and a silent local respawn would mask outages.
+  // Restart the tool server if it dies between requests. Auto-spawned servers
+  // only: a remote-routed target is the user's responsibility, and a silent
+  // local respawn would mask its outage.
   if (!(await isRemoteRouted())) {
     const HEALTH_INTERVAL_MS = 30_000;
     const healthInterval = setInterval(async () => {

@@ -1,20 +1,13 @@
 /**
- * Stage 0: Preprocess — Parent Chain Tracing
- *
- * For each fiber commit whose reason is 'parent', walks up the parentName chain
- * within the same React commit batch to find the root cause component — the
- * ancestor that actually had a props/hooks/state/context change.
- *
- * Annotates the commit with rootCause* fields so Stage 1 can aggregate them
- * into a parentTrigger finding, giving the LLM actionable "what triggered this
- * parent cascade" information rather than just "dominantReason: parent".
+ * Stage 0: for each commit whose reason is 'parent', walks the parentName chain
+ * within the same commit batch to the nearest ancestor that had a real change and
+ * records it in the rootCause* fields for the later stages.
  */
 import type { DevToolsFiberCommit } from "../types/input";
 import { deriveReason } from "./utils";
 
 export function preprocess(commits: DevToolsFiberCommit[]): DevToolsFiberCommit[] {
-  // Group by commitIndex → Map<componentName, DevToolsFiberCommit>
-  // Last-write wins for duplicate component names in the same commit (edge case).
+  // Last write wins for duplicate component names within one commit.
   const commitMap = new Map<number, Map<string, DevToolsFiberCommit>>();
   for (const c of commits) {
     let m = commitMap.get(c.commitIndex);
@@ -35,7 +28,6 @@ export function preprocess(commits: DevToolsFiberCommit[]): DevToolsFiberCommit[
     const commitComponents = commitMap.get(c.commitIndex);
     if (!commitComponents) return c;
 
-    // Walk the parent chain to find the first ancestor with a non-parent reason
     let current: string | null = c.parentName;
     const visited = new Set<string>([c.componentName]);
     const chain: string[] = [];

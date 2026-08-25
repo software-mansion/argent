@@ -23,9 +23,8 @@ import {
 import styles from "./styles.module.css";
 
 /*
- * Only the icons the sidebar actually uses are imported, so the bundle carries
- * this map and nothing else from lucide. Pages opt in through
- * `sidebar_custom_props: { icon: "rocket" }`; category headings carry no icon.
+ * Explicit map so the bundle pulls only these icons from lucide.
+ * Keys come from a page's `sidebar_custom_props: { icon: "rocket" }`.
  */
 const ICONS: Record<string, LucideIcon> = {
   "bug": Bug,

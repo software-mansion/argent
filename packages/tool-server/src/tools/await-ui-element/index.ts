@@ -28,18 +28,14 @@ import {
   evaluateCondition,
 } from "../../utils/ui-tree-match";
 
-// Tool id. Exported so run-sequence can both allow this tool and recognise its
-// result shape (it returns { success: false } instead of throwing on an unmet
-// condition) without hard-coding the string in two places.
+// Exported so run-sequence can allowlist this tool without repeating the string.
 export const AWAIT_UI_ELEMENT_TOOL_ID = "await-ui-element";
 
-// True when `result` is an unmet `await-ui-element` outcome — it reports a
-// timed-out condition by returning { success: false } rather than throwing.
-// The orchestrating tools (`run-sequence`, `flow-execute`) use this to STOP a
-// sequence at a wait that never held, instead of running the next step (often a
-// tap) blind against a screen that never settled. Shared here so the result
-// shape lives in one place. Result is `unknown` because it crosses the registry
-// boundary untyped.
+// True when `result` is a timed-out `await-ui-element`: an unmet condition is
+// reported as { success: false } rather than thrown. `run-sequence` and
+// `flow-execute` use this to stop a sequence instead of running the next step
+// against a screen that never settled. `unknown` because the result crosses the
+// registry boundary untyped.
 export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
   return (
     tool === AWAIT_UI_ELEMENT_TOOL_ID &&
@@ -254,41 +250,25 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// ── Tree matching ────────────────────────────────────────────────────────
-// The matching engine (matchNode, findAll, isVisible, firstInReadingOrder, …)
-// lives in utils/ui-tree-match so the flow directives and recorder reuse the
-// exact selector semantics. `evaluateMatches` is kept as a params-shaped wrapper
-// for this tool and its tests.
-
+// The matching engine lives in utils/ui-tree-match so the flow directives and
+// recorder reuse the exact selector semantics; `evaluateMatches` is a
+// params-shaped wrapper for this tool and its tests.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
   return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
 }
 
-// A degraded / blind read: the tree came back EMPTY and that emptiness is not
-// trustworthy evidence the element is gone, so we must not let `hidden` (the only
-// condition that resolves true on an empty tree) resolve positively off it. Two
-// ways an empty tree is untrustworthy:
-//   - the adapter flagged it as unreliable: iOS AX down, native injection
-//     pending, or a native hierarchy that could not be read at all (nothing
-//     connected to auto-target, the service down, the query failing) →
-//     `describeIos` returns an empty tree plus a hint / should_restart instead
-//     of throwing. Android / Chromium never set these flags.
-//   - the selector matched on an EARLIER poll (`everMatched`) yet the whole tree
-//     is now empty. A genuinely-hidden element leaves the rest of the screen
-//     behind; a wholly empty tree after we'd already read content is a transient
-//     blank frame mid-navigation, not the element being hidden. This is the only
-//     guard that fires on Android / Chromium, where an empty tree is otherwise
-//     taken at face value — without it an `everMatched` `hidden` wait would
-//     falsely resolve on a one-frame blink and release a gated tap against a
-//     screen that only briefly went blank.
+// An empty tree is not trustworthy evidence the element is gone, so `hidden` —
+// the only condition that resolves true on one — must not resolve off it when
+// the adapter flagged the read (`describeIos` returns an empty tree plus a hint /
+// should_restart instead of throwing), or when the selector matched on an earlier
+// poll and the tree has since gone blank mid-navigation.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   if (data.tree.children.length > 0) return false;
   return Boolean(data.hint || data.should_restart || everMatched);
 }
 
-// Fold an unreliable-read hint / restart prompt onto a timeout note so the agent
-// learns the real cause (degraded AX, native injection pending) rather than a
-// bare "no element matched".
+// Fold the read's hint / restart prompt into the timeout note so the agent sees
+// the real cause rather than a bare "no element matched".
 function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
   if (!lastData) return base;
   const extras: string[] = [];
@@ -312,8 +292,8 @@ function timeoutNote(
   let base: string;
   switch (params.condition) {
     case "text": {
-      // Visible-first, mirroring evaluateCondition — the note must quote the
-      // same element the check read, or the two can contradict each other.
+      // Visible-first, mirroring evaluateCondition, so the note quotes the
+      // element the check read.
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
@@ -338,12 +318,10 @@ function timeoutNote(
   return appendDiagnostics(base, lastData);
 }
 
-// ── Tool ─────────────────────────────────────────────────────────────────
-
-// `await-ui-element` is a factory (like `describe`) because the iOS / Android
-// tree fetch resolves the AX / android-devtools services through the registry
-// rather than through the tool's own services() declaration. Only the Chromium
-// CDP session flows in as a normal service.
+// A factory (like `describe`) because the iOS / Android tree fetch resolves the
+// AX / android-devtools services through the registry rather than through the
+// tool's own services() declaration. Only the Chromium CDP session flows in as a
+// normal service.
 export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Params, WaitResult> {
   async function fetchTree(
     device: DeviceInfo,
@@ -419,15 +397,13 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
 
-      // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
-      // blow the per-fetch budget for a fake UDID that never caches. Same for
-      // the Android TV probe: a serial that isn't listed is never cached, so
-      // leaving it inside `describeAndroid` would spawn `adb devices` per poll.
+      // Resolve once, outside the poll loop: an id that isn't listed is never
+      // cached, so probing per fetch would re-run `simctl list` / `adb devices`
+      // on every poll.
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
-      // Start the wait clock after setup so its fixed cost isn't charged against
-      // timeoutMs (the deadline should bound polling, not device resolution).
+      // Clock starts after setup so its fixed cost isn't charged to timeoutMs.
       const start = Date.now();
       const cancelled = (): WaitResult => ({
         success: false,
@@ -440,9 +416,8 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
       const selector = params.selector;
 
-      // For `hidden`: did the selector ever match across polls? Distinguishes
-      // "the element was there and disappeared" from "the selector never matched
-      // at all" — otherwise a typo'd selector is an instant false-positive.
+      // Whether the selector ever matched, so a `hidden` wait that resolves on
+      // the first poll can report it may have had nothing to wait for.
       let everMatched = false;
       // When the last read that could EVALUATE the condition landed. Still
       // undefined at the deadline means no read ever did.
@@ -456,8 +431,6 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          // Compute `blind` after `everMatched` so an empty tree that follows an
-          // earlier match counts as a transient blank, not a confirmed read.
           const blind = isBlindRead(data, everMatched);
           if (!blind) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {

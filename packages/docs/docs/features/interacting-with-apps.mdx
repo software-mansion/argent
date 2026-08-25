@@ -35,7 +35,7 @@ The agent opens an app by its bundle id or package name. The agent does not tap 
 
 ## Gestures and text
 
-The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape.
+The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
 
@@ -79,7 +79,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 
 - TV targets are focus-driven. The agent does not use touch gestures on them.
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
-- Shake works on simulators and emulators only.
+- Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

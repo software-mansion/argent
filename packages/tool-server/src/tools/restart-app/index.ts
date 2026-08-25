@@ -9,12 +9,11 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 
-// Bundle id / package name. Head must be letter or underscore so a bundleId
-// like `--user` can't masquerade as a flag inside `am force-stop …`.
+// Head must be a letter or `_` so a bundleId like `--user` can't masquerade as
+// a flag inside `am force-stop …`.
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
-// Same alphabet as launch-app's ACTIVITY_PATTERN. Leading `.` is allowed so
-// shorthand activities like `.MainActivity` work; leading `-` is forbidden
-// for flag-injection reasons.
+// Same alphabet as launch-app's ACTIVITY_PATTERN: leading `.` for shorthand
+// activities like `.MainActivity`, no leading `-` (flag injection).
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
 const zodSchema = z.object({
@@ -45,15 +44,9 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// `restart-app` resolves native-devtools through `registry` inside the iOS
-// handler (closed over below) rather than via the registry's `services()`
-// declaration — the same pattern as `describe` / `screenshot`. A tvOS sim
-// classifies as platform "ios" by UDID shape; native-devtools is iOS *and*
-// tvOS capable, so the handler resolves it for both. Its ensureEnv picks the
-// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap
-// for Apple TV sims), so injection is prepared correctly on tvOS too — not
-// skipped. Lazy resolution keeps this aligned with the other iOS tools that
-// branch on the resolved device inside their handler.
+// Local iOS resolves native-devtools inside the handler rather than via
+// `services()`. A tvOS sim classifies as platform "ios", and native-devtools
+// covers it too (ensureEnv injects the TVOSSIMULATOR dylib slice).
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
@@ -71,11 +64,8 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
     zodSchema,
     capability,
-    // ios-remote declares an eager native-devtools service (its handler shares
-    // the local iOS relaunch path, which reads `services.nativeDevtools`). Local
-    // iOS resolves native-devtools lazily in its handler so a tvOS udid never
-    // spins up the iOS-only injection (see header comment); Android and Vega
-    // need no service.
+    // Only ios-remote's handler reads `services.nativeDevtools`, so only it
+    // needs an eager declaration.
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
@@ -86,7 +76,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       Record<string, unknown>,
       Params,
       RestartAppResult,
-      // No chromium branch — falls back to the ChromiumServices default.
+      // No chromium branch.
       Record<string, unknown>,
       RestartAppVegaServices,
       RestartAppIosServices

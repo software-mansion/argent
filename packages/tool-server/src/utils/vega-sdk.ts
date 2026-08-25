@@ -6,8 +6,7 @@ import semver from "semver";
 import { resolveVegaBinary } from "./vega-cli";
 
 /**
- * Vega SDK on-disk layout for VVD (Vega Virtual Device) images — the `listAvds`
- * analogue for Vega.
+ * VVD (Vega Virtual Device) image discovery.
  *
  * The SDK installs bootable VVD images under
  *   <sdkPath>/vega-sdk/<channel>/<version>/vvd/images/<image>
@@ -15,13 +14,9 @@ import { resolveVegaBinary } from "./vega-cli";
  *
  * A *stopped* VVD does not appear in `vega device list` (only running/connected
  * devices do), so bootable VVDs have to be discovered from this images directory
- * rather than the CLI device list. Discovery is gated on the Vega CLI being
- * resolvable (PATH or ~/vega/bin, via `resolveVegaBinary`); the install root and
- * active version come from `~/vega/config.json` (`sdkPath`, `defaultChannel`,
- * `defaultVersion`). The <version> segment moves with every SDK update, so it is
- * resolved dynamically — trusted from config first (verified on disk), then by
- * scanning the channel dir for the highest installed semver. Each image
- * subdirectory is a VVD "package root" — passed to `vega virtual-device start -p`.
+ * rather than the CLI device list. The <version> segment moves with every SDK
+ * update, so it is resolved dynamically: trusted from config first (verified on
+ * disk), then by scanning the channel dir for the highest installed semver.
  */
 
 interface VegaConfig {
@@ -31,7 +26,7 @@ interface VegaConfig {
 }
 
 export interface VvdImage {
-  /** Image name, e.g. "tv" — what an agent passes as boot-device's `vvdImage`. */
+  /** Image name, e.g. "tv" — boot-device's `vvdImage` argument. */
   name: string;
   /** Absolute VVD package root, passed to `vega virtual-device start -p <path>`. */
   path: string;
@@ -51,7 +46,7 @@ function bareVersion(version: string | undefined): string | undefined {
   return version?.includes("@") ? version.split("@").pop() : version;
 }
 
-/** The `vega-sdk` component roots to probe, config-derived first, default last. */
+/** `vega-sdk` roots to probe, config-derived first, default last. */
 function sdkComponentRoots(config: VegaConfig): string[] {
   const roots = [
     config.sdkPath && join(config.sdkPath, "vega-sdk"),
@@ -66,7 +61,6 @@ async function resolveVersion(
   preferred: string | undefined
 ): Promise<string | null> {
   if (preferred && existsSync(join(channelDir, preferred))) return preferred;
-  // Fall back to the highest installed semver under the channel dir.
   try {
     const versions = (await readdir(channelDir))
       .filter((e) => semver.valid(e))
@@ -77,12 +71,7 @@ async function resolveVersion(
   }
 }
 
-/**
- * Resolve the directory holding installed VVD images
- * (`<sdkPath>/vega-sdk/<channel>/<version>/vvd/images`), or null when the Vega SDK
- * / a VVD image set can't be found. Best-effort and side-effect-free, like
- * `listAvds`; returns null when the Vega CLI isn't on PATH at all.
- */
+/** Directory holding installed VVD images; null when the Vega CLI or an image set is missing. */
 export async function resolveVegaSdkImagesDir(): Promise<string | null> {
   if (!(await resolveVegaBinary())) return null;
   const config = await readVegaConfig();

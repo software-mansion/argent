@@ -2,15 +2,12 @@ import { randomUUID } from "node:crypto";
 import { detectCloudAgent, type CloudAgent } from "./cloud-agent-detect.js";
 import { isCi } from "./ci-detect.js";
 
-// Build-time version metadata injected by esbuild's `define`. It substitutes the
-// bare `ARGENT_CLI_VERSION` identifier below with a string literal in the bundle;
-// unbundled source (tests) leaves it undefined and falls back to "0.0.0". A
-// `globalThis.ARGENT_CLI_VERSION` member read is intentionally NOT used here:
-// esbuild only rewrites the bare identifier, not property accesses, so such a
-// read would always be undefined.
+// esbuild `define` substitutes this bare identifier with a string literal at
+// build time; unbundled source (tests) leaves it undefined. It must stay a bare
+// identifier — esbuild rewrites identifiers, not property accesses.
 declare const ARGENT_CLI_VERSION: string | undefined;
 
-// Process-local session id. Never persisted or reused across Node processes.
+// Never persisted or reused across Node processes.
 let SESSION_ID: string = randomUUID();
 
 function readCliVersion(): string {
@@ -35,22 +32,18 @@ export interface BaseProps {
   arch: NodeJS.Architecture;
   is_tty: boolean;
   is_ci: boolean;
-  // Canonical slug of the detected cloud/remote AI coding-agent runtime, or null.
-  // The agent-environment analogue of is_ci — see ./cloud-agent-detect.ts. Fires
-  // only for vendor-hosted/remote runs, not local agent CLI use.
+  // Vendor-hosted/remote agent runtime slug; null for local agent CLI use.
+  // See ./cloud-agent-detect.ts.
   cloud_agent: CloudAgent | null;
   runtime: Runtime;
   session_id: string;
 }
 
-// Everything here is constant for the process lifetime. Computing it once
-// matters for the long-lived tool-server, which calls getBaseProps() on every
-// tracked event: readCliVersion(), the process.version regex, and especially
-// isCi() (which scans ~9 env vars and walks every ci-info vendor definition) and
-// detectCloudAgent() (which scans the agent signal table and may stat the
-// Devin/Jules markers) would otherwise re-run per event. Only `runtime` and
-// `session_id` are kept dynamic below — the session id reads SESSION_ID live so
-// the test seam can rotate it.
+// Constant for the process lifetime, and memoized because the long-lived
+// tool-server calls getBaseProps() on every tracked event: isCi() walks every
+// ci-info vendor definition and detectCloudAgent() may stat the Devin/Jules
+// markers. `session_id` stays a live read of SESSION_ID so the test seam can
+// rotate it.
 type InvariantProps = Omit<BaseProps, "runtime" | "session_id">;
 let invariantProps: InvariantProps | null = null;
 

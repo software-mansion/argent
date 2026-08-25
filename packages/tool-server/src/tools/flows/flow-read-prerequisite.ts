@@ -34,20 +34,22 @@ const zodSchema = z
     if ((params.name === undefined) === (params.flow_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Pass exactly one flow source: name or flow_path.",
-        path: ["flow_path"],
+        message:
+          params.name !== undefined
+            ? "Pass exactly one flow source: name or flow_path."
+            : "Pass exactly one flow source: name or flow_path. flow-read-prerequisite needs " +
+              "the flow's name in `name` — it resolves <project_root>/.argent/flows/<name>.yaml.",
+        // The ROOT, matching flow-execute: the rule spans both source fields,
+        // so it must not be anchored on one of them.
+        path: [],
       });
     }
   });
 
-// Mirror of flow-execute's specs, field for field: the documented pre-flight is
-// "read the prerequisite, then run", so both tools must resolve the same source
-// under the same boundary rules. A spec that diverged — e.g. one that silently
-// dropped flow_path — would have this tool answer for the saved flow of the
-// same stem while flow-execute runs the explicit file: same flow identity, two
-// contracts. See flow-run.ts for why a dual-source wire is unwrapped
-// (caller-authored flow_path beside name) or dropped (client-derived flow_file
-// beside flow_path) rather than resolved.
+// Must stay field-for-field identical to flow-execute's specs, or the same
+// params resolve to different files here and there — e.g. dropping flow_path
+// would answer for the saved flow of the same stem. flow-run.ts explains the
+// unwrapWhenSet/skipWhenSet choices.
 const fileInputs: FileInputSpec[] = [
   {
     target: "flow_path",
@@ -81,17 +83,14 @@ Use when you need to check what app/simulator state is required before executing
 source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
 the flow that will actually run.
 Fails if the flow file does not exist.
-Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
+Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected. The name goes in \`name\`, which resolves <project_root>/.argent/flows/<name>.yaml.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {
-    // The same resolver flow-execute uses, gates included: the prerequisite
-    // reported here must be the contract of exactly the file flow-execute
-    // would run for these params — flow_path clears the statVerified
-    // co-location boundary (never uploads, never raw server paths) and reports
-    // its basename-derived logical name, while the name branch keeps the
-    // flow_file containment under project_root.
+    // The same resolver flow-execute uses, gates included, so the prerequisite
+    // reported is the contract of exactly the file flow-execute would run for
+    // these params.
     const { filePath, flowName } = await resolveFlowSource(
       params,
       ctx?.fileInputs?.flow_file,

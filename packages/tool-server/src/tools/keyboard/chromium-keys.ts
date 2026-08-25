@@ -1,12 +1,9 @@
-// CDP `Input.dispatchKeyEvent` translation for the keyboard tool's named-key
-// surface. Maps the same string set we accept on iOS/Android to the renderer's
-// DOM key + windowsVirtualKeyCode + code values that web pages typically listen
-// for.
+// CDP `Input.dispatchKeyEvent` descriptors for the keyboard tool: the same named
+// keys accepted on iOS/Android (./key-codes.ts NAMED_KEYS), plus printable chars.
 //
-// Why three fields? key drives KeyboardEvent.key, code drives .code, and
-// windowsVirtualKeyCode drives the legacy .keyCode/.which. Apps still wired to
-// the deprecated keyCode API (e.g. React Native Web's Pressable) need all
-// three set or they will see `keyCode === 0` and silently drop the event.
+// key drives KeyboardEvent.key, code drives .code, windowsVirtualKeyCode drives
+// the legacy .keyCode/.which — apps still reading keyCode see 0 unless all three
+// are set.
 
 export interface ChromiumNamedKey {
   key: string;
@@ -41,13 +38,7 @@ export const CHROMIUM_NAMED_KEYS: Record<string, ChromiumNamedKey> = {
   "f12": { key: "F12", code: "F12", windowsVirtualKeyCode: 123 },
 };
 
-/**
- * Resolve the CDP descriptor for a single printable character. Returns null for
- * characters the keyboard tool doesn't know how to type (control chars beyond
- * tab/newline). For letters/digits/punctuation we set windowsVirtualKeyCode
- * even though `text` alone would suffice on most pages — apps listening to
- * the legacy `keydown.keyCode` need it.
- */
+/** CDP descriptor for one character; null outside printable ASCII plus tab/newline. */
 export function charToChromiumKey(char: string): {
   key: string;
   code: string;
@@ -65,7 +56,6 @@ export function charToChromiumKey(char: string): {
   if (cc >= 0x20 && cc <= 0x7e) {
     const upper = char.toUpperCase();
     const upperCc = upper.charCodeAt(0);
-    // Letters: code KeyA..KeyZ, vk = char code of uppercase
     if (upperCc >= 65 && upperCc <= 90) {
       return {
         key: char,
@@ -74,7 +64,6 @@ export function charToChromiumKey(char: string): {
         windowsVirtualKeyCode: upperCc,
       };
     }
-    // Digits: code Digit0..Digit9, vk = char code 48..57
     if (cc >= 48 && cc <= 57) {
       return {
         key: char,
@@ -83,9 +72,7 @@ export function charToChromiumKey(char: string): {
         windowsVirtualKeyCode: cc,
       };
     }
-    // Punctuation / space: rely on `text` for the actual character; code is
-    // unused by most apps. windowsVirtualKeyCode = 0 since legacy listeners
-    // for punctuation are rare and the actual character is delivered via text.
+    // Punctuation: `text` carries the character, so `code` is left unmapped.
     return {
       key: char,
       code: "",

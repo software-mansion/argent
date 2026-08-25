@@ -1,13 +1,3 @@
-/**
- * Stage 2: Enrich
- *
- * Derives statistics from Welford accumulators:
- *   mean, totalRenderMs, normalizedRenderCount
- *
- * Also computes:
- *   isCompilerOptimized — true if >50% of renders showed useMemoCache
- *   parentTrigger       — root cause component + reason for parent-cascade cases
- */
 import type {
   ReduceOutput,
   EnrichOutput,
@@ -64,7 +54,6 @@ function bestRootCause(
 
   if (!bestData) return undefined;
 
-  // Resolve hook names from the root cause component's hookTypes
   const ht = bestData.hookTypes ?? hookTypeNames;
   const changedHookNames = ht ? bestData.changedHooks.map((idx) => ht[idx] ?? `hook[${idx}]`) : [];
 

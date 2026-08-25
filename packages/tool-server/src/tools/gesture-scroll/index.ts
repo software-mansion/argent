@@ -55,11 +55,8 @@ function scrollDirection(params: Params): string {
   return `${vertical} and ${horizontal}`;
 }
 
-// Chromium only. Touch platforms scroll with `gesture-swipe`; a desktop
-// renderer scrolls with wheel events, which is exactly what this dispatches.
-// Keeping the two as separate tools (instead of overloading swipe) means each
-// platform has one obvious scroll verb and the capability gate explains the
-// other one.
+// Chromium only: a desktop renderer scrolls with wheel events, so touch
+// platforms use `gesture-swipe` instead.
 const capability: ToolCapability = {
   chromium: { app: true },
 };
@@ -89,9 +86,8 @@ Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is no
     const totalDx = (params.deltaX ?? 0) * vp.width;
     const totalDy = (params.deltaY ?? 0) * vp.height;
     const durationMs = params.durationMs ?? 300;
-    // Chunk into ~60fps wheel events so the renderer's scroll handlers fire
-    // progressively, like a human rolling the wheel — one giant delta can
-    // skip virtualized-list rendering and scroll-linked animations.
+    // ~60fps chunks: one giant delta can skip virtualized-list rendering and
+    // scroll-linked animations.
     const steps = Math.max(1, Math.round(durationMs / 16));
     const point = { x: params.x, y: params.y };
     for (let i = 0; i < steps; i++) {

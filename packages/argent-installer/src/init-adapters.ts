@@ -14,13 +14,10 @@ export interface AdapterSelection {
   detected: McpConfigAdapter[];
 }
 
-// Editors whose config (in the scope this init writes) already carries an
-// argent entry. The evidence-based detect() deliberately ignores argent's own
-// artifacts, so this is a separate signal with two jobs: a re-run keeps
-// maintaining every config a previous init wrote (instead of orphaning the
-// editors detect() no longer surfaces), and a teammate cloning a repo whose
-// only editor trace is a committed argent config gets exactly that editor —
-// not the nothing-detected → configure-everything fallback.
+// detect() deliberately ignores argent's own artifacts, so an existing argent
+// entry is a separate signal: a re-run keeps maintaining every config an
+// earlier init wrote, and a clone whose only editor trace is a committed argent
+// config still preselects that editor.
 function previouslyConfiguredAdapters(
   eligible: McpConfigAdapter[],
   installMode: InstallMode
@@ -32,10 +29,9 @@ function previouslyConfiguredAdapters(
 }
 
 // Step 1a — choose which editors to configure. Local mode commits project
-// files only, so editors without a project-level config are excluded up front
-// rather than silently dropped at write time. Non-interactive falls back to
-// the union of detected and previously-configured editors, or all eligible
-// when both are empty. Throws InitCancelled("editors") on cancel.
+// files only, so only editors with a project-level config are offered.
+// Non-interactive selects the detected and previously-configured editors, or
+// all eligible when both are empty. Throws InitCancelled("editors") on cancel.
 export async function chooseAdapters(opts: {
   nonInteractive: boolean;
   installMode: InstallMode;

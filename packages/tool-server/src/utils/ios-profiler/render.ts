@@ -22,21 +22,20 @@ interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
   exportErrors?: Record<string, string>;
-  /** Optional markdown warning shown in the header when the trace is stale. */
+  /** Markdown warning shown in the header when the trace is stale. */
   freshnessNote?: string;
   /**
-   * Optional markdown warning about the CPU data itself — e.g. samples were
-   * captured but carry no call stacks. Rendered alongside freshnessNote rather
-   * than in exportErrors, because nothing errored and the all-clear banner
-   * counts exportErrors entries as failed queries.
+   * Markdown warning about the CPU data itself (e.g. samples with no call
+   * stacks). Kept out of exportErrors because nothing errored and the
+   * all-clear banner counts exportErrors entries as failed queries.
    */
   cpuDiagnostic?: string;
   /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
    * unknown — a session restored from disk has no capture-mode sidecar — in
-   * which case the unattributed-leaks note infers the mode from the
-   * attributed-leak count.
+   * which case the unattributed-leaks note infers it from the attributed-leak
+   * count.
    */
   mallocStackLogging?: boolean | null;
 }
@@ -47,9 +46,9 @@ interface InlineCap {
 }
 
 /**
- * Render a native profiler analysis report for iOS or Android payloads —
- * bottleneck rows are platform-agnostic, branching on `b.platform`/`b.type`
- * for Android-specific row text (jank reason, state breakdown, RSS growth).
+ * Renders both iOS and Android payloads despite the ios-profiler/ home,
+ * branching on `b.platform`/`b.type` for Android-only rows (jank reason,
+ * state breakdown, RSS growth).
  */
 export async function renderNativeProfilerReport(
   input: RenderInput
@@ -98,18 +97,18 @@ export async function renderNativeProfilerReport(
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
-  // Name only the categories that are actually shown — "top 0 CPU hotspots" /
-  // "top 0 hangs" read as report artifacts. Both can be 0 at once (e.g. an
-  // RSS-growth-only trace still has bottlenecks), hence the fallback.
+  // Name only the categories actually shown — "top 0 hangs" reads as a report
+  // artifact. Both can be 0 at once (an RSS-growth-only trace still has
+  // bottlenecks), hence the fallback.
   const shownParts = [
     ...(shownHotspots > 0 ? [`top ${shownHotspots} CPU hotspots`] : []),
     ...(shownHangs > 0 ? [`top ${shownHangs} hangs`] : []),
   ];
   const shownSummary =
     shownParts.length > 0 ? `showing ${shownParts.join(" and ")} inline` : `summary inline`;
-  // Reference the result field rather than embedding the host path: the
-  // client materializes `reportFile` to a path on ITS machine, and the raw
-  // server path would dangle when the tool-server runs remotely.
+  // Point at the result field, not the host path: `reportFile` is registered
+  // as an artifact the client materializes locally, so the server path would
+  // dangle when the tool-server runs remotely.
   const report =
     wroteFile && reportFile
       ? inlineReport +
@@ -126,14 +125,10 @@ export async function renderNativeProfilerReport(
 }
 
 /**
- * Render the prominent, actionable banner shown when Android analysis cannot run
- * because the bundled Perfetto trace-processor WASM engine failed to load. The
- * engine ships as a single committed `.wasm` (no per-platform binary, no
- * download), so this is rare — a corrupt/missing vendored asset, or a bad
- * `ARGENT_TRACE_PROCESSOR_WASM` override. This is a *top-level* report body (not
- * a "> Export warnings" line) so the user/agent sees the recovery steps front
- * and centre. The caller pairs this with an empty `exportErrors` and
- * `status: "analysis_failed"`.
+ * Shown when Android analysis cannot run because the bundled Perfetto
+ * trace-processor WASM failed to load. A *top-level* report body, not a
+ * "> Export warnings" line, so the recovery steps are front and centre. The
+ * caller pairs it with an empty `exportErrors` and `status: "analysis_failed"`.
  */
 export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableError): string {
   const lines = [
@@ -167,10 +162,6 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
   ];
   return lines.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Report builders
-// ---------------------------------------------------------------------------
 
 function reportTitle(payload: ProfilerPayload): string {
   return payload.metadata.platform.toLowerCase() === "android"
@@ -206,9 +197,8 @@ function renderAllClear(
 
   const failedCount = exportErrors ? Object.keys(exportErrors).length : 0;
   if (failedCount > 0) {
-    // Zero bottlenecks + at least one failed exporter is NOT "all clear" —
-    // the analysis itself could not run. Replace the misleading sentence
-    // with a banner that points back at the Export warnings block above.
+    // Zero bottlenecks + a failed exporter is NOT "all clear" — the analysis
+    // itself could not run.
     lines.push(
       `⚠️ **Analysis failed** — ${failedCount} of 3 ${
         failedCount === 1 ? "query" : "queries"
@@ -275,7 +265,6 @@ function renderFullReport(
     );
   }
 
-  // CPU Hotspots section
   if (cpuHotspots.length > 0) {
     lines.push(``, `---`, ``, `## CPU Hotspots`, ``);
     lines.push(
@@ -342,7 +331,6 @@ function renderFullReport(
     }
   }
 
-  // UI Hangs section
   if (uiHangs.length > 0) {
     lines.push(``, `---`, ``, `## UI Hangs`, ``);
     const headerHasJank = uiHangs.some((h) => h.jankReason);
@@ -419,11 +407,10 @@ function renderFullReport(
     }
   }
 
-  // Memory Leaks section (iOS only in v1).
-  // Attributed leaks (a resolved responsible frame) are actionable and shown in
-  // full. Unattributed leaks (`<Call stack limit reached>` under `--attach`) are
-  // collapsed into one low-confidence line so the noise can't masquerade as a
-  // wall of RED findings — see isLeakAttributed in pipeline/01-correlate.ts.
+  // Attributed leaks (a resolved responsible frame) are shown in full;
+  // unattributed ones collapse into one low-confidence line so the noise can't
+  // masquerade as a wall of RED findings. See isLeakAttributed in
+  // pipeline/01-correlate.ts.
   if (memoryLeaks.length > 0) {
     const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
     const unattributedLeaks = memoryLeaks.filter((b) => !b.attributed);
@@ -452,7 +439,6 @@ function renderFullReport(
     }
   }
 
-  // RSS Growth section (Android-only weak signal)
   if (rssGrowths.length > 0) {
     lines.push(``, `---`, ``, `## RSS Growth — Weak Signal`, ``);
     lines.push(
@@ -469,7 +455,6 @@ function renderFullReport(
     }
   }
 
-  // Suggested Improvements
   lines.push(``, `---`, ``, `## Suggested Improvements`, ``);
 
   if (cpuHotspots.length > 0) {
@@ -512,7 +497,6 @@ function renderFullReport(
     lines.push(``);
   }
 
-  // Next steps guidance for the agent
   lines.push(`---`, ``, `## Next Steps`, ``);
   lines.push(`Ask the user which path to take:`, ``);
   lines.push(
@@ -524,16 +508,13 @@ function renderFullReport(
     );
   }
   if (cpuHotspots.length > 0) {
-    // Prefer the top *app* hotspot for the callers suggestion: on Android the
-    // leading hotspot is often a `system` (emulator/kernel) frame, which the
-    // CPU Hotspots note and Suggested Improvements already flag as not directly
-    // actionable — suggesting `function_callers` on it would contradict that.
-    // iOS hotspots have no `frameClass` (undefined ≠ "system"), so they keep
-    // using cpuHotspots[0] unchanged.
+    // Prefer the top *app* hotspot: on Android the leading hotspot is often a
+    // `system` (emulator/kernel) frame the report already flags as not
+    // actionable. iOS hotspots have no `frameClass`, so this picks their first.
     const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
     if (callerHotspot) {
-      // Keep the RAW (possibly mangled) name here: function_callers matches it as a
-      // SQL substring of the mangled frame, and a demangled name isn't a substring.
+      // Keep the RAW (possibly mangled) name: function_callers matches against
+      // raw frame names, so a demangled one would find nothing.
       lines.push(
         `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
       );
@@ -554,23 +535,14 @@ function renderFullReport(
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /**
- * The single low-confidence caveat line for unattributed leaks, shared by the
- * full analyze report above and the combined React × native report — one
- * source so the wording can't silently diverge between the two.
+ * The single low-confidence caveat line for unattributed leaks, shared with the
+ * combined React × native report so the wording can't diverge.
  *
- * `mallocStackLogging` is argent's capture mode when known (stamped at stop,
- * frozen into parsedData); pass null/undefined when unknown (a session
- * restored from disk has no capture-mode sidecar). Attributed leaks are
- * stronger evidence than the flag — a responsible frame is only ever recorded
- * when the target process ran under malloc stack logging, however it was
- * launched — so the flag matters only for the zero-attributed case: explicit
- * `true` names the malloc capture that recorded nothing, anything else gets
- * the `--attach` framing.
+ * `mallocStackLogging` is the capture mode when known (stamped at stop, frozen
+ * into parsedData); null/undefined when unknown. It only disambiguates the
+ * zero-attributed case: explicit `true` names the malloc capture that recorded
+ * nothing, anything else gets the `--attach` framing.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
@@ -579,12 +551,10 @@ export function renderUnattributedLeaksNote(
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
-  // Attribution evidence decides FIRST: a responsible frame exists only if the
-  // target process itself ran under malloc stack logging — true even when
-  // argent attached (the app can be launched with the diagnostic externally,
-  // e.g. via an Xcode scheme), so an explicit `false` capture flag must not
-  // produce a "no malloc-stack history" claim right above an attributed table.
-  // The flag only disambiguates the zero-attributed case.
+  // Attribution evidence decides first: a responsible frame exists only if the
+  // target ran under malloc stack logging — possible even under `--attach`, if
+  // the app was launched with the diagnostic externally — so an explicit
+  // `false` must not claim "no malloc-stack history" above an attributed table.
   const hint =
     attributedCount > 0
       ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
@@ -616,11 +586,9 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
 }
 
 /**
- * Pick the core remediation sentence for a UI hang. On Android the main-thread
- * state breakdown tells us whether the stall was CPU-bound work or a wait, so
- * the advice must match: telling a developer to "move heavy work off the main
- * thread" when the thread was asleep waiting on the GPU is actively misleading.
- * iOS hangs carry no state breakdown, so they fall through to the generic line.
+ * The advice must match the Android main-thread state breakdown: "move heavy
+ * work off the main thread" is misleading when the thread was asleep waiting on
+ * the GPU. iOS hangs carry no breakdown and get the generic line.
  */
 function hangCoreAdvice(hang: UiHang): string {
   const blocking = summarizeHangBlocking(hang.stateBreakdown);
@@ -667,9 +635,8 @@ function severitySummary(bottlenecks: Bottleneck[]): string {
   return parts.join("  ");
 }
 
-// Spaced size format (`1.5 MB`) for the iOS analysis report. Uses `bytes`
-// (base-1024) so leak totals above 1 GB render as `2.1 GB` rather than the old
-// hand-rolled helper's MB-capped `2148.0 MB`.
+// `bytes` picks the unit, so leak totals above 1 GB render as `2.1 GB` rather
+// than four digits of MB.
 function formatBytes(sizeBytes: number): string {
   return bytesUtil(sizeBytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${sizeBytes} B`;
 }

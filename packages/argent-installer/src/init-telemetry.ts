@@ -3,9 +3,8 @@ import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import type { InstallMode } from "./install-record.js";
 
-// Centralizes init's terminal-telemetry bookkeeping so the orchestrator and
-// step modules (notably install-runner) share the install-mode dimension,
-// editor count, and finalize-once guard.
+// Shared init telemetry context: the orchestrator and step modules (notably
+// install-runner) reuse one install-mode dimension, editor count and finalize-once guard.
 
 export type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
 
@@ -30,9 +29,8 @@ export const INSTALL_LOCAL_PRECONDITION_FAILED: InstallerFailureSignal = {
   error_kind: "validation",
 };
 
-// `--local` and `--global` passed together. Kept distinct from the local
-// precondition failure so the local-install failure funnel isn't polluted with
-// flag-usage mistakes (no install attempted, no meaningful install_mode).
+// `--local` and `--global` together. Distinct from the local precondition
+// failure so that funnel isn't polluted with flag misuse (no install attempted).
 export const INSTALL_MODE_FLAG_CONFLICT: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_MODE_FLAG_CONFLICT,
   failure_stage: "installer_install_mode_flag_conflict",
@@ -54,9 +52,8 @@ export const INSTALL_INIT_TRIGGERED_UPDATE_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
-// Catch-all for any unexpected throw that escapes the classified paths (file
-// I/O, copyRulesAndAgents, the online check, a clack prompt). Without it the
-// outer wrapper would drain telemetry but report no error code.
+// Catch-all for throws escaping the classified paths; without it the terminal
+// event would carry no error code.
 export const INSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_UNCLASSIFIED_FAILED,
   failure_stage: "installer_init_unclassified",
@@ -80,8 +77,7 @@ export class InitTelemetry {
 
   constructor(private readonly startTime: number) {}
 
-  // Drains buffered events and records the single terminal cli_init_complete.
-  // Idempotent — only the first call emits.
+  // Records the single terminal cli_init_complete, then drains the event queue.
   async finalize(failureSignal?: InstallerFailureSignal): Promise<void> {
     if (this.finalized) return;
     this.finalized = true;

@@ -21,30 +21,30 @@ export interface RootCauseVote {
   chain: string[]; // full chain: [immediateParent, ..., rootCauseParent]
 }
 
-// Welford accumulator for one component (first mounts excluded)
+// First mounts excluded
 export interface ComponentAccumulator {
   name: string;
-  n: number; // re-render count (first mounts stripped)
-  sum: number; // sum of actualDuration
-  sumSq: number; // sum of actualDuration^2
+  n: number; // re-render count
+  sum: number;
+  sumSq: number;
   min: number;
   max: number;
   reasonHistogram: Record<ReRenderReason, number>;
   propFreq: Map<string, number>;
   hookFreq: Map<number, number>;
   hookTypeNames?: string[]; // fiber._debugHookTypes — first non-null wins
-  parentFreq: Map<string, number>; // parent component name → frequency
-  compilerOptimizedCount: number; // renders where isCompilerOptimized=true
-  rootCauseVotes: Map<string, RootCauseVote>; // parent name → root cause vote data
-  firstCommitTs: number; // ms (performance.now reference)
+  parentFreq: Map<string, number>;
+  compilerOptimizedCount: number;
+  rootCauseVotes: Map<string, RootCauseVote>; // keyed by parent name
+  firstCommitTs: number;
   lastCommitTs: number;
 }
 
 // Stage 1: Reduce
 export interface ReduceOutput {
   components: Map<string, ComponentAccumulator>;
-  reactCommits: number; // unique React commit batch count (by commitIndex)
-  fiberRenders: number; // total fiber render entries processed
+  reactCommits: number; // distinct commit batches (by commitIndex)
+  fiberRenders: number; // didRender entries, first mounts included
   anyRuntimeCompilerDetected: boolean;
   totalFirstMounts: number;
   firstMountOnlyComponents: string[];
@@ -56,7 +56,7 @@ export interface ReduceOutput {
 export interface EnrichedComponent {
   name: string;
   n: number;
-  normalizedRenderCount: number; // n/2 if strictMode, else n
+  normalizedRenderCount: number;
   mean: number;
   min: number;
   max: number;
@@ -66,7 +66,7 @@ export interface EnrichedComponent {
   topChangedProps: string[];
   topChangedHooks: number[];
   hookTypeNames?: string[];
-  isCompilerOptimized: boolean; // >50% of renders showed useMemoCache
+  isCompilerOptimized: boolean; // >50% of renders were compiler-optimized
   parentTrigger?: {
     component: string;
     reason: ReRenderReason;
@@ -107,7 +107,7 @@ export interface TagOutput {
   recordingMs: number;
 }
 
-// Final pipeline output (returned by pipeline/index.ts, consumed by react-profiler-analyze.ts)
+// Returned by pipeline/index.ts, consumed by react-profiler-analyze.ts
 export interface PipelineOutput {
   hotCommitSummaries: HotCommitSummary[];
   componentFindings: ComponentFinding[];

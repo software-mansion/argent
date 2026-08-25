@@ -14,29 +14,20 @@ import {
 /**
  * Server-side secret placeholders for text-entry tools.
  *
- * An agent-composed tool call cannot carry a plaintext credential without the
- * credential entering the model's context, the MCP call log, the event log,
- * and any recorded flow YAML. `{{secret:NAME}}` lets the agent reference a
- * secret by name instead: the placeholder travels through every logging
- * boundary verbatim and is substituted with the secret's value only here,
- * inside the typing tool's `execute` — the last hop before the keystrokes leave
- * for the device.
+ * A plaintext credential in an agent-composed tool call enters the model's
+ * context, the MCP call log, the event log and any recorded flow YAML.
+ * `{{secret:NAME}}` crosses those boundaries verbatim and is substituted only
+ * in the tool's `execute`, the last hop before the device.
  *
- * Where a name's value comes from — the `ARGENT_SECRET_<NAME>` environment
- * variable, or a dotenv file in the project or under the user's `~/.argent` —
- * is owned by {@link secretSources}, which documents why each source exposes
- * what it does. What matters here is the property they share: only values the
- * user deliberately exposed to argent are resolvable, so a prompt-injected
- * agent cannot exfiltrate arbitrary host secrets through the mechanism.
+ * Which names resolve is owned by {@link secretSources}: only values the user
+ * deliberately exposed to argent, so a prompt-injected agent cannot exfiltrate
+ * arbitrary host secrets through the mechanism.
  */
 
 export { SECRET_ENV_PREFIX };
 export type { SecretSourceOptions };
 
-/**
- * Cheap containment probe — shared with the MCP layer's auto-screenshot skip,
- * which must not render a just-typed secret back into model context as pixels.
- */
+/** Copied in packages/argent-mcp/src/auto-screenshot.ts, which cannot depend on this package. */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 const PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
@@ -49,30 +40,27 @@ export function availableSecretNames(options: SecretSourceOptions = {}): string[
 export interface ResolvedSecretText {
   /** The input with every placeholder replaced by its secret value. */
   text: string;
-  /** The placeholders that were substituted; empty when the input had none. */
+  /** The substituted secrets; empty when the input had none. */
   secrets: Array<{ name: string; value: string }>;
 }
 
 /**
- * A placeholder name that (redundantly) repeats the env prefix in any casing —
- * `{{secret:ARGENT_SECRET_APP_PASSWORD}}` instead of the canonical
- * `{{secret:APP_PASSWORD}}`. Agents naturally paste the full variable name, so
- * this spelling is accepted as a fallback: the exact name is tried first, and
- * only when no source defines it is the prefix stripped and the lookup retried.
- * Exact-first keeps a literal `ARGENT_SECRET_ARGENT_SECRET_X` var reachable.
+ * A placeholder name redundantly repeating the env prefix in any casing —
+ * `{{secret:ARGENT_SECRET_APP_PASSWORD}}` for `{{secret:APP_PASSWORD}}` —
+ * accepted as a fallback because agents paste the full variable name. The
+ * exact name is tried first, which keeps a literal
+ * `ARGENT_SECRET_ARGENT_SECRET_X` var reachable.
  */
 const REDUNDANT_PREFIX_RE = /^argent_secret_/i;
 
 /**
- * Replace every `{{secret:NAME}}` in `text` with its value, resolved through
- * the source chain. Unknown names reject with a message that lists the *names*
- * of available secrets and the sources consulted — never a value — so an agent
- * can self-correct without anything sensitive entering its context.
+ * Replace every `{{secret:NAME}}` in `text` with its value. An unknown name
+ * rejects with the *names* of available secrets and the sources consulted —
+ * never a value — so an agent can self-correct.
  *
- * The chain is built once per call and only when the text actually references a
- * secret: a typing call with no placeholder — the overwhelming majority — never
- * touches the filesystem, and one that types several placeholders reads each
- * file once and resolves them all against the same snapshot.
+ * The source chain is built lazily and once per call: text with no placeholder
+ * never touches the filesystem, and several placeholders resolve against one
+ * snapshot.
  */
 export function resolveSecretPlaceholders(
   text: string,
@@ -110,11 +98,11 @@ export function resolveSecretPlaceholders(
 
 /**
  * Scrub resolved secret values from an error before it propagates — a backend
- * failure can echo its input (e.g. Android typing surfaces the device-side
- * `input text` command line). Mutates message/stack in place so the error's
- * class, and with it the HTTP status and telemetry mapping, is preserved.
- * Zero-length values are skipped: replacing an empty string would corrupt the
- * message rather than redact anything.
+ * failure can echo its input (Android typing surfaces the device-side
+ * `input text` command line). Mutates message/stack in place to preserve the
+ * error's class, and with it the HTTP status and telemetry mapping.
+ * Zero-length values are skipped: splitting on "" would corrupt the message
+ * rather than redact anything.
  */
 export function redactSecretsFromError(
   err: unknown,

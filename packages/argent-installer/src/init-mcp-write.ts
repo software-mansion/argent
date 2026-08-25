@@ -14,15 +14,15 @@ import type { InstallMode } from "./install-record.js";
 import type { Scope } from "./init-scope.js";
 
 export interface McpWriteResult {
-  /** Adapters actually written — local mode drops global-only adapters. */
+  /** Selected adapters minus the global-only ones local mode drops. */
   adapters: McpConfigAdapter[];
   /** One summary line per adapter. */
   lines: string[];
 }
 
-// Step 1c — write the MCP config files. Local mode points the command at the
-// repo-local copy (node + relative path / yarn for PnP / npx fallback) and
-// drops global-only adapters; global mode/scope keep the bare `argent` command.
+// Step 1c — write the MCP config files. Local mode points project-scope
+// entries at the repo-local copy and drops global-only adapters; everything
+// else keeps the bare `argent` command.
 export function writeMcpConfigs(args: {
   selectedAdapters: McpConfigAdapter[];
   installMode: InstallMode;
@@ -34,14 +34,11 @@ export function writeMcpConfigs(args: {
   let adapters = args.selectedAdapters;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
 
-  // Global-only adapters (no project config file) can't carry a project-scoped
-  // entry, so drop them with a note rather than writing a global `argent` entry
-  // that would depend on the global install the user opted out of.
   let localCmdMode: McpCommandMode | null = null;
   if (installMode === "local") {
     localCmdMode = resolveLocalCommandMode(effectiveRoot);
-    // Backstop for the eligibility filter in chooseAdapters (a custom root can
-    // change which adapters have a project path).
+    // Without this drop, the global-fallback branch below would write a global
+    // `argent` entry depending on the global install the user opted out of.
     const unsupported = adapters.filter((a) => a.projectPath(effectiveRoot) == null);
     if (unsupported.length > 0) {
       p.log.warn(
@@ -51,8 +48,7 @@ export function writeMcpConfigs(args: {
       adapters = adapters.filter((a) => a.projectPath(effectiveRoot) != null);
     }
     if (adapters.length === 0) {
-      // Without this, init would report success while no editor was wired up
-      // anywhere — the committed devDependency would do nothing.
+      // Without this, init would report success with nothing wired up anywhere.
       p.log.warn(
         pc.yellow(
           `No MCP config was written: none of the selected editors supports a ` +
@@ -72,21 +68,12 @@ export function writeMcpConfigs(args: {
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
     getMcpEntryForScope(installMode, configScope, localCmdMode);
 
-  // The project is still in local mode when its committed record says so or
-  // its manifest still declares the dep — the same signal init.ts uses to keep
-  // vs. clear the .argent marker in this run.
   const stillLocalMode = (root: string): boolean =>
     readInstallRecord(root)?.mode === "local" || isDeclaredLocally(root);
 
-  // A committed local-mode entry in a PROJECT config must survive a coexisting
-  // `init --global` run: the same run keeps .argent/install.json and reports
-  // the project stays in local mode, so clobbering the team's committed
-  // node-path command with the bare `argent` one (dead for every teammate
-  // without a global install) would contradict that — the same committed-file
-  // protection update's refresh applies. But only while the project is STILL
-  // local: one that abandoned local mode (devDependency removed) must have its
-  // now-dead node-path entry rewritten to bare `argent`, matching init's own
-  // "Removed stale .argent/install.json" cleanup in the same run.
+  // Clobbering a team's committed node-path command with the bare `argent` one
+  // would break every teammate without a global install, so a project still in
+  // local mode keeps it even under `init --global`.
   const keepsCommittedLocalEntry = (
     adapter: McpConfigAdapter,
     configPath: string,

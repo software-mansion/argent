@@ -39,12 +39,11 @@ const zodSchema = z.object({
 });
 
 /**
- * `project_root` is the AGENT's project. The probe tells us whether it exists
- * on this host: when it does (co-located, or a synced checkout) the flow file
- * is written here exactly as before; when it doesn't (remote tool-server) the
- * recording is kept in memory and every mutating flow tool returns a
- * client-write directive so the YAML lands in the agent's project instead of
- * recreating the agent's directory layout on this host.
+ * `project_root` is the AGENT's project; the probe says whether it also exists
+ * on this host. If it does (co-located, or a synced checkout) the flow file is
+ * written here; if it doesn't (remote tool-server) the recording is kept in
+ * memory and every mutating flow tool returns a client-write directive, so the
+ * YAML lands in the agent's project instead of recreating its layout here.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe" },
@@ -62,16 +61,15 @@ export const flowStartRecordingTool: ToolDefinition<
 > = {
   id: "flow-start-recording",
   interaction: {
-    // Name the flow: recordings are concurrent, so several of these lines can
-    // interleave in one log and "flow recording" would not identify which.
+    // Name the flow: concurrent recordings interleave in one log, and "flow
+    // recording" would not say which.
     startedMsg: ({ params }) => `Starting recording of flow ${params.name}`,
     completedMsg: ({ params, result }) => {
       if (!result.restarted) return `Started recording flow ${params.name}`;
-      // A restart destroyed a live take. Reporting that as a plain start would
-      // hide the discard, which is the one outcome here worth reading twice.
+      // A plain "started" would hide that a live take was discarded.
       // `discardedSteps` is absent when the superseded file could not be read
-      // or parsed - 0 is the answer a genuinely empty take gives - so say it
-      // was discarded without claiming a count we do not have.
+      // or parsed - 0 is the answer a genuinely empty take gives - so do not
+      // claim a count we do not have.
       const discarded = result.discardedSteps;
       return discarded === undefined
         ? `Restarted recording flow ${params.name}, discarding the previous take`
@@ -114,9 +112,9 @@ costs the finish the cross-tree verdicts anchored to them.`,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const filePath = getFlowPath(params.project_root, params.name);
-    // A recording's type emerges from its steps: recording a `restart-app`
-    // first makes it an e2e flow (captured as a leading `launch` step by
-    // flow-add-step); declaring an executionPrerequisite documents a fragment.
+    // The type emerges from the steps: a first `restart-app` becomes a leading
+    // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
+    // documents a fragment.
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
       steps: [],
@@ -129,30 +127,26 @@ costs the finish the cross-tree verdicts anchored to them.`,
     const probe = ctx?.fileInputs?.project_root;
     const persist = probe && !probe.presentOnHost ? "client" : "host";
 
-    // Truncate-and-register is one critical section. Held under the flow-file
-    // lock, so a step from the take being discarded can neither slip into the
-    // file between the reset and the swap, nor be written after both: it finds
-    // its session superseded and fails instead.
+    // Truncate-and-register is one critical section: under the flow-file lock a
+    // step from the take being discarded can neither slip in between the reset
+    // and the swap nor land after both - it finds its session superseded and
+    // fails.
     const { savedTo, replaced, discardedSteps } = await withFlowFileLock(
       params.project_root,
       params.name,
       async () => {
-        // Read the take being discarded ONCE, here, and drive both the
-        // `restarted` flag and its step count off that single read. Count it
-        // BEFORE the truncate destroys it, and where it actually lives: on disk
-        // in host mode, since a hand-edit made mid-recording is part of the take
-        // and the session's in-memory copy only catches up on the next append
-        // (see {@link countStepsOnDisk}). In client mode this host has no file
-        // and the in-memory copy IS the take.
+        // Read the take being discarded ONCE and drive both `restarted` and its
+        // step count off that read. Count BEFORE the truncate destroys it, and
+        // where it actually lives: on disk in host mode, since a hand-edit made
+        // mid-recording is part of the take and the session's in-memory copy
+        // only catches up on the next append (see {@link countStepsOnDisk}); in
+        // client mode this host has no file and the in-memory copy IS the take.
         //
-        // `replaced` is this read, NOT `startRecordingSession`'s return: in host
-        // mode two awaits (countStepsOnDisk, writeNewFlowFile) sit between them,
-        // and {@link evictIfOverCapacity} runs under some OTHER key's lock, so
-        // it can drop this key in that window. Reading `replaced` after the
-        // register would then see the key already gone and report a destructive
-        // restart — the file is already truncated — as a plain fresh start,
-        // discarding the count computed here. This read is inside our own key's
-        // lock, so it and the count agree.
+        // `replaced` is this read, NOT `startRecordingSession`'s return: awaits
+        // sit between the two and {@link evictIfOverCapacity} runs under some
+        // OTHER key's lock, so it can drop this key in that window — the return
+        // would then report an already-truncated restart as a fresh start and
+        // lose the count. This read is inside our own key's lock.
         const replaced = (await getRecordingSession(params.project_root, params.name)) ?? null;
         const discardedSteps =
           replaced === null
@@ -179,23 +173,19 @@ costs the finish the cross-tree verdicts anchored to them.`,
       }
     );
 
-    // Only a same-key restart replaces anything — the documented "re-record it
-    // to fix it" workflow. Recordings are keyed per flow file, so starting a
-    // *different* flow abandons nothing and there is nothing to report about it.
+    // Recordings are keyed per flow file, so only a same-key restart replaces
+    // anything; starting a *different* flow abandons nothing to report.
     if (replaced) {
-      // Only claim the file was reset when this process actually reset it. In
-      // client mode the truncation happens only once the client applies the
-      // directive, and a rejected path or a failed write there surfaces as
-      // `savedTo: null` — so asserting the reset here would tell the agent its
-      // file is empty while it still holds the previous take.
+      // Only claim the file was reset when this process reset it: in client mode
+      // truncation waits on the client applying the directive, and a rejected
+      // path or a failed write there comes back as `savedTo: null`.
       const reset =
         persist === "host"
           ? `${filePath} reset to an empty flow.`
           : `${filePath} is reset to an empty flow once your client applies \`savedTo\` ` +
             `(a null \`savedTo\` means it did not).`;
-      // An unreadable or unparseable file leaves the loss genuinely uncounted,
-      // so say the take was discarded without putting a number on it rather
-      // than reporting one the file disagrees with.
+      // An unreadable or unparseable file leaves the loss uncounted, so report
+      // the discard without a number rather than one the file disagrees with.
       const lost =
         discardedSteps === undefined
           ? "the previous take"

@@ -1,28 +1,11 @@
-// Feature-flag source of truth for argent.
+// Feature-flag storage for argent: booleans in `~/.argent/flags.json` (global) and
+// `<project-root>/.argent/flags.json` (project), where a project entry shadows the
+// global one. The `enable`/`disable`/`flags` commands live in `@argent/cli` and
+// wrap the primitives below.
 //
-// Flags are simple boolean toggles stored as JSON in:
-//   ~/.argent/flags.json                 (global, default scope)
-//   <project-root>/.argent/flags.json    (project scope)
-//
-// This package is the pure library: the registry, JSON storage, and
-// `isFlagEnabled`. It has no console I/O — the `enable`/`disable`/`flags` CLI
-// commands live in `@argent/cli` and import the primitives below.
-//
-// `setFlag` writes a boolean, `unsetFlag` removes the entry at the chosen scope.
-// `isFlagEnabled` walks project → global, so an entry at the project scope
-// shadows the same key at the global scope. To opt a single project out of
-// a globally-enabled flag, hand-edit `<project>/.argent/flags.json` to
-// `{"flags":{"name":false}}` — there is no CLI for an explicit override.
-//
-// FLAG_REGISTRY below is the single source of truth for which flags exist:
-// `argent enable` only accepts a name listed there, and `argent flags`
-// documents every entry. `isFlagEnabled` only reads storage — it never
-// consults the registry, keeping runtime callers decoupled from CLI validation.
-//
-// Deprecating a flag is safe: only the *write* path (`argent enable`) consults
-// the registry. Every read path (readFlags / isFlagEnabled / `argent flags`)
-// loads whatever booleans are stored regardless of the registry, so removing an
-// entry from FLAG_REGISTRY never errors on a flags.json that still contains it.
+// FLAG_REGISTRY gates only which names `argent enable` accepts; reads load whatever
+// booleans are stored, so dropping a registry entry never errors on a flags.json
+// that still contains it.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -34,21 +17,17 @@ interface FlagsFile {
   flags?: Record<string, boolean>;
 }
 
-// A recognized feature flag. `name` is what users pass to enable/disable and
-// what `isFlagEnabled` reads; `description` is shown by `argent flags`.
+// `description` is shown by `argent flags` and in `enable`/`disable` --help.
 export interface FlagDefinition {
   readonly name: string;
   readonly description: string;
-  // Opt-OUT flag: the feature is ON when the flag has never been set. `argent
-  // disable <name>` then persists an explicit `false` (rather than unsetting,
-  // which would revert to this ON default), and `argent enable <name>` / no
-  // entry both read as on. Omit (falsey) for the usual opt-IN flags, which are
-  // off until enabled. Runtime callers get the default via `isFeatureEnabled`.
+  // Opt-OUT flag: on until explicitly disabled, so `argent disable <name>` persists
+  // an explicit `false` instead of unsetting. Only `isFeatureEnabled` applies it.
   readonly defaultEnabled?: boolean;
 }
 
-// The flags argent recognizes. Adding one entry here is the only change needed
-// to make `argent enable <name>` accept it and `argent flags` document it.
+// Adding an entry here is the only change needed for `argent enable <name>` to
+// accept it and `argent flags` to document it.
 export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "disable-auto-screenshot",
@@ -68,6 +47,13 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },
   {
+    name: "boot-sound",
+    description:
+      "Default boot-device's `sound` argument to true so Android emulators boot with audio " +
+      "output instead of muted. Only the argument's default changes — an explicit " +
+      "`sound: false` on a call still boots muted.",
+  },
+  {
     name: "microinteractions",
     description:
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
@@ -80,8 +66,6 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   },
 ];
 
-// Look up a flag's definition — exported for consumers that want the
-// description alongside isFlagEnabled(). Defaults to the built-in registry.
 export function getFlagDefinition(
   name: string,
   registry: readonly FlagDefinition[] = FLAG_REGISTRY
@@ -89,9 +73,8 @@ export function getFlagDefinition(
   return registry.find((def) => def.name === name);
 }
 
-// Markers used to find the project root for --scope project. Trimmed to the
-// minimum needed: an existing `.argent` (so subsequent runs in subdirs find
-// the dir created by the first run), a git repo, or an npm package.
+// `.argent` is a marker itself so later runs from a subdir find the dir the first
+// run created.
 const PROJECT_MARKERS = [".argent", ".git", "package.json"];
 
 export interface FlagsPathOptions {
@@ -100,12 +83,10 @@ export interface FlagsPathOptions {
 }
 
 /**
- * Nearest ancestor of `startDir` (inclusive) that carries a {@link PROJECT_MARKERS}
- * marker, or `null` when the walk reaches the filesystem root without finding one
- * (i.e. `startDir` is not inside a project). Unlike {@link resolveProjectRoot},
- * this reports the "no project" case distinctly, so callers that must not silently
- * anchor at `startDir` can react — e.g. warn before materializing `.argent` in an
- * arbitrary directory, or fall back to a global location.
+ * Nearest ancestor of `startDir` (inclusive) carrying a {@link PROJECT_MARKERS} entry,
+ * or `null` if the walk reaches the filesystem root. Unlike {@link resolveProjectRoot},
+ * the "no project" case stays distinct, so callers can warn or fall back to a global
+ * location instead of silently anchoring at `startDir`.
  */
 export function findProjectRoot(startDir: string): string | null {
   let current = path.resolve(startDir);
@@ -156,9 +137,8 @@ function readFlagsFile(filePath: string): Record<string, boolean> {
 }
 
 function writeFlagsFile(filePath: string, flags: Record<string, boolean>): void {
-  // No flags left ⇒ remove the file (and the .argent dir if it becomes empty)
-  // so disable-after-enable round trips leave a clean tree. Sibling files
-  // (tool-server.json, tool-server.log, etc.) keep the dir alive when present.
+  // Drop the file (and `.argent` once empty) so disable-after-enable leaves a clean
+  // tree; sibling files like tool-server.json keep the dir alive when present.
   if (Object.keys(flags).length === 0) {
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
     const parent = path.dirname(filePath);
@@ -172,9 +152,8 @@ function writeFlagsFile(filePath: string, flags: Record<string, boolean>): void 
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // Atomic write via tmp+rename so a reader never observes a torn/partial JSON
-  // payload. (Concurrent read-modify-write is still last-writer-wins, but two
-  // argent CLI invocations racing on the same flag file are not expected.)
+  // tmp+rename so a reader never observes a torn payload; concurrent
+  // read-modify-write is still last-writer-wins.
   const tmp = `${filePath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ flags } satisfies FlagsFile, null, 2) + "\n");
   fs.renameSync(tmp, filePath);
@@ -199,30 +178,25 @@ export function setFlag(
   writeFlagsFile(filePath, current);
 }
 
-// Removes the entry from the given scope so the next layer (or the default)
-// takes effect. Returns true when an entry was removed.
+// Returns true when an entry existed; the next scope (or the default) then applies.
 export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOptions = {}): boolean {
   const filePath = getFlagsPath(scope, options);
   const current = readFlagsFile(filePath);
-  // hasOwn, not `in`: flag names like "toString"/"constructor" are valid
-  // identifiers but live on Object.prototype, so `in` would report them as
-  // present (and delete a no-op) even when they were never stored.
+  // hasOwn, not `in`: `in` reports never-stored names like "toString" as present.
   if (!Object.hasOwn(current, name)) return false;
   delete current[name];
   writeFlagsFile(filePath, current);
   return true;
 }
 
-// Effective value: project overrides global. Returns the caller-supplied
-// `default` (false when omitted) if the flag is not set in either scope. Stays
-// storage-only and registry-decoupled — for a flag's *declared* default use
-// `isFeatureEnabled`.
+// Effective value: project overrides global, then the caller's `default` (false).
+// Storage-only — for a flag's declared default use `isFeatureEnabled`.
 export function isFlagEnabled(
   name: string,
   options: FlagsPathOptions & { default?: boolean } = {}
 ): boolean {
-  // hasOwn, not `in`: otherwise prototype keys ("toString", "constructor", …)
-  // resolve to a truthy Object.prototype member for a flag that was never set.
+  // hasOwn, not `in`: prototype keys ("toString", …) would resolve to a truthy
+  // Object.prototype member for a flag that was never set.
   const projectFlags = readFlags("project", options);
   if (Object.hasOwn(projectFlags, name)) return projectFlags[name]!;
   const globalFlags = readFlags("global", options);
@@ -230,9 +204,8 @@ export function isFlagEnabled(
   return options.default ?? false;
 }
 
-// Registry-aware read: resolves an unset flag to its declared `defaultEnabled`
-// (so an opt-out feature reads as on until disabled). This is the check runtime
-// features should use; `isFlagEnabled` stays the low-level storage primitive.
+// Registry-aware read: an unset flag resolves to its declared `defaultEnabled`.
+// Runtime features should use this; `isFlagEnabled` is the storage primitive.
 export function isFeatureEnabled(
   name: string,
   options: FlagsPathOptions = {},

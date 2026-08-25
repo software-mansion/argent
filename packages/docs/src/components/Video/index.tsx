@@ -5,28 +5,23 @@ import useBaseUrl from "@docusaurus/useBaseUrl";
 import styles from "./styles.module.css";
 
 type Props = {
-  /* Site-relative path to the encoded MP4, e.g. "/video/tap-flow.mp4". */
+  /* Site-relative path to the encoded MP4. */
   src: string;
-  /*
-   * Poster frame. Defaults to the sibling .jpg that scripts/encode-video.sh
-   * writes next to every clip, so callers only pass this for a hand-picked
-   * frame.
-   */
+  /* Defaults to the sibling .jpg that scripts/encode-video.sh writes. */
   poster?: string;
-  /* Simulator captures are tall; this caps their height instead of their width. */
+  /* Caps height instead of width, for tall simulator captures. */
   portrait?: boolean;
   caption?: React.ReactNode;
-  /* Intrinsic pixel size, used to reserve space so the page does not reflow. */
+  /* Intrinsic pixel size; reserves space so the page does not reflow. */
   width?: number;
   height?: number;
   className?: string;
 };
 
 /*
- * A page can carry a dozen clips, so nothing is fetched until the player is
- * about to scroll into view: `src` stays off the element and `preload` is
- * "none" until then. Once loaded, playback follows visibility so off-screen
- * loops stop burning CPU.
+ * A page can carry a dozen clips, so `src` stays off the element until the
+ * player is about to scroll into view. After that, playback follows visibility
+ * so off-screen loops stop burning CPU.
  */
 function useNearViewport<T extends Element>(): [React.RefObject<T | null>, boolean, boolean] {
   const ref = React.useRef<T>(null);
@@ -41,11 +36,9 @@ function useNearViewport<T extends Element>(): [React.RefObject<T | null>, boole
 
     if (typeof IntersectionObserver === "undefined") {
       /*
-       * This cannot move into the initial state: the server has no
-       * IntersectionObserver either, so a lazy initializer would render "loaded"
-       * on the server and "not loaded" in a browser that supports the observer,
-       * which breaks hydration. It runs once, in the rare browser without the
-       * API.
+       * Not the initial state: the server has no IntersectionObserver either, so
+       * it would render loaded on the server and not loaded in a browser that
+       * has the API, breaking hydration.
        */
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setShouldLoad(true);
@@ -70,10 +63,7 @@ function useNearViewport<T extends Element>(): [React.RefObject<T | null>, boole
   return [ref, shouldLoad, isVisible];
 }
 
-/*
- * Readers who ask for reduced motion get a paused player with controls rather
- * than a silent loop running on its own.
- */
+/* Reduced motion trades the autoplaying loop for a paused player with controls. */
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = React.useState(false);
 
@@ -105,9 +95,8 @@ export default function Video({
   const [ref, shouldLoad, isVisible] = useNearViewport<HTMLVideoElement>();
   const prefersReducedMotion = usePrefersReducedMotion();
   /*
-   * The class fallback ratio only reserves space. Callers that pass width and
-   * height get an exact box up front; the rest are corrected once the file
-   * reports its own dimensions.
+   * The ratio on the landscape/portrait class is only a placeholder; without
+   * width and height props the real one arrives with the metadata.
    */
   const [measured, setMeasured] = React.useState<string | undefined>(undefined);
   const aspectRatio = width && height ? `${width} / ${height}` : measured;
@@ -123,7 +112,7 @@ export default function Video({
     }
 
     if (isVisible) {
-      /* Autoplay can still be refused (low power mode); a rejection is fine. */
+      /* Autoplay can be refused (low power mode); the rejection is fine. */
       void element.play().catch(() => {});
     } else {
       element.pause();

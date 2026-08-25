@@ -35,9 +35,8 @@ interface RunOptions {
 }
 
 function splitOptions(argv: string[]): RunOptions {
-  // Pull out CLI-only options (--json, --out) before passing the rest to the
-  // schema-driven flag parser. We do this here so they don't get mistaken for
-  // tool fields when a tool happens to have a "json" or "out" property.
+  // Consumed here rather than by the schema-driven flag parser, so a tool with its
+  // own "json" or "out" property can't capture them.
   let json = false;
   let outPath: string | null = null;
   const rest: string[] = [];
@@ -80,10 +79,8 @@ async function readStdin(): Promise<string> {
 function printToolHelp(meta: ToolMeta): void {
   const description = meta.description?.trim() ?? "";
   const schema = meta.inputSchema as JsonSchema | undefined;
-  // A tool may declare its own `args` field (e.g. flow-add-step). In that case
-  // `--args` is a per-field flag shown in the schema block above, so don't also
-  // advertise the whole-payload `--args` escape hatch — it no longer applies and
-  // would contradict the per-field flag.
+  // A tool with its own `args` field (e.g. flow-add-step) shows `--args` as a per-field
+  // flag in the schema block, so the whole-payload escape hatch no longer applies.
   const hasOwnArgsField = schema?.properties?.args !== undefined;
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
@@ -124,8 +121,7 @@ function renderResult(
   if (json) return JSON.stringify(result, null, 2);
 
   if (outputHint === "image") {
-    // New tool-servers return an artifact handle that the materializer has
-    // already resolved to a local file.
+    // Artifact handle, already resolved to a local file by the materializer.
     if (images.length > 0) return `Saved screenshot: ${images[0]!.localPath}`;
     // Legacy `{ url, path }` shape from older tool-servers.
     if (
@@ -189,7 +185,7 @@ Examples:
   }
 
   // Parsed before the tool is known, so a bad option here can only point at the tool's own help
-  // rather than print it. Guarded all the same: an unhandled throw would surface as a raw stack.
+  // rather than print it. Guarded so an unhandled throw doesn't surface as a raw stack.
   let cliOptions: RunOptions;
   try {
     cliOptions = splitOptions(rest);
@@ -229,7 +225,7 @@ Examples:
     const summary = formatValidationError(report, schema);
     if (json) {
       // One object on stderr and nothing on stdout, so `--json | jq` on a failed run reads an
-      // empty stream and a non-zero status rather than prose mixed into the result channel.
+      // empty stream and a non-zero status.
       console.error(
         JSON.stringify(
           {
@@ -277,11 +273,10 @@ Examples:
     return;
   }
 
-  // `argent run` takes no positional arguments beyond the tool name, so anything
-  // left here was typed and then ignored. Saying so is the point: a boolean flag
-  // now consumes a following `true`/`false`/`1`/`0`, but not `--flag yes`, and
-  // silently dropping those is the exact failure this warning exists to stop
-  // (#586). Written to stderr so `--json` output stays parseable.
+  // `argent run` takes no positionals, so anything left here was typed and dropped —
+  // e.g. `--flag yes`, since a boolean consumes only `true`/`false`/`1`/`0`. Dropping it
+  // silently is the failure this warning exists to stop (#586). stderr keeps `--json`
+  // output parseable.
   if (parsed.positional.length > 0) {
     console.error(
       `Note: ignoring unused argument(s): ${parsed.positional.join(", ")}. ` +
@@ -289,9 +284,8 @@ Examples:
     );
   }
 
-  // Build the final args payload. Precedence: --args JSON, then per-flag values
-  // merged on top so users can mix `--args '{...}' --x 0.5` to override one
-  // field. (Last write wins; flags override --args.)
+  // Precedence: --args JSON first, per-flag values merged on top, so
+  // `--args '{...}' --x 0.5` overrides a single field.
   let payload: Record<string, unknown> = {};
   if (parsed.rawArgs !== null) {
     let rawJson = parsed.rawArgs;
@@ -327,8 +321,8 @@ Examples:
   }
 
   // Checked against the merged payload, so a required field supplied through `--args` or
-  // `--<field>-json` counts. Answering here spares the user a round trip — and, for a tool that
-  // takes file inputs, spares them uploading those files only to be told a flag was missing.
+  // `--<field>-json` counts. Answering here spares a round trip — and, for a tool that takes
+  // file inputs, spares uploading those files only to be told a flag was missing.
   const missing = findMissingRequired(payload, schema);
   if (missing.length > 0) {
     await failValidation({ missing, invalid: [], rawIssues: null }, "cli_run_required_flags");
@@ -339,9 +333,9 @@ Examples:
   let images: MaterializedImage[] = [];
   try {
     const resp = await callTool(toolName, payload);
-    // Resolve any artifact handles to local files (using the file already on
-    // disk when the tool-server is co-located, downloading otherwise). After
-    // this the result holds real local paths, so rendering is location-agnostic.
+    // Resolve artifact handles to local files (the file already on disk when the
+    // tool-server is co-located, downloaded otherwise), so rendering is
+    // location-agnostic.
     const { url, token } = await baseUrl();
     const materialized = await materializeArtifacts(resp.data, {
       toolsUrl: url,
@@ -353,7 +347,7 @@ Examples:
     note = resp.note;
   } catch (err) {
     // The tool rejected the input rather than failing to run it — report it like any other bad
-    // invocation. Anything else keeps its existing handling untouched.
+    // invocation.
     const report = describeServerValidationFailure(err, payload, schema);
     if (report) {
       await failValidation(report, "cli_run_server_validation");
@@ -368,10 +362,8 @@ Examples:
     process.exit(1);
   }
 
-  // Image side-effect: save before rendering so --out works in non-JSON mode
-  // and --json mode still prints the structured result. Prefer the bytes the
-  // materializer already resolved; fall back to the legacy `{ url }` fetch for
-  // older tool-servers that don't emit artifact handles.
+  // Prefer the bytes the materializer already resolved; fall back to fetching the
+  // legacy `{ url }` for older tool-servers that don't emit artifact handles.
   if (outPath && meta.outputHint === "image") {
     try {
       if (images.length > 0) {

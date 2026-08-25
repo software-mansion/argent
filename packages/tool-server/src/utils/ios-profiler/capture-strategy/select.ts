@@ -4,16 +4,12 @@ import { deviceStrategy } from "./device";
 import { allProcessesStrategy } from "./all-processes";
 
 /**
- * Pick the iOS capture strategy for the current environment.
- *
- * Order of precedence:
- *  1. The `ARGENT_IOS_CAPTURE` env override ("device" | "all-processes") — an
- *     explicit escape hatch for both directions.
- *  2. Active Xcode version: 26.4 and later are "degraded" (the `--device` recording
- *     handshake deadlocks) → use the all-processes fallback. Only ≤ 26.3 uses the
- *     device path; when Apple ships a fixed build, narrow isDegraded() to re-enable it.
- *  3. If the version can't be determined, default to the device strategy so the
- *     original behaviour is preserved; force the fallback via the env override.
+ * Pick the iOS capture strategy, in precedence order:
+ *  1. `ARGENT_IOS_CAPTURE` ("device" | "all-processes") — an explicit escape hatch
+ *     in both directions.
+ *  2. Xcode 26.4 and later deadlock in the `--device` recording handshake, so they
+ *     take the all-processes fallback.
+ *  3. Unknown version → device strategy, preserving the original behaviour.
  */
 
 const ENV_OVERRIDE = "ARGENT_IOS_CAPTURE";
@@ -24,18 +20,16 @@ interface XcodeVersion {
 }
 
 /**
- * Why a given strategy was chosen. Callers that need to explain or gate on the
- * decision (e.g. the malloc_stack_logging guard, which rejects when the strategy
- * isn't `device`) can attribute the outcome accurately instead of assuming it is
- * always a degraded Xcode.
+ * Why a strategy was chosen, so callers that gate on the decision (the
+ * malloc_stack_logging guard, which rejects anything but `device`) can name the real
+ * cause instead of always blaming a degraded Xcode.
  */
 export type CaptureStrategyReason =
   | {
       kind: "env-override";
       strategyName: IosCaptureStrategy["name"];
-      /** The literal ARGENT_IOS_CAPTURE value the operator set (trimmed, case preserved),
-       *  which may be an alias/mixed-case form of `strategyName` — quote THIS when echoing
-       *  the override back to the user so the message names what they actually set. */
+      /** The value the operator set, trimmed with case preserved — may be an alias or
+       *  mixed-case form of `strategyName`, so quote THIS when echoing it back. */
       rawValue: string;
     }
   | { kind: "degraded-xcode"; major: number; minor: number }
@@ -55,8 +49,8 @@ type OverrideParse =
   | { kind: "invalid"; raw: string };
 
 function parseEnvOverride(): OverrideParse {
-  // Keep the original (trimmed, case-preserved) value so callers can echo exactly
-  // what the operator set; classify on a lower-cased copy so aliases/case still match.
+  // Keep the operator's original spelling for echoing back; classify on a lower-cased
+  // copy so aliases and casing still match.
   const original = process.env[ENV_OVERRIDE]?.trim();
   if (!original) return { kind: "none" };
   const raw = original.toLowerCase();
@@ -69,9 +63,9 @@ function parseEnvOverride(): OverrideParse {
 
 function readActiveXcodeVersion(): XcodeVersion | null {
   try {
-    // `xcodebuild -version` honours DEVELOPER_DIR / xcode-select and prints
-    // e.g. "Xcode 26.5\nBuild version 17F42". Argv (execFileSync, no shell) to
-    // keep the iOS-profiler subsystem uniformly shell-free.
+    // `xcodebuild -version` honours DEVELOPER_DIR / xcode-select and prints e.g.
+    // "Xcode 26.5\nBuild version 17F42". execFileSync (no shell) keeps the
+    // iOS-profiler subsystem shell-free.
     const out = execFileSync("xcodebuild", ["-version"], {
       encoding: "utf-8",
       timeout: 5_000,
@@ -87,11 +81,9 @@ function readActiveXcodeVersion(): XcodeVersion | null {
 
 /**
  * True for Xcode versions where `xctrace record --device <sim>` deadlocks at the
- * recording-start handshake. Known broken from 26.4 onwards with no upper bound; we
- * conservatively treat ALL of 27+ as broken by default (the regression has shipped
- * across every build tested so far, 26.4 through 27.x). When Apple fixes it, narrow
- * this bound — until then, force the original path on a known-good version via
- * ARGENT_IOS_CAPTURE=device.
+ * recording-start handshake: every 26.x from 26.4 up, plus all of 27+ assumed broken
+ * for want of a known upper bound. Narrow this when Apple fixes it; until then a
+ * known-good version needs ARGENT_IOS_CAPTURE=device.
  */
 function isDegraded({ major, minor }: XcodeVersion): boolean {
   if (major === 26) return minor >= 4;
@@ -99,11 +91,10 @@ function isDegraded({ major, minor }: XcodeVersion): boolean {
 }
 
 /**
- * Resolve the capture strategy **and why** it was chosen, with **no side effects**
- * — nothing is written to stderr. Callers that log the decision (the normal record
- * flow, via {@link selectIosCaptureStrategy}) can do so; callers that may reject
- * the decision outright (the malloc_stack_logging guard) get the reason without a
- * misleading "using the all-processes fallback" line that never actually happens.
+ * Resolve the strategy and the reason for it with no side effects — nothing is written
+ * to stderr. Callers that may reject the decision outright (the malloc_stack_logging
+ * guard) would otherwise print a "using the all-processes fallback" line for a capture
+ * that never happens; {@link selectIosCaptureStrategy} logs for the normal record flow.
  */
 export function resolveIosCaptureStrategy(): CaptureStrategyDecision {
   const override = parseEnvOverride();
@@ -139,11 +130,10 @@ export function resolveIosCaptureStrategy(): CaptureStrategyDecision {
 }
 
 /**
- * Warn (once, to stderr) when `ARGENT_IOS_CAPTURE` held an unrecognised value that
- * was ignored. Shared by the normal record flow ({@link selectIosCaptureStrategy})
- * and the malloc_stack_logging guard, which resolves the strategy directly via
- * {@link resolveIosCaptureStrategy} (side-effect-free) and would otherwise swallow a
- * typo'd override silently — leaving the user with no clue their value was dropped.
+ * Warn on stderr when `ARGENT_IOS_CAPTURE` held an unrecognised value. Shared with the
+ * malloc_stack_logging guard, which resolves via {@link resolveIosCaptureStrategy} and
+ * would otherwise drop a typo'd override silently while advising the user to set that
+ * very variable.
  */
 export function warnIfInvalidCaptureOverride(decision: CaptureStrategyDecision): void {
   if (decision.invalidOverride) {

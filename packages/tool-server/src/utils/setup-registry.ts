@@ -92,10 +92,9 @@ import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
 
 export function createRegistry(): Registry {
-  // Inject the real feature-flag check so the gate is enforced for EVERY
-  // dispatch path (flow-execute, flow-add-step, run-sequence) — not only the
-  // HTTP edge in http.ts. Re-read per invocation, so `argent enable/disable
-  // <flag>` takes effect without restarting the long-lived tool-server.
+  // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
+  // just the HTTP edge in http.ts. Re-read per invocation, so `argent
+  // enable/disable <flag>` needs no tool-server restart.
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
   registry.registerBlueprint(simulatorServerBlueprint);
@@ -177,12 +176,10 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeViewAtPointTool);
   registry.registerTool(nativeUserInteractableViewAtPointTool);
 
-  // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
 
-  // Flow tools
   registry.registerTool(flowStartRecordingTool);
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
@@ -190,20 +187,12 @@ export function createRegistry(): Registry {
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
 
-  // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
 
-  // Variant proposal tools (non-blocking propose + single blocking await) —
-  // the Argent Lens surface. macOS-only: the Lens preview window + `argent lens`
-  // drive Terminal/iTerm and the simulator stream through macOS-only paths, so
-  // the tools are not registered off-darwin at all (they vanish from GET /tools
-  // and any invocation is rejected as unknown). On darwin they additionally
-  // declare `featureFlag: "argent-lens"`, so the HTTP layer (http.ts) hides them
-  // until the flag is enabled — re-checked on every request, so `argent
-  // enable/disable argent-lens` takes effect on the next tools/list WITHOUT
-  // restarting the long-lived tool-server. Platform gates at registration; the
-  // flag gates at the exposure boundary.
+  // Argent Lens is macOS-only, so these are not registered off-darwin at all —
+  // unknown there rather than hidden. On darwin their `featureFlag:
+  // "argent-lens"` gates exposure in http.ts, re-checked per request.
   if (process.platform === "darwin") {
     registry.registerTool(createProposeVariantTool(registry));
     registry.registerTool(awaitUserSelectionTool);

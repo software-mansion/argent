@@ -15,10 +15,8 @@ import {
 } from "jsonc-parser";
 import { resolvePackageRoot } from "./package-root.js";
 
-// ── Re-exports ────────────────────────────────────────────────────────────────
-// The package-manager / topology / preflight / install-record helpers moved into
-// focused modules. They are re-exported here so existing import sites
-// (`./utils.js`) keep resolving unchanged.
+// Re-exported so existing `./utils.js` import sites keep resolving after these
+// helpers moved into focused modules.
 export {
   formatShellCommand,
   detectPackageManager,
@@ -57,10 +55,9 @@ export type { InstallMode, InstallRecord } from "./install-record.js";
 export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
-// ── Package root resolution ───────────────────────────────────────────────────
-// resolvePackageRoot lives in the leaf package-root.ts module (topology.ts
+// resolvePackageRoot lives in the leaf package-root.ts module: topology.ts
 // needs it too, and importing it from this barrel — which re-exports topology —
-// was an ESM cycle). Re-exported here so existing import sites keep resolving.
+// was an ESM cycle.
 export { resolvePackageRoot };
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
@@ -77,26 +74,18 @@ export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
-// GitHub source shorthand the `skills` CLI parses to a github-typed entry with
-// `subpath: "packages/skills/skills"` and the supplied ref. Pinning to the
-// installed argent version's git tag is what keeps `skills-lock.json` portable
-// across machines (see issue #208) — install paths stop being absolute and
-// teammates resolve the same SHA.
+// GitHub source shorthand for the `skills` CLI. Pinning to the installed
+// version's git tag keeps `skills-lock.json` portable across machines (issue
+// #208): install paths stop being absolute and teammates resolve the same SHA.
 export const ARGENT_SKILLS_REPO = "software-mansion/argent/packages/skills/skills";
 
-// Build the `skills add` source argument. Returns the GitHub-pinned shorthand
-// when a clean version is available; falls back to the bundled local SKILLS_DIR
-// when the version is unknown (e.g. dev tarball) so offline / pre-release
-// installs still succeed.
+// Source argument for `skills add`. Falls back to the bundled SKILLS_DIR when
+// the version is unknown, since there is then no git tag to pin.
 export function buildArgentSkillsSource(version: string | null | undefined): string {
   if (!version || version === "unknown") return SKILLS_DIR;
   return `${ARGENT_SKILLS_REPO}#v${version}`;
 }
 
-// Returns the names of the skills that ship with this argent install — each
-// subdirectory of SKILLS_DIR that contains a SKILL.md. Used to detect which
-// skills on the user's machine are argent-owned so we don't touch anything
-// else during update.
 export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
   try {
     return fs
@@ -110,10 +99,8 @@ export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
   }
 }
 
-// Locations of the skills-CLI lock files. These paths mirror the skills CLI
-// (v1.5.x) so we can detect which scopes already track argent skills and only
-// re-sync those. Project lock lives next to the user's working tree, global
-// lock under XDG_STATE_HOME or ~/.agents/.
+// Lock file locations owned by the skills CLI, not by argent — mirrored here so
+// we can read them.
 export function getProjectSkillLockPath(cwd: string = process.cwd()): string {
   return path.join(cwd, "skills-lock.json");
 }
@@ -124,14 +111,10 @@ export function getGlobalSkillLockPath(): string {
   return path.join(os.homedir(), ".agents", ".skill-lock.json");
 }
 
-// Prefix that identifies every skill argent ships. Used to locate argent-
-// owned entries in the skills CLI lock files (including ones that were
-// removed from the bundled set and need to be pruned).
+// Prefix on every skill argent ships. Argent reserves the namespace, so lock
+// entries under it count as ours even once they leave the bundled set.
 export const ARGENT_SKILL_PREFIX = "argent-";
 
-// Returns names in the lock that argent owns (i.e. start with the argent
-// prefix). Argent reserves this namespace, so everything under it is
-// considered ours and is kept in sync with the bundled SKILLS_DIR.
 export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
     const raw = fs.readFileSync(lockPath, "utf8");
@@ -182,8 +165,6 @@ export function resolveProjectRoot(startDir: string): string {
   }
 }
 
-// ── TOML helpers ─────────────────────────────────────────────────────────────
-
 export function readToml(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   try {
@@ -198,10 +179,8 @@ export function writeToml(filePath: string, data: Record<string, unknown>): void
   fs.writeFileSync(filePath, stringifyToml(data) + "\n");
 }
 
-// ── YAML helpers ────────────────────────────────────────────────────────────
-// Uses the Document API so comments and formatting survive round-trips,
-// which matters for hand-edited config files like ~/.hermes/config.yaml.
-
+// Uses the Document API so comments and formatting survive round-trips, which
+// matters for hand-edited config files like ~/.hermes/config.yaml.
 export function readYaml(filePath: string): Document {
   if (!fs.existsSync(filePath)) return new Document({});
   const text = fs.readFileSync(filePath, "utf8");
@@ -215,13 +194,10 @@ export function readYaml(filePath: string): Document {
 
 export function writeYaml(filePath: string, doc: Document): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // lineWidth: 0 disables hard-wrap so long user strings (e.g. multi-line
-  // quoted personalities in ~/.hermes/config.yaml) stay on the lines they
-  // were on. Default would re-wrap at column 80.
+  // lineWidth: 0 disables hard-wrap, so long user strings stay on the lines
+  // they were on; the default would re-wrap them at column 80.
   fs.writeFileSync(filePath, doc.toString({ lineWidth: 0 }));
 }
-
-// ── JSON helpers ──────────────────────────────────────────────────────────────
 
 export function readJson(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
@@ -237,17 +213,7 @@ export function writeJson(filePath: string, data: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
 }
 
-// ── JSONC helpers ────────────────────────────────────────────────────────────
-// Comment-preserving edits for the editor config files that are JSONC (Zed,
-// Cursor, VS Code, Kiro, ...) — and, since JSONC is a superset of JSON, the
-// shared write path for the strict-JSON adapters too. Unlike the
-// JSON.parse → mutate → JSON.stringify path, these helpers operate on the
-// source string via jsonc-parser's modify(), so user comments, trailing
-// commas, blank lines, and key ordering all survive.
-
-// jsonc-parser's modify() needs a formatting hint for newly-inserted keys.
-// Zed's bundled defaults use 2-space indentation; matching that keeps writes
-// visually consistent for the common case.
+// jsonc-parser's modify() needs a formatting hint for the keys it inserts.
 const JSONC_FORMATTING = { tabSize: 2, insertSpaces: true } as const;
 
 function setJsoncIn(text: string, jsonPath: JSONPath, value: unknown): string {
@@ -260,8 +226,8 @@ function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean; wa
   let text = fs.readFileSync(filePath, "utf8");
   const hadBom = text.charCodeAt(0) === 0xfeff;
   if (hadBom) text = text.slice(1);
-  // A whitespace-only file has no real content whose formatting we'd preserve —
-  // it is substituted with "{}" and synthesized fresh, like a non-existent file.
+  // A whitespace-only file has no formatting worth preserving, so it is
+  // synthesized fresh, like a non-existent one.
   const wasEmpty = text.trim() === "";
   if (wasEmpty) text = "{}";
   return { text, hadBom, wasEmpty };
@@ -297,11 +263,9 @@ function rmEmptyDir(dirPath: string): void {
 }
 
 /**
- * Read a JSON-with-Comments file (line + block comments + trailing commas).
- * Used across the MCP-config adapters to inspect editor config files that may
- * be JSONC (Zed, Cursor, VS Code, Kiro, ...) without `JSON.parse` failing on a
- * user-authored comment. For mutations go through {@link editJsoncFile}
- * instead — it preserves comments on write.
+ * Read a JSON-with-Comments file, so a user-authored comment or trailing comma
+ * in an editor config does not fail the parse. For mutations use
+ * {@link editJsoncFile} instead — it preserves comments on write.
  */
 export function readJsonc(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
@@ -315,21 +279,20 @@ export function readJsonc(filePath: string): Record<string, unknown> {
 }
 
 /**
- * Apply a single path-targeted edit to a JSONC config file in place.
- * Comments, trailing commas, blank lines, and key ordering outside the
- * edited path are preserved (jsonc-parser's modify() operates on the source
- * text rather than a parsed object).
+ * Apply a single path-targeted edit to a JSONC config file in place. Comments,
+ * trailing commas, blank lines and key ordering outside the edited path are
+ * preserved: jsonc-parser's modify() operates on the source text rather than a
+ * parsed object.
  *
- * Pass `undefined` as `value` to delete the key. Empty ancestor objects are
- * pruned, and if the document collapses to `{}` the file (and an empty
- * parent directory) is removed.
+ * Pass `undefined` as `value` to delete the key. Emptied ancestor objects are
+ * pruned, and a document that collapses to `{}` takes the file (and an empty
+ * parent directory) with it.
  *
- * This is the shared write path for every MCP-config adapter — including the
- * strict-JSON ones (Claude's `.mcp.json`, Windsurf, Gemini). JSONC is a
- * superset of JSON, so routing them here is safe and keeps every argent entry
- * on one comment- and foreign-server-preserving path. {@link writeJson}
+ * JSONC is a superset of JSON, so the strict-JSON MCP-config adapters (Claude's
+ * `.mcp.json`, Windsurf, Gemini) write through here too, keeping every argent
+ * entry on one comment- and foreign-server-preserving path. {@link writeJson}
  * remains for whole-document rewrites that must never delete the file (e.g.
- * `~/.claude.json`, which holds the user's OAuth state).
+ * `~/.claude.json`, which holds unrelated user state).
  */
 export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
   const { text: initial, hadBom, wasEmpty } = readJsoncFileRaw(filePath);
@@ -352,20 +315,14 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // A synthesized document — a fresh file, or an existing file that was empty /
-  // whitespace-only and so had no real content to preserve — gets a trailing
-  // newline, matching writeJson/TOML (POSIX text-file convention, avoids a git
-  // "\ No newline at end of file"). An existing file with real content keeps its
-  // own EOL/formatting untouched — setJsoncIn edits in place — so we never
-  // rewrite its trailing byte.
+  // A synthesized document (a fresh or previously empty file) gets a trailing
+  // newline, matching writeJson/writeToml. A file with real content is edited in
+  // place, so its own EOL and trailing byte stay untouched.
   const out = wasEmpty && !text.endsWith("\n") ? text + "\n" : text;
   fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + out);
 }
 
-// ── Directory helpers ─────────────────────────────────────────────────────────
-
-// How many links a destination chain may traverse before we give up, matching
-// the kernel's own ELOOP ceiling.
+// Matches the kernel's own ELOOP ceiling.
 const MAX_SYMLINK_HOPS = 40;
 
 export function realpathOrSelf(p: string): string {
@@ -376,16 +333,15 @@ export function realpathOrSelf(p: string): string {
   }
 }
 
-// The path a copy destination names: itself, or — when it is a symlink — what
-// it points at, following a chain to its end. Each hop resolves against the
-// directory the link really lives in, which is not the lexical dirname when a
-// parent is itself a link into another subtree.
+// The path a copy destination names: itself, or — when it is a symlink — the
+// end of the chain it points along. Each hop resolves against the directory the
+// link really lives in, which is not the lexical dirname when a parent is itself
+// a link into another subtree.
 //
-// A link whose target does not exist is completed, but only into a directory
-// that already exists: finishing `.claude/agents -> ../.agents/agents` for
-// someone who has made `.agents` is helpful, conjuring a whole tree at the end
-// of an arbitrary link is not. Anything else resolves back to the path we were
-// given, so the caller fails naming the link the user actually wrote.
+// A dangling link is completed only when its target's parent directory already
+// exists: finishing `.claude/agents -> ../.agents/agents` for someone who has
+// made `.agents` is helpful, conjuring a whole tree is not. Anything else
+// resolves back to `dest`, so the caller fails naming the link the user wrote.
 function resolveLinkedDestination(dest: string): string {
   let current = dest;
 
@@ -416,22 +372,18 @@ function resolveLinkedDestination(dest: string): string {
 // directory actually written (which differs from `dest` when that was a link),
 // or null when there is nothing to copy.
 //
-// Writing through matters because agent definitions are increasingly the same
-// content across harnesses: people keep the canonical copy in one neutral
-// directory and point each vendor path at it — the whole directory
-// (`.claude/agents -> ../.agents/agents`) or a single file inside it. The host
-// tools already tolerate that — Claude Code documents symlinks for
-// `.claude/rules/` — so argent's writer should too (issue #701).
+// Writing through matters because people keep one canonical copy of their agent
+// definitions and point each vendor path at it — the whole directory
+// (`.claude/agents -> ../.agents/agents`) or a single file inside it (issue
+// #701).
 //
-// `fs.cp` cannot do any of this, because what it does with a symlinked
-// destination depends on which runtime you are on. Node 20 refuses one at any
-// level (ERR_FS_CP_DIR_TO_NON_DIR) and quietly replaces a symlinked file,
-// leaving the canonical copy stale; Node 22 writes through both, but aborts
-// the process — an uncatchable C++ std::filesystem exception no try/catch can
-// reach — whenever it has to create a directory and cannot, whether that is a
-// dangling link or one it may not write to. Argent supports both. Walking the
-// tree here is what makes the behaviour the same on every supported runtime,
-// and `fs.copyFileSync` reports each failure as a plain, catchable errno.
+// `fs.cp` cannot do this: its handling of a symlinked destination depends on
+// the runtime. Node 20 refuses one at any level (ERR_FS_CP_DIR_TO_NON_DIR) and
+// quietly replaces a symlinked file, leaving the canonical copy stale; Node 22
+// writes through both, but aborts the process — an uncatchable C++
+// std::filesystem exception — whenever it has to create a directory and cannot.
+// Argent supports both, and `fs.copyFileSync` reports each failure as a plain,
+// catchable errno.
 export function copyDir(src: string, dest: string): string | null {
   if (!fs.existsSync(src)) return null;
 
@@ -442,7 +394,7 @@ export function copyDir(src: string, dest: string): string | null {
 
 function copyTree(src: string, dest: string): void {
   // Read the source before creating anything: a destination that resolves back
-  // inside the source would otherwise grow the very tree being walked.
+  // inside the source would otherwise grow the tree being walked.
   const entries = fs.readdirSync(src, { withFileTypes: true });
 
   fs.mkdirSync(dest, { recursive: true });
@@ -462,8 +414,6 @@ export function dirExists(p: string): boolean {
     return false;
   }
 }
-
-// ── Version helpers ───────────────────────────────────────────────────────────
 
 export function getInstalledVersion(): string | null {
   try {
@@ -487,22 +437,18 @@ export function getLatestVersion(): string {
   return result.trim();
 }
 
-// Returns true only when `candidate` is a strictly newer semver than
-// `current`. Unparseable versions never report as newer, so a local
-// prerelease build with a non-semver tag does not trigger a downgrade prompt.
+// Unparseable versions never report as newer, so a local build carrying a
+// non-semver tag never shows up as an available update.
 export function isNewerVersion(candidate: string, current: string): boolean {
   if (!semver.valid(candidate) || !semver.valid(current)) return false;
   return semver.gt(candidate, current);
 }
 
 // Every `npx` call is `npm exec`, which evaluates the host project's
-// package.json `engines` / `devEngines` gate before running the command. A
-// project that pins a runtime the user's machine doesn't match — e.g. Bluesky's
-// `devEngines.runtime: { node: "^24.15.0" }` — otherwise aborts with
-// EBADDEVENGINES (exit 1) before the skills CLI ever runs, so `argent init`
-// can't install skills on an older Node (issue #298). `--force` downgrades that
-// gate to a non-fatal warning; we scope it to argent's own skills commands so
-// nothing else is affected.
+// package.json `engines` / `devEngines` gate first: a project pinning a runtime
+// the user's machine doesn't match aborts with EBADDEVENGINES before the skills
+// CLI ever runs (issue #298). `--force` downgrades that gate to a non-fatal
+// warning; scoped to argent's own skills commands so nothing else is affected.
 export function withNpmForce(npxArgs: string[]): string[] {
   return ["--force", ...npxArgs];
 }

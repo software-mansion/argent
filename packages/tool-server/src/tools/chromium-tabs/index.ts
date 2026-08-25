@@ -28,7 +28,7 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
-  /** Tabs after the action, with `active` marking the one other tools drive. */
+  /** Tabs after the action. */
   tabs: TabInfo[];
 }
 
@@ -63,8 +63,7 @@ const tabAction = {
   }
 >;
 
-// Chromium-only: iOS/Android have no tab/window concept, so the capability gate
-// rejects them up-front (no apple/android blocks declared).
+// No apple/android blocks: those platforms have no tab/window concept.
 const capability: ToolCapability = {
   chromium: { app: true },
 };

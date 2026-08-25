@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
+import type { ToolContext } from "@argent/registry";
+import { ArtifactStore, Registry, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -454,7 +454,7 @@ describe("flow-add-step", () => {
       counts.push(result.stepCount);
       // The number `recorded` opens with IS the reported count, so the author
       // cannot be shown "3." while being told the flow holds one step.
-      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+      expect(result.recorded?.startsWith(`${result.stepCount}. `)).toBe(true);
     }
 
     expect(counts).toEqual([1, 2, 3]);
@@ -1193,6 +1193,51 @@ describe("flow-add-step", () => {
       flowName: "login",
       viaUpload: false,
     });
+  });
+
+  it("names the flow_path the author wrote when the rewritten call is rejected", async () => {
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const tool = createFlowAddStepTool(registry);
+    registry.registerTool(tool as never);
+
+    await flowStartRecordingTool.execute({}, { name: "reframe", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
+
+    const authored = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ flow_path: sibling, project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(authored).toContain("`platform`");
+    expect(authored).toContain("You sent: `flow_path`, `project_root`, `platform`.");
+    expect(authored).not.toContain("`name`");
+
+    const byName = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ name: "login", project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(byName).toContain("You sent: `name`, `project_root`, `platform`.");
+
+    expect(parseFlow(await onDisk("reframe")).steps).toEqual([]);
   });
 
   it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
@@ -2706,6 +2751,12 @@ describe("flow-read-prerequisite", () => {
         { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one flow source");
+  });
+
+  it("rejects direct callers that provide NEITHER flow source", async () => {
+    await expect(flowReadPrerequisiteTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      "exactly one flow source"
+    );
   });
 });
 

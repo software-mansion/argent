@@ -1,11 +1,7 @@
-// Universal configuration CLI for argent: the `argent config` command with
-// `list` / `get` / `set` / `unset` subcommands.
-//
-// This is the single front door for the schema-driven config system in
-// `@argent/configuration-core`. New configurations are added by registering
-// them in the schema (CONFIG_SCHEMA) — they show up here automatically, with no
-// new top-level `argent` command. Values with a dedicated lifecycle command
-// (e.g. telemetry) are surfaced read-only and point the user at that command.
+// The `argent config` CLI over the schema-driven config system in
+// `@argent/configuration-core`. Registering a key in CONFIG_SCHEMA is enough to
+// surface it here. Keys with a `manageCommand` (e.g. telemetry) stay read-only
+// and point the user at that command.
 
 import * as path from "node:path";
 import pc from "picocolors";
@@ -50,8 +46,6 @@ export function config(argv: string[]): void {
   }
 }
 
-// ── list ───────────────────────────────────────────────────────────────────
-
 function cmdList(argv: string[]): void {
   if (wantsHelp(argv)) {
     console.log(`Usage: argent config list [--json]
@@ -85,15 +79,12 @@ the raw value stored at each scope.`);
 
 function scopeDetail(e: ConfigEntryView): string {
   const parts: string[] = [`scopes: ${e.scopes.join(", ")}`];
-  // What the key accepts, which the description alone does not say — a list-valued
-  // key reads exactly like a string-valued one otherwise.
+  // The description alone can't say it: a list-valued key reads like a string one.
   if (e.expected) parts.push(`value: ${e.expected}${e.example ? `, e.g. ${e.example}` : ""}`);
   if (e.project !== undefined) parts.push(`project=${formatValuePlain(e.project)}`);
   if (e.global !== undefined) parts.push(`global=${formatValuePlain(e.global)}`);
   return parts.join("  ·  ");
 }
-
-// ── get ────────────────────────────────────────────────────────────────────
 
 function cmdGet(argv: string[]): void {
   if (wantsHelp(argv)) {
@@ -130,8 +121,6 @@ merging project and global. With --scope, prints only that scope's stored value.
   }
 }
 
-// ── set ────────────────────────────────────────────────────────────────────
-
 function cmdSet(argv: string[]): void {
   if (wantsHelp(argv)) {
     console.log(`Usage: argent config set <key> <value> [--scope global|project]
@@ -156,20 +145,15 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   const targetScope: FlagScope = scope ?? "global";
   const warning = degenerateProjectScopeWarning(targetScope);
   try {
-    // Echo the normalized value that was actually stored (asString trims,
-    // asStringArray drops blanks, …), not the raw CLI input.
+    // Report the value as normalized on write (trimmed, blanks dropped), not the input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
   } catch (err) {
-    // Built here rather than in reportError because the correction is worth
-    // more when it carries what the user actually typed, and only this frame
-    // knows the value and the scope they chose.
+    // Built here, not in reportError: only this frame knows the value and scope typed.
     reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
   }
 }
-
-// ── unset ──────────────────────────────────────────────────────────────────
 
 function cmdUnset(argv: string[]): void {
   if (wantsHelp(argv)) {
@@ -204,8 +188,6 @@ other scope / the default on the next read.`);
     reportError(err);
   }
 }
-
-// ── shared helpers ───────────────────────────────────────────────────────────
 
 interface ParsedArgs {
   positionals: string[];
@@ -251,22 +233,18 @@ function wantsHelp(argv: string[]): boolean {
   return argv.includes("--help") || argv.includes("-h");
 }
 
-/**
- * `(global)` for the global scope; `(project: /resolved/root)` for the project
- * scope, so a write always shows which directory "project" resolved to.
- */
+/** Names the resolved root for `project`, so a write shows which directory it meant. */
 function scopeLabel(scope: FlagScope): string {
   if (scope === "global") return "global";
   return `project: ${path.dirname(configDir("project"))}`;
 }
 
 /**
- * A stderr warning when "project" scope resolves somewhere surprising: to the
- * home directory (where the project config file IS the global one — `~/.argent`
- * itself is a project marker, so any non-project cwd under $HOME lands here),
- * or to the bare cwd because no marker was found up to the fs root. Must be
- * called BEFORE the write — a project-scope `set` creates `.argent` in the
- * resolved root, which would make the no-marker case undetectable afterwards.
+ * Warns when "project" resolves somewhere surprising: to the home directory
+ * (`~/.argent` is itself a project marker, and there the project file IS the
+ * global one), or to the bare cwd because no marker was found. Must run BEFORE
+ * the write — a project-scope `set` creates `.argent` in the resolved root,
+ * hiding the no-marker case afterwards.
  */
 function degenerateProjectScopeWarning(scope: FlagScope): string | null {
   if (scope !== "project") return null;
@@ -288,13 +266,12 @@ function degenerateProjectScopeWarning(scope: FlagScope): string | null {
   return null;
 }
 
-/** JSON for arrays/objects, the bare string for strings, `String()` otherwise. */
 function formatValuePlain(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value);
 }
 
-/** Colorized variant for the human list view (booleans green/red). */
+/** Colorized variant for the human list view. */
 function formatValue(value: unknown): string {
   if (value === undefined) return pc.dim("(unset)");
   if (typeof value === "boolean" && process.stdout.isTTY) {
@@ -303,23 +280,16 @@ function formatValue(value: unknown): string {
   return formatValuePlain(value);
 }
 
-/**
- * Shell-quote a value for a suggested command, so pasting it stores exactly
- * what it shows. A `~` or a bracket left bare would be expanded or eaten by the
- * shell, which is how the user got here in the first place.
- */
+/** Quote so a pasted suggestion stores what it shows: bare `~`/brackets are eaten by the shell. */
 function quoteForShell(value: string): string {
   if (/^[A-Za-z0-9._/@:+-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
- * The command the user probably meant, or null when there is nothing confident
- * to suggest.
- *
- * Only offered where the correction is mechanical — a value for a list-valued
- * key that was written as a single item. Nothing is stored on the user's behalf;
- * the corrected command is shown for them to run.
+ * The command the user probably meant, or null. Only offered for the one
+ * mechanical case: a single item given where a list-valued key was expected.
+ * Nothing is written on their behalf — the command is printed for them to run.
  */
 function suggestCorrectedSet(
   err: unknown,
@@ -330,7 +300,7 @@ function suggestCorrectedSet(
   if (!(err instanceof ConfigValidationError)) return null;
   const def = getConfigDefinition(key);
   if (!def) return null;
-  // A single item offered to a list — the mistake this suggestion exists for.
+  // A successful parse of the wrapped value is the confidence test.
   const wrapped = def.parse([rawValue]);
   if (wrapped === undefined) return null;
   const scopeFlag = scope ? ` --scope ${scope}` : "";

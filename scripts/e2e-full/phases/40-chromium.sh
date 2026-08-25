@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 # Phase 4 — Chromium / Electron tier (Linux + macOS).
 #
-# Generates a minimal Electron app, boots it through boot-device
-# (electronAppPath), and drives every Chromium/CDP tool. Electron ships as an
-# argent optionalDependency, so it's present after a sandbox install that kept
-# optional deps (run-e2e installs them when the chromium/rn phases are
-# selected). resolveLauncher() prefers <app>/node_modules/.bin/electron, so we
-# symlink the bundled binary in. Needs a display (DISPLAY or xvfb) on Linux.
+# Generates a minimal Electron app and boots it through boot-device
+# (electronAppPath). Electron is an argent optionalDependency, installed by
+# run-e2e only when the chromium or rn phase is selected. resolveLauncher()
+# prefers <app>/node_modules/.bin/electron, so the bundled binary is symlinked
+# in. Needs a display on Linux.
 
-# Locate the electron launcher binary the sandbox install pulled in.
 _find_electron() {
   find "$E2E_PREFIX" "$E2E_UNPACKED/.." -path '*/.bin/electron' 2>/dev/null | head -1
 }
 
-# Write the minimal Electron app into $E2E_WORK/electron-app and link electron.
-# Loads over http://127.0.0.1:$1 (not file://) so localStorage/sessionStorage
-# have a real, storable origin — file:// origins are opaque and throw.
+# Loads over http, not file://, so localStorage/sessionStorage have a storable
+# origin — file:// origins are opaque and throw.
 _gen_electron_app() { # electron-bin http-port  -> echoes app dir
   local ebin="$1" httpport="$2" dir="$E2E_WORK/electron-app"
   mkdir -p "$dir/node_modules/.bin"
@@ -34,9 +31,8 @@ function createWindow() {
 app.whenReady().then(createWindow);
 app.on("window-all-closed", () => app.quit());
 JS
-  # A full-window canvas painted with random noise guarantees a large,
-  # incompressible PNG (well above the blank-framebuffer floor), with a button +
-  # input at known positions for the interaction tools.
+  # Random noise keeps the PNG large and incompressible, above the screenshot
+  # size floor; the button and input sit at known positions for the gestures.
   cat > "$dir/index.html" <<'HTML'
 <!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;height:100%;overflow:auto}
@@ -63,19 +59,11 @@ run_phase() {
   local P=chromium
   ensure_server || { skip "$P" tier all "tool-server unavailable"; return 0; }
 
-  # Display gate (Linux). macOS always has one. An installed xvfb-run is not
-  # accepted as a substitute: nothing here or in argent wraps the Electron spawn
-  # in it, so a headless box that merely has it would clear this gate and then
-  # fail boot-device on a missing X server — turning the release gate red for
-  # exactly the environment this check exists to skip. Run the whole harness
-  # under `xvfb-run` instead; that supplies a real DISPLAY.
-  #
-  # A set-but-unusable DISPLAY costs the same red gate and is not rare: a
-  # display-manager session switch leaves $DISPLAY pointing at a server this
-  # process has no cookie for, and Electron then binds its CDP port and never
-  # answers on it, so the failure surfaces as an opaque readiness timeout rather
-  # than as "no display". Probe it when a probe tool exists; when none does, say
-  # so in the skip rather than implying the display was checked.
+  # Display gate (Linux; macOS always has one). A merely installed xvfb-run does
+  # not count — nothing wraps the Electron spawn in it, so run the whole harness
+  # under `xvfb-run` instead. A set-but-unreachable DISPLAY (e.g. a session
+  # switch left it pointing at a server this process has no cookie for) shows up
+  # only as an opaque CDP readiness timeout, hence the probe.
   if [ "$E2E_OS" = "linux" ]; then
     if [ -z "${DISPLAY:-}" ]; then
       skip "$P" tier all "no DISPLAY on Linux (re-run the harness under xvfb-run)"; return 0
@@ -102,8 +90,7 @@ run_phase() {
   local port; port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
   sleep 1
 
-  # electronArgs: --no-sandbox is required for Electron under many CI/root/Linux
-  # setups; disable-gpu keeps rendering deterministic.
+  # --no-sandbox: Electron's sandbox is unusable under many CI/root Linux setups.
   run_tool boot-device "{\"electronAppPath\":\"$appdir\",\"electronPort\":$port,\"electronArgs\":[\"--no-sandbox\",\"--disable-gpu\"]}"
   if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.booted==true' >/dev/null 2>&1; then
     fail "$P" boot-device boot "$(rt_detail 180)"
@@ -115,7 +102,6 @@ run_phase() {
   export E2E_ELECTRON_PORT="$port"
   pass "$P" boot-device boot "electron $DEV (port $port)"
 
-  # --- discovery ------------------------------------------------------------
   assert_true "$P" list-devices present "{}" "(any(.devices[]?; (.id//.udid//.serial)==\"$DEV\"))"
   if capture_screenshot "$DEV" "$E2E_WORK/chromium-shot.png"; then
     pass "$P" screenshot shot "${SHOT_SIZE}B"
@@ -124,18 +110,15 @@ run_phase() {
   fi
   assert_field "$P" describe describe "{\"udid\":\"$DEV\"}" '(.description|length>0)' 'true'
 
-  # --- interaction ----------------------------------------------------------
   assert_true "$P" gesture-tap tap    "{\"udid\":\"$DEV\",\"x\":0.5,\"y\":0.5}" '.tapped'
   assert_true "$P" gesture-scroll scroll "{\"udid\":\"$DEV\",\"x\":0.5,\"y\":0.5,\"deltaY\":0.5}" '.scrolled'
   assert_true "$P" gesture-drag drag   "{\"udid\":\"$DEV\",\"fromX\":0.4,\"fromY\":0.4,\"toX\":0.6,\"toY\":0.6}" '.dragged'
   assert_ok   "$P" keyboard  text     "{\"udid\":\"$DEV\",\"text\":\"hello chromium\"}"
-  # navigate within the same http origin so storage tests below keep a storable
-  # origin (about:/data: origins are opaque and reject Web Storage).
+  # Stay on the http origin: the storage cases below need a storable one.
   assert_true "$P" open-url  url      "{\"udid\":\"$DEV\",\"url\":\"http://127.0.0.1:$httpport/index.html\"}" '.opened'
 
-  # --- tabs -----------------------------------------------------------------
-  # `list` always works; new/select/close need a multi-window/tab target, which
-  # a single-window Electron app doesn't provide — tolerate "Not supported".
+  # Electron has no browser-level target creation, so `new` comes back
+  # "Not supported"; tolerate that.
   assert_ok "$P" chromium-tabs list "{\"udid\":\"$DEV\",\"action\":\"list\"}"
   run_tool chromium-tabs "{\"udid\":\"$DEV\",\"action\":\"new\",\"url\":\"about:blank\",\"label\":\"e2e-tab\"}"
   if [ "$RT_RC" -eq 0 ]; then
@@ -148,20 +131,15 @@ run_phase() {
         skip "$P" chromium-tabs new "single-window Electron: tab creation not supported" ;;
       *) fail "$P" chromium-tabs new "$(rt_detail 140)" ;;
     esac
-    # Whatever the reason `new` gave, there is no second tab, so select/close
-    # were not exercised. Record that on both arms or the report counts
-    # chromium-tabs as covered off the `list` case alone.
     skip "$P" chromium-tabs select "no extra tab to select"
     skip "$P" chromium-tabs close "no extra tab to close"
   fi
 
-  # --- cookies --------------------------------------------------------------
   assert_ok "$P" chromium-cookies set   "{\"udid\":\"$DEV\",\"action\":\"set\",\"name\":\"e2e\",\"value\":\"1\",\"url\":\"https://example.com\"}"
   assert_ok "$P" chromium-cookies get   "{\"udid\":\"$DEV\",\"action\":\"get\"}"
   assert_ok "$P" chromium-cookies delete "{\"udid\":\"$DEV\",\"action\":\"delete\",\"name\":\"e2e\",\"url\":\"https://example.com\"}"
   assert_ok "$P" chromium-cookies clear "{\"udid\":\"$DEV\",\"action\":\"clear\"}"
 
-  # --- storage (local + session) -------------------------------------------
   local store
   for store in local session; do
     assert_ok "$P" chromium-storage "set-$store"    "{\"udid\":\"$DEV\",\"store\":\"$store\",\"action\":\"set\",\"key\":\"e2e\",\"value\":\"v\"}"
@@ -170,15 +148,12 @@ run_phase() {
     assert_ok "$P" chromium-storage "clear-$store"  "{\"udid\":\"$DEV\",\"store\":\"$store\",\"action\":\"clear\"}"
   done
 
-  # --- teardown: kill the electron we spawned ------------------------------
   if [ -n "${E2E_ELECTRON_PID:-}" ] && kill -0 "$E2E_ELECTRON_PID" 2>/dev/null; then
     kill "$E2E_ELECTRON_PID" 2>/dev/null || true
   else
-    # fall back: kill whatever holds the CDP port. The port is compared as the
-    # whole last field of the local address and the pid is read from that same
-    # line — a substring match on ":$port" also hits ":${port}9", and a pid
-    # picked from anywhere in the output belongs to whichever listener happened
-    # to sort first. On a shared machine that is someone else's process.
+    # Fall back to the CDP port's listener. The port is matched as the whole
+    # last field and the pid taken from that same line: ":$port" as a substring
+    # also hits ":${port}9", and a stray pid may be another user's process.
     local pid; pid="$(python3 -c "
 import re, subprocess
 port = '$port'
@@ -199,9 +174,8 @@ print(pid)" 2>/dev/null)"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   fi
   [ -n "${E2E_HTTP_PID:-}" ] && kill "$E2E_HTTP_PID" 2>/dev/null || true
-  # Confirm the process is actually gone. Electron takes a moment to go down
-  # after SIGTERM, and this case is the run's only record that the tier left
-  # nothing behind, so it has to look rather than assert.
+  # Electron takes a moment to go down after SIGTERM, and this case is the run's
+  # only record that the tier left nothing behind — so poll, don't assert.
   local waited=0
   while [ -n "${E2E_ELECTRON_PID:-}" ] && kill -0 "$E2E_ELECTRON_PID" 2>/dev/null && [ "$waited" -lt 5 ]; do
     sleep 1; waited=$((waited + 1))

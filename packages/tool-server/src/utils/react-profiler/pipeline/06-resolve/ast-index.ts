@@ -1,8 +1,6 @@
 import { promises as fs } from "fs";
 import { join } from "path";
 
-// Tree-sitter requires native bindings loaded via require (CJS context)
-
 const _require = require;
 
 export interface TreeSitterNode {
@@ -36,13 +34,9 @@ export interface ComponentIndexEntry {
   isMemoized: boolean;
   hasUseCallback: boolean;
   hasUseMemo: boolean;
-  // Other components found under the same name elsewhere in the project — most
-  // commonly platform variants (List.tsx vs List.web.tsx). The lookup key is
-  // just the name, so without surfacing these a caller asking for "List" would
-  // be silently handed whichever file happened to be walked first. The fields
-  // above hold the primary match (chosen deterministically — see pickPrimary);
-  // these are the remaining candidates, exposed so callers can tell an
-  // ambiguous name apart instead of trusting a single arbitrary location.
+  // Same-named components elsewhere, usually platform variants (List.tsx vs
+  // List.web.tsx). The fields above hold the primary match; these expose the
+  // rest so a caller can tell an ambiguous name from a single definite hit.
   otherMatches?: ComponentMatch[];
 }
 
@@ -54,9 +48,7 @@ export interface AstIndexResult {
   indexedFiles: number;
 }
 
-// ---------------------------------------------------------------------------
-// Load tree-sitter lazily (graceful fallback if not compiled)
-// ---------------------------------------------------------------------------
+// Loaded lazily: a missing or uncompiled tree-sitter degrades to an empty index.
 
 let _ParserClass: ParserCtor | null = null;
 let _tsLanguage: unknown = null;
@@ -85,15 +77,12 @@ function loadTreeSitter(): {
 
     _tsxLanguage = TSLang.tsx ?? TSLang.default?.tsx;
   } catch {
-    // tree-sitter not available
     return null;
   }
 
   if (!_ParserClass || !_tsLanguage || !_tsxLanguage) return null;
   return { ParserClass: _ParserClass, ts: _tsLanguage, tsx: _tsxLanguage };
 }
-
-// ---------------------------------------------------------------------------
 
 const EXCLUDE_DIRS = new Set(["node_modules", ".git", "android", "ios", "dist", "build", ".expo"]);
 
@@ -154,12 +143,9 @@ function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
 }
 
 /**
- * Detect a React component wrapper call: memo(...) / forwardRef(...) /
- * React.memo(...) / React.forwardRef(...) (also nested, e.g. memo(forwardRef(...)),
- * since the outer callee is what we match). Components declared as
- * `const X = memo(...)` / `const X = forwardRef(...)` have a call_expression
- * value node, so without recognising these they would be missed entirely --
- * and profiler-flagged components are disproportionately memo-wrapped.
+ * Match memo()/forwardRef(), including React.* and nesting such as
+ * memo(forwardRef(...)) — only the outer callee is checked. Without this,
+ * `const X = memo(...)` is just a call_expression value and never indexed.
  */
 function reactWrapperCall(node: TreeSitterNode | undefined): {
   isWrapper: boolean;
@@ -177,11 +163,9 @@ function reactWrapperCall(node: TreeSitterNode | undefined): {
 }
 
 /**
- * Collect component names passed by reference to memo()/React.memo(), e.g.
- * `function Card() {}; export default memo(Card)`. This is the cross-reference
- * form that reactWrapperCall (which inspects a declarator's value node) does
- * not catch. Replaces a former regex scan of the raw source text that also
- * matched `memo(...)` inside comments and string literals and ignored AST scope.
+ * Names passed by reference to memo(), e.g. `function Card() {}; export default
+ * memo(Card)` — the cross-reference form reactWrapperCall misses, since it only
+ * inspects a declarator's value node.
  */
 function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   const names = new Set<string>();
@@ -197,10 +181,9 @@ function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   return names;
 }
 
-// React Native / Metro resolves platform-specific extensions (.ios / .android /
-// .native, plus web's .web) over the base file only when bundling for that
-// platform; the base file (no platform segment) is the general default. So when
-// the same component name exists in several files, prefer the base as primary.
+// Metro resolves .ios/.android/.native/.web over the base file only when
+// bundling for that platform, so the base file is the general default and wins
+// as primary when one component name exists in several files.
 const PLATFORM_SUFFIX = /\.(web|ios|android|native)\.[jt]sx?$/;
 
 function isPlatformVariant(file: string): boolean {
@@ -208,12 +191,8 @@ function isPlatformVariant(file: string): boolean {
 }
 
 /**
- * Order same-named component candidates deterministically and split into the
- * primary match plus the rest. Previously the first file the directory walk
- * happened to reach won, so "which List survives" was effectively arbitrary and
- * a lookup could return the wrong platform variant's source. Base files sort
- * ahead of platform variants; ties break on path, then line, then column — all
- * walk-order independent.
+ * Split same-named candidates into a primary plus the rest, walk-order
+ * independently: base files before platform variants, then path, line, column.
  */
 function pickPrimary(entries: ComponentIndexEntry[]): {
   primary: ComponentIndexEntry;
@@ -234,9 +213,8 @@ function pickPrimary(entries: ComponentIndexEntry[]): {
 }
 
 /**
- * Build an in-memory index of all React components in the project.
- * Returns the index plus diagnostics (treeSitterAvailable, indexedFiles).
- * Returns empty index with treeSitterAvailable=false if tree-sitter is not available.
+ * Index every React component in the project. Without tree-sitter, returns an
+ * empty index and treeSitterAvailable=false rather than throwing.
  */
 export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise<AstIndexResult> {
   const index: ComponentIndex = new Map();
@@ -248,9 +226,8 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
 
   const files = await findSourceFiles(projectRoot);
 
-  // Collect every match per name first, then resolve a deterministic primary
-  // once all files are walked — picking eagerly during the walk would re-tie
-  // the result to directory-walk order.
+  // Resolve the primary only once every file is walked; picking during the walk
+  // would re-tie the result to directory-walk order.
   const candidates = new Map<string, ComponentIndexEntry[]>();
   function addCandidate(name: string, entry: ComponentIndexEntry): void {
     const existing = candidates.get(name);
@@ -278,7 +255,6 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       continue;
     }
 
-    // Names wrapped by a cross-referenced memo() call anywhere in this file.
     const memoizedNames = collectMemoizedNames(tree.rootNode);
 
     function findComponents(node: TreeSitterNode): void {
@@ -328,7 +304,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
     try {
       findComponents(tree.rootNode);
     } catch {
-      // ignore parse errors for individual files
+      /* best-effort */
     }
   }
 

@@ -1,14 +1,6 @@
 // Feature-flag CLI for argent: the `enable` / `disable` / `flags` commands.
-//
-// This module is the command layer only — argv parsing and console output. The
-// registry, JSON storage, and `isFlagEnabled` live in `@argent/configuration-core`
-// (the pure source of truth); the primitives are imported below.
-//
-// `enable` writes `true` for a registry-listed flag; `disable` removes the entry
-// at the chosen scope. `enable` is the only path that consults the registry —
-// `disable` stays lenient so a flag removed from the registry can still be
-// cleared from storage, and `argent flags` lists such leftovers under an
-// "unrecognized" section so they can be cleaned up.
+// Command layer only — argv parsing and console output; the registry and JSON
+// storage live in `@argent/configuration-core`.
 
 import pc from "picocolors";
 import {
@@ -22,20 +14,16 @@ import {
   type FlagDefinition,
 } from "@argent/configuration-core";
 
-// Green for enabled, red for disabled. The label is padded first, then wrapped,
-// so column alignment is computed from the plain text and never thrown off by
-// ANSI escapes. We only colorize for an interactive TTY: picocolors' own
-// auto-detection also turns colors on when the CI env var is set (e.g. GitHub
-// Actions), which would leak escapes into captured/piped output, so we gate on
-// isTTY ourselves to keep piped/redirected/CI output plain.
+// Pad before coloring so column alignment ignores ANSI escapes. Gate on isTTY
+// ourselves because picocolors also enables color when CI is set, which would
+// leak escapes into piped output.
 function colorState(enabled: boolean): string {
   const label = (enabled ? "enabled" : "disabled").padEnd(8);
   if (!process.stdout.isTTY) return label;
   return enabled ? pc.green(label) : pc.red(label);
 }
 
-// Flag names: start with a letter, then letters/digits/dot/underscore/dash.
-// Keeps file contents predictable and avoids shell-quoting surprises.
+// Avoids shell-quoting surprises and keeps stored keys predictable.
 const FLAG_NAME_RE = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
 
 interface ParsedToggleArgs {
@@ -58,7 +46,6 @@ function parseToggleArgs(argv: string[], command: "enable" | "disable"): ParsedT
     }
 
     if (tok === "--") {
-      // POSIX positional escape — everything after is treated as a positional.
       positionalOnly = true;
       continue;
     }
@@ -98,9 +85,7 @@ function parseScope(raw: string): FlagScope {
   throw new Error(`--scope must be "project" or "global", got "${raw}"`);
 }
 
-// Renders the registry as an indented "Available flags:" block for --help
-// output: one line per flag, `name <padding> description`, so users can see
-// what they can toggle without running `argent flags` first.
+// Shown in --help so users see what they can toggle without running `argent flags`.
 function formatAvailableFlags(registry: readonly FlagDefinition[]): string {
   if (registry.length === 0) {
     return "Available flags:\n  (none defined)";
@@ -150,8 +135,8 @@ function runToggle(
     process.exit(2);
   }
 
-  // Only registry-listed flags can be enabled. `disable` stays lenient so a
-  // flag that was removed from the registry can still be cleared from storage.
+  // `disable` stays lenient so a flag dropped from the registry can still be
+  // cleared from storage.
   if (command === "enable" && getFlagDefinition(parsed.name, registry) === undefined) {
     console.error(
       `Error: Unknown feature flag "${parsed.name}". Run \`argent flags\` to see available flags.`
@@ -164,11 +149,11 @@ function runToggle(
     if (command === "enable") {
       setFlag(parsed.name, true, parsed.scope);
     } else if (getFlagDefinition(parsed.name, registry)?.defaultEnabled) {
-      // Opt-out flag (on by default): persist an explicit `false` so the
-      // feature actually turns off. Unsetting would revert it to its ON default.
+      // Opt-out flag: persist an explicit `false`; unsetting would revert it
+      // to its ON default.
       setFlag(parsed.name, false, parsed.scope);
     } else {
-      // Opt-in flag: clear the entry back to its off default.
+      // Opt-in flag: the off default takes over once the entry is gone.
       unsetFlag(parsed.name, parsed.scope);
     }
   } catch (err) {
@@ -191,8 +176,8 @@ export function disable(argv: string[], registry: readonly FlagDefinition[] = FL
   runToggle(argv, "disable", registry);
 }
 
-// `argent flags` — list every registry flag with its description and effective
-// state (project overrides global; unset flags read as disabled).
+// `argent flags` — every registry flag with its description and effective state
+// (project overrides global).
 export function flags(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(`Usage: argent flags [--json]
@@ -216,8 +201,8 @@ Options:
   for (const [k, v] of Object.entries(globalFlags)) effective[k] = { value: v, scope: "global" };
   for (const [k, v] of Object.entries(projectFlags)) effective[k] = { value: v, scope: "project" };
 
-  // Registry-driven view: every known flag, whether or not it is stored.
-  // hasOwn guards against prototype-named flags resolving to Object.prototype.
+  // Every registry flag, stored or not. hasOwn guards against prototype-named
+  // flags resolving to Object.prototype.
   const registryView = registry.map((def) => {
     const eff = Object.hasOwn(effective, def.name) ? effective[def.name]! : undefined;
     return {
@@ -229,9 +214,8 @@ Options:
     };
   });
 
-  // Flags still in storage but no longer in the registry (e.g. deprecated and
-  // removed). Reading them never errors — they are surfaced here so they stay
-  // visible and can be cleared with `argent disable <name>`.
+  // Stored flags no longer in the registry — surfaced so they can be cleared
+  // with `argent disable <name>`.
   const known = new Set(registry.map((def) => def.name));
   const unrecognized = Object.keys(effective)
     .filter((name) => !known.has(name))

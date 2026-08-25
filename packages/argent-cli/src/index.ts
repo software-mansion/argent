@@ -7,9 +7,7 @@ export { enable, disable, flags } from "./flags.js";
 export { config } from "./config.js";
 export { secrets } from "./secrets.js";
 export { link, unlink } from "./link.js";
-// Backward-compat re-export: the flag primitives now live in
-// @argent/configuration-core, but @argent/cli's public surface keeps exposing
-// them so existing importers (and the publish bundle) are unaffected.
+// Re-exported for backward compat: these moved to @argent/configuration-core.
 export {
   isFlagEnabled,
   getFlagDefinition,
