@@ -32,7 +32,7 @@ export type OptionSpecs = Readonly<Record<string, OptionSpec>>;
 
 /** The parsed options: `true` for a boolean that was given, the string for a
  * value option, absent when not given. A repeated option keeps the last value. */
-export type ParsedOptions = Record<string, string | boolean | undefined>;
+type ParsedOptions = Record<string, string | boolean | undefined>;
 
 interface ParsedCommandArgs {
   positionals: string[];
