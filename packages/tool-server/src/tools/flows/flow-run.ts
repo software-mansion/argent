@@ -1045,7 +1045,8 @@ Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch)
 ready (on iOS it also pins later element lookups to that app rather than auto-detecting the frontmost
 one); \`tool\` calls dispatch through the registry (a raw \`tool\` step ends that iOS pin, so lookups
 auto-detect again until the next \`launch\`, though a tool that cannot change the foreground app leaves the
-launched id as a fallback for a timed-out auto-detect); \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+launched id as a fallback for a timed-out auto-detect, and \`launch-app\`/\`restart-app\` leave the id they
+started as that fallback instead); \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
