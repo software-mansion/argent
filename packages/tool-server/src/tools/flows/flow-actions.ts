@@ -78,23 +78,13 @@ export interface FlowTreeTarget {
   /**
    * Whether a pinned read's `Application.getState` probe has ever answered for
    * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
-   * after construction) rather than reported back: `deviceEnv` shallow-spreads
-   * the run state, so every read of the same pin reaches the same object, and
-   * that is what makes "has any read already answered" available to the next
-   * read.
+   * after construction) so every read of the same pin sees it — `deviceEnv`
+   * shallow-spreads the run state, so they all reach the same object.
    *
    * It is the only evidence the runner has that the app's main queue was ever
-   * serviced, which tells the two causes of a timed-out probe apart: before any
-   * answer the timeout is read as the cold start that can pin the main thread
-   * right after launch, and ridden out; after one it is an app that stopped
-   * servicing a queue it demonstrably serviced, and refused. One-sided by
-   * construction - a flow that leaves the app before its first read still reads
-   * as a cold start and pays both RPC timeouts - and not separable here, since
-   * the launch gate waits only for the connect, which precedes the startup work
-   * the ride-out exists for. A later `launch` builds a fresh target, since a
-   * re-pinned app cold-starts again. Meaningless while unpinned: an
-   * arbitrated read probes the hint for itself but neither consults nor arms
-   * this - a demoted target never re-pins.
+   * serviced, which tells the two causes of a timed-out probe apart. A later
+   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
+   * an unpinned target neither consults nor arms it.
    */
   probeAnswered: boolean;
 }
@@ -112,10 +102,9 @@ export interface ActionEnv {
    * Demoted to an unpinned hint by a raw `tool:` step (its effect on the
    * foreground is opaque to the runner), dropped outright by a `tool:` step
    * that can change the foreground app and by a launch attempt until it
-   * succeeds; `launch-app` and `restart-app` then re-set it from their own
-   * `bundleId`, unpinned (see `FOREGROUND_CHANGING_TOOLS` in flow-run).
-   * Chromium launches hand off before the assignment, so chromium runs never
-   * set it. Only iOS tree reads consume it (see `fetchFlowTree`).
+   * succeeds (see `FOREGROUND_CHANGING_TOOLS` in flow-run). Shared with nested
+   * `run:` flows, since ExecState is per-run. Only iOS tree reads consume it
+   * (see `fetchFlowTree`).
    */
   treeTarget?: FlowTreeTarget;
   /**
@@ -123,13 +112,12 @@ export interface ActionEnv {
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
    * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
-   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget} (the
-   * verdict was proven against the pinned branch's gates, which the demoted
-   * read no longer runs), and by a nested orchestrator step, which can do
-   * either out of this holder's sight. One holder per run, built in flow-run's
-   * ExecState and shared by every `deviceEnv`. A `tool:` step's own read clears
-   * nothing: it goes through `invokeSubTool` and never reaches
-   * {@link readFlowTree}. Nor is the clear ordered against the step running —
+   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget}, and by
+   * a nested orchestrator step, which can do either out of this holder's sight.
+   * One holder per run, built in flow-run's ExecState and shared by every
+   * `deviceEnv`. A `tool:` step's own read clears nothing: it goes through
+   * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
+   * ordered against the step running —
    * `idle` stops waiting on its read at the round budget, so that read can land
    * later and retire a verdict minted after it was issued.
    *
@@ -867,10 +855,10 @@ type GestureSettle = { aborted?: true; warning?: string };
  * outage. Only the outage path warns; a window that expired without converging
  * did settle.
  *
- * It is also the caller `skipProvenOutage` exists for: flows drive an Apple
- * system app by coordinates because argent refuses it a flow tree by policy on
- * every read that names one, so every step of such a flow arrives here and
- * would otherwise be charged a window for the same verdict.
+ * It is also the caller `skipProvenOutage` exists for: an app the tree source
+ * refuses fails every read (an Apple system app, which flows drive by
+ * coordinates for exactly that reason), so every step of such a flow arrives
+ * here and would otherwise be charged a window for the same verdict.
  *
  * A platform with no tree source at all is the one case that settles nothing and
  * reports nothing. `ios-remote` is coordinate-driven by necessity —

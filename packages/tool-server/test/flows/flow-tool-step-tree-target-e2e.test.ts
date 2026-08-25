@@ -7,20 +7,16 @@ import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/nat
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
-// Composition of the two halves the sibling suites pin separately:
-// flow-launch-pins-tree-target.test.ts proves a `tool:` step un-pins the tree
-// target, but stubs the tree source; flow-ios-tree-pinned-target.test.ts proves
-// an unpinned target arbitrates a fan-out a wedged sibling sank, but is handed
-// that target by hand. Both assert on the internal target; this file is the
-// only one that asserts the STEP OUTCOME a run gets on such a device, driving
-// the runner's demotion through the REAL fetchFlowTree ->
-// queryFullHierarchyTree - nothing on the tree path is mocked, and the only
-// seam is the native-devtools service.
+// Composition of the two halves the sibling suites pin separately
+// (flow-launch-pins-tree-target.test.ts and
+// flow-ios-tree-pinned-target.test.ts both assert on the internal target).
+// This file asserts the STEP OUTCOME instead, driving the runner's demotion
+// through the REAL fetchFlowTree -> queryFullHierarchyTree: nothing on the
+// tree path is mocked, and the only seam is the native-devtools service.
 //
 // The device is the CI shape the pin exists for: the app under test is
 // healthy, a second app is connected, and its `Application.getState` never
-// answers (a process parked mid-RPC). Auto-resolution `Promise.all`s getState
-// over both, so every unhinted read of this simulator times out.
+// answers, so every unhinted read of this simulator times out.
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const APP = "com.example.app";
@@ -119,11 +115,10 @@ function bareWindow() {
 }
 
 /**
- * The reviewer's measured device: the launched app answers getState from the
- * background, the healthy subject is active, and the wedged sibling's getState
- * never answers. Only the subject's hierarchy carries the `ready` marker - the
- * backgrounded app serves a bare window, which is what made the old arbiter's
- * read of it a false `hidden:` green.
+ * The launched app answers getState from the background, the healthy subject is
+ * active, and the wedged sibling's getState never answers. Only the subject's
+ * hierarchy carries the `ready` marker - the backgrounded app serves a bare
+ * window.
  */
 function backgroundedAppWedgedSiblingApi(hierarchyReads: string[]): NativeDevtoolsApi {
   return {
@@ -154,8 +149,7 @@ type ToolCall = { id: string; args: Record<string, unknown> };
 
 // resolveService is the only faked seam; the tool surface just has to answer
 // the launch's restart-app and the flow's `tool:` step. `toolCalls` records
-// what each dispatch carried, which is how a directive's own geometry (the
-// rotate below) is observable without a second seam.
+// what each dispatch carried.
 function mockRegistry(api: NativeDevtoolsApi, toolCalls: ToolCall[] = []): Registry {
   return {
     resolveService: async () => api,
@@ -243,12 +237,10 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   });
 
   it("retires an outage verdict proven while pinned when a tool step demotes the pin", async () => {
-    // The launched app answers getState from the background with no foreground
-    // scene, so every pinned read dies on the foreground guard and the first
-    // tap's settle mints the outage memo. The demoted read never runs that
-    // guard - auto-resolve answers and picks the healthy sibling - so a memo
-    // that outlived the demote would have every later gesture skip its settle
-    // and re-report a diagnosis about a path the run no longer reads.
+    // Every pinned read dies on the foreground guard, so the first tap's settle
+    // mints the outage memo. The demoted read never runs that guard, so a memo
+    // outliving the demote would have every later gesture skip its settle over
+    // a path the run no longer reads.
     const hierarchyReads: string[] = [];
     await writeFlow("outage-outlives-demote", {
       executionPrerequisite: "",
@@ -282,12 +274,9 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   }, 20_000);
 
   it("keeps the system-app refusal terminal after a tool step demotes the pin", async () => {
-    // The reviewer's false green: `launch: com.apple.*` + `tool: screenshot` +
-    // asserts came back ok=true, because the demoted read arbitrated toward
-    // the system app and read its hosting view. The policy verdict must
-    // survive the demote: the pinned read refuses (the tap's settle warning),
-    // and the post-demote read refuses the same way instead of reading - zero
-    // hierarchy reads, where the on-device repro recorded six.
+    // The policy verdict must survive the demote, or the demoted read
+    // arbitrates toward the system app and reads its hosting view - the
+    // false green this covers. Zero hierarchy reads either side of the demote.
     const hierarchyReads: string[] = [];
     await writeFlow("system-app-demote", {
       executionPrerequisite: "",
@@ -316,14 +305,10 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   }, 20_000);
 
   it("keeps the foreground refusal across a tool step demoting a backgrounded pin", async () => {
-    // The reviewer's scenario B: the pinned foreground guard refuses the
-    // backgrounded app (the tap's settle warning), the flow follows the old
-    // remedy with a raw `tool:` step, and the wedged sibling sinks the demoted
-    // read's fan-out - the old arbiter then handed the read back to the app
-    // the guard had just refused (six hierarchy reads of it on device, ending
-    // in "no element matched selector"). The arbiter's probe keeps the
-    // verdict: the assert fails naming the observed state, and the
-    // backgrounded app is never read.
+    // The pinned foreground guard refuses the backgrounded app, the flow
+    // follows the remedy with a raw `tool:` step, and the wedged sibling sinks
+    // the demoted read's fan-out - without a probe of its own the arbiter hands
+    // the read back to the app the guard just refused.
     const hierarchyReads: string[] = [];
     await writeFlow("backgrounded-demote", {
       executionPrerequisite: "",
@@ -358,11 +343,10 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   }, 20_000);
 
   it("fails a hidden: assert after the demote instead of false-passing on the backgrounded app", async () => {
-    // Scenario B's `hidden:` twin, the worse failure mode (the reviewer's C):
-    // the old arbiter read the backgrounded app's bare window, the subject's
-    // marker was absent from it, and the assert went GREEN against a screen
-    // that is not on screen. The refusal leaves `hidden:` indeterminate, which
-    // must report as a failure, never as gone-ness.
+    // The `hidden:` twin, and the worse failure mode: reading the backgrounded
+    // app's bare window finds the subject's marker absent and goes GREEN
+    // against a screen that is not on screen. The refusal must instead report a
+    // failure, never gone-ness.
     const hierarchyReads: string[] = [];
     await writeFlow("backgrounded-demote-hidden", {
       executionPrerequisite: "",
@@ -394,11 +378,8 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
 
   it("drops the target across a foreground-changing tool step - the read fails instead", async () => {
     // `launch-app` can put another app on screen, so the pinned target is
-    // dropped and re-set from the tool's own args: com.example.other, unpinned.
-    // The read auto-resolves, the fan-out times out on the sibling, and the
-    // arbiter declines the restored hint - that id never connected here - so
-    // the timeout surfaces and the assert reports it. Keep the ORIGINAL app as
-    // the hint instead and the runner would arbitrate toward an app it can no
+    // dropped and re-set from the tool's own args, unpinned. Keep the ORIGINAL
+    // app as the hint instead and the runner arbitrates toward an app it can no
     // longer vouch for, false-passing the assert.
     const hierarchyReads: string[] = [];
     const result = await runToolStepFlow(
@@ -420,17 +401,12 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   });
 
   it("reads the screen aspect for a rotate after a foreground-neutral tool step", async () => {
-    // The SILENT variant, and why this asserts on the reads and the geometry
-    // rather than on the step: `fetchScreenAspect` swallows a failed read and
+    // The SILENT variant: `fetchScreenAspect` swallows a failed read and
     // returns undefined, so dropping the target degrades the orbit to the
-    // legacy normalized ellipse with the step still green and the degradation
-    // itself named nowhere. The rotate's settle converges in two identical
-    // reads, so the third read after them IS the aspect read, proving it came
-    // back and went to the launched app; radiusX/radiusY then proves it was
-    // used, where a swallowed error dispatches the legacy single `radius`.
-    // The step's own report is not silent in that state, but what it carries
-    // is the settle's unsettled-gesture warning, about a read the same outage
-    // took - so the assert below is that a healthy rotate raises none.
+    // legacy normalized ellipse with the step still green. Hence the assertions
+    // on the reads and the geometry - radiusX/radiusY prove the aspect read
+    // came back, where a swallowed error dispatches the legacy single
+    // `radius`.
     const hierarchyReads: string[] = [];
     const toolCalls: ToolCall[] = [];
     await writeFlow("rotate-after-tool", {
@@ -498,10 +474,9 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   });
 
   it("evaluates a when: guard after a tool step instead of stopping the run", async () => {
-    // An unreadable tree makes the guard indeterminate, and `execWhenStep`
-    // reports that as `error` plus `state.stopped` - so a dropped target turns
-    // one dead read into a run-level stop that skips the block AND every later
-    // step, not just one failed assert.
+    // An unreadable tree makes the guard indeterminate, which `execWhenStep`
+    // reports as `error` plus `state.stopped` - so a dropped target turns one
+    // dead read into a run-level stop, not just one failed assert.
     const hierarchyReads: string[] = [];
     await writeFlow("when-after-tool", {
       executionPrerequisite: "",

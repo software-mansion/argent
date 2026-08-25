@@ -146,8 +146,8 @@ describe("hidden timeout diagnostics", () => {
     // outage — the /no window attached/ check pins the fetch error's text
     // landing in the step reason — instead of treating an unreadable screen as
     // a no-match that satisfies `hidden`. The scripted bundle id is a system
-    // app because this flow has no `launch:` step, so its reads are unpinned:
-    // that is the one path on which auto-resolve can still hand a connected
+    // app because this flow has no `launch:` step, so its reads are unpinned -
+    // the one path on which auto-resolve can still hand a connected
     // `com.apple.*` process to the read.
     currentFetch = () => {
       throw new Error(

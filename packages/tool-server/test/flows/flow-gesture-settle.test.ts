@@ -242,7 +242,7 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
 
   it("charges one outage window for a run of gestures, not one per gesture", async () => {
     // The shape this matters for: a source that serves no tree at all
-    // (`ios-remote`, an app the tree read refuses by policy) against a flow
+    // (`ios-remote`, an app the instrumentation cannot load) against a flow
     // made of coordinate gestures, which is the only kind such a run can have.
     // Consecutive ones, at that: a foreground-changing `tool:` step between two
     // gestures re-arms the window for the second, which the arms below pin.
@@ -730,8 +730,8 @@ describe("a launch clears a proven outage", () => {
 
 // The same device operation written as a raw `tool:` step. It is the shape a
 // recorded flow actually carries - `launch-app` is never rewritten into a
-// `launch:` directive, and the docs tell authors to start an app the tree read
-// refuses by policy with a bare `tool: restart-app` - so it must spend
+// `launch:` directive, and the docs tell authors to start an app that cannot
+// load the instrumentation with a bare `tool: restart-app` - so it must spend
 // the verdict too, or the gesture behind the most animation-heavy moment a flow
 // has would be the one dispatched with no settle at all. The set is
 // deliberately coarse - `button` and most `open-url` targets repair nothing -

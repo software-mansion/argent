@@ -44,10 +44,8 @@ const FLOW_TREE_SOURCES: Partial<
     (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
   >
 > = {
-  // Only iOS consumes the launch target (see queryFullHierarchyTree for what
-  // its two confidence levels buy). The platforms below resolve their tree
-  // source per-device and never auto-resolve; ios-remote has no entry here at
-  // all and falls through to fetchFlowTree's not-supported throw.
+  // Only iOS consumes the target: the platforms below resolve their tree
+  // source per-device and never auto-resolve.
   ios: (registry, device, target) => queryFullHierarchyTree(registry, device, target),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
   chromium: (registry, device) => queryChromiumTree(registry, device),

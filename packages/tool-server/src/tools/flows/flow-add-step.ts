@@ -577,22 +577,12 @@ async function probeAgainstRunnerTree(
  * replay tree keeps. A describe-derived selector could fail — or hit a
  * different element — at replay while recording reported success.
  *
- * Same source is not the same target on iOS: recording has no run state to
- * vouch for the foreground app — the author drives the device by hand — so this
- * read auto-resolves the frontmost connected app, and the recorded `launch`
- * step's app rides along only as the unpinned hint (see `ActionEnv`). It
- * decides nothing while auto-resolve answers, and buys the case the recorder
- * hits most: a recording relaunches the app AFTER this tool-server bound its
- * listener, so the first tap reads during the connect window, where the hint is
- * the only id the iOS tree source can measure and its measured message says NOT
- * to restart the app. Without it the kept-coordinates warning quotes
- * auto-targeting's "Launch or restart the app first" instead.
- *
- * Replay pins those reads instead, between a `launch:` and the next raw `tool:`
- * step, so the two can diverge: a pinned read is verified still foreground-like
- * - not frontmost - so where the pin and another connected app both look
- * foreground-like, auto-resolve refuses a tie as ambiguous but resolves a
- * uniquely-active sibling, while the pin keeps reading the launched app.
+ * The launched app is passed — unpinned, unlike replay, since recording has no
+ * run state vouching for the foreground app — because a recording relaunches
+ * the app AFTER this tool-server bound its listener: the first tap reads during
+ * the connect window, where that id is the only one the iOS tree source can
+ * measure, and it yields a measured reason instead of auto-targeting's "Launch
+ * or restart the app first".
  */
 async function captureTapSelector(
   registry: Registry,

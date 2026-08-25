@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // launch-app / restart-app must keep working for Apple system apps: launching
-// or restarting com.apple.* is legitimate — the app just isn't a
-// native-devtools target. They stay safe from the terminal
-// NATIVE_DEVTOOLS_NOT_INJECTABLE throw only
+// or restarting com.apple.* is legitimate — the app just never injects. They
+// stay safe from the terminal NATIVE_DEVTOOLS_NOT_INJECTABLE throw only
 // because all four iOS call sites use the 2-arg precheckNativeDevtools
 // overload (no bundleId). Unlike launch-restart-tvos.test.ts, the REAL
 // precheck runs here — these tests pin the tool boundary so a call site

@@ -35,8 +35,7 @@ const UDID = "AAAAAAAA-1111-2222-3333-444444444444";
 const BUNDLE = "com.example.app";
 const DEVICE: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 // The launched app as the runner hands it over once a raw `tool:` step has
-// spent the pin: auto-resolve decides, and the id is what a disconnection it
-// cannot describe is explained for.
+// spent the pin.
 const UNPINNED = { bundleId: BUNDLE, pinned: false, probeAnswered: false };
 
 describe("remoteIosHost.inspectRunningApp", () => {

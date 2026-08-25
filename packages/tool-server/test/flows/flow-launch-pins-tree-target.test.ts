@@ -10,14 +10,12 @@ import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 // A launch step must pin every later tree read to the launched app - unpinned
 // iOS reads auto-resolve across every connected process, which one poisoned
 // background system process sinks. A raw `tool:` step demotes that pin to an
-// unpinned hint (still the timeout arbiter for the fan-out, see
-// flow-ios-tree.ts) - or drops it outright, when the tool can change the
-// foreground app (`launch-app` and `restart-app` then re-set it from their own
-// args, unpinned). The mock sits at the iOS tree SOURCE
-// (queryFullHierarchyTree), not at fetchFlowTree, so the real fetchFlowTree
-// dispatches every read and dropping the target on its ios branch is
-// observable here; treeTargets records the target each read actually reached
-// the source with, rendered by `label` as level:bundleId.
+// unpinned hint, or drops it outright when the tool can change the foreground
+// app.
+//
+// The mock sits at the iOS tree SOURCE (queryFullHierarchyTree), not at
+// fetchFlowTree, so the real fetchFlowTree dispatches every read and dropping
+// the target on its ios branch is observable here.
 
 let treeTargets: Array<FlowTreeTarget | undefined>;
 let treeData: () => DescribeTreeData;
@@ -193,10 +191,8 @@ describe("launch pins the flow tree target", () => {
 
   it("a foreground-neutral tool step demotes the pin to a hint - later reads auto-resolve again", async () => {
     // The tool step's effect on the screen is opaque to the runner, so the pin
-    // must not survive it: reads after it auto-resolve. screenshot cannot
-    // change the foreground app though, so the launched app stays behind as an
-    // unpinned hint - the arbiter that rescues an auto-resolve a wedged
-    // sibling process timed out (see flow-tool-step-tree-target-e2e.test.ts).
+    // must not survive it. screenshot cannot change the foreground app though,
+    // so the launched app stays behind as an unpinned hint.
     await writeFlow("escaped", {
       executionPrerequisite: "",
       steps: [
@@ -231,10 +227,8 @@ describe("launch pins the flow tree target", () => {
 
   it("a foreground-changing tool step that names no app drops the target outright", async () => {
     // `button` home can put anything on screen and names nothing, so the
-    // launched app is not even a hint afterwards: keeping it would let the
-    // arbiter target an app that is no longer frontmost. `launch-app` /
-    // `restart-app` are the exception - their args name the app they just
-    // started, which is restored as a hint (flow-composition.test.ts).
+    // launched app is not even a hint afterwards. `launch-app` / `restart-app`
+    // are the exception - their args name the app they just started.
     await writeFlow("switched", {
       executionPrerequisite: "",
       steps: [
@@ -308,11 +302,8 @@ describe("launch pins the flow tree target", () => {
 
   it("back-to-back launches move the pin to the newest app", async () => {
     // No tool step between the launches, so the second one starts from a pin
-    // still set on the first app. It moves because runLaunch replaces the target -
-    // it clears before restart-app and re-pins after - but which half does
-    // that is not observable here: with the clear in place a keep-if-set
-    // assignment still passes. Each assert reads once, so the run is one read
-    // per app, in launch order.
+    // still set on the first app. Each assert reads once, so the run is one
+    // read per app, in launch order.
     const OTHER = "com.acme.other";
     await writeFlow("relaunched", {
       executionPrerequisite: "",
@@ -336,12 +327,9 @@ describe("launch pins the flow tree target", () => {
   });
 
   it("a later launch re-arms the probe ride-out on a fresh, unanswered target", async () => {
-    // `probeAnswered` decides how a pinned read reads an unanswerable getState:
-    // before the pin's first answer it is a cold-start stall to ride out, after
-    // it the app has stopped servicing its main queue and the read is refused.
     // A relaunched app cold-starts again, so the second launch must hand out a
-    // FRESH target rather than carry the first one's answered flag - otherwise
-    // the new app's own cold start is misdiagnosed as a suspension.
+    // FRESH target rather than carry the first one's `probeAnswered` - else the
+    // new app's own cold start is misdiagnosed as a suspension.
     const OTHER = "com.acme.other";
     await writeFlow("rearmed", {
       executionPrerequisite: "",
@@ -379,16 +367,11 @@ describe("launch pins the flow tree target", () => {
   });
 
   it("a failed launch hard-stops the run - nothing reads after it", async () => {
-    // runLaunch clears the pin before restart-app, so a failed launch cannot
-    // leave the terminated app's target behind. That clear has no reader today:
-    // a failed launch reports `error`, which hard-stops the run, so every later
-    // step reports skip without reading - a plain directive, a `when:` block
-    // and its inner steps, a `run:` fragment alike. Deleting the clear
-    // therefore changes no label, here or anywhere in the flows suite, so it is
-    // not what this test asserts. The assertion is the hard stop it shelters
-    // behind, which fails the moment a failed launch stops halting the run -
-    // the point at which a later read exists again and the clear needs a pin
-    // assertion of its own.
+    // runLaunch clears the pin before restart-app, but that clear has no reader
+    // today: a failed launch hard-stops the run, so every later step skips
+    // without reading. What this asserts is that hard stop - the moment it
+    // stops holding, a later read exists again and the clear needs its own
+    // assertion.
     const OTHER = "com.acme.other";
     await writeFlow("afterfail", {
       executionPrerequisite: "App is running",
@@ -446,10 +429,8 @@ describe("launch pins the flow tree target", () => {
         { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
       ],
     });
-    // The element appears only on the third poll, so waitForCondition retries
-    // - a regression that pins only the first read of a step cannot hide
-    // behind a first-poll pass. The mock pushes the target before serving, so
-    // treeTargets.length is the 1-based index of the read being served.
+    // The element appears only on the third poll, so a regression that pins
+    // only the first read of a step cannot hide behind a first-poll pass.
     treeData = () =>
       treeTargets.length <= 2
         ? {
@@ -470,11 +451,9 @@ describe("launch pins the flow tree target", () => {
 });
 
 // Every read below goes through the one `readFlowTree` helper, the only place
-// `env.treeTarget` is passed - there is no per-site target argument left to
-// drop. What each test pins is its directive's own read path: a label fails a
-// read that reaches the tree source outside that helper (auto-resolving,
-// unpinned), and the label COUNT fails a directive that stops making one of its
-// reads - a settle round, the focus wait, the aspect read, an idle poll.
+// `env.treeTarget` is passed. A label fails a read that reaches the tree source
+// outside that helper, and the label COUNT fails a directive that stops making
+// one of its reads.
 describe("every read path carries the launch pin", () => {
   it("tap - the settle reads resolving the target (settleTree)", async () => {
     await writeFlow("tapped", {

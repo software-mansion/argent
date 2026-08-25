@@ -272,11 +272,11 @@ async function unreadableHierarchyReason(
 ): Promise<string> {
   if (!isInjectableBundleId(bundleId)) {
     return (
-      `${bundleId} is an Apple system app (com.apple.*) - never a valid target for a flow tree: ` +
-      `it is not the app under test, and argent's native devtools refuse to read one, so a flow ` +
-      `has no view hierarchy to resolve selectors against and no relaunch changes that verdict. ` +
-      `Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point ` +
-      `directly and reads no tree - or target an app argent installs.`
+      `${bundleId} is an Apple system app: it is never the app under test, so ` +
+      `argent's native devtools refuse to read one, and without them a flow has ` +
+      `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
+      `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
+      `argent installs.`
     );
   }
   const state = await nativeApi.appConnectionState(bundleId).catch(() => "indeterminate" as const);
@@ -295,12 +295,7 @@ async function unreadableHierarchyReason(
   return `${buildAppStateMessage(bundleId, state)} Flows resolve selectors against the full view hierarchy native devtools serve.`;
 }
 
-/**
- * The terminal policy refusal for a `com.apple.*` flow target, shared verbatim
- * by the pinned gate and the unpinned arbiter: both refuse the id the run's own
- * `launch:` step supplied, so a raw `tool:` step demoting the pin must not
- * soften the verdict or lose the coordinate remedy.
- */
+/** Shared verbatim by the pinned gate and the unpinned arbiter. */
 function systemAppFlowTargetRefusal(bundleId: string): string {
   return `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this flow has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this flow's \`launch\` step at the app under test.`;
 }
@@ -312,41 +307,15 @@ function systemAppFlowTargetRefusal(bundleId: string): string {
  * and whatever is still failing at its deadline becomes the step's failure
  * reason.
  *
- * `target` carries the runner's two confidence levels ({@link FlowTreeTarget}),
- * and they take different paths.
+ * A PINNED {@link FlowTreeTarget} is read directly, skipping auto-resolve's
+ * `Application.getState` fan-out — injection is simulator-wide, and one
+ * background system process that never answers getState sinks the whole
+ * fan-out — and re-deciding against the pinned app alone what that fan-out
+ * would otherwise have decided.
  *
- * PINNED — the target names the app outright and auto-resolve never runs, so
- * the `Application.getState` fan-out over every connection is skipped:
- * injection is simulator-wide, and one background system process that never
- * answers getState sinks the whole fan-out. Skipping it also skips what it
- * decided, so this path re-decides it against the pinned app alone — four
- * throws, each a verdict about that app rather than a read that might yet
- * succeed: the `com.apple.*` policy gate (nothing upstream of a `launch` step
- * applies it), a connection dropped after launch, a getState probe that stopped
- * answering once one in this run had, and an app with no foreground presence at
- * all. A probe that fails any other way propagates unwrapped.
- *
- * UNPINNED — auto-resolve picks the target and its own errors (no connected
- * app, ambiguous frontmost, a single backgrounded app) propagate unwrapped;
- * `target` decides only when that fan-out times out AND it names an injectable
- * app whose connection is still up AND that app vouches for itself: its own
- * getState probe must answer with a foreground presence. A `com.apple.*` hint
- * gets the pinned gate's terminal refusal instead, since it is the id this
- * run's own `launch:` step supplied and a `tool:` step's demote must not
- * soften that verdict; a hint whose probe times out leaves the fan-out's own
- * timeout standing, and one that answers with no foreground presence is
- * refused the way the pinned guard refuses that state. With
- * nothing connected at all it is the app the disconnection is measured and
- * explained for, ahead of auto-resolve's own "Launch or restart the app first"
- * — the restart loop that measurement exists to break. What auto-resolve
- * itself ranks stays ungated: a system app the simulator spawned can still be
- * resolved and read, and filtering those connections is the follow-up the
- * pinned gate does not cover.
- *
- * Both paths end in the same read. It throws on an explicit getFullHierarchy
- * error and on a target that returns no windows (backgrounded, or a first window
- * not attached yet), and can still fail at the transport — the 15s RPC timeout,
- * or a connection lost after the gate.
+ * An UNPINNED target is only a hint: auto-resolve decides and its own errors
+ * propagate unwrapped, and the hint takes the read solely when that fan-out
+ * times out and the hint vouches for itself with a probe of its own.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
@@ -367,14 +336,11 @@ export async function queryFullHierarchyTree(
   let bundleId: string;
   if (target?.pinned) {
     bundleId = target.bundleId;
-    // Same policy gate every other explicit-bundleId hierarchy read applies via
-    // precheckNativeDevtools - nothing upstream applies it for a pinned flow
-    // target: `launch` reaches restart-app, which runs the 2-arg precheck (no
-    // bundleId, so no throw), and treeSourceGate only waits for isConnected,
-    // which simulator-wide injection lets a background system process satisfy.
-    // Placed before the isConnected gate and the getState probe so the refusal
-    // stays terminal AND free, instead of costing a 5s probe plus a 15s
-    // getFullHierarchy timeout to arrive at "RPC timed out".
+    // Nothing upstream of a pinned flow target applies the policy gate every
+    // other explicit-bundleId hierarchy read gets from precheckNativeDevtools:
+    // `launch` runs its 2-arg overload, and treeSourceGate only waits for
+    // isConnected, which simulator-wide injection lets a background system
+    // process satisfy. Before the gates below so the refusal costs neither.
     if (!isInjectableBundleId(bundleId)) {
       throw new FailureError(systemAppFlowTargetRefusal(bundleId), {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
@@ -383,14 +349,12 @@ export async function queryFullHierarchyTree(
         error_kind: "validation",
       });
     }
-    // The pin was proven connected at launch, but the app can crash or be
-    // killed later - the socket close removes it from the connections map. Gate
-    // on isConnected (a pure map lookup), never appConnectionState: its miss
-    // path runs reverifyEnv - a full env re-setup with 10s simctl timeouts -
-    // and tree reads poll every 300ms, so a dead pin would drive that repair
-    // once per poll and three failures latch the device's process-wide
-    // give-up. Injection is not in question either: the pinned app launched
-    // with the instrumentation loaded, so a missing connection means it's gone.
+    // Gate on isConnected (a pure map lookup), never appConnectionState: its
+    // miss path runs reverifyEnv - a full env re-setup with 10s simctl
+    // timeouts - and tree reads poll every 300ms, so a dead pin would drive
+    // that repair once per poll until three failures latch the device's
+    // process-wide give-up. The pinned app launched with the instrumentation
+    // loaded, so a missing connection means the process is gone.
     if (!nativeApi.isConnected(bundleId)) {
       throw new FailureError(
         `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - restart it (restart-app, or a flow \`launch\` step) so the full view hierarchy is readable; launch-app recovers only the causes that killed the process, since on iOS it just foregrounds one that is still alive`,
@@ -403,33 +367,16 @@ export async function queryFullHierarchyTree(
       );
     }
     // Connected only proves the process is alive. The pin bypasses
-    // auto-resolve's frontmost guard, and a flow can leave the app without
-    // clearing the pin (e.g. a tap that opens another app) - the dylib serves
-    // getFullHierarchy for a backgrounded-but-not-suspended app too, so an
-    // unguarded read would describe a screen that is not on screen. Probe ONLY
-    // the pinned app, never siblings: one suspended sibling's getState is the
-    // fan-out failure the pin exists to avoid.
+    // auto-resolve's frontmost guard, and the dylib serves getFullHierarchy for
+    // a backgrounded app too, so an unguarded read would describe a screen that
+    // is not on screen. Probe ONLY the pinned app: one suspended sibling's
+    // getState is the fan-out failure the pin exists to avoid.
     //
-    // A probe that never ANSWERS has two opposite causes, told apart by whether
-    // this pin has ever had one answer (see FlowTreeTarget.probeAnswered):
-    //
-    //  - Not yet: the probe hops onto the app's MAIN thread, which a heavy cold
-    //    start (first Hermes parse, asset decode) can pin past the RPC timeout.
-    //    That stall can only precede the pin's first answered read, and an
-    //    unanswerable probe is not an answer of "backgrounded". Ride it out and
-    //    read the pin - accepting that a flow which left the app before ever
-    //    reading it is indistinguishable here and pays both timeouts.
-    //  - Already has: the app was servicing its main queue and stopped. For a
-    //    pinned app that is usually the suspension iOS applies once a flow
-    //    leaves it; in-app work blocking the main thread past the probe
-    //    timeout is indistinguishable from here, and refused the same way.
-    //    Refuse rather than fall through: getFullHierarchy hops onto the same
-    //    unserviced queue, so unless the block clears inside its longer
-    //    timeout it spends that too, only to surface a bare "RPC timed out"
-    //    that reads like a wedged simulator. Refusing early costs nothing the
-    //    caller's poll does not recover, since it re-reads until its deadline.
-    //
-    // Every probe that DOES answer still decides.
+    // A probe that never answers means opposite things before and after this
+    // pin's first answer (see FlowTreeTarget.probeAnswered): a cold start
+    // pinning the main thread, which is ridden out, versus an app that stopped
+    // servicing a queue it demonstrably serviced, which is refused rather than
+    // parked on for the longer getFullHierarchy timeout.
     let pinnedState: NativeAppState | undefined;
     try {
       pinnedState = await nativeApi.getAppState(bundleId);
@@ -439,26 +386,12 @@ export async function queryFullHierarchyTree(
         throw err;
       }
       if (target.probeAnswered) {
-        // Why this refusal rules out a foreground-NEUTRAL `tool:` step where
-        // the answered-state one below can offer one: auto-resolve's fan-out
-        // is a Promise.all over EVERY connection, so this still-connected,
-        // silent app sinks it too, and the arbiter's own probe of the demoted
-        // hint times out the same way - only a `launch:` step (or the
-        // launch-app/restart-app `tool:` spelling) re-targets reads past it.
-        // The refusal below can offer the demote because an app that answers
-        // never sinks the fan-out at all. Hardening the fan-out against
-        // per-connection failures is the follow-up named in the PR description.
         throw new FailureError(
           `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is usually the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; in-app work blocking the main thread past the probe timeout looks the same from here. Reading anyway parks on that same unserviced queue: certain to time out if the app is suspended, and paying the longer hierarchy timeout to find that out if it is not. If this flow's subject IS the other app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the silent ${bundleId} is never touched; \`tool: launch-app\` or \`tool: restart-app\` naming that app works too - each re-targets reads at the app it starts, and is how a recorded flow switches apps. A foreground-NEUTRAL raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. If the flow left ${bundleId} but is still about it, make it return before reading the UI. If it never left, the main thread is busy: raise the step's \`timeout:\` so the poll re-reads past the work, or \`launch\` ${bundleId} again.`,
           {
             // The timeout's own code, NOT
-            // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: no app state was
-            // observed here - nothing answered - so claiming that verdict as
-            // the machine-readable classification would assert a state this
-            // read never saw. What measurably happened is an RPC timeout; the
-            // flow-level diagnosis rides in the message, and failure_stage
-            // (with the preserved cause) keeps it apart from both a bare
-            // transport timeout and the answered-state refusal below.
+            // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: nothing answered, so no
+            // app state was observed to classify it by.
             error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
             failure_stage: "flow_tree_pinned_target",
             failure_area: "tool_server",
@@ -469,15 +402,10 @@ export async function queryFullHierarchyTree(
       }
     }
     // Deliberately as lenient as auto-resolve is over a single app:
-    // `chooseFrontmostConnectedApp` accepts `inactive` with no scenes, and a
-    // `background` app still holding a foreground-inactive scene. Those are the
-    // transition window - under a system permission alert, in the app
-    // switcher's first frames, behind the notification shade - where the app is
-    // still what is on screen, so reading it still reads what the author sees.
-    // A strict "active only" check would fail the very flows that assert on
-    // such an alert, and would split the pinned path from auto-resolve over the
-    // same one-element array. The message below says what this therefore
-    // actually refuses.
+    // `chooseFrontmostConnectedApp` accepts the transition window - under a
+    // system alert, in the app switcher's first frames - where the app is still
+    // what is on screen. A strict "active only" check would fail the very flows
+    // that assert on such an alert.
     if (pinnedState && !chooseFrontmostConnectedApp([pinnedState])) {
       throw new FailureError(
         `${bundleId} (the launched app) has no foreground presence at all (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this flow left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual - under a system alert or mid-transition it is still the app on screen. If this flow's subject IS another app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and no wedged sibling connection can sink a pinned read; a raw \`tool:\` step demotes the pin and returns reads to frontmost auto-resolve, which works when the app on screen answers but is sunk by a single wedged connection. Otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
@@ -492,10 +420,9 @@ export async function queryFullHierarchyTree(
   } else {
     // The target does not come from `listConnectedBundleIds`, the map
     // auto-resolve draws its candidates from, so it survives a disconnection
-    // auto-resolve could not describe: an empty list is exactly the set of
-    // states `appConnectionState` explains, and the error auto-resolve raises
-    // there ("Launch or restart the app first") is the restart loop this
-    // measurement exists to break.
+    // auto-resolve could not describe - and the error auto-resolve raises there
+    // ("Launch or restart the app first") is the restart loop this measurement
+    // exists to break.
     //
     // Tested directly rather than by catching the throw: its failure code
     // travels on a module-local symbol, so a duplicate `@argent/registry`
@@ -507,16 +434,13 @@ export async function queryFullHierarchyTree(
     // resolveNativeTargetApp's own errors (no connected app / ambiguous
     // frontmost) already carry the actionable next step, so they propagate
     // unwrapped - with one exception. Its `Application.getState` fan-out probes
-    // every connection at once, and each probe hops onto that app's MAIN
-    // thread: one process whose main thread is pinned (a suspended system app,
-    // or the launched app mid-cold-start) times the whole resolution out, and
-    // leaves the read no target at all. ONLY then, and only while the target
-    // names an injectable app whose devtools connection is still up and whose
-    // own probe answers foreground-like, read it instead - it is the app this
-    // run launched. A resolution that ANSWERS
-    // (including the deliberate "single app but backgrounded" error) always
-    // wins: the arbiter never overrides a guard that fired, it only rides out
-    // a probe the stall made unanswerable.
+    // every connection at once, so one process whose main thread is pinned
+    // times the whole resolution out and leaves the read no target at all. ONLY
+    // then, and only while the target names an injectable app whose connection
+    // is still up and whose own probe answers foreground-like, read it instead.
+    // A resolution that ANSWERS (including the deliberate "single app but
+    // backgrounded" error) always wins: the arbiter never overrides a guard
+    // that fired, it only rides out a probe the stall made unanswerable.
     let resolved: { bundleId: string };
     try {
       resolved = await resolveNativeTargetApp(nativeApi, undefined);
@@ -524,9 +448,8 @@ export async function queryFullHierarchyTree(
       const timedOut =
         getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
       if (!timedOut || !target) throw err;
-      // The hint is the id this run's own `launch:` step supplied, so the
-      // pinned policy verdict survives the demote; checked before the
-      // connections list to keep the refusal terminal either way.
+      // Checked before the connections list to keep the refusal terminal
+      // either way.
       if (!isInjectableBundleId(target.bundleId)) {
         throw new FailureError(
           systemAppFlowTargetRefusal(target.bundleId),
@@ -541,10 +464,8 @@ export async function queryFullHierarchyTree(
       }
       if (!nativeApi.listConnectedBundleIds().includes(target.bundleId)) throw err;
       // The timed-out fan-out proved nothing about what is on screen, so the
-      // hint must vouch for itself before taking the read: probe it alone,
-      // as a pinned read would. A probe it cannot answer is nothing to vouch
-      // for - the fan-out's own timeout stands, and the 15s getFullHierarchy
-      // that would park on the same silent queue is never spent.
+      // hint must vouch for itself before taking the read. A probe it cannot
+      // answer is nothing to vouch for: the fan-out's own timeout stands.
       let hintState: NativeAppState;
       try {
         hintState = await nativeApi.getAppState(target.bundleId);
@@ -591,11 +512,6 @@ export async function queryFullHierarchyTree(
   // one thing a `hidden`/absent check accepts, so trusting it would false-pass.
   // Key on raw windows, not flattened children: windows-but-no-leaves is a
   // genuinely sparse, trusted screen.
-  //
-  // A `com.apple.*` bundle id can only reach here via auto-resolve's own
-  // ranking (the pinned gate and the unpinned hint both refuse one above): the
-  // dylib did load and answer, so the message names the wrong-target diagnosis
-  // rather than a failed injection.
   if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
     throw new Error(
       `getFullHierarchy returned no windows for ${bundleId} - it has no window attached to read ` +

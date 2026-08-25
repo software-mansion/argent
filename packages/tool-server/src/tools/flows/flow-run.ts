@@ -298,7 +298,7 @@ const NATIVE_READY_POLL_MS = 250;
 export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
 /**
- * `tool:` steps that can change or relaunch the foreground app - running one
+ * `tool:` steps that can change or relaunch the foreground app — running one
  * drops {@link ActionEnv.treeTarget} outright instead of keeping it as an
  * unpinned hint, since the launched app may no longer be on screen at all, and
  * spends {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
@@ -338,8 +338,8 @@ async function waitForNativeDevtools(
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
-    // Withheld for the same reason as the timeout below: an app argent refuses
-    // to target was never going to get a tree out of this service.
+    // Withheld for the same reason as the timeout below: an app the native
+    // tools refuse to target was never going to be served by this service.
     if (!isInjectableBundleId(bundleId)) return null;
     return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
@@ -350,18 +350,16 @@ async function waitForNativeDevtools(
     if (Date.now() >= deadline) break;
     if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
   }
-  // Timed out with no connection. An app argent refuses to target gets no flow
-  // tree whether or not it connects, so that is its expected outcome rather than
-  // a launch failure; the refusal bites only where a selector needs the
-  // hierarchy, and `fetchFlowTree` reports it there.
+  // Timed out with no connection. An app the native tools refuse to target has
+  // no hierarchy to wait for, so that is its expected outcome rather than a
+  // launch failure; the refusal bites only where a selector needs the hierarchy,
+  // and `fetchFlowTree` reports it there.
   //
-  // The wait itself still runs, deliberately: nothing special-cases a refused
-  // id out of the poll, and a system app that does connect (#453 saw
-  // `connected: false` for com.apple.Preferences on iOS 26.5, an E2E run
-  // `connected: true` on 18.5) leaves at the first poll that sees it. Where
-  // none arrives it spends the full budget on a verdict already fixed. Only the
-  // VERDICT is withheld — before a measurement no arm below would consult for
-  // such an app, costing several uninterruptible simctl round-trips.
+  // The wait itself still runs, deliberately: whether the dylib loads into a
+  // simulator system app is unsettled (#453 saw `connected: false` for
+  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5).
+  // Only the VERDICT is withheld — before a measurement no arm below would
+  // consult for such an app, costing several uninterruptible simctl round-trips.
   if (!isInjectableBundleId(bundleId)) return null;
   // Measure why — the state may have flipped to connected since the last poll.
   // The loop's abort check covers every exit but this one (`break` follows it
@@ -491,7 +489,7 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * surface a raw tree-source error.
  *
  * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and for an iOS app argent refuses a flow tree (see
+ * aborted, and for an iOS app the native tools refuse to target (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed.
  * Otherwise the reason to report.
  */
@@ -559,9 +557,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
-  // Once restart-app is attempted the old target may no longer describe the
-  // foreground app (the previous app terminated, the new one launching), so a
-  // failed or aborted launch must not leave it behind.
+  // The previous app is terminating and the new one has not started, so a
+  // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
   let restart: unknown;
   try {
@@ -585,10 +582,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
-  // Pins later tree reads; nested `run:` fragments share this state and
-  // inherit it. A FRESH object every time, never a mutation of the previous
-  // target: `probeAnswered` is per-pin state and the app just cold-started, so
-  // a re-pin has to re-arm the ride-out of a probe its cold start stalls.
+  // A FRESH object every time, never a mutation of the previous target: the
+  // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
   return { ok: true };
 }
@@ -2342,20 +2337,12 @@ async function execLeafStep(
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }
-      // A raw tool step is an escape hatch whose effect on the device is opaque
-      // to the runner, so it stops vouching for the foreground app: iOS reads
-      // go back to frontmost auto-resolve (the pre-pin behavior), the only
-      // honest target after it. A tool OUTSIDE FOREGROUND_CHANGING_TOOLS still
-      // leaves the launched app worth remembering as an unpinned hint, which
-      // decides nothing while auto-resolve answers and arbitrates only a
-      // getState fan-out a wedged sibling sank, by answering a probe of its
-      // own - the state that would otherwise sink every later read. The
-      // nesting tools (`flow-execute`, `run-sequence`) are not in that set and
-      // can launch an app inside, so their hint can go stale; it costs nothing
-      // until the fan-out is already unanswerable, and narrowing it would need
-      // this list to see through a nested flow. Applied
-      // BEFORE invoking, since a tool that throws mid-way may still have
-      // switched apps. The next `launch` step re-pins.
+      // A raw tool step's effect on the device is opaque to the runner, so it
+      // stops vouching for the foreground app: reads go back to auto-resolve,
+      // the only honest target after it, keeping the launched app as an
+      // unpinned hint unless the tool could change the foreground app outright.
+      // Applied BEFORE invoking, since a tool that throws mid-way may still
+      // have switched apps. The next `launch` step re-pins.
       if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
         state.treeTarget = undefined;
         // A relaunch is also the repair a proven tree outage asks for by name -
@@ -2437,11 +2424,9 @@ async function execLeafStep(
         // args name the app they just started: they change WHICH app is in
         // front, not whether the run has one, so discarding the id sends the
         // iOS tree source back to auto-targeting's "Launch or restart the app
-        // first" — the very advice the measured diagnosis replaces. Restored
-        // UNPINNED, like any other raw tool step: the id arbitrates a fan-out
-        // nothing answered and names the app a disconnection is explained for,
-        // it does not re-pin. After the invoke, like `runLaunch`: a tool that
-        // threw started nothing.
+        // first" — the very advice the measured diagnosis replaces. UNPINNED,
+        // like any other raw tool step. After the invoke, like `runLaunch`: a
+        // tool that threw started nothing.
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {

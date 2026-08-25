@@ -90,10 +90,9 @@ function mockRegistry(props?: Record<string, unknown>): Registry {
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],
-      // No windows, so any read that does reach the tree source fails there
+      // No windows, so a read that does reach the tree source fails there
       // rather than degrading to an empty tree.
       queryViewHierarchy: async () => ({ windows: [] }),
-      // A pinned read probes the launched app alone before reading it.
       getAppState: async (bundleId: string) => ({
         bundleId,
         applicationState: "active",
@@ -2404,8 +2403,8 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(false);
   });
 
-  // Argent refuses an Apple system app a flow tree by policy, so its hierarchy
-  // never becomes readable - which is not a reason to fail the LAUNCH. The step
+  // Argent refuses an Apple system app a flow tree, so its hierarchy never
+  // becomes readable — which is not a reason to fail the LAUNCH. The step
   // started the app, and a flow that taps by coordinate needs nothing else; the
   // refusal belongs where a selector actually needs the hierarchy.
   it("lets a system-app launch through so a coordinate-driven flow still runs", async () => {
@@ -2659,8 +2658,8 @@ describe("flow composition (run:)", () => {
     const reason = result.steps[1].reason ?? "";
     expect(reason).toMatch(/Apple system app/);
     expect(reason).toMatch(/com\.apple\.Preferences/);
-    // Terminal is only half of it - the reason must also name the coordinate
-    // remedy this launch was let through for.
+    // The reason must also name the coordinate remedy this launch was let
+    // through for.
     expect(reason).toContain("`tap: { x: 0.5, y: 0.35 }` takes a point directly and reads no tree");
     // Not the native-* dead-end warning: none of those tools is a flow step.
     expect(reason).not.toMatch(/native-describe-screen|native-find-views/);
@@ -2751,9 +2750,8 @@ describe("flow composition (run:)", () => {
   // author is told to restart a tool-server with no mention that a selector
   // needed a hierarchy.
   it("says why the tree was being read, not just what is wrong with the app", async () => {
-    // Through the UNPINNED read: the `tool:` step demotes the launch's pin to a
-    // hint, which is where a launched id that no longer resolves is measured
-    // rather than reported as a connection this run watched drop.
+    // Through the UNPINNED read: the `tool:` step demotes the launch's pin,
+    // which is where a launched id that no longer resolves is measured.
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
