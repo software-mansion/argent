@@ -7,7 +7,7 @@ interface WaitForXctraceReadyOptions {
   timeoutMs: number;
 }
 
-export interface WaitForXctraceReadyResult {
+interface WaitForXctraceReadyResult {
   /** stderr accumulated while waiting for ready. */
   stderrBuffer: string;
 }

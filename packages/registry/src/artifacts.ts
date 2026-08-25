@@ -190,6 +190,12 @@ export class ArtifactStore {
     return handle;
   }
 
+  /**
+   * @public
+   * The only caller is the tool-server `GET /artifacts/:id` route, and the
+   * dead-code gate runs against an unbuilt tree, where a cross-workspace edge
+   * cannot form. See `knip.jsonc`.
+   */
   get(id: string): ArtifactEntry | undefined {
     return this.entries.get(id);
   }
