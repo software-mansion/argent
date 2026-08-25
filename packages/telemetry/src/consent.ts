@@ -80,7 +80,7 @@ function readConfigOverrideAt(filePath: string): boolean | null {
 }
 
 /** Which config document(s) set `telemetry.enabled`, when any did. */
-export interface PersistedConsent {
+interface PersistedConsent {
   enabled: boolean;
   /** Human-readable origin for `argent telemetry status`. */
   detail: string;

@@ -23,7 +23,7 @@ export type OptionSpec =
 
 export type OptionSpecs = Readonly<Record<string, OptionSpec>>;
 
-export interface ParsedCommandArgs {
+interface ParsedCommandArgs {
   positionals: string[];
   /** `true` for a boolean option that was given; the string for a value option. */
   options: Record<string, string | boolean>;

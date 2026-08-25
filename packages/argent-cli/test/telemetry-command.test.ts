@@ -72,7 +72,7 @@ function readJson(file: string): Record<string, unknown> | null {
 }
 const globalConfig = () => readJson(path.join(homeDir, ".argent", "config.json"));
 const projectConfig = () => readJson(path.join(projectDir, ".argent", "config.json"));
-const output = () => logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+const output = () => logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
 const cleanEnv = { DO_NOT_TRACK: undefined, ARGENT_TELEMETRY: undefined };
 
 describe("argent telemetry — scopes", () => {
