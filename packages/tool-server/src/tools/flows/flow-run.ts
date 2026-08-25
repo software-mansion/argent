@@ -1041,70 +1041,9 @@ export function createRunFlowTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
-Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready (on iOS it also pins later element lookups to that app rather than auto-detecting the frontmost
-one); \`tool\` calls dispatch through the registry (a raw \`tool\` step ends that iOS pin, so lookups
-auto-detect again until the next \`launch\`, though a tool that cannot change the foreground app leaves the
-launched id as a fallback for a timed-out auto-detect, and \`launch-app\`/\`restart-app\` leave the id they
-started as that fallback instead); \`tap\`/\`long-press\`/\`type\` resolve a selector to an
-element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
-holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
-any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
-(descendant — inside that container's frame), \`after: <selector>\` (CSS \`~\` — following it in reading
-order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unlike CSS reaches past a
-non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
-never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
-reads "inside card inside list", each container's frame inside the next);
-\`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
-(\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
-two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
-when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
-for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
-until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
-fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
-persist; the one idle outcome that does stop the run is an \`error\` for a tree source THIS step could not
-read at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
-every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
-perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
-diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
-baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
-cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
-inline — a YAML path resolved against the directory of the flow file that references it (co-located
-runs only).
-A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
-no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
-settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
-own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually
-relaunch the app so the instrumentation loads), or accept the warning where the app can serve no tree;
-the first such gesture proves the outage and later ones spend that verdict without paying the settle
-window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the
-next gesture pay a fresh window, and it warns again if the source is still down.
-A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
-checked once with the short assert grace — for one-sided divergences like interstitials and coach
-marks; a skipped block reports distinctly and failures inside an entered block are real failures.
-A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
-device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
-\`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
-Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
-than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
-unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
-starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
-otherwise the first launch attaches to an already-running instance and never kills it. Every later
-launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto;
-an instance the run already owns for that same app is killed first (its exit awaited) so the
-replacement can't lose the race against its single-instance lock. Instances the runner still owns at
-run end are torn down then. A launch declaring no id for the run's platform is an error, not a cue to
-switch platforms. Every step hard-stops the flow on failure; later steps are reported as skipped.
-Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
-skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
-runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
-off <id>\`, or \`retired <id> (same app relaunched)\` when the instance it left was the one killed —
-a relaunch that retired an older owned instance names both.
-
-If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
-returns a notice with the prerequisite instead of running.
-Pass exactly one flow source: name for a saved flow under project_root, or flow_path for an explicit YAML — both together, or neither, fails the call.`,
+    description: `Run a saved flow — a YAML script of UI steps — end to end against a booted device, passing
+exactly one of name (under project_root) or flow_path, and returning a per-step report in which the first
+failure stops the run and a step that passes carrying a \`warning\` was sent, not verified.`,
     longRunning: true,
     zodSchema,
     fileInputs,
