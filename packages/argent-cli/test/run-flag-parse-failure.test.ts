@@ -36,12 +36,12 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
 vi.mock("@argent/telemetry", () => telemetryMock);
 
 const RETIREMENT_NOTE =
-  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`.";
+  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
 // The refusal text, assembled by the parser from the note above with its "Retired: " label
 // dropped. Pinned whole so the message a `--json` caller reads is the message a human reads.
 const REFUSAL =
-  "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`.";
+  "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
 // Run the real registry serializer over a real zod object rather than hand-writing the
 // `{description, not: {}}` shape a retired key produces, so this fixture cannot drift from what

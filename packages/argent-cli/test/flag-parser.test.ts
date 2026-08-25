@@ -535,7 +535,7 @@ function schemaFrom(shape: z.ZodRawShape): JsonSchema {
 }
 
 const RETIREMENT_NOTE =
-  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`.";
+  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
 const retiredSchema = schemaFrom({
   durationMs: z.number().optional().describe("Total gesture duration in milliseconds"),
@@ -574,7 +574,7 @@ describe("retired (never-typed) keys in usage", () => {
   it("still surfaces the field and its retirement, without doubling 'Retired:'", () => {
     const usage = formatSchemaUsage(retiredSchema);
     expect(usage).toMatch(
-      /^ {2}Retired: settle - renamed to `momentum` with the opposite sense\. Pass `momentum: false`\.$/m
+      /^ {2}Retired: settle - renamed to `momentum` with the opposite sense\. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key\.$/m
     );
     expect(usage).not.toMatch(/Retired:.*Retired:/);
   });
@@ -591,7 +591,7 @@ describe("retired (never-typed) keys in parseFlags", () => {
   // Spelled out rather than derived from RETIREMENT_NOTE: re-running the source's
   // own "Retired: " strip here would assert nothing about it.
   const REFUSAL =
-    "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`.";
+    "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
   // A retired key has no `type`, so every spelling used to find a wrong branch:
   // bare `--settle` fell to the unknown-scalar tail, `--no-settle` was not a

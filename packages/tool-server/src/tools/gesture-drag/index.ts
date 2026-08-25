@@ -65,7 +65,9 @@ const zodSchema = z.object({
         "gesture-drag's `settle` was renamed to `momentum`, with the opposite sense - write `momentum: false` for the momentum-free drag that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
     })
     .optional()
-    .describe("Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`."),
+    .describe(
+      "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;

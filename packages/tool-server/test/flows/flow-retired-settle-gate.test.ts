@@ -38,6 +38,10 @@
  *   - `registry.invokeTool` still refuses the key on its own, so the gate is the
  *     earlier of two independent lines rather than the only one.
  *
+ * One last check steps outside the flow path: the guidance both tools publish is
+ * pinned whole here, because the argent-cli fixtures driving the CLI's own
+ * refusal and usage notice hand-copy it and cannot see it change.
+ *
  * Each case gets its own temp project root, passed explicitly to `flow-execute`,
  * so nothing is shared between them.
  */
@@ -58,6 +62,16 @@ import { createRunSequenceTool } from "../../src/tools/run-sequence";
 // is resolved - no simulator / CDP backend is ever contacted.
 const IOS_DEVICE = "00000000-0000-0000-0000-0000000000ab";
 const CHROMIUM_DEVICE = "chromium-cdp-19222";
+
+/**
+ * The guidance both gestures declare on their retired `settle` field, verbatim.
+ * The gate carries this description and never the `z.never` error text, so it is
+ * the whole of what a flow author is told, and it has to name what BOTH old
+ * values become: `settle: true` became `momentum: false`, while `settle: false`
+ * was the default and becomes no key at all.
+ */
+const RENAME_GUIDANCE =
+  "renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
 let tmpDir: string;
 
@@ -172,11 +186,10 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     const err = await refusalOf("swipe-settle", IOS_DEVICE);
 
     // The refusal is what the flow author reads, so it must locate the step and
-    // teach both the new spelling and the flipped sense.
+    // carry the rename guidance whole.
     expect(messageOf(err)).toContain('Flow "swipe-settle" step 1');
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
-    expect(messageOf(err)).toContain("renamed to `momentum`");
-    expect(messageOf(err)).toContain("momentum: false");
+    expect(messageOf(err)).toContain(RENAME_GUIDANCE);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
@@ -192,8 +205,7 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     const err = await refusalOf("drag-settle", CHROMIUM_DEVICE);
 
     expect(messageOf(err)).toContain("gesture-drag's retired `settle` key");
-    expect(messageOf(err)).toContain("renamed to `momentum`");
-    expect(messageOf(err)).toContain("momentum: false");
+    expect(messageOf(err)).toContain(RENAME_GUIDANCE);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
@@ -278,8 +290,7 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 
     expect(messageOf(err)).toContain("step 1 of the run-sequence step at step 2");
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
-    expect(messageOf(err)).toContain("renamed to `momentum`");
-    expect(messageOf(err)).toContain("momentum: false");
+    expect(messageOf(err)).toContain(RENAME_GUIDANCE);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
@@ -418,4 +429,27 @@ describe("flow-execute refuses the retired `settle` key through the real registr
       })
     ).rejects.toThrow(/gesture-swipe's `settle` was renamed to `momentum`/);
   });
+});
+
+// The description is the only retirement text the CLI's parse refusal and usage
+// notice can render: the property serializes to `{description, not: {}}`, so the
+// `z.never` error text is not in the schema they read. `@argent/cli` does not
+// depend on the tool-server and cannot derive the string, so it is hand-copied
+// into packages/argent-cli/test/flag-parser.test.ts and
+// packages/argent-cli/test/run-flag-parse-failure.test.ts. The guard lives here,
+// where the string is: if this fails, update both fixtures in the same change.
+describe("the retired `settle` guidance the CLI tests hand-copy", () => {
+  it.each([["gesture-swipe"], ["gesture-drag"]])(
+    "%s publishes it whole, behind the `Retired: ` label every caller strips",
+    (tool) => {
+      const schema = buildRegistry().getTool(tool)!.inputSchema as {
+        properties: Record<string, unknown>;
+      };
+
+      expect(schema.properties["settle"]).toEqual({
+        description: `Retired: ${RENAME_GUIDANCE}`,
+        not: {},
+      });
+    }
+  );
 });
