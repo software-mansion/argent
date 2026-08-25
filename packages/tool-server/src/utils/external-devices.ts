@@ -393,7 +393,7 @@ export function assertExternalCapabilitySync(
 
 /**
  * Capability sets as last observed, keyed by device id. Comparing against this
- * is how a mid-session license change or a withdrawn device invalidates a
+ * is how a mid-session capability change or a withdrawn device invalidates a
  * service the registry has cached and would otherwise keep serving.
  */
 const lastSeenCapabilities = new Map<string, string>();

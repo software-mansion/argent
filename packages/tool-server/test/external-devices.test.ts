@@ -217,7 +217,12 @@ describe("the contract's tool-server facade", () => {
     expect(EXTERNAL_PREFIX).toBe("ext:");
     expect(PROVIDER_ID_SHAPE.test("acme-3f2a9c")).toBe(true);
     expect([...EXTERNAL_CAPABILITIES]).toContain("simulator-server");
-    expect([...ALLOWED_SIM_SERVER_ENDPOINTS]).toEqual(["/api/pointer", "/api/screenshot", "/ws"]);
+    expect([...ALLOWED_SIM_SERVER_ENDPOINTS]).toEqual([
+      "/api/clipboard/text",
+      "/api/pointer",
+      "/api/screenshot",
+      "/ws",
+    ]);
 
     /**
      * The type re-exports matter as much as the value ones and nothing at
@@ -839,16 +844,18 @@ describe("revocation", () => {
 });
 
 describe("simulator-server endpoint parity", () => {
-  it.each(["/ws", "/api/screenshot", "/api/pointer"])("allows %s", (endpoint) => {
-    expect(() => assertAllowedSimServerEndpoint(endpoint)).not.toThrow();
-  });
+  it.each(["/ws", "/api/screenshot", "/api/pointer", "/api/clipboard/text"])(
+    "allows %s",
+    (endpoint) => {
+      expect(() => assertAllowedSimServerEndpoint(endpoint)).not.toThrow();
+    }
+  );
 
   /**
-   * These exist only in builds compiled with the recording / clipboard /
-   * license features. Argent's own build has none, so using one would mean
-   * consuming a capability argent does not itself provide.
+   * A provider's build may serve more than argent's does. Anything off the list
+   * is refused, including near-misses of entries that are on it.
    */
-  it.each(["/api/video/start", "/api/video/stop", "/api/clipboard/text", "/api/token/verify"])(
+  it.each(["/api/screenshots", "/api/clipboard", "/api/pointer/reset", "/ws/control"])(
     "refuses %s",
     (endpoint) => {
       expect(() => assertAllowedSimServerEndpoint(endpoint)).toThrow(/Refusing to call/);

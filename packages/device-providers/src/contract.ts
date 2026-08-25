@@ -189,7 +189,12 @@ export const CAPABILITY_SET: ReadonlySet<string> = new Set(EXTERNAL_CAPABILITIES
  * that throws on anything else is the consumer's (it needs the consumer's own
  * failure type).
  */
-export const ALLOWED_SIM_SERVER_ENDPOINTS = ["/api/pointer", "/api/screenshot", "/ws"] as const;
+export const ALLOWED_SIM_SERVER_ENDPOINTS = [
+  "/api/clipboard/text",
+  "/api/pointer",
+  "/api/screenshot",
+  "/ws",
+] as const;
 
 const httpUrl = z
   .string()

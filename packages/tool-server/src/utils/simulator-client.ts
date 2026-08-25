@@ -167,33 +167,15 @@ async function pointerPost(
  * keystroke sent afterwards cannot race the fill.
  *
  * The endpoint exists only in a simulator-server built with the `clipboard`
- * feature. An older binary answers the route with a bare 404, which is
- * reported as "unsupported" rather than as a network fault.
+ * feature. A binary without it (an older one or a provider's) 404s the route,
+ * which is reported as "unsupported" rather than as a network fault.
  */
 export async function setSimulatorClipboardText(
   api: SimulatorServerApi,
   text: string,
   signal?: AbortSignal
 ): Promise<void> {
-  /**
-   * `/api/clipboard/text` is not one of the endpoints argent's own build
-   * guarantees, so it is off-limits on a server argent did not spawn. Said
-   * plainly here rather than as a generic allowlist refusal, since the agent's
-   * way out is a different tool.
-   */
-  if (api.external) {
-    throw new FailureError(
-      "Pasting text is not available on a device supplied by an external provider: " +
-        "argent only uses the endpoints its own simulator-server build serves, and the " +
-        "clipboard is not one of them. Use `keyboard` to type the text instead.",
-      {
-        error_code: FAILURE_CODES.EXTERNAL_DEVICE_PASTE_UNSUPPORTED,
-        error_kind: "unsupported",
-        failure_area: "tool_server",
-        failure_stage: "external_device_paste_unsupported",
-      }
-    );
-  }
+  if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
 
   let res: Response;
   try {
@@ -207,10 +189,17 @@ export async function setSimulatorClipboardText(
     throw toSimulatorNetworkError("Paste", err, api.apiUrl);
   }
   if (res.status === 404) {
+    /**
+     * A provider's binary is not argent's, so "update argent" would be the
+     * wrong advice there.
+     */
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a build with " +
+        "clipboard support. Type the text with the keyboard tool instead."
+      : "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.";
     throw new FailureError(
-      "Paste failed: this simulator-server build has no clipboard endpoint. " +
-        "Update argent so its bundled simulator-server includes clipboard support, " +
-        "or type the text with the keyboard tool instead.",
+      "Paste failed: this simulator-server build has no clipboard endpoint. " + fix,
       {
         error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
         failure_stage: "simulator_clipboard_endpoint_missing",

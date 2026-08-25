@@ -28,8 +28,9 @@ import { resolveDevice } from "../src/utils/device-info";
  * 2. `pressKey` must travel over the WebSocket, because the local path uses
  *    stdin, which an attached server has none of, so `keyboard` would silently
  *    no-op,
- * 3. only the endpoints argent's own build serves may be used, however much
- *    the attached binary exposes. */
+ * 3. only the endpoints argent's own build serves may be used, however much the
+ *    attached binary exposes.
+ */
 
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
@@ -47,6 +48,8 @@ const DEVICE_ID = makeExternalId(PROVIDER_ID, IOS_UDID);
 interface FakeSimulatorServer {
   alive: () => boolean;
   apiUrl: string;
+  /** Every text the server was asked to put on the clipboard, in order. */
+  clipboardTexts: string[];
   close: () => Promise<void>;
   /** Every HTTP path the server was asked for. */
   httpPaths: string[];
@@ -60,14 +63,33 @@ interface FakeSimulatorServer {
  * only the endpoints argent's own build serves, so anything argent reaches for
  * beyond that shows up as a 404 in `httpPaths`, which is what makes the parity
  * rule checkable here as well as in the E2E.
+ *
+ * `clipboard: false` models a provider's build that has no clipboard route.
  */
-async function createFakeSimulatorServer(): Promise<FakeSimulatorServer> {
+async function createFakeSimulatorServer({
+  clipboard = true,
+}: { clipboard?: boolean } = {}): Promise<FakeSimulatorServer> {
+  const clipboardTexts: string[] = [];
   const httpPaths: string[] = [];
   const wsCommands: unknown[] = [];
   let closed = false;
 
   const server = http.createServer((request, response) => {
     httpPaths.push(request.url ?? "");
+
+    if (request.url === "/api/clipboard/text" && clipboard) {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { text: string };
+        clipboardTexts.push(body.text);
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ status: "ok" }));
+      });
+
+      return;
+    }
 
     if (request.url === "/api/screenshot") {
       response.setHeader("content-type", "application/json");
@@ -99,6 +121,7 @@ async function createFakeSimulatorServer(): Promise<FakeSimulatorServer> {
   return {
     alive: () => !closed,
     apiUrl: `http://127.0.0.1:${port}`,
+    clipboardTexts,
     close: () =>
       new Promise<void>((resolve) => {
         closed = true;
@@ -187,8 +210,10 @@ afterEach(async () => {
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 });
 
-async function startSimulatorServer(): Promise<FakeSimulatorServer> {
-  const simulatorServer = await createFakeSimulatorServer();
+async function startSimulatorServer(options?: {
+  clipboard?: boolean;
+}): Promise<FakeSimulatorServer> {
+  const simulatorServer = await createFakeSimulatorServer(options);
   cleanups.push(() => simulatorServer.close());
   return simulatorServer;
 }
@@ -268,20 +293,25 @@ describe("attaching to a provider's simulator-server", () => {
     expect(simulatorServer.httpPaths).toEqual(["/api/screenshot"]);
   });
 
-  /**
-   * The paste tool fills the device clipboard over `/api/clipboard/text`, an
-   * endpoint argent's own build does not guarantee, so it is refused before the
-   * request is made rather than sent to a provider's server.
-   */
-  it("refuses paste rather than calling an endpoint it does not own", async () => {
+  it("fills the device clipboard over the http api", async () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
+    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBeUndefined();
+    expect(simulatorServer.clipboardTexts).toEqual(["hello"]);
+  });
+
+  /**
+   * A 404 here must read as "unsupported" and must point at the provider.
+   * "update argent" would be the wrong advice for someone else's binary.
+   */
+  it("reports a missing clipboard endpoint as unsupported", async () => {
+    const simulatorServer = await startSimulatorServer({ clipboard: false });
+    const device = attachTo(simulatorServer);
+    const instance = await simulatorServerBlueprint.factory({}, device, { device });
     await expect(setSimulatorClipboardText(instance.api, "hello")).rejects.toThrow(
-      /Pasting text is not available/
+      /provider that supplied this device would have to ship a build with clipboard support/
     );
-    expect(simulatorServer.httpPaths).toHaveLength(0);
-    expect(simulatorServer.wsCommands).toHaveLength(0);
   });
 
   it("refuses an endpoint argent's own build does not serve", async () => {
@@ -292,10 +322,10 @@ describe("attaching to a provider's simulator-server", () => {
      * Reaching past the parity allowlist must fail before any request is made,
      * so the provider's server never even sees it.
      */
-    await expect(httpScreenshotAtEndpoint(instance.api, "/api/clipboard/text")).rejects.toThrow(
+    await expect(httpScreenshotAtEndpoint(instance.api, "/api/clipboard")).rejects.toThrow(
       /Refusing to call/
     );
-    expect(simulatorServer.httpPaths).not.toContain("/api/clipboard/text");
+    expect(simulatorServer.httpPaths).not.toContain("/api/clipboard");
   });
 
   it("refuses to attach when the provider withheld the simulator-server capability", async () => {

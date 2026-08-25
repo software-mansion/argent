@@ -14,9 +14,9 @@
 #
 # This is genuinely faithful rather than a mock: it is the same protocol, over
 # the same binary, from the same release channel a real provider would spawn.
-# It also enforces the parity rule for free — the forbidden endpoints
-# (/api/video/*, /api/clipboard/text, /api/token/verify) do not exist in
-# argent's own build, so any code reaching for one fails here on its own.
+# It also enforces the parity rule for free, this server serves exactly what
+# argent's own build serves, so code reaching past the allowlist fails here on
+# its own.
 #
 # The device is injected the same way the android tier takes one
 # (E2E_ANDROID_SERIAL), or booted from E2E_ANDROID_AVD by the android tier
@@ -117,7 +117,7 @@ _publish_descriptor() { # native-id platform kind capabilities-json
 }
 
 # Rewrite the descriptor with an empty device list — how a provider withdraws a
-# device (and how a licence revocation reaches argent).
+# device (and how a narrowed grant reaches argent).
 _withdraw_device() {
   jq -nc --arg id "$PROVIDER_ID" \
     '{schemaVersion:1,id:$id,name:"E2E Provider",
@@ -224,6 +224,10 @@ run_phase() {
   # websocket route this silently no-ops while still reporting success.
   assert_ok "$P" keyboard type "{\"udid\":\"$DEV\",\"text\":\"argent\"}"
 
+  # paste is the guard for `/api/clipboard/text`, it is the only tool that calls
+  # it, so a stale allowlist would show up here as a refusal.
+  assert_ok "$P" paste type "{\"udid\":\"$DEV\",\"text\":\"argent\"}"
+
   # --- what argent must NOT do ----------------------------------------------
   run_tool boot-device "$U"
   if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "owns its lifecycle"; then
@@ -263,8 +267,8 @@ run_phase() {
   # --- revocation -----------------------------------------------------------
   # Withdraw the device and assert the very next call is refused. There is no
   # TTL to wait out: argent re-reads the descriptor on every dispatch, so a
-  # withdrawal (or a narrowed capability set, which is how a licence revocation
-  # would reach argent) takes effect immediately.
+  # withdrawal (or a narrowed capability set, which is how a provider revokes
+  # part of a grant) takes effect immediately.
   _withdraw_device
   run_tool gesture-tap "{\"udid\":\"$DEV\",\"x\":100,\"y\":200}"
   if [ "$RT_RC" -ne 0 ]; then
@@ -348,14 +352,5 @@ run_phase() {
     pass "$P" simulator-server "provider's server still alive at end of session"
   else
     fail "$P" simulator-server "still alive at end of session" "pid $PROV_SIM_PID is gone"
-  fi
-
-  # No argent call may ever have touched a licensed/paid endpoint. Argent's own
-  # build does not serve them, so a request would appear as a 404 in the
-  # simulator-server log.
-  if grep -qiE '/api/(video|clipboard|token)' "$E2E_WORK/provider-simserver.log" 2>/dev/null; then
-    fail "$P" parity "no paid endpoints touched" "found a video/clipboard/token request in the log"
-  else
-    pass "$P" parity "no video/clipboard/token endpoint was ever requested"
   fi
 }
