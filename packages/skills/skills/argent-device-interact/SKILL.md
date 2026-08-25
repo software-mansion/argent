@@ -131,7 +131,7 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 
 Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
 
-`"momentum"` defaults to `true` (a natural flinging swipe). Pass `"momentum": false` for a momentum-free swipe: the finger decelerates into the end point, so the OS reads ~0 release velocity and applies little to no fling. Use it when you need a deterministic scroll distance, e.g. scroll-to-element loops. The deceleration rides on the interpolated Moves, so a `durationMs` under 24ms emits none and there is nothing to ease.
+`"momentum"` defaults to `true` (a natural flinging swipe). Pass `"momentum": false` for a momentum-free swipe: the finger decelerates into the end point, so the OS reads ~0 release velocity and applies little to no fling. Use it when you need a deterministic scroll distance, e.g. scroll-to-element loops. It needs `durationMs` of at least 150 and is rejected below it, so keep the 300 default or raise it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards).
 
 ### gesture-pinch — Two-finger pinch
 
