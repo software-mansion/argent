@@ -206,20 +206,18 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 ### await-ui-element — Block until a UI element reaches a state
 
-Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to block server-side until an element reaches an expected state (or `timeoutMs`, default 5000ms, elapses). It polls the same accessibility/DOM tree as `describe`. (For a plain pause, use your own harness sleep — this tool deliberately has no bare-timer mode.)
+**Never poll `screenshot`/`describe` in a loop to wait for something.** Use `await-ui-element`: it blocks server-side on the same tree `describe` reads. It has no bare-timer mode by design — for a plain pause, use your own harness sleep.
 
 ```json
 { "udid": "<UDID>", "condition": "visible", "selector": { "text": "Continue" } }
 ```
 
-- `condition`: `exists`, `visible`, `hidden`, or `text`.
-- `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
-- `text` condition also needs `expectedText` (substring the matched element must contain).
-- `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
-- Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
+The tool's own description carries the conditions, selector matching, defaults and return shape. What it does not tell you:
 
-Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
+- A `hidden` check that succeeds **immediately** may be a false pass — its `note` then says the selector never matched anything at all. Treat that as a failed check and fix the selector; do not read it as "the element went away".
+- The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
+- To disambiguate a loose selector, pin the `role` to a text role like `StaticText` — that skips a same-named button.
+- On a `text` timeout the `note` quotes the text of the element the check actually read, so you can see which match it landed on.
 
 ### await-screen-idle — Block until the screen stops changing
 
