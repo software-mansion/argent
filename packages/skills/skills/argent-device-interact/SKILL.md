@@ -88,7 +88,7 @@ Point follow-up native diagnostics after you already have a candidate point:
 - `native-user-interactable-view-at-point`: deepest native view that would receive touch at a known raw iOS point; requires `bundleId`
 - `native-view-at-point`: deepest visible native view at a known raw iOS point; requires `bundleId`
 
-### If `describe` Fails
+### If `describe` Tool Fails
 
 Read the exact error and choose the action that matches it:
 
@@ -271,18 +271,14 @@ For visual regression checks, before/after screenshot comparisons, and detailed 
 
 ## 8. Action Sequencing with `run-sequence`
 
-Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
-scrolling multiple times, typing and submitting automatically, known sequence of multiple taps, rotating device back and forth.
+Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete.
 
-Do **not** use `run-sequence` when any step depends on observing the result of a previous step
+Do **not** use `run-sequence` when any step depends on observing the result of a previous step.
 
 ### Use cases
 
-Use the sequencing when:
-
-- Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
-- "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- "scroll to bottom", "scroll to top", "scroll until X" -> sequence 3-5 scrolls
+- form interactions, "clear and retype field" -> triple-tap to select all, then type the new value
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 
