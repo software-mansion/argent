@@ -160,6 +160,15 @@ export interface DirectiveOutcome {
    * the step report.
    */
   warning?: string;
+  /**
+   * The tolerated failed read behind a DETERMINATE verdict — the trailing
+   * poll's error, worded as {@link waitForCondition} already appends it to
+   * `reason`. On its own field so a caller that phrases its own verdict line
+   * (the drain's cap in flow-run) can carry the detail without slicing it out
+   * of a message. An evidence gap wide enough to doubt the verdict is
+   * `indeterminate` instead, never this.
+   */
+  blipNote?: string;
 }
 
 /**
@@ -1356,16 +1365,20 @@ async function waitForCondition(
     }
   }
   // Tier 3 (or a trusted final read): the verdict is determinate; a blip's
-  // failed final read is appended, not dropped.
+  // failed final read is appended, not dropped — and carried on `blipNote`
+  // too, for the callers that build their own verdict line rather than printing
+  // `reason`. Held bare, brackets added at each use; the settle path's
+  // same-named local below is pre-wrapped instead.
   const blipNote =
     !lastReadTrusted && fetchError
-      ? ` (the final poll could not read the UI tree: ${fetchError})`
-      : "";
+      ? `the final poll could not read the UI tree: ${fetchError}`
+      : undefined;
   return {
     ok: false,
     reason:
       assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      blipNote,
+      (blipNote ? ` (${blipNote})` : ""),
+    ...(blipNote ? { blipNote } : {}),
   };
 }
 

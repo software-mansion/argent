@@ -1545,6 +1545,87 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("rejects an uploaded flow whose run: hides inside a repeat: block", async () => {
+    // The repeat: counterpart of the when: test above, with a worse miss: a
+    // repeat block always executes, so a preflight blind to its children does
+    // not go silently green — it runs the block for real and the run: fails
+    // mid-flow against the per-call temp directory, whose `..` a run: target
+    // may legally traverse (parseRunTarget admits it for co-located layouts).
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n  - repeat: 1\n    steps:\n      - run: login.yaml\n",
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    await expect(
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(/co-located/i);
+    // Preflight, not mid-run: nothing was dispatched to the device.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded flow whose run: sits under mixed when: > repeat: nesting", async () => {
+    // The two-when: fixture above with the inner block swapped for a repeat:.
+    // Pins that the recursion is directive-agnostic, which neither same-kind
+    // test can: a pair of per-directive walkers (one descending when:, one
+    // repeat:) passes both of them and still loses this run: at the handoff
+    // between the two kinds — blockSteps is one predicate so no walker has to
+    // enumerate the directives, and this is the test that notices one that does.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n" +
+        "  - when:\n" +
+        "      platform: android\n" +
+        "    steps:\n" +
+        "      - repeat: 2\n" +
+        "        steps:\n" +
+        "          - run: login.yaml\n",
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    // Preflight, not mid-run: nothing was dispatched to the device.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("rejects an uploaded chromium e2e flow's run: before booting the launch's Electron app", async () => {
     // The guard's docstring promises the rejection fires "before anything
     // executes" — a POSITIONAL contract its mere existence doesn't keep. For

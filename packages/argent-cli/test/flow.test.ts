@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
 import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
+import type { StepReport } from "../src/flow.js";
 import { ToolInvocationError } from "@argent/tools-client";
 import { FlagParseException } from "../src/flag-parser.js";
 import type { ResolvedToolsUrl } from "@argent/tools-client";
@@ -1211,6 +1212,110 @@ describe("argent flow run", () => {
     expect(out).toMatch(/⚠ {2}1 snapshot/);
     expect(out).toContain("⚠ no baseline; adopted");
     expect(out).toContain("1 warning");
+  });
+
+  it("prints streamed steps through the real live renderer — markers unnumbered, a hostile structural value numbered", async () => {
+    // Drives the production onStepReport closure, not a test-local copy: the
+    // mocked callTool invokes the onProgress callback the handler passed it,
+    // and the transcript below is whatever that closure printed. One hostile
+    // line: `structural` is untrusted wire data, so a truthy "yes" must number
+    // like any step or the live numbering drifts from the server's counts.
+    const streamed: StepReport[] = [
+      { index: 0, kind: "repeat", status: "pass", target: "2 times", structural: true },
+      {
+        index: 1,
+        kind: "repeat",
+        status: "pass",
+        target: "iteration 1/2",
+        depth: 1,
+        structural: true,
+      },
+      { index: 2, kind: "tap", status: "pass", target: '"Clear"', depth: 1 },
+      {
+        index: 3,
+        kind: "repeat",
+        status: "fail",
+        reason: 'still not hidden text="X" after 2 iterations (max)',
+      },
+      {
+        index: 4,
+        kind: "assert",
+        status: "pass",
+        target: '"Done"',
+        structural: "yes" as unknown as boolean,
+      },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (
+        _tool: string,
+        _payload: unknown,
+        callOpts?: { onProgress?: (e: unknown) => void }
+      ) => {
+        for (const s of streamed) callOpts?.onProgress?.(s);
+        return { data: report({ ok: false, passed: 2, failed: 1, steps: streamed }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    // The full transcript, in order and byte-exact: the markers keep glyph,
+    // indent and label column but take a number-width blank; the tap is 1, the
+    // verdict 2, the hostile line 3. With steps already printed live, the
+    // final report contributes only the summary (with the starting device).
+    expect(logs).toEqual([
+      'Flow "checkout"',
+      "  ✓    repeat 2 times",
+      "  ✓      repeat iteration 1/2",
+      '  ✓  1   tap "Clear"',
+      '  ✗  2 repeat — still not hidden text="X" after 2 iterations (max)',
+      '  ✓  3 assert "Done"',
+      "\nFAIL (started on SIM-1) — 2 passed, 1 failed, 0 errored, 0 skipped",
+    ]);
+  });
+
+  it("streams a structural marker's warning under its line, its artifacts in the tail", async () => {
+    // Same production closure, driven with a marker a server stamped structural
+    // while hanging a warning and a path on it. The warning prints under the
+    // marker, and the path rides the tail where paths only exist once the final
+    // report lands; dropping either would end the run on a summary counting a
+    // warning whose text never reached the screen.
+    const streamed: StepReport[] = [
+      {
+        index: 0,
+        kind: "repeat",
+        status: "pass",
+        target: "2 times",
+        structural: true,
+        warning: "the screen never held still",
+        artifacts: { diff: "/tmp/d.png" },
+      },
+      { index: 1, kind: "tap", status: "pass", target: '"Clear"', depth: 1 },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (
+        _tool: string,
+        _payload: unknown,
+        callOpts?: { onProgress?: (e: unknown) => void }
+      ) => {
+        for (const s of streamed) callOpts?.onProgress?.(s);
+        return { data: report({ passed: 1, steps: streamed }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toEqual([
+      'Flow "checkout"',
+      "  ⚠    repeat 2 times",
+      "       ⚠ the screen never held still",
+      '  ✓  1   tap "Clear"',
+      "  repeat (unnumbered marker):",
+      "       diff: /tmp/d.png",
+      "\nPASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped, 1 warning",
+    ]);
+    // The warning sits under the marker's label, and the marker still takes no
+    // number — the tap after it is step 1.
+    expect(logs[2]!.indexOf("⚠")).toBe(logs[1]!.indexOf("repeat"));
   });
 
   it("prints the raw report with --json", async () => {

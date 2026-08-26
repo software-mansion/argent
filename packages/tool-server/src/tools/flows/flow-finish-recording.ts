@@ -398,6 +398,30 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
     case "snapshot":
       return `${n}. snapshot: ${step.name}`;
+    case "repeat": {
+      // The recorder never emits a repeat block (it records the literal
+      // iterations); this renders a hand-authored one in a re-summarized flow,
+      // with the same "(N steps)" tail as when.
+      //
+      // A drain renders its guard alone, deliberately without the `max` that
+      // flow-run's `stepTarget` spells out. There `max` is the bound the step
+      // FAILS at; nothing has run here, so a cap this summary cannot hit would
+      // only stand between the reader and the condition.
+      const bound =
+        step.spec.mode === "times"
+          ? `${step.spec.times} time${step.spec.times === 1 ? "" : "s"}`
+          : `until ${
+              step.spec.until.condition === "text"
+                ? textConditionLabel(
+                    step.spec.until.selector,
+                    step.spec.until.expectedText,
+                    step.spec.until.textMatch
+                  )
+                : `${step.spec.until.condition} ${selectorLabel(step.spec.until.selector)}`
+            }`;
+      const count = step.steps.length;
+      return `${n}. repeat: ${bound} (${count} step${count === 1 ? "" : "s"})`;
+    }
     case "idle":
       return `${n}. await: screen idle`;
     case "tool":

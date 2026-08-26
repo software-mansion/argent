@@ -173,7 +173,13 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);
+    // One answer per step kind: a block directive needs a device without
+    // recursing into its body. `when` because its guard reads the tree, and
+    // `repeat` by the same blanket answer — which costs a `times` block over
+    // pure `wait:`/`echo:` steps a device it never acts on. Accepted knowingly
+    // and pinned by a test.
     case "when":
+    case "repeat":
     case "run":
     case "launch":
     case "tap":
@@ -199,7 +205,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
  * Whether any step in a flow acts on a device - each block header's own
  * classification OR, via {@link blockSteps}, the steps it actually CONTAINS.
  *
- * The child walk answers nothing today: `when`, the only block kind, classifies
+ * The child walk answers nothing today: every block kind classifies
  * device-requiring in {@link stepRequiresDevice}. It is what makes a future
  * block kind safe to classify `false` — a flow that is only such a block would
  * otherwise resolve device-free and hard-stop on the first device step in its

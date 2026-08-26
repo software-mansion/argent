@@ -1133,6 +1133,201 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("boots for a chromium launch inside a leading times block", async () => {
+    // A literal count is paste-equivalence, so the first iteration's launch runs
+    // at step 1 exactly as the unwrapped spelling does. Without the descent the
+    // block is a wrapper that makes a launch-first run invisible: no boot, and
+    // the run attaches to whatever chromium instance happens to be up.
+    const flowFile = await writeFlow(
+      "steps:\n  - repeat: 2\n    steps:\n      - launch: { chromium: { path: ./app, args: [--e2e] } }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    // Booted for the block's launch, args and all — the same call the unwrapped
+    // spelling makes, from the app path resolved against the flow's directory.
+    expect(bootElectronApp).toHaveBeenCalled();
+    expect(bootElectronApp.mock.calls[0][0]).toEqual({
+      appPath: path.join(path.dirname(flowFile), "app"),
+      extraArgs: ["--e2e"],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    // Iteration 1's launch settles the hoisted instance rather than booting its
+    // own — reason presence is the owned-vs-attached signal — and iteration 2
+    // relaunches the same app, retiring it exactly as two pasted launches would.
+    const launches = result.steps.filter((s) => s.kind === "launch");
+    expect(launches.map((s) => s.reason)).toEqual([
+      "booted chromium instance chromium-cdp-12345",
+      "booted chromium instance chromium-cdp-12346 — retired chromium-cdp-12345 (same app relaunched)",
+    ]);
+    expect(bootElectronApp).toHaveBeenCalledTimes(2);
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12345, 4242],
+      [12346, 4243],
+    ]);
+  });
+
+  it("boots for a launch a leading times block reaches through a run: hop", async () => {
+    // The composed spelling of the fixture above, pinning what the descent
+    // carries into the body: the same stack, since the block adds no file hop,
+    // and a repeat scope that fences only snapshot-bearing fragments. Get
+    // either wrong and the hop is a dead end — no boot, and the run attaches to
+    // whatever instance happens to be up.
+    const top = await writeFlow(
+      "steps:\n  - repeat: 1\n    steps:\n      - echo: warming up\n      - run: e2e-chromium\n"
+    );
+    await writeSiblingFlow(top, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-run-hop",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0]).toEqual({
+      appPath: path.join(path.dirname(top), "app"),
+      extraArgs: undefined,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    const launch = result.steps.find((s) => s.kind === "launch")!;
+    expect(launch.reason).toBe("booted chromium instance chromium-cdp-12345");
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("boots the times block's first launch, not a later one in the body or behind the block", async () => {
+    // Step 1 of the pasted-out flow is the body's FIRST executable step, so that
+    // is the launch the hoist owns. A descent that returned any other launch
+    // would still boot, still report one call and still tear down cleanly, so
+    // only the app path tells the two apart.
+    const flowFile = await writeFlow(
+      "steps:\n" +
+        "  - repeat: 1\n" +
+        "    steps:\n" +
+        "      - launch: { chromium: ./app-a }\n" +
+        "      - launch: { chromium: ./app-b }\n" +
+        "  - launch: { chromium: ./app-c }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-first-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    // app-a is the hoist; b and c boot themselves as the run reaches them.
+    expect(bootElectronApp.mock.calls.map((c) => c[0].appPath)).toEqual([
+      path.join(path.dirname(flowFile), "app-a"),
+      path.join(path.dirname(flowFile), "app-b"),
+      path.join(path.dirname(flowFile), "app-c"),
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+  });
+
+  it("does not boot for a chromium launch inside an until drain", async () => {
+    // The negative twin of the three fixtures above: transparency is times-only.
+    // A drain may run its body — launch included — zero times, and a launch
+    // that may never happen is no basis for booting an app, so device
+    // resolution proceeds normally and reports what it finds (nothing here).
+    const flowFile = await writeFlow(
+      "steps:\n  - repeat: { until: { hidden: Busy } }\n    steps:\n      - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "drain-launch", project_root: PROJECT_ROOT, flow_file: flowFile })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("does not boot when the launch hides in a snapshot-bearing fragment inside a times block", async () => {
+    // The fourth refusal kind: under a repeat scope execRunStep refuses a
+    // snapshot-bearing fragment at load, so the launch behind it never runs —
+    // booting for it would spawn an app the run can never use (and, with the
+    // app already open, report a single-instance lock instead of the fence).
+    const top = await writeFlow("steps:\n  - repeat: 1\n    steps:\n      - run: frag.yaml\n");
+    await writeSiblingFlow(
+      top,
+      "frag",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "snap-frag", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+
+    // The executor's verdict on the same chain, pinned so it actually runs:
+    // the run: errors with the fence's message and no launch line appears.
+    const result = await runFlow(registry, {
+      name: "snap-frag",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("does not boot when that snapshot-bearing fragment sits a second run: hop down", async () => {
+    // The fence rides the recursion, not just the block's own first hop, so a
+    // clean fragment that merely composes the snapshot-bearing one is refused at
+    // the SECOND load. A scan that dropped the scope one hop down would walk
+    // past a.yaml and boot an app this run never reaches, with the one-hop case
+    // above staying green throughout.
+    const top = await writeFlow("steps:\n  - repeat: 1\n    steps:\n      - run: a.yaml\n");
+    await writeSiblingFlow(top, "a", "steps:\n  - run: b.yaml\n");
+    await writeSiblingFlow(
+      top,
+      "b",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "snap-frag-chain", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+
+    // The executor's verdict on the same chain, pinned so it actually runs:
+    // a.yaml loads clean, and ITS run: errors with the fence's message.
+    const result = await runFlow(registry, {
+      name: "snap-frag-chain",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "b.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("does not boot when a leading run: chain reaches no launch", async () => {
     // A plain fragment composition: nothing to boot, so device resolution
     // proceeds normally (and reports no booted device here).
@@ -1835,6 +2030,175 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prerequisite fragment whose repeat: 1 block wraps the launch-bearing run:", async () => {
+    // A times block is its body pasted N times, so `repeat: 1` around the run:
+    // reaches e2e-a's launch at step 1 exactly as the unwrapped spelling above.
+    // Before the scan descended into times blocks it gave up here instead: no
+    // refusal and no hoist, so the acknowledged run auto-detected whatever
+    // browser was already open and green-passed the launch step against it —
+    // the wrapper bought silence, not equivalence.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const refusal = runFlow(registry, {
+      name: "repeat-wrapped-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+    // Same refusal as the unwrapped spelling, naming the launch-carrying file.
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(refusal).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("takes the handshake when the repeat-wrapped run:'s fragment carries a snapshot", async () => {
+    // The scan mirrors execRunStep's fragment-snapshot fence: under a repeat
+    // scope that hop is refused at load, so the launch behind it never runs —
+    // refusing here would demand the author drop a launch that cannot execute.
+    // The ordinary handshake stands, and the acknowledged run errors the run:
+    // step with the fence's own message, no launch line and no boot.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: frag.yaml\n"
+    );
+    await writeSiblingFlow(
+      fragment,
+      "frag",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
+    );
+
+    const noticed = await runFlowRaw(registry, {
+      name: "snap-frag-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+
+    const result = await runFlow(registry, {
+      name: "snap-frag-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("takes it too when that fragment sits a second run: hop below the block", async () => {
+    // The two-hop spelling of the test above: the repeat scope the fence reads
+    // rides every hop under the block, so the executor refuses a.yaml's own
+    // run: and b.yaml's launch never runs. Dropping the scope one hop down, the
+    // scan would reach that launch and refuse the composition for declaring a
+    // prerequisite — sending the author to delete the one step that is not the
+    // problem, while the one-hop case above stayed green.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: a.yaml\n"
+    );
+    await writeSiblingFlow(fragment, "a", "steps:\n  - run: b.yaml\n");
+    await writeSiblingFlow(
+      fragment,
+      "b",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
+    );
+
+    const noticed = await runFlowRaw(registry, {
+      name: "snap-frag-chain-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+
+    const result = await runFlow(registry, {
+      name: "snap-frag-chain-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "b.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("continues past an all-echo times block to the launch-bearing run: behind it", async () => {
+    // Pasted out, `repeat: 2` over narration is two echoes, and an echo-only
+    // prefix never hid the launch from this guard (the narrating-hop test
+    // above). The block contributes no executable step, so the scan resumes at
+    // the step after it rather than abandoning the walk.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - repeat: 2\n    steps:\n      - echo: warming up\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const refusal = runFlow(registry, {
+      name: "echo-block-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(refusal).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("still notices when the launch-bearing run: sits inside an until drain", async () => {
+    // The control for the two above: transparency is times-only. A drain's
+    // guard is checked BEFORE each iteration, so its body — the run: and the
+    // launch it reaches — may legitimately execute zero times; a launch that
+    // may never happen is no ground for refusal, and the ordinary handshake
+    // stands.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: { until: { hidden: Busy } }\n    steps:\n      - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const noticed = await runFlowRaw(registry, {
+      name: "drain-wrapped-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 

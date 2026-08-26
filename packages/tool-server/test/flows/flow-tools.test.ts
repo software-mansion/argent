@@ -1941,6 +1941,128 @@ describe("flow-finish-recording", () => {
       '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
     ]);
   });
+
+  it("renders both repeat bounds, pluralizing the count and the step-count tail", async () => {
+    const name = "repeat-bound-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // The recorder never emits a repeat block, so this hand-authors one on
+    // disk — which is the path the summary reads: finish-recording re-parses
+    // the file, so a manually added block lands in the same switch.
+    const tap: FlowStep = { kind: "tap", selector: { identifier: "next" } };
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          { kind: "repeat", spec: { mode: "times", times: 3 }, steps: [tap] },
+          {
+            kind: "repeat",
+            spec: {
+              mode: "until",
+              until: { kind: "ui", condition: "hidden", selector: { identifier: "spinner" } },
+              max: 15,
+            },
+            steps: [tap, { kind: "tap", selector: { identifier: "more" } }],
+          },
+          {
+            kind: "repeat",
+            spec: { mode: "times", times: 1 },
+            steps: [tap, { kind: "tap", selector: { identifier: "more" } }],
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    expect(result.summary).toEqual([
+      "1. repeat: 3 times (1 step)",
+      // The bound only, no `max` — the summary states what the loop drains to.
+      '2. repeat: until hidden {"id":"spinner"} (2 steps)',
+      // Two independently pluralized numbers on one line, and they disagree:
+      // `repeat: 1` is a legal bound (the range starts at 1), so the iteration
+      // count pluralizes like the run report's repeat target, while the
+      // "(N steps)" tail — which already handled its own singular — counts the
+      // two authored steps. One plural decision serving both could not produce
+      // this line; a `times` left unpluralized would print "1 times" here.
+      "3. repeat: 1 time (2 steps)",
+    ]);
+  });
+
+  it("renders repeat until text guards with the same comparator spelling as await/assert", async () => {
+    const name = "repeat-text-guard-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const tap: FlowStep = { kind: "tap", selector: { identifier: "next" } };
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "repeat",
+            spec: {
+              mode: "until",
+              until: {
+                kind: "ui",
+                condition: "text",
+                selector: { identifier: "status" },
+                expectedText: 'Done "now"\nnext',
+                textMatch: "contains",
+              },
+              max: 10,
+            },
+            steps: [tap],
+          },
+          {
+            kind: "repeat",
+            spec: {
+              mode: "until",
+              until: {
+                kind: "ui",
+                condition: "text",
+                selector: { identifier: "status" },
+                expectedText: "Done",
+                textMatch: "equals",
+              },
+              max: 10,
+            },
+            steps: [tap],
+          },
+          {
+            kind: "repeat",
+            spec: {
+              mode: "until",
+              until: {
+                kind: "ui",
+                condition: "text",
+                selector: { identifier: "total" },
+                expectedText: "^Total: \\$\\d+\\.\\d{2}$",
+                textMatch: "matches",
+              },
+              max: 10,
+            },
+            steps: [tap, { kind: "tap", selector: { identifier: "more" } }],
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    expect(result.summary).toEqual([
+      '1. repeat: until text {"id":"status"} contains "Done \\"now\\"\\nnext" (1 step)',
+      '2. repeat: until text {"id":"status"} == "Done" (1 step)',
+      '3. repeat: until text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
+    ]);
+  });
 });
 
 // ── flow-execute ─────────────────────────────────────────────────────

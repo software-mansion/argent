@@ -34,9 +34,17 @@ export interface StepReport {
   target?: string;
   /**
    * Nesting depth: absent/0 at top level, +1 inside each nesting step (`when:`
-   * guarded steps, `run:` fragment steps). Renderers indent by it.
+   * guarded steps, `run:` fragment steps, `repeat:` iteration markers and body
+   * steps). Renderers indent by it.
    */
   depth?: number;
+  /**
+   * The line marks block structure (a `repeat:` block's opening and iteration
+   * markers), not a step that ran — so it prints without consuming a step
+   * number, the way echo narration does, and the tool-server leaves it out of
+   * the counts this CLI reports.
+   */
+  structural?: boolean;
   /** Baseline key stem, on artifact-bearing snapshot steps. */
   snapshotKey?: string;
   /**
@@ -223,13 +231,42 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+/**
+ * Whether a line marks block structure rather than a step that ran. Such lines
+ * print but take no step number (pass `{ unnumbered }` to renderStepLine),
+ * keeping the CLI's sequence in step with the counts the tool-server sends.
+ * Untrusted wire data, so only a literal `true` counts.
+ */
+function isStructural(s: StepReport): boolean {
+  return s.structural === true;
+}
+
+/**
+ * A step line. `n` is the step's number, or `{ unnumbered: count }` for a
+ * structural marker, which keeps the glyph, indent and columns but leaves the
+ * number blank — the block/iteration shape IS what those lines convey.
+ * `count` is how many numbers have been issued, which sizes the blank.
+ */
+export function renderStepLine(
+  s: StepReport,
+  n: number | { unnumbered: number },
+  topFlow: string
+): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
   const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+  // A marker's blank must span the numbers around it or the label column breaks
+  // past 99. It leans FORWARD, to the next number to be issued, because the
+  // live streamer shares this function and cannot look ahead — so a block over
+  // narration alone at the 99/100 seam sits one column right of its body. The
+  // floor of 2 mirrors the padStart(2).
+  const num =
+    typeof n === "number"
+      ? String(n).padStart(2)
+      : " ".repeat(Math.max(2, String(n.unnumbered + 1).length));
+  return `  ${glyph} ${num} ${stepIndent(s.depth)}${label}${where}${reason}`;
 }
 
 /**
@@ -239,6 +276,26 @@ export function renderStepLine(s: StepReport, n: number, topFlow: string): strin
  */
 export function renderUnderStepLine(s: StepReport, n: number, text: string): string {
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
+}
+
+/**
+ * Everything that hangs under a step line: its warning, then its artifact
+ * paths. Shared by the buffered renderer and batch mode so the two can't
+ * disagree about the same report.
+ *
+ * `n` is the number column the line above printed, so the text sits under the
+ * label past step 99. A marker's under-lines are NOT dropped — a dropped one is
+ * a warning or artifact path with nowhere else to appear.
+ */
+function underStepLines(s: StepReport, n: number): string[] {
+  const lines: string[] = [];
+  if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+  if (s.artifacts && typeof s.artifacts === "object") {
+    for (const [k, v] of Object.entries(s.artifacts)) {
+      if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
+    }
+  }
+  return lines;
 }
 
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
@@ -261,18 +318,22 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
 /**
  * Artifact paths for the live renderer, which prints step lines before any
  * path exists (paths are materialized only from the final report). Labeled by
- * step number since they no longer sit under their step line.
+ * step number since they no longer sit under their step line; a structural
+ * marker owns no number, so it is labeled as the unnumbered line it is.
  */
 export function renderArtifactLines(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
+    // Numbering must match renderReport's. A marker's paths are still listed:
+    // this tail is the only place live mode ever prints one.
     if (s.kind === "echo") continue;
-    n++;
+    const structural = isStructural(s);
+    if (!structural) n++;
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
     const entries = Object.entries(s.artifacts).filter(([, v]) => typeof v === "string");
     if (entries.length === 0) continue;
-    lines.push(`  ${s.kind} (step ${n}):`);
+    lines.push(`  ${s.kind} (${structural ? "unnumbered marker" : `step ${n}`}):`);
     for (const [k, v] of entries) lines.push(`       ${k}: ${v}`);
   }
   return lines;
@@ -291,16 +352,18 @@ export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
+    // Same skips as renderReport, or the number printed here disagrees with
+    // the single-mode rerun it sends the operator to.
     if (s.kind === "echo") continue;
-    n++;
+    // Block structure takes no number, as in renderReport, but is not dropped:
+    // these lines are the whole of what batch mode prints, so a server that
+    // stamped a fail/error line structural would otherwise produce a FAIL
+    // summary with no failure line under it.
+    const structural = isStructural(s);
+    if (!structural) n++;
     if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
-    lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
-      }
-    }
+    lines.push(renderStepLine(s, structural ? { unnumbered: n } : n, report.flow));
+    lines.push(...underStepLines(s, structural ? n + 1 : n));
   }
   return lines;
 }
@@ -696,14 +759,17 @@ export function renderReport(report: FlowReport): string {
       if (line) lines.push(line);
       continue;
     }
+    // Block structure prints in the step column but takes no number, so the
+    // sequence still counts what the summary counts. Its under-lines hang under
+    // it all the same, padded to the blank its own line printed.
+    if (isStructural(s)) {
+      lines.push(renderStepLine(s, { unnumbered: n }, report.flow));
+      lines.push(...underStepLines(s, n + 1));
+      continue;
+    }
     n++;
     lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
-      }
-    }
+    lines.push(...underStepLines(s, n));
   }
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
@@ -1360,6 +1426,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) console.log(line);
+      return;
+    }
+    // Block structure: printed as it streams, but unnumbered, with the same
+    // blank width renderReport's would give it. Its warning prints too, padded
+    // to the blank the line above just printed; artifacts are not printed here
+    // for any step — no path exists yet — and reach the tail below.
+    if (isStructural(s)) {
+      console.log(renderStepLine(s, { unnumbered: liveIndex }, flowName));
+      if (s.warning) console.log(renderUnderStepLine(s, liveIndex + 1, `⚠ ${s.warning}`));
       return;
     }
     liveIndex++;

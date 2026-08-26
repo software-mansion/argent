@@ -33,12 +33,12 @@ The file has two top-level keys:
 
 A flow has one of two shapes:
 
-| Shape           | First non-echo step | Start state                                         |
-| --------------- | ------------------- | --------------------------------------------------- |
-| End-to-end flow | `launch:`           | Argent starts the app from scratch                  |
-| Fragment        | Any other step      | The app is already in the state that the flow needs |
+| Shape           | First non-echo step                                                | Start state                                         |
+| --------------- | ------------------------------------------------------------------ | --------------------------------------------------- |
+| End-to-end flow | `launch:`, direct or inside a leading `repeat:` block with a count | Argent starts the app from scratch                  |
+| Fragment        | Any other step                                                     | The app is already in the state that the flow needs |
 
-Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
+Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Argent also looks inside a leading [`repeat:` block](#repeated-steps) that has a count, because the first iteration runs the launch as step 1. Argent does not look inside a leading `repeat:` block that has an `until` bound, because the body can run zero times. Argent classifies that flow as a fragment. Put the named start state of an end-to-end flow in a leading `echo` step.
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
@@ -124,6 +124,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
 | `run`        | `<path>`                                                           | Run another flow file inline. See [Composition](#composition)                                     |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
+| `repeat`     | `<count>` or `{ until: <condition>, max }`, with `steps:`          | Run the nested steps to a count or until a condition holds. See [Repeated steps](#repeated-steps) |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
 
@@ -197,7 +198,7 @@ The identity selector must exist only on the destination. `idle` waits until the
 
 One outcome stops the run: the runner cannot read the UI tree at all. Argent marks the step as errored and skips the later steps.
 
-`idle` has no `assert` form and no `when` form.
+`idle` has no `assert` form, no `when` form and no `until` form.
 
 ## Optional steps
 
@@ -208,6 +209,32 @@ One outcome stops the run: the runner cannot read the UI tree at all. Argent mar
 ```
 
 The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega }`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+
+## Repeated steps
+
+```yaml
+- repeat: 3
+  steps:
+    - tap: { id: add-item }
+
+- repeat: { until: { hidden: { text: Clear all } }, max: 15 }
+  steps:
+    - tap: { text: Clear all }
+    - await: { hidden: { text: Clear all } }
+```
+
+A `repeat:` step takes exactly one bound and a `steps:` list:
+
+| Bound                            | Behavior                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `repeat: <count>`                | Run the steps `<count>` times. `repeat: { times: <count> }` is the same bound  |
+| `repeat: { until: <condition> }` | Run the steps until the condition holds. `max` bounds the number of iterations |
+
+`times` and `max` take a literal integer from 1 to 100. The default `max` is 10.
+
+An `until` guard takes one `exists`, `visible`, `hidden` or `text` condition. An `until` guard rejects `platform`, `idle` and `timeout`. Argent checks the guard before each iteration, also before the first. When the guard already holds, Argent runs the steps zero times and passes the step. When the guard does not hold after `max` iterations, Argent fails the step.
+
+A `repeat:` block is not a retry. A failure inside an iteration stops the flow. When a step fails sometimes, add an `await:` step for the state that the step needs.
 
 ## Composition
 
@@ -233,6 +260,8 @@ A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequi
 ```
 
 A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
+
+Argent refuses a `snapshot:` step inside a [`repeat:` block](#repeated-steps). A snapshot name maps to one baseline, and each iteration can show a different screen. Argent refuses the step in every `repeat:` block, also in a block with a bound of 1. Put the snapshot after the block.
 
 Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. Review each baseline before you commit it.
 

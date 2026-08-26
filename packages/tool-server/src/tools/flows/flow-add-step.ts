@@ -60,12 +60,13 @@ const zodSchema = z.object({
     .describe(
       'MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app") — a TOOL, not a flow directive. ' +
         'A flow-file directive name ("tap", "launch", "run", "type", "await", "assert", "pinch", ' +
-        '"echo", "wait", "long-press", "scroll-to", "snapshot", "when") is answered with guidance, ' +
-        "and nothing runs or is recorded: most name the tool that records the directive, while " +
-        '"wait", "long-press", "scroll-to", "snapshot" and "when" have no recording tool at all and ' +
-        "are answered with what to do instead. A recording tool (flow-add-step, flow-add-echo, " +
-        "flow-start-recording, flow-finish-recording) is refused the same way, each for its own " +
-        "reason — nesting one would erase this flow at replay, end the take, or write the step twice."
+        '"echo", "wait", "long-press", "scroll-to", "snapshot", "when", "repeat") is answered with ' +
+        "guidance, and nothing runs or is recorded: most name the tool that records the directive, " +
+        'while "wait", "long-press", "scroll-to", "snapshot", "when" and "repeat" have no recording ' +
+        "tool at all and are answered with what to do instead. A recording tool (flow-add-step, " +
+        "flow-add-echo, flow-start-recording, flow-finish-recording) is refused the same way, " +
+        "each for its own reason — nesting one would erase this flow at replay, end the take, or " +
+        "write the step twice."
     ),
   args: z
     .string()
@@ -794,6 +795,14 @@ export function directiveCommandHint(command: string): string | undefined {
       `them in the \`when:\` block by hand during polish and prove both branches with the replay.`
     );
   }
+  if (command === "repeat") {
+    return (
+      `"repeat" is a flow directive, not a tool, and no tool records one — it BOUNDS the steps ` +
+      `nested under it, so there is no action of its own to run. Record one pass of those steps, ` +
+      `then wrap them in the \`repeat:\` block by hand during polish and prove the bound with the ` +
+      `replay.`
+    );
+  }
   // `Object.hasOwn`, not a bare index: `"constructor"` would hit the prototype
   // and render a hint with `tool: undefined`.
   const hint = Object.hasOwn(DIRECTIVE_COMMAND_HINTS, command)
@@ -1126,7 +1135,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     },
     description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
 A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
-Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
+Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\`, \`when\` and \`repeat\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
 If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the

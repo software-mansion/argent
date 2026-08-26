@@ -206,6 +206,37 @@ describe("a flow that does touch a device still demands one", () => {
     await expectDemandsDevice("platform-guarded");
   });
 
+  it("when a repeat block wraps steps that would each run device-free", async () => {
+    // The expected answer, not a bug — and the sharpest case, a `times` block
+    // having no guard of its own. `stepRequiresDevice` gives ONE answer per
+    // step kind without recursing into the body, so wrapping narration in a
+    // repeat block is what makes the run demand a device, up front and before
+    // step 1. The quiet half of that cost is the suite below.
+    const body: FlowStep[] = [
+      { kind: "echo", message: "tick" },
+      { kind: "wait", ms: 1 },
+    ];
+    await writeFlow("looped-narration", [
+      { kind: "repeat", spec: { mode: "times", times: 2 }, steps: body },
+    ]);
+    await expectDemandsDevice("looped-narration");
+
+    // The developer/CI case is refused on a different question entirely — one
+    // the author of a device-free body has no answer to.
+    const { registry: several } = mockRegistry({
+      booted: [DEVICE, "11111111-1111-1111-1111-111111111111"],
+    });
+    await expect(runAuto(several, "looped-narration")).rejects.toThrow(/booted devices matched/);
+
+    // The cost, stated: those same two steps unwrapped run with nothing booted
+    // and are attributed to no device. Only the wrapper changed.
+    await writeFlow("unwrapped", body);
+    const { registry } = mockRegistry({ booted: [] });
+    const result = asRun(await runAuto(registry, "unwrapped"));
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
+  });
+
   it("when it launches an app", async () => {
     await writeFlow("launcher", [{ kind: "launch", app: { ios: "com.example.app" } }]);
     await expectDemandsDevice("launcher");
@@ -239,6 +270,32 @@ describe("a flow that does touch a device still demands one", () => {
   });
 });
 
+describe("a repeat block over a device-free body, with one device booted", () => {
+  const body: FlowStep[] = [
+    { kind: "echo", message: "tick" },
+    { kind: "wait", ms: 1 },
+  ];
+
+  it("attaches to that device and reports it, where the same steps unwrapped report none", async () => {
+    // The quiet half of the blanket device answer: exactly one booted device
+    // resolves, so there is no refusal to notice and the run just carries a
+    // device it never acts on. The wrapper is the only difference between the
+    // two flows here, so it is what makes the report depend on what else is
+    // booted.
+    await writeFlow("looped-narration", [
+      { kind: "repeat", spec: { mode: "times", times: 2 }, steps: body },
+    ]);
+    await writeFlow("unwrapped", body);
+    const { registry } = mockRegistry({ booted: [DEVICE] });
+
+    const wrapped = asRun(await runAuto(registry, "looped-narration"));
+    expect(wrapped.ok).toBe(true);
+    expect(wrapped.device).toBe(DEVICE);
+
+    expect(asRun(await runAuto(registry, "unwrapped")).device).toBe("");
+  });
+});
+
 describe("stepRequiresDevice", () => {
   it("classifies every step kind", () => {
     // Keyed on the union, so a new step kind fails to compile until it is
@@ -249,6 +306,7 @@ describe("stepRequiresDevice", () => {
       "tool": true,
       "run": true,
       "when": true,
+      "repeat": true,
       "launch": true,
       "tap": true,
       "long-press": true,
@@ -267,6 +325,7 @@ describe("stepRequiresDevice", () => {
       "tool": { kind: "tool", name: "tap", args: {} },
       "run": { kind: "run", flow: "other" },
       "when": { kind: "when", condition: { kind: "platform", platform: "ios" }, steps: [] },
+      "repeat": { kind: "repeat", spec: { mode: "times", times: 1 }, steps: [] },
       "launch": { kind: "launch", app: { ios: "com.example" } },
       "tap": { kind: "tap", x: 0, y: 0 },
       "long-press": { kind: "long-press", x: 0, y: 0 },
@@ -332,8 +391,10 @@ describe("stepRequiresDevice", () => {
 });
 
 describe("flowRequiresDevice", () => {
-  // These pin the function's ANSWERS. With `when` the only block kind, its
-  // header decides every case - no FlowStep value can exercise the child walk.
+  // These pin the function's ANSWERS. With every block kind classifying
+  // device-requiring (pinned per kind in the stepRequiresDevice suite above), a
+  // block header decides every case - no FlowStep value can exercise the child
+  // walk, so `when` stands in for all of them here.
   const whenOver = (steps: FlowStep[]): FlowStep => ({
     kind: "when",
     condition: { kind: "platform", platform: "ios" },
@@ -395,8 +456,8 @@ describe("flowScopesDevice", () => {
   // These pin the function's ANSWERS. The child walk shows in them - unlike
   // `flowRequiresDevice`, a `when` header scopes nothing itself - but only
   // under a direct call: a run reaches this question only once
-  // `flowRequiresDevice` said no, and `when`, the only block kind, answers that
-  // one yes for any flow holding a block.
+  // `flowRequiresDevice` said no, and every block kind answers that one yes for
+  // any flow holding a block.
   const whenOver = (steps: FlowStep[]): FlowStep => ({
     kind: "when",
     condition: { kind: "platform", platform: "ios" },

@@ -206,10 +206,12 @@ export type FlowStepResult = {
   target?: string;
   /**
    * Nesting depth: absent/0 at top level, +1 inside each nesting step (`when:`
-   * guarded steps, `run:` fragment steps). Pre-depth tool-servers send none and
-   * the report renders flat.
+   * guarded steps, `run:` fragment steps, `repeat:` iteration markers and body
+   * steps). Pre-depth tool-servers send none and the report renders flat.
    */
   depth?: number;
+  // `structural` is deliberately not read here: this renderer numbers raw
+  // report entries, the treatment `echo` already gets.
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). Untrusted
    * wire data: a non-handle value renders as text or is skipped.

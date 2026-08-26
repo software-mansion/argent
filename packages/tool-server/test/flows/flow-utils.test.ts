@@ -245,8 +245,8 @@ describe("parseFlow", () => {
     ["a primitive", "steps:\n  - when: { visible: Cart }\n    steps: [42]\n"],
     ["a null", "steps:\n  - when: { visible: Cart }\n    steps: [~]\n"],
   ])("names the step shape when %s sits in a block's steps list", (_shape, content) => {
-    // `when:` is only the vehicle — it is today's sole block directive, and the
-    // guard it reaches is parseBlockSteps', shared by every block directive.
+    // `when:` is only the vehicle: the guard it reaches is parseBlockSteps',
+    // shared by every block directive.
     expect(entryRejectionMessage(content)).toContain(
       "Unrecognized flow entry (step must be an object)"
     );
@@ -633,6 +633,10 @@ describe("parseFlow", () => {
         "await.timeout needs a positive number of milliseconds"
       );
     }
+    // The echo keeps the value the author wrote, not JSON.stringify's `null`.
+    expect(() => parseFlow("steps:\n  - await: { visible: Account, timeout: .inf }\n")).toThrow(
+      /: \{"await":\{"visible":"Account","timeout":"Infinity"\}\}$/s
+    );
   });
 
   it("rejects a timeout on an assert step (an assert is an immediate check)", async () => {
@@ -831,6 +835,19 @@ describe("parseFlow", () => {
       );
     });
 
+    it("echoes the author's await/assert step in the error", () => {
+      // No caller passes an entry for await/assert, so the echoed step comes
+      // from parseWaitFields' own `entry` default (`{ [kind]: raw }`) — and
+      // that echo is the only part of the message identifying WHICH step is
+      // wrong, so it is pinned here alongside the label, for both directives.
+      expect(() => parseFlow("steps:\n  - await: { visible: Home, timeut: 5 }\n")).toThrow(
+        /await has unknown key `timeut`.*: \{"await":\{"visible":"Home","timeut":5\}\}$/s
+      );
+      expect(() => parseFlow("steps:\n  - assert: { text: { in: A, contians: x } }\n")).toThrow(
+        /assert\.text has unknown key `contians`.*: \{"assert":\{"text":\{"in":"A","contians":"x"\}\}\}$/s
+      );
+    });
+
     it("rejects a misspelled snapshot.maxMismatch key with a suggestion", async () => {
       expect(() => parseFlow("steps:\n  - snapshot: { name: home, maxMissmatch: 1.5 }\n")).toThrow(
         /snapshot has unknown key `maxMissmatch` \(did you mean `maxMismatch`\?\)/
@@ -950,6 +967,16 @@ const BLOCK_DIRECTIVE_FLOWS: Record<
       { kind: "tap", selector: { text: "Buy", loose: true } },
     ],
   },
+  repeat: {
+    yaml:
+      ["steps:", "  - repeat: 2", "    steps:", "      - echo: Again", "      - tap: Next"].join(
+        "\n"
+      ) + "\n",
+    children: [
+      { kind: "echo", message: "Again" },
+      { kind: "tap", selector: { text: "Next", loose: true } },
+    ],
+  },
 };
 
 // Registering a kind in BLOCK_DIRECTIVE_KEYS exempts it from fromYamlStep's
@@ -968,6 +995,13 @@ const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
         "\n"
       ) + "\n",
     message: "a when step takes exactly { when: <condition>, steps: [...] }",
+  },
+  repeat: {
+    yaml:
+      ["steps:", "  - repeat: 2", "    steps:", "      - echo: hi", "    bogus: 1"].join("\n") +
+      "\n",
+    message:
+      "a repeat step takes exactly { repeat: <count | { times } | { until, max? }>, steps: [...] }",
   },
 };
 
