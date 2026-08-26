@@ -1302,13 +1302,20 @@ async function runSwipe(
   // moved. `from` leads the pair so a swipe where NEITHER end ever appears is
   // blamed on the anchor, the element the finger needs first.
   const ends = [step.from, step.to] as const;
-  const frames = await waitForFrames(
-    env,
-    ends.map((end) => (end && "selector" in end ? end.selector : undefined))
-  );
+  const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
+  const frames = await waitForFrames(env, selectors);
   if (frames === "aborted") return ABORTED_OUTCOME;
   if (!Array.isArray(frames)) return { ok: false, reason: offscreenHint(frames.unresolved) };
   const [fromFrame, toFrame] = frames;
+
+  // A selector end already resolved against a settled tree; with neither end
+  // carrying one, `waitForFrames` read no tree at all, so this is the only thing
+  // between the touch-down and whatever motion earlier steps left behind.
+  let settle: GestureSettle = {};
+  if (selectors.every((selector) => selector === undefined)) {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
+  }
 
   let toPoint: { x: number; y: number } | undefined;
   if (step.to) {
@@ -1503,7 +1510,7 @@ async function runSwipe(
   // settleTree returns undefined only on abort, which must read as the uniform
   // aborted skip, never a pass.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  return { ok: true };
+  return { ok: true, ...warned(settle) };
 }
 
 /**

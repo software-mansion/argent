@@ -10,7 +10,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // lands the abort deterministically inside a directive's auto-wait / focus-wait
 // poll (no timer races).
 let currentFetch: () => DescribeTreeData;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentFetch()),
 }));
 

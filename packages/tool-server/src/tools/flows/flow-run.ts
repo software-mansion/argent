@@ -195,10 +195,10 @@ export interface StepReport {
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
    * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
    * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
-   * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
-   * regardless, and the warning is the only thing separating it from one that
-   * waited.
+   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * it is dispatched regardless, and the warning is the only thing separating it
+   * from one that waited.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1081,7 +1081,7 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only).
-A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
+A selector-less gesture — a coordinate \`tap\`/\`long-press\`/\`swipe\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
 no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
 settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
 own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually

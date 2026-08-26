@@ -9,7 +9,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // full-hierarchy source and hard-fail rather than degrade to the AX tree, so
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
@@ -1465,11 +1466,11 @@ describe("swipe: post-dispatch settle", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
-    // Neither end is a selector, so nothing else in the step reads the tree:
-    // these reads can only be the post-dispatch settle, and they land AFTER the
-    // gesture. Without them a following point-target step would touch down
-    // mid-deceleration and be swallowed while still reporting pass.
-    expect(events).toEqual(["gesture-swipe", "tree", "tree"]);
+    // Neither end is a selector, so every read here is a settle: the pair the
+    // gesture waits for, then the pair AFTER it. Without the trailing pair a
+    // following point-target step would touch down mid-deceleration and be
+    // swallowed while still reporting pass.
+    expect(events).toEqual(["tree", "tree", "gesture-swipe", "tree", "tree"]);
   });
 
   it("waits out the animation after a settle: true swipe too", async () => {
@@ -1483,7 +1484,7 @@ describe("swipe: post-dispatch settle", () => {
     });
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
-    expect(events).toEqual(["gesture-swipe", "tree", "tree"]);
+    expect(events).toEqual(["tree", "tree", "gesture-swipe", "tree", "tree"]);
   });
 
   it("passes when the tree source dies after the gesture was delivered", async () => {
@@ -1501,9 +1502,8 @@ describe("swipe: post-dispatch settle", () => {
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
     expect(result.steps[0].reason).toBeUndefined();
-    expect(events[0]).toBe("gesture-swipe");
-    expect(events.slice(1).every((e) => e === "tree")).toBe(true);
-    expect(events.length).toBeGreaterThan(1);
+    expect(events.filter((e) => e !== "tree")).toEqual(["gesture-swipe"]);
+    expect(events.indexOf("gesture-swipe")).toBeLessThan(events.length - 1);
   }, 15000);
 
   it("reports a swipe cancelled during its post-dispatch settle as the aborted skip", async () => {
@@ -1523,7 +1523,54 @@ describe("swipe: post-dispatch settle", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(result.ok).toBe(false);
-    // The settle bails on the abort before reading anything.
-    expect(events).toEqual(["gesture-swipe"]);
+    // The settle that follows the gesture bails on the abort before reading
+    // anything; the pair ahead of it is the pre-dispatch settle.
+    expect(events).toEqual(["tree", "tree", "gesture-swipe"]);
   });
+});
+
+describe("swipe: pre-dispatch settle", () => {
+  it("settles before a swipe with no selector end touches down", async () => {
+    const { result, events } = await runLoggedSwipe({ kind: "swipe", direction: "left" });
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
+    // Nothing waits out motion a `launch:` or a raw `tool: gesture-swipe` left
+    // running, so without these two reads the touch-down lands mid-fling, is
+    // consumed arresting it, and the step still passes.
+    expect(events.slice(0, events.indexOf("gesture-swipe"))).toEqual(["tree", "tree"]);
+  });
+
+  it("does not settle again when an end resolved against a settled tree", async () => {
+    const { result, events } = await runLoggedSwipe(
+      { kind: "swipe", from: { x: 0.5, y: 0.85 }, to: { selector: { text: "Archive" } } },
+      {
+        tree: () =>
+          screen([n({ label: "Archive", frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 } })]),
+      }
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
+    // The endpoint's own settle, and only it: a second window here would double
+    // the step's cost for a screen already proved still.
+    expect(events.slice(0, events.indexOf("gesture-swipe"))).toEqual(["tree", "tree"]);
+  });
+
+  it("carries the same unsettled-gesture warning a coordinate tap reports", async () => {
+    currentTree = () => {
+      throw new Error("native devtools disconnected");
+    };
+    await writeFlow("blind", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.5, y: 0.5 },
+        { kind: "swipe", direction: "left" },
+      ],
+    });
+
+    const result = await run("blind");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "swipe:pass"]);
+    expect(result.steps[1].warning).toContain("dispatched without settling the screen first");
+    expect(result.steps[1].warning).toBe(result.steps[0].warning);
+  }, 15000);
 });
