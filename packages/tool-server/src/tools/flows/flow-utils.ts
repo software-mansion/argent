@@ -1308,7 +1308,10 @@ function badEntry(raw: unknown, detail: string): never {
   // throw and mask the validation message.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw);
+    // JSON.stringify returns the value `undefined` (not a string) for an
+    // `undefined` entry, so reading `.length` below would throw a raw
+    // TypeError and mask the classified failure.
+    rendered = JSON.stringify(raw) ?? "undefined";
   } catch {
     rendered = "[cyclic entry]";
   }
