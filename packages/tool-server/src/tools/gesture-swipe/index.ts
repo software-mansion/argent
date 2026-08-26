@@ -75,7 +75,7 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        `Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe). Needs durationMs >= ${SETTLE_MIN_DURATION_MS} and is rejected below it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards).`
+        `Momentum-free swipe at the default durationMs: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe). Needs durationMs >= ${SETTLE_MIN_DURATION_MS} and is rejected below it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards). At ${SETTLE_MIN_DURATION_MS} itself the swipe lands short of where the finger stopped, and 2 of 47 runs still flung backwards.`
       ),
   })
   .refine((p) => !p.settle || (p.durationMs ?? DEFAULT_DURATION_MS) >= SETTLE_MIN_DURATION_MS, {
@@ -113,7 +113,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (little to no fling), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass settle:true for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
