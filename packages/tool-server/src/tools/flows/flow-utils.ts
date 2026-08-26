@@ -965,6 +965,17 @@ type YamlFlowFile = {
  * on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
+  // `parseSelector` accepts a closed key set, so a hand-built selector carrying
+  // anything else serializes into a flow file the parser refuses - or, on the
+  // bare-string path below, loses the key in silence.
+  const unknown = Object.keys(sel).filter((key) => !WRITABLE_SELECTOR_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Cannot serialize flow selector: ${describeUnknownKeys(unknown, WRITABLE_SELECTOR_KEYS)} - ` +
+        `allowed keys: ${WRITABLE_SELECTOR_KEYS.join(", ")}.`
+    );
+  }
+
   // YAML has a single `text` slot — a literal string or a `{ matches }` map —
   // so emitting one would drop the other and change the selector's AND
   // semantics. Reject this internal-only combination at the boundary instead of
@@ -1721,6 +1732,22 @@ const SELECTOR_KEYS: readonly string[] = [
   "any",
   ...SELECTOR_RELATIONS,
 ];
+
+// Every field of {@link FlowSelector}, kept exact by `Record`, which rejects
+// both a missing field and an extra key. Deliberately not SELECTOR_KEYS: `id`
+// is the YAML-only spelling of `identifier`, so an in-memory selector carrying
+// it is junk the match engine ignores, not an identifier constraint.
+const WRITABLE_SELECTOR_KEYS = Object.keys({
+  text: true,
+  textMatches: true,
+  identifier: true,
+  role: true,
+  any: true,
+  loose: true,
+  within: true,
+  after: true,
+  next: true,
+} satisfies Record<keyof FlowSelector, true>);
 
 /**
  * Total scopes one selector may carry, counted across its whole relation TREE

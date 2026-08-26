@@ -143,6 +143,20 @@ describe("swipe: parse/serialize", () => {
     }
   );
 
+  it.each([
+    ["from", { kind: "swipe", from: { selector: { text: "Card", junk: 1 } }, direction: "left" }],
+    ["to", { kind: "swipe", to: { selector: { text: "Archive", junk: 1 } } }],
+  ])(
+    "rejects a programmatic swipe %s selector carrying a key the parser refuses",
+    (_description, step) => {
+      // The selector branch of a gesture target, which the { x, y } key check
+      // never sees.
+      expect(() => serializeFlow({ executionPrerequisite: "", steps: [step as never] })).toThrow(
+        /cannot serialize flow selector: unknown key `junk` - allowed keys: text, textMatches, identifier, role, any, loose, within, after, next/i
+      );
+    }
+  );
+
   it("serializes a selector from/to untouched by the coordinate key check", () => {
     // A selector target is a different shape and must not be dragged through
     // the { x, y } key set — the check applies to the coordinate branch only.
