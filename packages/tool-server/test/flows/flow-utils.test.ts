@@ -252,6 +252,17 @@ describe("parseFlow", () => {
     );
   });
 
+  it.each([
+    ["await with an omitted `in:`", "steps:\n  - await: { text: { contains: Welcome } }\n"],
+    ["type with an omitted `into:`", "steps:\n  - type: { text: hello }\n"],
+  ])("classifies %s instead of crashing on the absent key", (_case, content) => {
+    // The absent selector key reaches badEntry with `undefined`, which
+    // JSON.stringify renders as the value undefined rather than a string;
+    // reading `.length` off it once threw a raw TypeError that carried no
+    // failure signal and stopped the whole batch.
+    expect(entryRejectionMessage(content)).toContain("Unrecognized flow entry");
+  });
+
   it("sugars a bare-string selector into a loose { text } for tap", async () => {
     const flow = parseFlow("steps:\n  - tap: Settings\n");
     // Bare string ⇒ loose: resolves identifier-first, then falls back to text.
