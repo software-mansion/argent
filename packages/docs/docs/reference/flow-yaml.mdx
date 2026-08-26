@@ -114,7 +114,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `launch`     | `<app id>` or `{ native, ios, android, vega, chromium }`           | Terminate and start the app, then wait until the app is ready                                     |
 | `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
-| `swipe`      | `<direction>` or `{ from, direction, to, by, settle, duration }`   | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
+| `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
@@ -153,7 +153,7 @@ An Android app that starts from a non-launcher activity has no `launch:` form. R
 - swipe: left
 - swipe: { from: { id: story-card }, direction: left }
 - swipe: { by: { y: -0.4 }, duration: 600 }
-- swipe: { from: { id: drag-handle }, to: { id: drop-zone }, settle: true }
+- swipe: { from: { id: drag-handle }, to: { id: drop-zone }, momentum: false }
 ```
 
 A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
@@ -164,7 +164,7 @@ A swipe moves one finger across the screen. `direction` is the travel of the fin
 | `direction` | `up`, `down`, `left` or `right`. Argent moves the finger a preset distance. With `from`, Argent clamps the travel on screen                |
 | `to`        | The end point. A selector or `{ x, y }`                                                                                                    |
 | `by`        | A signed delta `{ x, y }` in screen fractions. Argent delivers the exact delta. With `from`, a delta that leaves the screen fails the step |
-| `settle`    | `true` removes the momentum at the default `duration`                                                                                      |
+| `momentum`  | `false` removes the fling at the default `duration`. Default `true`                                                                        |
 | `duration`  | The travel time in milliseconds. Default 300, minimum 150, maximum 10000                                                                   |
 
 A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
