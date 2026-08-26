@@ -1,19 +1,13 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator (NOT physical iPhones), Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
 ---
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
+All interaction tools below accept a `udid` parameter and auto-dispatch on its shape, so you use the same tool names on every platform. A known prefix wins first — `chromium-cdp-` → Chromium (CDP) app, `remote:` → remote iOS simulator — otherwise a bare UUID → local iOS simulator and anything else → Android adb serial.
 
 **Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
-
-> **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
-
-> **Physical iPhones (an iOS entry with kind `"device"`) follow a different contract:** automation is app-scoped and only a subset of these tools exists there. Use the `argent-ios-device-interact` skill instead.
-
-For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 
 ## 1. Before You Start
 
