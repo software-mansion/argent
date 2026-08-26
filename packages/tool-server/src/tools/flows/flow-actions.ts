@@ -1040,13 +1040,20 @@ async function runLongPress(
   const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   if (env.device.platform === "chromium") {
-    await invokeOnDevice(env, "gesture-drag", {
-      fromX: point.x,
-      fromY: point.y,
-      toX: point.x,
-      toY: point.y,
-      durationMs: duration,
-    });
+    try {
+      await invokeOnDevice(env, "gesture-drag", {
+        fromX: point.x,
+        fromY: point.y,
+        toX: point.x,
+        toY: point.y,
+        durationMs: duration,
+      });
+    } catch (err) {
+      // gesture-drag rejects when cancelled mid-hold; per ABORTED_OUTCOME that
+      // must read as an aborted skip, never a step failure with the tool's message.
+      if (env.signal?.aborted) return ABORTED_OUTCOME;
+      throw err;
+    }
   } else {
     await invokeOnDevice(env, "gesture-custom", {
       events: [

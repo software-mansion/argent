@@ -51,9 +51,14 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-async function run(name: string, registry: Registry, signal: AbortSignal): Promise<FlowRunResult> {
+async function run(
+  name: string,
+  registry: Registry,
+  signal: AbortSignal,
+  device = DEVICE
+): Promise<FlowRunResult> {
   return asRun(
-    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device: DEVICE }, {
+    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device }, {
       signal,
     } as never)
   );
@@ -213,15 +218,19 @@ describe("run cancellation mid-directive", () => {
   // back onto the uniform abort skip - otherwise a cancelled run reports the
   // tool's own message as a step error and the whole run reads as broken rather
   // than cancelled.
-  function abortingSwipeRegistry(calls: string[], controller: AbortController): Registry {
+  function abortingGestureRegistry(
+    calls: string[],
+    controller: AbortController,
+    gestureTool = "gesture-swipe"
+  ): Registry {
     return {
       invokeTool: vi.fn(async (id: string) => {
         calls.push(id);
         if (id === "list-devices") return { devices: [] };
-        if (id === "gesture-swipe") {
+        if (id === gestureTool) {
           controller.abort();
           const err = new Error(
-            "gesture-swipe aborted - cancelled mid-gesture after 3 of 301 frames"
+            `${gestureTool} aborted - cancelled mid-gesture after 3 of 301 frames`
           );
           err.name = "AbortError";
           throw err;
@@ -247,7 +256,7 @@ describe("run cancellation mid-directive", () => {
 
     const result = await run(
       "cancelled-mid-swipe",
-      abortingSwipeRegistry(calls, controller),
+      abortingGestureRegistry(calls, controller),
       controller.signal
     );
 
@@ -275,7 +284,7 @@ describe("run cancellation mid-directive", () => {
 
     const result = await run(
       "cancelled-mid-increment",
-      abortingSwipeRegistry(calls, controller),
+      abortingGestureRegistry(calls, controller),
       controller.signal
     );
 
@@ -306,7 +315,7 @@ describe("run cancellation mid-directive", () => {
 
     const result = await run(
       "cancelled-raw-swipe",
-      abortingSwipeRegistry(calls, controller),
+      abortingGestureRegistry(calls, controller),
       controller.signal
     );
 
@@ -315,6 +324,34 @@ describe("run cancellation mid-directive", () => {
     expect(result.steps[0].reason).toBe("run aborted");
     // Not the tool's own "aborted - cancelled mid-gesture after N of M frames".
     expect(result.steps[0].reason).not.toMatch(/frames/);
+    expect(result.aborted).toBe(true);
+  });
+
+  it("reports a chromium long-press cancelled inside the hold as a skip, not the tool's error", async () => {
+    const controller = new AbortController();
+    // On chromium a long-press IS a gesture-drag with from == to, so the tool's
+    // per-frame abort reaches this dispatch site as well.
+    currentFetch = () => ({
+      tree: screen([n({ label: "Row 3", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-mid-press", {
+      executionPrerequisite: "",
+      steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true } }],
+    });
+
+    const result = await run(
+      "cancelled-mid-press",
+      abortingGestureRegistry(calls, controller, "gesture-drag"),
+      controller.signal,
+      "chromium-cdp-9222"
+    );
+
+    expect(calls).toContain("gesture-drag");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["long-press:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
     expect(result.aborted).toBe(true);
   });
 
