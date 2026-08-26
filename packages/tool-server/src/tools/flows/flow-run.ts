@@ -1044,9 +1044,8 @@ export function createRunFlowTool(
     description: `Run a saved flow — a YAML script of UI steps — end to end against a booted device. Use when
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author a flow use flow-start-recording. Pass
-exactly one of name (under project_root) or flow_path.
-Returns a per-step report: the first failure stops the run and the rest report as skipped; a flow with an unacknowledged executionPrerequisite returns a
-notice instead of running; and a step that passes carrying a \`warning\` was sent, not verified.`,
+exactly one flow source: name (under project_root) or flow_path.
+Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
     zodSchema,
     fileInputs,
