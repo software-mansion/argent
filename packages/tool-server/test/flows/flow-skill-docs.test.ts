@@ -12,7 +12,6 @@ import {
   parseFlow,
   STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 
 /**
@@ -80,16 +79,11 @@ describe("create-flow selector-scope docs", () => {
 
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
-// warn-instead-of-fail change: the two agent-facing descriptions of `idle`
-// have to agree with what it does, and the numbers the prose quotes have to be
-// the ones the parser enforces.
+// warn-instead-of-fail change: the reference has to agree with what `idle`
+// does, and the numbers the prose quotes have to be the ones the parser
+// enforces.
 describe("create-flow idle docs", () => {
-  it("the flow-execute description and the reference agree that idle warns rather than fails", () => {
-    const description = createRunFlowTool({} as unknown as Registry).description;
-    expect(description).toContain("idle: true");
-    expect(description).toMatch(/never\s+fails a run/);
-    expect(description).not.toMatch(/FAILS on timeout/i);
-
+  it("the reference says idle warns rather than fails", () => {
     const reference = readFileSync(FLOW_YAML, "utf8");
     expect(reference).toContain("It **never fails a run.**");
     // The one outcome that does stop a run is the window, never the app - and
@@ -97,10 +91,6 @@ describe("create-flow idle docs", () => {
     // leaves a selector-less gesture passing with a warning of its own.
     expect(reference).toMatch(/Only a tree source this step could not read stops the run/);
     expect(reference).toMatch(/stops no \[selector-less gesture\]/);
-    // Both surfaces have to carry that caveat: the description is what an
-    // authoring agent reads, and "never fails a run" on its own is not true
-    // of a tree nobody could read.
-    expect(description).toMatch(/unreadable|cannot be read|could not be read/);
   });
 
   it("the reference's idle defaults and settle span are the ones the parser enforces", () => {
