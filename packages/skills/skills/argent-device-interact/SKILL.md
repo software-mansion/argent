@@ -7,11 +7,7 @@ description: Interact with an iOS simulator, Android emulator, or Chromium (CDP)
 
 All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
 
-**Chromium (CDP) app** = any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app (boot it with `boot-device` + `electronAppPath`), or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`. The latter is auto-discovered by `list-devices` on port `9222` plus anything in `ARGENT_CHROMIUM_PORTS`. The same describe/tap/swipe/keyboard/screenshot surface drives all of them.
-
-**Multi-tab / windows (Chromium only):** a Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to `list` them (stable ids `t1`, `t2`, …, optional labels), open a `new` one, `select` which is active, or `close` one. Every other tool (`describe`, `gesture-tap`, `screenshot`, `debugger-evaluate`, `open-url`, …) acts on the **active** tab, so `chromium-tabs action=select` before driving a different tab. Note: a cross-process navigation (some redirects) can swap a tab's underlying CDP target — re-run `chromium-tabs action=list` to pick it up under a fresh id.
-
-**Cookies & storage (Chromium only):** `chromium-cookies` reads/writes cookies via the Network domain (so HttpOnly cookies are visible): `action=get` (optionally scoped by `url`), `set` (`name`, `value`, + `url`/`domain`, optional `secure`/`httpOnly`/`sameSite`/`expires`), `delete` (`name`), `clear` (all). `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`. Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
+**Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
 
 > **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
 
@@ -393,6 +389,10 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
+
+### Chromium
+
+See `references/chromium.md` — tabs, cookies/storage, `gesture-scroll` / `gesture-drag`, and the `paste` restriction.
 
 ### iOS
 
