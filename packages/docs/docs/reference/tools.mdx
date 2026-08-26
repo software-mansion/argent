@@ -113,14 +113,14 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Flows
 
-| Tool                     | Description                                                       |
-| ------------------------ | ----------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording a new flow, resetting `.argent/flows/<name>.yaml` |
-| `flow-add-step`          | Execute a tool call and record it as a step in the open recording |
-| `flow-add-echo`          | Record an echo step that prints a message during replay           |
-| `flow-finish-recording`  | Finish the recording and write the flow to disk                   |
-| `flow-execute`           | Run a saved flow                                                  |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it           |
+| Tool                     | Description                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `flow-start-recording`   | Start recording a new flow, resetting `.argent/flows/<name>.yaml`. A `requires:` block survives the reset when the tool-server can read and parse the existing file |
+| `flow-add-step`          | Execute a tool call and record it as a step in the open recording                                                                                                   |
+| `flow-add-echo`          | Record an echo step that prints a message during replay                                                                                                             |
+| `flow-finish-recording`  | Finish the recording and write the flow to disk                                                                                                                     |
+| `flow-execute`           | Run a saved flow                                                                                                                                                    |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                                                                                                             |
 
 ## Design variants
 

@@ -236,6 +236,14 @@ export const FAILURE_CODES = {
   FLOW_ENTRY_UNRECOGNIZED: "FLOW_ENTRY_UNRECOGNIZED",
   FLOW_E2E_HAS_PREREQUISITE: "FLOW_E2E_HAS_PREREQUISITE",
   FLOW_DEVICE_RESOLUTION: "FLOW_DEVICE_RESOLUTION",
+  // A `requires:` block no target could ever satisfy — a broken file.
+  FLOW_REQUIRES_UNSATISFIABLE: "FLOW_REQUIRES_UNSATISFIABLE",
+  // A fine file on the wrong target. Distinct from the above because a
+  // directory run turns exactly this code into a per-flow skip.
+  FLOW_REQUIREMENTS_UNMET: "FLOW_REQUIREMENTS_UNMET",
+  // A requirement that could not be checked at all — distinct from the above
+  // because "we never found out" must not be silently skipped by a directory run.
+  FLOW_REQUIREMENTS_UNVERIFIABLE: "FLOW_REQUIREMENTS_UNVERIFIABLE",
   PROFILER_QUERY_MODE_INVALID: "PROFILER_QUERY_MODE_INVALID",
   PROFILER_QUERY_REQUIRED_PARAM_MISSING: "PROFILER_QUERY_REQUIRED_PARAM_MISSING",
   PROFILER_DATA_NOT_LOADED: "PROFILER_DATA_NOT_LOADED",

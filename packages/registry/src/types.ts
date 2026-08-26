@@ -246,6 +246,22 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   /** Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
+   * Declares a tool that can drive a device its input schema never names —
+   * today only `flow-add-step`, whose target rides inside the opaque `args`
+   * JSON it forwards to another tool. The flow runner decides whether a run
+   * needs a device from the declared arg names (`udid`/`device_id`/`device`),
+   * so such a tool reads device-free without this: the run resolves nothing and
+   * the flow's `requires` block is never judged (#751). Marked, the runner
+   * reads the step's own args and judges the recorded command by those same
+   * names, taking a step whose args it cannot read to need a device.
+   *
+   * Not for a tool that merely NARROWS to devices —
+   * `stop-all-simulator-servers` omitting its `devices` scope is a complete
+   * machine-wide sweep, and marking it would make a cleanup flow demand a
+   * device it has no use for.
+   */
+  opaqueDeviceTarget?: boolean;
+  /**
    * Host binaries needed by *every* invocation, probed by the HTTP dispatcher
    * before `execute` runs (424 on a miss). When the requirement differs per
    * branch (iOS → `xcrun`, Android → `adb`), declare it on each `PlatformImpl`

@@ -480,6 +480,7 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
     expect(res.body.data).toEqual({
       flow: "gate",
       executionPrerequisite: "SHARED-COPY: DETAIL screen",
+      requires: "",
     });
   });
 
@@ -536,6 +537,7 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
     expect(res.body.data).toEqual({
       flow: "saved-only",
       executionPrerequisite: "App on home screen",
+      requires: "",
     });
   });
 });

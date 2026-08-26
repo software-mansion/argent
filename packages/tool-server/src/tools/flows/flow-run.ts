@@ -20,6 +20,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  assertComposedLaunchCoverage,
   assertSafeFlowName,
   assertValidProjectRoot,
   blockSteps,
@@ -27,12 +28,14 @@ import {
   classifyOnDiskSpelling,
   describeSelector,
   describeTextExpectation,
+  foldLeadingRequires,
   getFlowPath,
   isBlockStep,
   parseFlow,
   runTargetName,
   type BlockStep,
   type FlowFile,
+  type FlowRequires,
   type FlowSelector,
   type FlowStep,
   type Launch,
@@ -47,6 +50,8 @@ import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
+  assertDeviceMeetsRequires,
+  assertPlatformMeetsRequires,
   bindDeviceArgs,
   flowRequiresDevice,
   flowScopesDevice,
@@ -80,7 +85,7 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { classifyDeviceShape, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -558,9 +563,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
+    // Name the key the author can add: an `ios-remote` launch entry is parse-rejected.
+    const launchKey = device.platform === "ios-remote" ? "ios" : device.platform;
     return {
       ok: false,
-      reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+      reason: `no app id declared for platform "${launchKey}" — add a launch entry for it`,
     };
   }
   // The previous app is terminating and the new one has not started, so a
@@ -1084,7 +1091,19 @@ A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the c
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
-device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
+device's current state. A top-level \`requires:\` block (\`platform: [ios, android]\`, \`runtimeKind: tv|mobile\`,
+ANDed) names the targets the flow supports; no block means it runs anywhere. Requirements narrow device
+auto-detection, so an ios-only flow picks the booted simulator rather than failing as ambiguous, and a run
+pointed at a target they exclude fails with FLOW_REQUIREMENTS_UNMET (the CLI turns that into a skip when
+running a whole directory). Skipping needs the check to have ANSWERED: a requirement that could not be
+verified — the device's runtime kind was unreadable — raises FLOW_REQUIREMENTS_UNVERIFIABLE instead, which
+a directory run fails the flow on rather than skipping, so a broken probe cannot pose as a filter.
+A \`run:\` fragment whose requirements the run device does not meet ERRORS the
+step — a composed fragment silently not running would leave a green report for a scenario that half
+happened. Exception: fragments the run's leading \`run:\` chain enters before its first executable step
+are certain to run, so their blocks fold into the root's (platform lists intersect, runtimeKinds must
+agree) and narrow/skip exactly as if declared there; a fold no target could satisfy fails with
+FLOW_REQUIRES_UNSATISFIABLE. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
 than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
@@ -1125,10 +1144,13 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
-      // One seed for all three `run:` walks — the prerequisite guard, the
-      // chromium hoist, and the executor itself — so none can accept a chain
-      // another refuses.
+      // One seed for both `run:` walks — the leading scan just below and the
+      // executor itself — so neither can accept a chain the other refuses.
       const rootEntry: RunStackEntry = { canonical: canonicalPath, display: flowName };
+
+      // The launch the run begins with and the requires the leading chain
+      // folds to, walked once here and threaded to every setup check below.
+      const leading = await leadingRun(flow, rootEntry);
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
       // one file, but a leading `run:` chain crosses files — a fragment whose
@@ -1136,6 +1158,11 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // the state the prerequisite demands. Checked before the notice handshake
       // so a caller is never asked to establish state the run would throw away,
       // and (resolving the pin by shape alone) before any device listing or boot.
+      //
+      // Ahead of the requires refusal below, too: this verdict does not depend
+      // on the target, and FLOW_REQUIREMENTS_UNMET is a per-flow skip, so
+      // refusing on the block first would filter it silently out of every
+      // directory run the block excludes and red it only where it matches.
       //
       // Exempt: a run pinned to a chromium instance, whose leading launch
       // provably restarts nothing. An explicit `device` skips resolveRunDevice's
@@ -1145,27 +1172,41 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // prerequisite state survives. Pinning buys nothing on ios/android/vega:
       // `launch` there is restart-app, which terminates and relaunches whatever
       // device it is handed, so those stay refused.
-      if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, [rootEntry]);
-        if (leading) {
-          // Offer the pin only where it is a real way out (see
-          // chromiumPinnable): the guard also fires for unpinned runs of every
-          // platform and for pinned native ones, and sending the caller of an
-          // android flow after a chromium id would only misdirect.
-          const pinRemedy = chromiumPinnable(leading.app, params.platform)
-            ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
-            : "";
-          throw new FailureError(
-            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
-            {
-              error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
-              failure_stage: "flow_run_validate",
-              failure_area: "tool_server",
-              error_kind: "validation",
-            }
-          );
-        }
+      if (flow.executionPrerequisite && !pinnedToChromium(params.device) && leading.launch) {
+        // Offer the pin only where it is a real way out (see
+        // chromiumPinnable): the guard also fires for unpinned runs of every
+        // platform and for pinned native ones, and sending the caller of an
+        // android flow after a chromium id would only misdirect.
+        const pinRemedy = chromiumPinnable(leading.launch.app, params.platform)
+          ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
+          : "";
+        throw new FailureError(
+          `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.launch.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
+          {
+            error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
+            failure_stage: "flow_run_validate",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
+        );
       }
+
+      // The requirements decidable from the caller-named target alone: the
+      // platform it names (the `platform` param, or an explicit device's id
+      // shape) against requires.platform, plus runtimeKind where that platform
+      // presents a constant one. Reading no device, this sits ahead of the
+      // prerequisite handshake — such a caller is not asked to establish state
+      // for a target already refused — and ahead of the chromium hoist, so no
+      // app is booted for one.
+      //
+      // What it leaves open is judged by the resolution below, AFTER the
+      // handshake: runtimeKind on the platforms that must be probed for it, and
+      // the platform of an auto-detected device. Both read a device, and the
+      // landscape that decides them is the one at acknowledge time — the
+      // prerequisite setup may itself boot the satisfying device, or bring the
+      // named one back onto adb — so settling them pre-notice would refuse runs
+      // the setup was about to make possible.
+      assertParamsMeetRequires(params, leading.requires);
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading
@@ -1191,7 +1232,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         flow,
         params,
         flowsDir,
-        rootEntry,
+        leading,
         viaUpload
       );
       // The device the run STARTS on — `state.device` moves when a chromium
@@ -1279,16 +1320,18 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
  * unambiguously chromium (see {@link chromiumBootSpec}) and no explicit
  * `device` is given, this boots a fresh Electron instance from the launch's
  * app path and returns it for teardown — a fragment whose leading `run:` chain
- * reaches a chromium e2e flow boots just the same ({@link leadingLaunch}).
+ * reaches a chromium e2e flow boots just the same ({@link leadingRun}).
  * Otherwise it attaches to an already-booted device. An explicit `device`
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
  * root flow file's canonical directory — the base for a relative chromium app
  * path.
  *
- * Returns null when no step in the flow acts on a device: demanding one would
- * fail a flow that could have succeeded, and picking whichever device happens to
- * be booted would make the report depend on what else is running.
+ * Returns null when no step acts on a device — asked of the flow composed along
+ * its leading `run:` chain ({@link LeadingRun}), so the answer does not depend
+ * on how the same steps were split across files. Demanding one would fail a
+ * flow that could have succeeded, and picking whichever device happens to be
+ * booted would make the report depend on what else is running.
  */
 async function resolveRunDevice(
   registry: Registry,
@@ -1296,15 +1339,27 @@ async function resolveRunDevice(
   flow: FlowFile,
   params: Params,
   flowDir: string,
-  rootEntry: RunStackEntry,
+  leading: LeadingRun,
   viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
-    // The executor's own runStack seed, so a boot can never precede a chain it
-    // then refuses.
-    const leading = await leadingLaunch(flow, [rootEntry]);
-    const spec = leading && chromiumBootSpec(leading.app, params.platform);
+    const spec = leading.launch && chromiumBootSpec(leading.launch.app, params.platform);
     if (spec) {
+      // The hoist commits the run to chromium, so its requirements are
+      // decidable here — judged against the leading chain's folded requires,
+      // so a block on any file the chain crosses refuses too — and must be
+      // decided BEFORE the boot: the instance is only registered for teardown
+      // once this function returns, so a refusal after booting would strand a
+      // live Electron process. The two gates ahead of it —
+      // {@link assertParamsMeetRequires} on a caller-named `--platform chromium`
+      // and {@link assertComposedLaunchCoverage} on the launch map — already
+      // refuse every shape that could reach here, so this call is the last
+      // barrier before an irreversible boot rather than the gate that answers.
+      assertPlatformMeetsRequires(
+        "chromium",
+        leading.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
@@ -1315,8 +1370,20 @@ async function resolveRunDevice(
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
-    if (!flowRequiresDevice(registry, flow.steps)) {
-      if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
+    //
+    // Both questions read the leading chain's composed picture, so factoring a
+    // body into a fragment cannot turn a device-free flow into a device-bound
+    // one: `stepRequiresDevice` calls a bare `run:` device-requiring because
+    // its body is unread, and here it has been read. A chain the scan could not
+    // read end to end has no picture and falls back to the root's own steps,
+    // where that conservative answer still stands.
+    const steps = leading.composedSteps ?? flow.steps;
+    if (!flowRequiresDevice(registry, steps)) {
+      // A run that touches no device has no target to judge, so its
+      // requirements go unexamined here: resolving a device purely to refuse
+      // one would fail a run that needs none. A caller-named platform or device
+      // is judged at the tool's entry, by {@link assertParamsMeetRequires}.
+      if (!flowScopesDevice(registry, steps)) return { device: null, booted: null };
       // A flow that only SCOPES to a device (a cleanup flow) takes one when one
       // is unambiguous, so the teardown stays narrowed to the run device and
       // cannot reap what another agent is mid-session on. When resolution has
@@ -1327,10 +1394,14 @@ async function resolveRunDevice(
       // `list-devices` through the registry, so a bare catch would absorb an
       // adb/simctl failure, a dead sub-tool, an abort — and the teardown step
       // would then run unscoped and report pass, the machine-wide sweep this
-      // path exists to avoid.
+      // path exists to avoid. A requirement the resolved device does not meet
+      // rethrows for the same reason: this branch is reached only where the
+      // resolved device would actually bind — a step that recorded no scope of
+      // its own — so an ios-only teardown must not narrow itself to the android
+      // emulator that happens to be the only one up.
       try {
         return {
-          device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
+          device: await resolveFlowDevice(registry, ctx, resolveOpts(params, leading.requires)),
           booted: null,
         };
       } catch (err) {
@@ -1339,12 +1410,53 @@ async function resolveRunDevice(
       }
     }
   }
-  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params));
+  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params, leading.requires));
   return { device, booted: null };
 }
 
-function resolveOpts(params: Params): { device?: string; platform?: FlowPlatform } {
-  return { device: params.device, platform: params.platform as FlowPlatform | undefined };
+function resolveOpts(
+  params: Params,
+  requires: FlowRequires | undefined
+): { device?: string; platform?: FlowPlatform; requires?: FlowRequires } {
+  return { device: params.device, platform: params.platform as FlowPlatform | undefined, requires };
+}
+
+/**
+ * Refuse a run whose caller-named target the run's `requires` (the leading
+ * chain's fold) already excludes — decidable with no device listing and no
+ * boot, from the `platform` param or the shape of an explicit `device` id
+ * (which is the whole of what `resolveDevice` reads). The device-bearing half
+ * of the check (runtimeKind,
+ * and the platform of an auto-detected device) belongs to
+ * {@link resolveFlowDevice}; this is only the part worth knowing earlier.
+ */
+function assertParamsMeetRequires(params: Params, requires: FlowRequires | undefined): void {
+  if (!requires) return;
+  if (params.device) {
+    const { platform: shape, recognised } = classifyDeviceShape(params.device);
+    // Only an unconfirmed shape earns the hint — the android fallback, or a
+    // `remote:` tail that is not a UDID. On a confirmed id it would tell the
+    // caller a falsehood about the string they typed.
+    const unconfirmed =
+      shape === "ios-remote"
+        ? "the remote: prefix alone classifies it"
+        : "a device name classifies the same way";
+    const hint = recognised
+      ? ""
+      : ` (no device listing is consulted, and no id shape confirms this one - ${unconfirmed})`;
+    assertPlatformMeetsRequires(
+      shape,
+      requires,
+      `device "${params.device}", whose id shape classifies it as ${shape}${hint}`
+    );
+    return;
+  }
+  if (!params.platform) return; // nothing named — auto-detection judges it later
+  assertPlatformMeetsRequires(
+    params.platform,
+    requires,
+    `the ${params.platform} target this run was pointed at`
+  );
 }
 
 /**
@@ -1400,25 +1512,115 @@ function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
 /** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
 const NO_EXECUTABLE_STEP = "no-executable-step";
 
-/**
- * The launch the RUN begins with, following a leading `run:` — a fragment whose
- * first step composes an e2e flow starts with that flow's launch, and the runner
- * has to know that before step 1 to boot a chromium app for it (and to refuse a
- * prerequisite that launch would invalidate). `flow` names the flow whose first
- * step IS the launch, so a rejection can point at the right file. Null when the
- * run doesn't begin with a launch, or when the chain can't be read (a broken
- * `run:` target is reported by {@link execRunStep} when it executes).
- */
-async function leadingLaunch(
-  flow: FlowFile,
-  stack: RunStackEntry[]
-): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow, stack);
-  return found === NO_EXECUTABLE_STEP ? null : found;
+/** What the leading `run:` walk learned before step 1. */
+interface LeadingRun {
+  /**
+   * The launch the RUN begins with, following a leading `run:` — a fragment
+   * whose first step composes an e2e flow starts with that flow's launch, and
+   * the runner has to know that before step 1 to boot a chromium app for it
+   * (and to refuse a prerequisite that launch would invalidate). `flow` names
+   * the flow whose first step IS the launch, so a rejection can point at the
+   * right file. Null when the run doesn't begin with a launch, or when the
+   * chain can't be read (a broken `run:` target is reported by
+   * {@link execRunStep} when it executes).
+   */
+  launch: { app: Launch; flow: string } | null;
+  /**
+   * The requires blocks of every file the walk entered — root included —
+   * folded into the run's effective block ({@link foldLeadingRequires}): each
+   * entered file is certain to execute before the first executable step, so
+   * its constraints are constraints on the whole run's start. A block behind a
+   * `when:` guard or past the first executable step never folds — it is
+   * conditional or mid-run, judged where it executes ({@link execRunStep}).
+   */
+  requires: FlowRequires | undefined;
+  /**
+   * The run's steps and every followed `run:` step's body, with the `run:`
+   * steps themselves dropped, so the device question reads a composition
+   * exactly as it reads the same steps written inline
+   * ({@link resolveRunDevice}). A flat union rather than a positional splice:
+   * both readers only ask whether SOME step wants a device. Null when the scan
+   * gave up, since an unread body cannot be shown to touch none.
+   */
+  composedSteps: FlowStep[] | null;
+}
+
+/** What the leading walk accumulates on its way to the first executable step. */
+interface LeadingScan {
+  /**
+   * Every fragment the walk entered, root excluded. Each is certain to be
+   * reached, so both its `requires` block and its launches belong to the run —
+   * the same certainty `validateRequires` already assumes within one file.
+   * `via` is the `run:` step it was reached through, which the composed
+   * picture drops in favour of these steps.
+   */
+  entered: { flow: string; steps: FlowStep[]; requires?: FlowRequires; via: FlowStep }[];
+  /**
+   * Cleared once a hop is unreadable or refused: the picture is then missing
+   * both launches and the blocks that could have narrowed them away, so it is
+   * not safe to judge.
+   */
+  complete: boolean;
+}
+
+async function leadingRun(flow: FlowFile, rootEntry: RunStackEntry): Promise<LeadingRun> {
+  const scan: LeadingScan = { entered: [], complete: true };
+  const found = await scanLeadingLaunch(flow, [rootEntry], scan);
+  const requires = foldLeadingRequires(
+    rootEntry.display,
+    flow.requires,
+    scan.entered.flatMap((f) => (f.requires ? [{ flow: f.flow, requires: f.requires }] : []))
+  );
+  // Composition is what parse-time validation cannot see, so the check only
+  // earns its keep once a fragment joined — and only over a chain read end to
+  // end: a broken one stays best-effort here and is reported by execRunStep.
+  if (scan.complete && scan.entered.length > 0) {
+    assertComposedLaunchCoverage(
+      [{ flow: rootEntry.display, steps: flow.steps }, ...scan.entered],
+      requires
+    );
+  }
+  const followed = new Set(scan.entered.map((f) => f.via));
+  return {
+    launch: found === NO_EXECUTABLE_STEP ? null : found,
+    requires,
+    composedSteps: scan.complete
+      ? [flow.steps, ...scan.entered.map((f) => f.steps)].flat().filter((s) => !followed.has(s))
+      : null,
+  };
 }
 
 /**
- * {@link leadingLaunch}'s recursion, plus the third outcome it needs internally:
+ * What a RUN of this flow is judged against, for readers that hold the parsed
+ * file but not the runner: {@link leadingRun}'s fold and its composed steps,
+ * anchored the way the run anchors its `run:` targets. A pre-flight that
+ * reported the file's own block instead would answer "runs anywhere" for a root
+ * whose leading fragment the runner then refuses on, and one that judged the
+ * file's own steps would miss the launches the same fragment contributes.
+ * `steps` is null when the chain could not be read end to end — exactly when
+ * the run leaves the composed picture unjudged too.
+ */
+export async function effectiveComposition(
+  flow: FlowFile,
+  filePath: string,
+  flowName: string
+): Promise<{ requires: FlowRequires | undefined; steps: FlowStep[] | null }> {
+  const canonical = await canonicalFlowPath(filePath);
+  const leading = await leadingRun(flow, { canonical, display: flowName });
+  return { requires: leading.requires, steps: leading.composedSteps };
+}
+
+/** {@link effectiveComposition}'s folded block alone. */
+export async function effectiveRequires(
+  flow: FlowFile,
+  filePath: string,
+  flowName: string
+): Promise<FlowRequires | undefined> {
+  return (await effectiveComposition(flow, filePath, flowName)).requires;
+}
+
+/**
+ * {@link leadingRun}'s recursion, plus the third outcome it needs internally:
  * {@link NO_EXECUTABLE_STEP} — this flow, and everything its leading `run:`s
  * pulled in, contribute no executable step. That is not a reason to give up on
  * the run: {@link execRunStep} inlines such a fragment and carries straight on
@@ -1435,34 +1637,50 @@ async function leadingLaunch(
  * chain the executor refuses never reaches its launch, so any hop it would error
  * on stays `null` (give up) here, never transparent. Anything unreadable is
  * `null` too.
+ *
+ * `scan` collects every fragment the walk enters (parsed and descended into).
+ * A fragment entered before a hop the scan gives up on still executes ahead of
+ * that hop's error, so its contribution still binds — but the giving up itself
+ * is recorded, since what lies past it is neither read nor judged.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
-  stack: RunStackEntry[]
+  stack: RunStackEntry[],
+  scan: LeadingScan
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
+  const abandon = (): null => {
+    scan.complete = false;
+    return null;
+  };
   for (const step of flow.steps) {
     if (step.kind === "echo") continue;
     if (step.kind === "launch") return { app: step.app, flow: top.display };
+    // Not an abandonment: the leading chain ends at the first executable step,
+    // so nothing the fold or the picture wants is left unread.
     if (step.kind !== "run") return null;
     const spelled = path.dirname(top.canonical) + path.sep + step.flow;
     let nested: FlowFile;
     let canonical: string;
     try {
       canonical = await canonicalFlowPath(spelled);
-      if (stack.some((entry) => entry.canonical === canonical)) return null;
-      if (stack.length >= MAX_RUN_DEPTH) return null;
+      if (stack.some((entry) => entry.canonical === canonical)) return abandon();
+      if (stack.length >= MAX_RUN_DEPTH) return abandon();
       const supplied = path.posix.basename(step.flow);
       const spelling = await classifyOnDiskSpelling(path.dirname(spelled), supplied);
-      if (spelling.state === "case_folded") return null;
+      if (spelling.state === "case_folded") return abandon();
       nested = parseFlow(await fs.readFile(canonical, "utf8"));
     } catch {
-      return null;
+      return abandon();
     }
-    const inner = await scanLeadingLaunch(nested, [
-      ...stack,
-      { canonical, display: runDisplayFor(step.flow, stack[0]!.display) },
-    ]);
+    const display = runDisplayFor(step.flow, stack[0]!.display);
+    scan.entered.push({
+      flow: display,
+      steps: nested.steps,
+      ...(nested.requires ? { requires: nested.requires } : {}),
+      via: step,
+    });
+    const inner = await scanLeadingLaunch(nested, [...stack, { canonical, display }], scan);
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
   return NO_EXECUTABLE_STEP;
@@ -1859,7 +2077,12 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     // They cannot disagree today, nor for a future block directive whichever way
     // stepRequiresDevice classifies it — flowRequiresDevice recurses through
     // blockSteps, so no nesting hides a step.
-    if (!state.device && stepRequiresDevice(state.registry, step)) {
+    //
+    // A `run:` step is exempt: it acts on no device itself, and reaching one
+    // device-free means resolveRunDevice read its body and found nothing that
+    // does. Should the file have changed since, the offending step still meets
+    // this guard when execRunStep inlines it.
+    if (!state.device && step.kind !== "run" && stepRequiresDevice(state.registry, step)) {
       state.stopped = true;
       pushReport(state, {
         index,
@@ -2204,6 +2427,36 @@ async function execRunStep(
     fragment = parseFlow(await fs.readFile(canonical, "utf8"));
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+  }
+
+  // A composed fragment the run device cannot satisfy ERRORS the step rather
+  // than skipping it. At the root, an unmet requirement means "this scenario
+  // does not apply here" and a directory run moves on; mid-run it would mean
+  // part of the scenario silently did not happen while the report stayed
+  // green. Expressing that deliberately is what `when:` is for.
+  //
+  // Checked per fragment as it is reached, not by pre-walking the whole run:
+  // graph — that second resolution could disagree with the executor's own if
+  // the file changed in between, and the walk is exactly the work execRunStep
+  // is already doing.
+  //
+  // On a device-free run there is no target to judge the block against, so it
+  // goes unexamined: the answer {@link resolveRunDevice} gives the root's own
+  // block, and the one this body would get written inline.
+  if (fragment.requires && state.device) {
+    try {
+      await assertDeviceMeetsRequires(state.device, fragment.requires);
+    } catch (err) {
+      // An unverifiable requirement was never established as a mismatch, so
+      // its prefix must not assert one as fact the way the unmet prefix does.
+      const unverified =
+        getFailureSignal(err)?.error_code === FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE;
+      return fail(
+        unverified
+          ? `fragment "${target}" may not run on this device (its requires could not be verified): ${errMsg(err)}`
+          : `fragment "${target}" cannot run on this device: ${errMsg(err)}`
+      );
+    }
   }
 
   // Marker for the composition point, then expand the fragment's steps inline,

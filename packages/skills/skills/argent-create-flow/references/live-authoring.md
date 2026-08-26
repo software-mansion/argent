@@ -26,7 +26,7 @@ Obey these lifecycle rules:
 1. Pass the same `name` and absolute `project_root` to every recording tool.
 2. Choose a name unique to the task. Another caller can take over the same pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/flows` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
-4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. `restarted` reports only a displaced live take.
+4. Treat `flow-start-recording` as destructive. It always truncates the named YAML's steps, including a finished or committed flow. An existing `requires:` block is the one thing carried across, and only when the flow file sits on the tool server's host and parses, or was deleted or emptied while a live take of it was still recording — against a remote tool server, or over a file that cannot be read or does not parse, nothing carries over and the message says so. Remotely that note can only warn: the server never reads that file, so whether it held a block at all is unknowable there - do not relay the note as a loss that happened. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
 7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
@@ -173,15 +173,20 @@ Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-prese
 
 Copy the recorded `selector:` map when you convert a wait. Do not use the loose bare-string form. Flow YAML accepts `identifier`; rename it to `id` only for style. Convert `textMatch: equals` to `equals:` and other text checks to `contains:`.
 
-Only these unrecorded insertions are allowed, at states observed live:
+Only these unrecorded insertions are allowed - the step-shaped ones at states observed live:
 
 - A planned `snapshot:` for pixel-level evidence.
 - `await: { idle: true }` after a navigation identity check.
 - The Chromium launch that packages the live boot.
+- A [`requires:`](#ask-about-requires) block, which fences targets instead of adding a step and has no recorder form.
 
 Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, velocity-sensitive swipe, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
 
 If polish reveals a missing action or structural check, restore its preceding state and record it. Do not add remembered behavior directly to YAML.
+
+### Ask about `requires`
+
+When the run composes no [`requires:`](flow-yaml.md#target-requirements) block - none in the flow file and none folded in from a leading `run:` fragment - `flow-finish-recording` also returns a **`requiresPrompt`**. Put that question to the **user**: should this flow be restricted to certain platforms, or to a TV? Ask it here and nowhere else. This is the first moment the whole flow exists, and a flow with no block runs against every target, so an unasked question silently answers itself "anywhere". If they say yes, write the block into the YAML yourself — there is no tool for it. Take the prompt's own suggestion as a starting point, not a verdict: it is read off the launch step's app ids, which say where the flow _can start_, not where the scenario is _meant_ to run.
 
 ## Worked example
 

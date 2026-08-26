@@ -33,11 +33,26 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  */
 const VEGA_SERIAL_PREFIX = "amazon-";
 
+/**
+ * The platform a `udid` belongs to, plus whether an id shape confirmed that
+ * classification. Unconfirmed at the android fallback, which holds an id to
+ * nothing — with `ro.serialno` vendor-defined, a real serial, a device name and
+ * a typo all land there alike — and behind a `remote:` prefix whose tail is not
+ * a UDID. A caller that reports the verdict to a user needs the second half;
+ * one that just routes by platform wants {@link classifyDevice}.
+ */
+export function classifyDeviceShape(udid: string): { platform: Platform; recognised: boolean } {
+  if (udid.startsWith(REMOTE_PREFIX)) {
+    return { platform: "ios-remote", recognised: IOS_UDID_SHAPE.test(stripRemotePrefix(udid)) };
+  }
+  if (udid.startsWith(VEGA_SERIAL_PREFIX)) return { platform: "vega", recognised: true };
+  if (udid.startsWith(CHROMIUM_ID_PREFIX)) return { platform: "chromium", recognised: true };
+  if (IOS_UDID_SHAPE.test(udid)) return { platform: "ios", recognised: true };
+  return { platform: "android", recognised: false };
+}
+
 export function classifyDevice(udid: string): Platform {
-  if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
-  if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
-  if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
-  return IOS_UDID_SHAPE.test(udid) ? "ios" : "android";
+  return classifyDeviceShape(udid).platform;
 }
 
 /**

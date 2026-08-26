@@ -1717,6 +1717,439 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 
+  it("skips a flow whose requires the target does not satisfy, and keeps going", async () => {
+    // The whole point of the block: one command over a mixed suite runs what
+    // applies here and filters out the rest, rather than failing on it.
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(
+          "This flow declares requires: { platform: [android] }, which excludes the ios target this run was pointed at.",
+          { errorCode: "FLOW_REQUIREMENTS_UNMET", errorKind: "validation" }
+        )
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--platform", "ios"], opts)).rejects.toThrow(
+      "process.exit:0"
+    );
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    const out = logs.join("\n");
+    expect(out).toContain("· skipped — This flow declares requires: { platform: [android] }");
+    expect(out).toContain("PASS — 2 flows: 1 passed, 0 failed, 1 skipped");
+    // A skip is not an error: nothing goes to stderr and the exit stays 0.
+    expect(errs.join("\n")).not.toContain("requires");
+  });
+
+  it("fails — never skips — a flow whose requirements could not be verified", async () => {
+    // A probe that could not answer says nothing about whether the flow applies
+    // here, so folding it into the skip bucket would hide a broken toolchain
+    // behind "check your requires: blocks".
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(
+          "This flow declares requires: { runtimeKind: tv }. The runtime kind of device emulator-5554 could not be determined (android), so the requirement cannot be verified.",
+          { errorCode: "FLOW_REQUIREMENTS_UNVERIFIABLE", errorKind: "validation" }
+        )
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    // Validation still means this flow alone — the batch reached the second.
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs.join("\n")).toContain("could not be determined");
+    const out = logs.join("\n");
+    expect(out).not.toContain("skipped —");
+    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+  });
+
+  it("separates an unverifiable requires probe from an invalid file in --json", async () => {
+    // Both reject as `status: "fail"` with prose in `error`; only the code and
+    // the kind let a CI consumer tell a flow that could not be judged from a
+    // broken file, and either from a flow that ran and failed.
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(
+          "This flow declares requires: { runtimeKind: tv }, which cannot be verified.",
+          { errorCode: "FLOW_REQUIREMENTS_UNVERIFIABLE", errorKind: "validation" }
+        )
+      )
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "c-search",
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ index: 0, kind: "assert", status: "fail", reason: "never visible" }],
+        }),
+      });
+
+    await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const parsed = JSON.parse(logs.join("\n")) as { flows: Record<string, unknown>[] };
+    expect(parsed.flows[0]).toMatchObject({
+      status: "fail",
+      errorCode: "FLOW_REQUIREMENTS_UNVERIFIABLE",
+      errorKind: "validation",
+    });
+    expect(parsed.flows[1]).toMatchObject({
+      status: "fail",
+      errorCode: "FLOW_FILE_INVALID",
+      errorKind: "validation",
+    });
+    // A flow that ran and broke is neither, and carries no code to be confused
+    // with one.
+    expect(parsed.flows[2]).toMatchObject({ status: "fail" });
+    expect(parsed.flows[2]).not.toHaveProperty("errorCode");
+    expect(parsed.flows[2]).not.toHaveProperty("errorKind");
+  });
+
+  it("exits 2 when every flow was skipped — nothing ran, which is not a pass", async () => {
+    // Otherwise a mistyped requires (or a target nobody meant to run against)
+    // reads as a green suite.
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError(
+        "This flow declares requires: { platform: [vega] }, which excludes…",
+        {
+          errorCode: "FLOW_REQUIREMENTS_UNMET",
+          errorKind: "validation",
+        }
+      )
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    // Not "PASS": the verdict has to agree with the non-zero exit.
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 0 passed, 0 failed, 2 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("reports a fully-skipped batch as not ok in --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("requires unmet", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const parsed = JSON.parse(logs.join("\n")) as {
+      ok: boolean;
+      skipped: number;
+      flows: { status: string; skipReason?: string }[];
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.skipped).toBe(2);
+    expect(parsed.flows.every((f) => f.status === "skip")).toBe(true);
+    expect(parsed.flows[0]?.skipReason).toBe("requires unmet");
+    // The explanation still reaches stderr with --json: a CI leg that archives
+    // stdout and surfaces stderr must not get an exit-2 build with an empty log.
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  // The pre-`requires:` idiom for platform-specific flows: every step behind a
+  // `when: { platform: … }` guard, so the report is a flow-level pass that
+  // executed nothing.
+  const vacuousPass = (): Record<string, unknown> =>
+    report({
+      flow: "a-login",
+      ok: true,
+      passed: 0,
+      failed: 0,
+      errored: 0,
+      skipped: 2,
+      steps: [
+        { index: 0, kind: "tap", status: "skip" },
+        { index: 1, kind: "assert", status: "skip" },
+      ],
+    });
+
+  const requiresUnmet = (): ToolInvocationError =>
+    new ToolInvocationError("requires unmet", {
+      errorCode: "FLOW_REQUIREMENTS_UNMET",
+      errorKind: "validation",
+    });
+
+  it("exits 1, not 2, when a rejected file sits beside requires skips and nothing ran", async () => {
+    // The other half of what `argent flow --help` promises: the nothing-ran
+    // guard is conditioned on `counts.failed === 0`, so a red result outranks
+    // an empty one even when not one step executed. Replace this rejection with
+    // a skip and it is the exit-2 case above; keep it and the exit is the
+    // ordinary 1, with no nothing-ran diagnostic to mislead a CI triage.
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const out = logs.join("\n");
+    expect(out).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+    expect(out).not.toContain("NONE RAN");
+    expect(errs.join("\n")).not.toContain("No step executed");
+  });
+
+  it("exits 2 when the only flow-level pass executed zero steps beside a requires skip", async () => {
+    // A vacuous pass must not defeat the nothing-ran guard: not one step
+    // executed anywhere in this suite, so it is NONE RAN, not green.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: vacuousPass() })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("reports a vacuous-pass-beside-skips batch as not ok in --json", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: vacuousPass() })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const parsed = JSON.parse(logs.join("\n")) as { ok: boolean; passed: number };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.passed).toBe(1);
+  });
+
+  // A `run:` step reports a composition marker of its own, counted as a pass by
+  // the runner's summary, before the fragment's steps are expanded inline after
+  // it. Here every expanded step is `when:`-skipped, so the marker is the whole
+  // of the flow's `passed`.
+  const composedVacuousPass = (): Record<string, unknown> =>
+    report({
+      flow: "a-login",
+      ok: true,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      skipped: 2,
+      steps: [
+        { index: 0, kind: "run", status: "pass", flow: "frag" },
+        { index: 1, kind: "tap", status: "skip" },
+        { index: 2, kind: "assert", status: "skip" },
+      ],
+    });
+
+  it("exits 2 when the only flow-level pass composed a fragment that executed nothing", async () => {
+    // The composition marker is not an executed step: counting it would let one
+    // `run:`-composed flow green-light a suite the requires filter emptied —
+    // and `run:`-composed suites are the ones that filter is aimed at.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: composedVacuousPass() })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("stays PASS when the composed fragment executed a step of its own", async () => {
+    // Only the marker is discounted — a fragment's expanded steps land in the
+    // same report and still count as work done.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: true,
+          passed: 2,
+          skipped: 1,
+          steps: [
+            { index: 0, kind: "run", status: "pass", flow: "frag" },
+            { index: 1, kind: "tap", status: "pass" },
+            { index: 2, kind: "assert", status: "skip" },
+          ],
+        }),
+      })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs.join("\n")).toContain("PASS — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).not.toContain("No step executed");
+  });
+
+  it("stays PASS when a vacuous composed flow sits beside a flow that ran a step", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: composedVacuousPass() })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs.join("\n")).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+    expect(errs.join("\n")).not.toContain("No step executed");
+  });
+
+  // The `tool:` spelling of the same composition, hand-authored: one step
+  // reporting work performed entirely inside another flow.
+  const wrapperPass = (): Record<string, unknown> =>
+    report({
+      flow: "b-checkout",
+      ok: true,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      skipped: 0,
+      steps: [{ index: 0, kind: "tool", tool: "flow-execute", status: "pass" }],
+    });
+
+  it("exits 2 when the only executing step was a tool: flow-execute wrapper", async () => {
+    // Every authored step under the wrapper skipped, so adding one file that
+    // only delegates must not flip the batch from NONE RAN to green.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: vacuousPass() })
+      .mockResolvedValueOnce({ data: wrapperPass() });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 2 passed, 0 failed, 0 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("stays PASS when a tool step other than the wrapper executed", async () => {
+    // Only `flow-execute` is discounted — every other `tool:` step is work.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          steps: [{ index: 0, kind: "tool", tool: "screenshot", status: "pass" }],
+        }),
+      })
+      .mockResolvedValueOnce({ data: wrapperPass() });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs.join("\n")).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+    expect(errs.join("\n")).not.toContain("No step executed");
+  });
+
+  // A met `when:` guard reports a marker of its own — a pass in the runner's
+  // summary — before the guarded steps expand under it. Those steps still all
+  // skip here, behind a nested guard the run's platform does not match.
+  const guardedSteps = (): Record<string, unknown>[] => [
+    { index: 0, kind: "when", status: "pass", reason: "condition met (platform ios)" },
+    {
+      index: 1,
+      kind: "when",
+      status: "skip",
+      reason: "condition not met (platform vega) — block skipped (2 steps)",
+    },
+    { index: 2, kind: "tap", status: "skip" },
+    { index: 3, kind: "assert", status: "skip" },
+  ];
+
+  it("exits 2 when the only flow-level pass met a when: guard over steps that all skipped", async () => {
+    // The simplest vacuous pass with a non-zero `passed`, and the case the
+    // guard exists for: no `run:` anywhere, just a met guard whose marker is
+    // the whole of the flow's pass count.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({ flow: "a-login", passed: 1, skipped: 3, steps: guardedSteps() }),
+      })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("exits 2 when a composed fragment's own when: guard was the only thing that passed", async () => {
+    // Both marker kinds stacked: neither a composition nor a guard is work.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          passed: 2,
+          skipped: 3,
+          steps: [{ index: 0, kind: "run", status: "pass", flow: "frag" }, ...guardedSteps()],
+        }),
+      })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("stays PASS when a met when: guard led to a step that executed", async () => {
+    // Only the marker is discounted — the guarded steps land in the same report
+    // and still count as work done.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          passed: 2,
+          skipped: 1,
+          steps: [
+            { index: 0, kind: "when", status: "pass", reason: "condition met (platform ios)" },
+            { index: 1, kind: "tap", status: "pass" },
+            { index: 2, kind: "assert", status: "skip" },
+          ],
+        }),
+      })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs.join("\n")).toContain("PASS — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).not.toContain("No step executed");
+  });
+
+  it("exits 2 when the only flow-level pass narrated and did nothing else", async () => {
+    // Echo steps report as passes on the wire even though the runner's summary
+    // omits them; narration is not proof a suite ran.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          passed: 0,
+          steps: [
+            { index: 0, kind: "echo", status: "pass", message: "starting" },
+            { index: 1, kind: "echo", status: "pass", message: "done" },
+          ],
+        }),
+      })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("keeps FAIL and exit 1 when a vacuous pass sits beside a failed flow", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({ data: vacuousPass() }).mockResolvedValueOnce({
+      data: report({
+        flow: "b-checkout",
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [{ index: 0, kind: "assert", status: "fail", reason: "never visible" }],
+      }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n")).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+  });
+
   it("stops the batch on a server error the signal does not mark as validation", async () => {
     toolsClientMock.callTool.mockRejectedValueOnce(
       new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
@@ -1832,7 +2265,11 @@ describe("argent flow run <dir>", () => {
       flows: [
         { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
         { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
+        {
+          path: path.join("sub", "c-search.yaml"),
+          status: "skip",
+          skipReason: "batch stopped",
+        },
       ],
     });
   });

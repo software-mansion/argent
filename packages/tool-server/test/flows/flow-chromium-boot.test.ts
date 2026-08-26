@@ -1134,17 +1134,23 @@ describe("flow-execute chromium boot", () => {
   });
 
   it("does not boot when a leading run: chain reaches no launch", async () => {
-    // A plain fragment composition: nothing to boot, so device resolution
-    // proceeds normally (and reports no booted device here).
+    // A plain fragment composition: nothing to boot — and the walk read the
+    // whole chain, so a narration-only one needs no device either and runs on
+    // a machine with nothing booted, exactly as its inline spelling would.
     const top = await writeFlow("steps:\n  - run: helper\n");
     await writeSiblingFlow(top, "helper", "steps:\n  - echo: nothing to launch\n");
     const registry = makeRegistry(async (id: string) =>
       id === "list-devices" ? { devices: [] } : {}
     );
 
-    await expect(
-      runFlow(registry, { name: "no-launch", project_root: PROJECT_ROOT, flow_file: top })
-    ).rejects.toThrow(/No booted device found/);
+    const result = await runFlow(registry, {
+      name: "no-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
@@ -1984,7 +1990,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
   });
 
   it("keeps best-effort behavior when the leading run: chain is broken", async () => {
-    // A missing sibling makes the chain unreadable: leadingLaunch yields null,
+    // A missing sibling makes the chain unreadable: leadingRun finds no launch,
     // so no new rejection fires — the notice comes back as before, and an
     // acknowledged run proceeds to device resolution (the broken run: target is
     // reported at step time, exactly as on main).

@@ -695,9 +695,72 @@ export type FlowStep =
   | { kind: "rotate"; selector?: FlowSelector; by: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
 
+/**
+ * The form factors a `requires.runtimeKind` may name — the vocabulary
+ * `list-devices` already surfaces, spelled once here. "tv" is a focus-driven
+ * remote environment (Apple TV, Android TV / leanback, Fire TV); "mobile" is
+ * its complement — every target driven by touch or pointer, which on the
+ * chromium side means a desktop window rather than anything handheld.
+ */
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
+
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/**
+ * What a flow demands of the target it runs on. Absent means "runs anywhere",
+ * so every flow written before this key existed keeps running everywhere.
+ *
+ * Every key is a fact the runner can resolve BEFORE the first step, and the
+ * keys are ANDed: `{ platform: [ios, android], runtimeKind: tv }` is Apple TV
+ * or Android TV and excludes Fire TV, which `{ runtimeKind: tv }` alone would
+ * admit. Deliberately a closed vocabulary rather than a free-form capability
+ * list — a name the runner cannot check is a name that silently passes.
+ *
+ * Requirements do more than gate: they narrow device auto-detection
+ * (`resolveFlowDevice`), so an ios-only flow picks the booted simulator
+ * instead of erroring on the emulator sitting beside it.
+ */
+export type DeclaredRequires = {
+  /**
+   * Platforms the flow may run on. Non-empty when present; `ios` covers a
+   * remote simulator too, matching how the `when: { platform }` guard folds
+   * `ios-remote` into `ios`.
+   */
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+  /**
+   * `never`, so a folded block cannot be assigned where a flow file's block
+   * belongs: `composed` has no YAML spelling, and serializing it would write a
+   * file `parseRequires` rejects.
+   */
+  composed?: never;
+};
+
+/**
+ * A requires block as the runner judges it, which is the declared vocabulary
+ * plus the fold marker. Set only by {@link foldLeadingRequires}, never parsed
+ * from YAML: the block was folded across `run:` composition, so refusal
+ * messages must attribute it to the flow plus its fragments rather than claim
+ * one file declares it.
+ */
+export type FlowRequires = Omit<DeclaredRequires, "composed"> & { composed?: true };
+
+/**
+ * Human-readable form of a `requires` block, for the messages a caller has to
+ * act on. Mirrors the YAML spelling so the remedy is the line they wrote.
+ */
+export function describeRequires(requires: FlowRequires): string {
+  const parts: string[] = [];
+  if (requires.platform) parts.push(`platform: [${requires.platform.join(", ")}]`);
+  if (requires.runtimeKind) parts.push(`runtimeKind: ${requires.runtimeKind}`);
+  return parts.join(", ");
+}
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Target contract; absent when the flow runs anywhere. */
+  requires?: DeclaredRequires;
   steps: FlowStep[];
 };
 
@@ -754,6 +817,10 @@ function isE2eFlow(flow: FlowFile): boolean {
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
+  // A remote simulator is an iOS target and the parser rejects an `ios-remote`
+  // launch key, so without this fold (mirroring the `when:` guard and requires
+  // folds) no map entry could ever serve one.
+  if (platform === "ios-remote") platform = "ios";
   if (launch === undefined) return null;
   if (typeof launch === "string") return launch;
   if (platform === "chromium") {
@@ -899,6 +966,7 @@ type YamlStep =
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
+  requires?: DeclaredRequires;
   steps: YamlStep[];
 };
 
@@ -1303,7 +1371,7 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message.
   let rendered: string;
@@ -1316,7 +1384,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -1860,6 +1932,92 @@ export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+// Keys a `requires:` block accepts — DeclaredRequires' YAML vocabulary (the
+// `composed` marker is fold-only, never parsed).
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+// `requires` is a top-level key, not a step, so its parse errors carry the
+// file-level classification of parseFlow's top-level-key check, not
+// badEntry's step-shaped one.
+function badRequires(raw: unknown, detail: string): never {
+  throw new FailureError(`Invalid flow file: ${detail}: ${renderEntry({ requires: raw })}`, {
+    error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+    failure_stage: "flow_file_parse",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/**
+ * Parse `requires.platform`: one platform or a list of them, normalized to a
+ * list. The two spellings mean the same thing (unlike a selector, where bare
+ * string vs map is semantic), so normalizing here costs nothing — serialize
+ * emits the list form and re-parsing it yields the same value.
+ */
+function parseRequiredPlatforms(raw: unknown, value: unknown): WhenPlatform[] {
+  const list = Array.isArray(value) ? value : [value];
+  const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
+  if (list.length === 0) {
+    badRequires(raw, `requires.platform must name at least ${oneOf}`);
+  }
+  const out: WhenPlatform[] = [];
+  for (const p of list) {
+    if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+      badRequires(raw, `requires.platform must be ${oneOf} (or a list of them)`);
+    }
+    // A repeat narrows nothing, so it is a copy/paste slip rather than an
+    // intent — and rejecting it keeps the parsed list a faithful image of the
+    // file, which the serialize/parse identity relies on.
+    if (out.includes(p as WhenPlatform)) {
+      badRequires(raw, `requires.platform lists "${p}" twice`);
+    }
+    out.push(p as WhenPlatform);
+  }
+  return out;
+}
+
+/**
+ * Parse the top-level `requires:` block. Same strictness as a directive body:
+ * an unknown key is a typo, and dropping it silently would turn a constraint
+ * the author wrote into a flow that runs everywhere — the exact failure this
+ * block exists to prevent.
+ */
+function parseRequires(raw: unknown): DeclaredRequires {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    badRequires(raw, `requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  const unknown = Object.keys(b).filter((k) => !(REQUIRES_KEYS as readonly string[]).includes(k));
+  if (unknown.length > 0) {
+    badRequires(
+      raw,
+      `requires has ${describeUnknownKeys(unknown, REQUIRES_KEYS)} — ` +
+        `allowed keys: ${REQUIRES_KEYS.join(", ")}`
+    );
+  }
+
+  const out: DeclaredRequires = {};
+  if (b.platform !== undefined) out.platform = parseRequiredPlatforms(raw, b.platform);
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      badRequires(raw, `requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  // An empty block reads as a constraint that isn't there — far likelier a
+  // half-written edit than an intent, and "runs anywhere" already has a
+  // spelling: no block at all.
+  if (Object.keys(out).length === 0) {
+    badRequires(
+      raw,
+      `requires must declare at least one of: ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block entirely for a flow that runs anywhere)`
+    );
+  }
+  return out;
+}
 
 /**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
@@ -2706,6 +2864,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
+  // Project key by key rather than forwarding the block: only REQUIRES_KEYS
+  // re-parse, so a key added to the type must be emitted deliberately.
+  const requires = flow.requires;
+  if (requires) {
+    doc.requires = {
+      ...(requires.platform ? { platform: requires.platform } : {}),
+      ...(requires.runtimeKind ? { runtimeKind: requires.runtimeKind } : {}),
+    };
+  }
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
@@ -2717,8 +2884,367 @@ export function serializeFlow(flow: FlowFile): string {
   return yamlStringify(doc, { blockQuote: false });
 }
 
-/** Validate cross-field invariants that are checkable without other files. */
-export function validateFlow(flow: FlowFile): void {
+/**
+ * Whether a platform can ever present a given runtime kind. Vega is Fire TV, so
+ * it is only ever a TV; chromium is a desktop window, so it is only ever the
+ * non-TV complement. iOS and Android come in both.
+ */
+function platformCanPresent(platform: WhenPlatform, kind: FlowRuntimeKind): boolean {
+  if (platform === "vega") return kind === "tv";
+  if (platform === "chromium") return kind === "mobile";
+  return true;
+}
+
+/**
+ * Every `launch` step paired with the platforms that can still be the run's
+ * platform where it sits. A `when: { platform: X }` narrows that set for its
+ * body, so an ios-only launch guarded by an ios guard is not a contradiction
+ * inside a flow that also allows android — and a block whose guard the
+ * requirements already exclude is dead code, so its launches are not checked
+ * at all. Any other guard is decided at run time, so its body and everything
+ * nested under it is `conditional`: the launch may never be reached.
+ */
+function* launchesInScope(
+  steps: FlowStep[],
+  allowed: readonly WhenPlatform[],
+  conditional = false
+): Generator<{ app: Launch; allowed: readonly WhenPlatform[]; conditional: boolean }> {
+  for (const step of steps) {
+    if (step.kind === "launch") {
+      yield { app: step.app, allowed, conditional };
+    } else if (step.kind === "when") {
+      const cond = step.condition;
+      const isPlatform = cond.kind === "platform";
+      const inner = isPlatform ? allowed.filter((p) => p === cond.platform) : allowed;
+      if (inner.length > 0) yield* launchesInScope(step.steps, inner, conditional || !isPlatform);
+    }
+  }
+}
+
+/**
+ * One file's steps inside the picture a `requires` block is judged against,
+ * named so a refusal can point at the file whose launch broke it. `flow` is
+ * absent for a single-file judgement, whose message needs no attribution.
+ */
+interface CoverageScope {
+  flow?: string;
+  steps: FlowStep[];
+}
+
+/** {@link launchesInScope} across several files, tagging each launch's file. */
+function* scopedLaunches(
+  scopes: readonly CoverageScope[],
+  allowed: readonly WhenPlatform[]
+): Generator<{
+  app: Launch;
+  allowed: readonly WhenPlatform[];
+  conditional: boolean;
+  flow?: string;
+}> {
+  for (const scope of scopes) {
+    for (const found of launchesInScope(scope.steps, allowed)) yield { ...found, flow: scope.flow };
+  }
+}
+
+/**
+ * How these steps' launches relate to one platform under
+ * `requires: { platform: [platform] }`: "unserved" when a launch reached
+ * unconditionally declares no id for it (the block would fail validation),
+ * "served" when at least one launch is in scope and every one declares an id,
+ * and "unknown" when the launches settle neither: nothing launches at all, or
+ * only a conditionally reached launch is missing its id. Shared by
+ * {@link validateRequires} and flow-finish-recording's requires hint, so the
+ * hint can never suggest a block the validator refuses over the steps it was
+ * given — the run's composed picture where the hint could read one.
+ */
+export function launchCoverage(
+  steps: FlowStep[],
+  platform: WhenPlatform
+): "served" | "unserved" | "unknown" {
+  return scopedCoverage([{ steps }], platform);
+}
+
+function scopedCoverage(
+  scopes: readonly CoverageScope[],
+  platform: WhenPlatform
+): "served" | "unserved" | "unknown" {
+  let sawLaunch = false;
+  let complete = true;
+  for (const { app, conditional } of scopedLaunches(scopes, [platform])) {
+    sawLaunch = true;
+    if (appIdForPlatform(app, platform) === null) {
+      if (!conditional) return "unserved";
+      complete = false;
+    }
+  }
+  return sawLaunch && complete ? "served" : "unknown";
+}
+
+/**
+ * The steps that can still run on one platform, under the same `when:` scoping as
+ * {@link launchesInScope}: a `when: { platform: X }` guard for another platform
+ * takes its whole body out of scope, any other guard is decided at run time so its
+ * body stays in. The guard step itself is never yielded, since an unmet guard runs
+ * nothing.
+ */
+function* stepsInScope(steps: FlowStep[], platform: WhenPlatform): Generator<FlowStep> {
+  for (const step of steps) {
+    if (step.kind !== "when") {
+      yield step;
+    } else if (step.condition.kind !== "platform" || step.condition.platform === platform) {
+      yield* stepsInScope(step.steps, platform);
+    }
+  }
+}
+
+/**
+ * Whether this platform runs anything at all: some step is in its scope, every
+ * other platform's `when:` guard having taken its body out. A platform that runs
+ * nothing loses nothing to a `requires` block that excludes it, which is what
+ * flow-finish-recording's hint needs before it offers one.
+ */
+export function runsSteps(steps: FlowStep[], platform: WhenPlatform): boolean {
+  return !stepsInScope(steps, platform).next().done;
+}
+
+/**
+ * Which launch-coverage promise these scopes break under `requires`, or null
+ * when they keep it. Split out of {@link validateRequires} so
+ * {@link assertComposedLaunchCoverage} can apply the identical judgement to a
+ * multi-file picture instead of growing a second implementation that drifts.
+ */
+function launchCoverageFailure(
+  scopes: readonly CoverageScope[],
+  requires: FlowRequires
+): string | null {
+  const { platform, runtimeKind } = requires;
+
+  if (platform) {
+    // A launch declaring no id for the run's platform is a run-time error
+    // (flow-run's runLaunch), so a launch missing an id for a platform the flow
+    // claims to support is that same error, decidable here without a device.
+    // A platform runtimeKind already rules out can never host a run, so it
+    // owes no id. Only unconditional launches prove anything: one behind a
+    // run-time guard may never be reached, and the flow completes end to end on
+    // every run where the guard stays shut.
+    const viable = runtimeKind
+      ? platform.filter((p) => platformCanPresent(p, runtimeKind))
+      : platform;
+    for (const { app, allowed, conditional, flow } of scopedLaunches(scopes, viable)) {
+      if (conditional) continue;
+      const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
+      if (missing.length > 0) {
+        return (
+          `a launch step${flow ? ` in "${flow}"` : ""} declares no app id for ${missing.join(", ")}, ` +
+          `which requires.platform says the flow supports — add the missing launch ` +
+          `${missing.length > 1 ? "entries" : "entry"}, or narrow requires.platform`
+        );
+      }
+    }
+    return null;
+  }
+
+  if (!runtimeKind) return null;
+  // Asymmetry with the branch above: a declared platform list is a per-platform
+  // promise (every viable listed platform must be served), but an undeclared
+  // one is an open set — one viable platform served by every launch in its
+  // scope suffices.
+  const candidates = LAUNCH_PLATFORMS.filter((p) => platformCanPresent(p, runtimeKind));
+  if (candidates.some((p) => scopedCoverage(scopes, p) !== "unserved")) return null;
+  return (
+    `no platform that is ever "${runtimeKind}" (${candidates.join(", ")}) has an app id in ` +
+    `every launch step — add launch entries for one of them, or drop requires.runtimeKind`
+  );
+}
+
+function unsatisfiable(detail: string): FailureError {
+  return new FailureError(`This flow's requires block can never be satisfied: ${detail}`, {
+    error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+    failure_stage: "flow_file_validate",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/**
+ * Cross-field checks on a `requires` block: the first names a block no target
+ * anywhere could satisfy, the other two hold it to the promise it makes about
+ * this file — that a platform it admits runs steps, and that the launches
+ * cover the platforms it declares. Failing any of the three is always an
+ * authoring mistake and always cheaper to learn at parse than as a whole suite
+ * quietly skipping itself.
+ */
+function validateRequires(flow: FlowFile): void {
+  const requires = flow.requires;
+  if (!requires) return;
+  const { platform, runtimeKind } = requires;
+
+  if (platform && runtimeKind && !platform.some((p) => platformCanPresent(p, runtimeKind))) {
+    throw unsatisfiable(
+      `no platform it names (${platform.join(", ")}) is ever "${runtimeKind}" — ` +
+        `vega is always tv and chromium never is`
+    );
+  }
+
+  // A `when: { platform: X }` guard takes its body out of scope on every other
+  // platform, so a block admitting only platforms with an empty scope certifies a
+  // file that runs nothing on every target it allows. A file that runs nothing
+  // anywhere — flow-start-recording's `steps: []` reset — is not that mistake.
+  const declared: readonly WhenPlatform[] = platform ?? LAUNCH_PLATFORMS;
+  const admitted = runtimeKind
+    ? declared.filter((p) => platformCanPresent(p, runtimeKind))
+    : declared;
+  if (
+    !admitted.some((p) => runsSteps(flow.steps, p)) &&
+    LAUNCH_PLATFORMS.some((p) => runsSteps(flow.steps, p))
+  ) {
+    // Which key shut the runners out picks the remedy: widening the platform
+    // list is no fix for a platform it already names and runtimeKind rejects.
+    const shutOutByKind = runtimeKind
+      ? declared.filter((p) => runsSteps(flow.steps, p) && !platformCanPresent(p, runtimeKind))
+      : [];
+    throw unsatisfiable(
+      `no platform it admits (${admitted.join(", ")}) runs any step — ` +
+        (shutOutByKind.length > 0
+          ? `the steps sit behind guards for ${shutOutByKind.join(", ")}, which ` +
+            `requires.runtimeKind: ${runtimeKind} excludes, so move the steps out of those ` +
+            `guards, or drop requires.runtimeKind`
+          : `every step sits behind a when: platform guard for another platform, so move the ` +
+            `steps out of those guards, or widen requires.platform`)
+    );
+  }
+
+  const detail = launchCoverageFailure([{ steps: flow.steps }], requires);
+  if (detail) throw unsatisfiable(detail);
+}
+
+/**
+ * Re-run {@link validateRequires}'s launch-coverage judgement over a run's
+ * composed picture — the root's steps plus those of every fragment its leading
+ * `run:` chain enters — against the folded block. Parse-time validation sees
+ * one file, so factoring either half across the boundary escapes it and the
+ * same content is judged two ways depending only on how it is split. Refusing
+ * here raises FLOW_REQUIRES_UNSATISFIABLE, which a directory run fails on:
+ * falling through instead leaves the composition to be refused per target as
+ * FLOW_REQUIREMENTS_UNMET, the code that run turns into a silent skip.
+ */
+export function assertComposedLaunchCoverage(
+  scopes: readonly CoverageScope[],
+  requires: FlowRequires | undefined
+): void {
+  if (!requires) return;
+  const detail = launchCoverageFailure(scopes, requires);
+  if (!detail) return;
+  throw new FailureError(
+    `This run's requires block, composed along its leading run: chain, can never be ` +
+      `satisfied: ${detail}`,
+    {
+      error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+      failure_stage: "flow_run_validate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/** One leading-chain file's requires block, named so a fold conflict can point at it. */
+interface RequiresContribution {
+  flow: string;
+  requires: FlowRequires;
+}
+
+function unsatisfiableTogether(detail: string): FailureError {
+  return new FailureError(
+    `The requires blocks this run composes can never be satisfied together: ${detail}. ` +
+      `Relax one of the blocks, or drop the run: composition.`,
+    {
+      error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+      failure_stage: "flow_run_validate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * Fold the requires blocks a run's leading `run:` chain contributes — the
+ * root's plus one per fragment entered before the first executable step — into
+ * the single block run setup judges. Every entered file is certain to execute
+ * before step 1, so each block constrains the whole run's start: platform
+ * lists intersect and runtimeKinds must agree (absent = unconstrained). A fold
+ * no target could ever satisfy throws, naming the blocks that collide — a
+ * broken composition should go red once, not skip silently. Returns the root's
+ * block untouched when no fragment contributed; a folded block carries
+ * `composed` so refusal messages can attribute it honestly.
+ */
+export function foldLeadingRequires(
+  rootFlow: string,
+  rootRequires: FlowRequires | undefined,
+  fragments: RequiresContribution[]
+): FlowRequires | undefined {
+  if (fragments.length === 0) return rootRequires;
+  const contributions = rootRequires
+    ? [{ flow: rootFlow, requires: rootRequires }, ...fragments]
+    : fragments;
+
+  let platform: WhenPlatform[] | undefined;
+  // A set: the leading scan enters a fragment once per `run:` step that reaches it.
+  const platformOwners = new Set<string>();
+  let runtimeKind: FlowRuntimeKind | undefined;
+  let kindOwner = "";
+  const names = (owners: ReadonlySet<string>): string =>
+    [...owners].map((o) => `"${o}"`).join(" and ");
+  for (const { flow, requires } of contributions) {
+    if (requires.platform) {
+      const prior = platform;
+      const next = prior ? requires.platform.filter((p) => prior.includes(p)) : requires.platform;
+      if (prior && next.length === 0) {
+        throw unsatisfiableTogether(
+          `${names(platformOwners)} leave${platformOwners.size > 1 ? "" : "s"} platform: ` +
+            `[${prior.join(", ")}] and "${flow}" requires platform: ` +
+            `[${requires.platform.join(", ")}] — no platform satisfies both`
+        );
+      }
+      platform = next;
+      platformOwners.add(flow);
+    }
+    if (requires.runtimeKind) {
+      if (runtimeKind && runtimeKind !== requires.runtimeKind) {
+        throw unsatisfiableTogether(
+          `"${kindOwner}" requires runtimeKind: ${runtimeKind} and "${flow}" requires ` +
+            `runtimeKind: ${requires.runtimeKind}`
+        );
+      }
+      runtimeKind = requires.runtimeKind;
+      kindOwner ||= flow;
+    }
+  }
+  // Cross-file only: a single file pairing a platform list with a kind none of
+  // it can present is already refused at parse (validateRequires).
+  const kind = runtimeKind;
+  if (platform && kind && !platform.some((p) => platformCanPresent(p, kind))) {
+    throw unsatisfiableTogether(
+      `${names(platformOwners)} leave${platformOwners.size > 1 ? "" : "s"} platform: ` +
+        `[${platform.join(", ")}] and "${kindOwner}" requires runtimeKind: ${kind}, ` +
+        `which no platform in that list ever presents`
+    );
+  }
+  return {
+    ...(platform ? { platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+    composed: true,
+  };
+}
+
+/**
+ * Validate cross-field invariants that are checkable without other files.
+ * `skipRequires` is for callers that must carry or count a `requires` block
+ * verbatim rather than judge it: a block hand-written mid-take legitimately
+ * precedes the launch steps that will satisfy it — flow-finish-recording and
+ * the run path are the gates that judge the whole flow.
+ */
+export function validateFlow(flow: FlowFile, opts?: { skipRequires?: boolean }): void {
+  if (!opts?.skipRequires) validateRequires(flow);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
@@ -2732,8 +3258,8 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-/** Parse a YAML flow file into a FlowFile. */
-export function parseFlow(content: string): FlowFile {
+/** Parse a YAML flow file into a FlowFile. `opts` forwards to {@link validateFlow}. */
+export function parseFlow(content: string, opts?: { skipRequires?: boolean }): FlowFile {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return { executionPrerequisite: "", steps: [] };
@@ -2771,9 +3297,10 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  // Same strictness as step bodies: the file has exactly three top-level keys,
+  // so a misspelled `executionPrerequisite` must not silently become "" — nor
+  // a misspelled `requires` become a flow that runs anywhere.
+  const topKeys: readonly string[] = ["executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -2795,9 +3322,12 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined
+      ? {}
+      : { requires: parseRequires(parsed.requires as unknown) }),
     steps,
   };
-  validateFlow(flow);
+  validateFlow(flow, opts);
   return flow;
 }
 
@@ -3148,21 +3678,68 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  */
 export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
   try {
-    return parseFlow(await fs.readFile(filePath, "utf8")).steps.length;
+    // skipRequires: a take mid-edit on its requires block still has countable
+    // steps, and reporting no count would understate the loss.
+    return parseFlow(await fs.readFile(filePath, "utf8"), { skipRequires: true }).steps.length;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * What the flow file on disk declares in `requires:` — `{ requires }` when the
+ * file was read and parsed (the block, or undefined for a file that declares
+ * none), or `unwitnessed` naming why the file says nothing about it. For
+ * flow-start-recording's reset: `requires` is the one FlowFile field no tool
+ * can write back, so the truncate carries it forward instead of silently
+ * unfencing the flow. skipRequires so even a coverage-violating block survives
+ * the reset rather than vanishing.
+ *
+ * `unwitnessed` rather than "declares none" on a failure, for the same reason
+ * {@link countStepsOnDisk} does not report 0: a typo inside the block, an
+ * unknown top-level key or an unparseable step all land here, and those are
+ * exactly the files a re-record is meant to repair — so reporting the unknown
+ * as "no block" would discard a fence in silence. A missing file is an answer
+ * rather than a gap, so a first-time start stays silent.
+ *
+ * It names the REASON, because the reasons do not license the same answer:
+ * "absent" and "empty" leave the flow's fence unwitnessed here, and so only
+ * those may be answered from elsewhere, while "unreadable" and "unparsed" can
+ * only be reported — and a file that could not be READ must not be reported as
+ * one that did not parse.
+ */
+export async function requiresOnDisk(filePath: string): Promise<{
+  requires: DeclaredRequires | undefined;
+  unwitnessed?: "absent" | "empty" | "unreadable" | "unparsed";
+}> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+    return { requires: undefined, unwitnessed: code === "ENOENT" ? "absent" : "unreadable" };
+  }
+  // An empty file parses clean as a flow that declares nothing, but zero bytes
+  // are what a truncated write leaves, not what an unfencing hand-edit does.
+  if (content.trim() === "") return { requires: undefined, unwitnessed: "empty" };
+  try {
+    return { requires: parseFlow(content, { skipRequires: true }).requires };
+  } catch {
+    return { requires: undefined, unwitnessed: "unparsed" };
   }
 }
 
 /** Read and parse the flow file, append a step, write it back. */
 async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
-  const flow = parseFlow(content);
+  // skipRequires, or a mid-take requires block would fail every append —
+  // including this parse of the file as it already stands.
+  const flow = parseFlow(content, { skipRequires: true });
   flow.steps.push(step);
   // Re-validate with the new step: a leading `launch` recorded into a
   // prerequisite-bearing recording must error here (nothing written), not
   // produce a file that fails to validate at replay.
-  validateFlow(flow);
+  validateFlow(flow, { skipRequires: true });
   const updated = serializeFlow(flow);
   await writeFlowFile(filePath, updated);
   return updated;
@@ -3381,7 +3958,9 @@ export async function appendStepToFlow(
     if (session.persist === "host") {
       const before = session.flow.steps;
       const flowFile = await appendStep(session.filePath, step);
-      session.flow = parseFlow(flowFile);
+      // As lenient as the append that just accepted this content: the file may
+      // be mid-take on its requires block.
+      session.flow = parseFlow(flowFile, { skipRequires: true });
       // `appendStep` adds exactly one step, so everything before the last one
       // is what the file already held — the recorder's previous view, unless a
       // hand edit landed in between.
@@ -3401,7 +3980,9 @@ export async function appendStepToFlow(
       // un-normalized coordinates). Roll back on either: in client mode this
       // in-memory copy is the ONLY copy, so leaving the rejected step in it
       // would poison every later append and the finish itself.
-      validateFlow(session.flow);
+      // skipRequires for the same reason as appendStep: an append never judges
+      // the whole flow.
+      validateFlow(session.flow, { skipRequires: true });
       const flowFile = serializeFlow(session.flow);
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),

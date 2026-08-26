@@ -34,7 +34,7 @@ Argent makes a recorded tap portable. When the tapped element has a stable text 
 
 ## The flow file
 
-Argent stores each flow as a YAML file in the `.argent/flows/` directory of the project. The file contains a list of steps. The file does not contain a device identifier. Thus the same flow runs on a different simulator or a different emulator.
+Argent stores each flow as a YAML file in the `.argent/flows/` directory of the project. The file contains a list of steps. The file does not contain a device identifier. Thus the same flow runs on a different simulator or a different emulator. A flow can also name the targets that it supports, for example a phone or a TV. Argent runs the flow only on a target of that kind. In a run over a whole directory, Argent skips the flow on every other target.
 
 A flow has one of two shapes:
 

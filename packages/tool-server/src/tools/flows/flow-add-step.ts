@@ -1135,6 +1135,9 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
     // because an aborted request still appends its first.
     longRunning: true,
     zodSchema,
+    // The recorded command's own target rides inside the `args` JSON string, so
+    // the schema shows no device key while the step drives a device.
+    opaqueDeviceTarget: true,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);

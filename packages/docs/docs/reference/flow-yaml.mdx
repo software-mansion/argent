@@ -24,12 +24,13 @@ steps:
   - await: { idle: true }
 ```
 
-The file has two top-level keys:
+The file has three top-level keys:
 
-| Key                     | Required | Description                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                       |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it |
+| Key                     | Required | Description                                                                      |
+| ----------------------- | -------- | -------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it          |
+| `requires`              | no       | The block a target must satisfy. See [Target requirements](#target-requirements) |
 
 A flow has one of two shapes:
 
@@ -43,6 +44,33 @@ Argent skips leading `echo` steps when it classifies a flow. A flow that opens w
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
 When a step fails, Argent stops the flow and reports the later steps as skipped.
+
+## Target requirements
+
+```yaml
+requires:
+  platform: [ios, android]
+  runtimeKind: tv
+```
+
+`platform` names one of `ios`, `android`, `chromium` and `vega`, or a list of them. `runtimeKind` is `tv` for a focus-driven remote environment, or `mobile` for every other target. Argent runs the flow only on a target that satisfies every key of the block. The example above allows Apple TV and Android TV. The example excludes Fire TV. A file without a `requires:` block runs on every target. The block also narrows the device detection. For a flow that requires `ios`, Argent selects the booted simulator, and not an emulator that is booted at the same time. On a target that does not satisfy the block, the outcome depends on the run:
+
+| Run                                                | Outcome                                              |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| `argent flow run <dir>`                            | Argent skips the flow and runs the rest of the batch |
+| `argent flow run <name>` or a single file          | Argent reports an error                              |
+| A `run:` step that the flow reaches during the run | Argent fails the step                                |
+
+A `run:` step before the first executable step is different. Argent adds the block of that fragment to the block of the flow before step 1. The platform lists intersect, and the two `runtimeKind` values must be equal. Argent then judges the whole run against the result, as the first two rows describe. Argent fails the run when the two blocks have no common target.
+
+Argent skips a flow only when the check answers. Argent fails the flow when it cannot verify a requirement. For example, Argent cannot always read the runtime kind of a device.
+
+Argent rejects a `requires:` block that no target can satisfy:
+
+- The `platform` list names no platform that can satisfy the `runtimeKind`. `vega` is always `tv`. `chromium` is never `tv`.
+- The flow has at least one step, and every step sits behind a `when: { platform }` guard for a platform that the block excludes.
+
+Argent also rejects a block that names a platform for which a `launch` step that always runs declares no app id. Argent makes this check again before the first step, over the flow and the fragments of its leading `run:` chain. Argent fails such a run instead of skipping it.
 
 ## Selectors
 
@@ -240,7 +268,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 ## The `argent flow` command
 
-`argent flow run` replays a flow without an agent and exits non-zero on failure. The command always uses a local tool-server.
+`argent flow run` replays a flow without an agent. The command exits non-zero after a failure. A directory run that executes no step exits 2, even when no flow failed. The command always uses a local tool-server.
 
 | Command                       | Description                                          |
 | ----------------------------- | ---------------------------------------------------- |
@@ -252,7 +280,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 | Option               | Description                                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------------------------ |
 | `--device <id>`      | The device to run on. Argent detects the device when you omit the option                               |
-| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection                                          |
+| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection. A `requires:` block narrows it further  |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them                                                 |
 | `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload        |
 | `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped |
@@ -266,7 +294,9 @@ argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
 argent flow run .argent/flows --recursive
 ```
 
-The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`. A directory run prints only the failing steps and a summary. An invalid file fails alone and the batch continues. An infrastructure error stops the batch and counts the remaining flows as skipped.
+The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`. A directory run prints only the failing steps and a summary. An invalid file fails alone and the batch continues. Argent skips a flow when the target does not satisfy its [`requires:`](#target-requirements) block, and the batch continues. An infrastructure error stops the batch and counts the remaining flows as skipped.
+
+A directory run prints a `PASS`, `FAIL` or `NONE RAN` verdict in the summary. `NONE RAN` means that no flow failed and that no step did work of its own. Argent exits 2 on that verdict, because a run that proved nothing is not a pass. Argent prints `FAIL` and exits 1 when one flow fails.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
@@ -277,3 +307,5 @@ The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow
 ## YAML safety
 
 Quote a string that contains `#`, `:` or quotes. Quote a number, `true` or `false` in a text slot. Use single quotes for a regex with backslashes. Parsing rejects an unknown directive, an invalid selector, an invalid regex, `else`, an unsupported option, and an end-to-end flow that declares `executionPrerequisite`.
+
+Parsing also rejects an unknown top-level key. Parsing rejects a `requires:` block that is not a map, or that declares no key. Parsing rejects an unknown key in the block, an empty `platform` list, an unknown platform, a repeated platform, and an unknown `runtimeKind`.

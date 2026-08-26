@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
  */
 
 import { stripRemotePrefix } from "./device-info";
+import { isIosOrTvOsRuntimeId, runtimeKindFromRuntimeId } from "./ios-devices";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -66,38 +67,103 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
   }
 }
 
-// A simulator's runtime kind is fixed at creation, so memoize it per-UDID and
-// keep the `sim-remote simctl list` round-trip off repeated calls. Only
-// successful lookups are cached.
+/**
+ * The listing's runtime-id -> simulators entries, or undefined when the payload
+ * parsed but isn't a listing (e.g. `{"error":...}` at exit 0). A runtime entry
+ * whose value is not an array is dropped, so one malformed entry costs its own
+ * simulators rather than every entry behind it.
+ *
+ * Callers share the shape check but not the verdict on undefined:
+ * `getRemoteSimulatorRuntimeKind` throws, `list-devices` reports the platform
+ * absent.
+ */
+export function listedRuntimeEntries(
+  listed: SimRemoteListDevicesResult
+): Array<[string, SimRemoteDevice[]]> | undefined {
+  const byRuntime = (listed as { devices?: unknown } | null)?.devices;
+  if (typeof byRuntime !== "object" || byRuntime === null) return undefined;
+  return Object.entries(byRuntime).filter((entry): entry is [string, SimRemoteDevice[]] =>
+    Array.isArray(entry[1])
+  );
+}
+
+/**
+ * A runtime entry's usable simulators. A row that is not an object carrying a
+ * string `udid` is dropped, so one malformed row costs its own simulator rather
+ * than every row behind it.
+ */
+export function listedRuntimeDevices(devices: SimRemoteDevice[]): SimRemoteDevice[] {
+  return (devices as unknown[]).filter(
+    (d): d is SimRemoteDevice =>
+      typeof d === "object" && d !== null && typeof (d as { udid?: unknown }).udid === "string"
+  );
+}
+
+// A simulator's runtime kind is fixed at creation, so memoize it per bare udid
+// and keep the `sim-remote simctl list` round-trip off repeated calls — the
+// same deal (and the same shape) as the local `getSimulatorRuntimeKind`, down
+// to caching verdicts only: an unknown udid re-probes, since the sim may not
+// have been created yet when the first call landed, and probes racing the same
+// udid before either lands each pay their own round-trip.
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
+
+/**
+ * Resolve the runtime kind ("mobile" | "tv") of a remote simulator, or undefined
+ * when the listing answered but doesn't know the udid. A `sim-remote` failure
+ * (missing binary, expired auth, orchestrator down) propagates instead — per the
+ * module's contract, so the CLI's stderr reaches the agent verbatim.
+ *
+ * The remote analogue of `getSimulatorRuntimeKind`: `classifyDevice` tags every
+ * `remote:`-prefixed id `ios-remote` by shape alone, so a caller that must tell
+ * tvOS from iOS reads the real runtime off the listing's runtime-id key here.
+ */
+export async function getRemoteSimulatorRuntimeKind(
+  udid: string
+): Promise<"mobile" | "tv" | undefined> {
+  const bare = stripRemotePrefix(udid);
+  const cached = remoteRuntimeKindCache.get(bare);
+  if (cached) return cached;
+  const listed = await simctlListDevices();
+  // A payload that parses but isn't a listing (e.g. `{"error":...}` at exit 0)
+  // gets the same descriptive wrap as non-JSON output, not a raw TypeError.
+  const entries = listedRuntimeEntries(listed);
+  if (!entries) {
+    throw new Error("sim-remote simctl list devices --json returned JSON without a devices map");
+  }
+  for (const [runtimeId, devices] of entries) {
+    // Mirror the local classifier's runtime filter, so a watchOS / xrOS sim comes
+    // back unverifiable instead of falling into the `mobile` default below.
+    if (!isIosOrTvOsRuntimeId(runtimeId)) continue;
+    // Mirror `listRemoteIosSimulators`' availability filter, so a simulator
+    // `list-devices` hides can't be the one that answers here.
+    if (!listedRuntimeDevices(devices).some((d) => d.udid === bare && d.isAvailable !== false))
+      continue;
+    const kind = runtimeKindFromRuntimeId(runtimeId);
+    remoteRuntimeKindCache.set(bare, kind);
+    return kind;
+  }
+  return undefined;
+}
 
 /**
  * True when a remote UDID is a tvOS (Apple TV) simulator.
  *
- * `resolveDevice` classifies remote ids by shape alone, and iOS and tvOS sims
- * are both `platform: "ios-remote"` UUIDs, so the runtime is only knowable
- * from the orchestrator's device list, whose keys name the runtime.
- *
- * A failed lookup resolves to `false` rather than throwing: callers use this
- * to narrow an already-supported device, so it must not turn a working phone
- * simulator into an error.
+ * The remote analogue of `isTvOsSimulator`. Callers use it to *narrow* an
+ * already-supported device, so an unanswerable lookup reads as non-TV rather
+ * than throwing: a listing the orchestrator can't serve must not turn a working
+ * phone simulator into an error.
  */
 export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
-  const id = stripRemotePrefix(udid);
-  const cached = remoteRuntimeKindCache.get(id);
-  if (cached) return cached === "tv";
   try {
-    const { devices } = await simctlListDevices();
-    for (const [runtime, entries] of Object.entries(devices)) {
-      if (!entries.some((d) => d.udid === id)) continue;
-      const kind = runtime.includes("tvOS") ? "tv" : "mobile";
-      remoteRuntimeKindCache.set(id, kind);
-      return kind === "tv";
-    }
+    return (await getRemoteSimulatorRuntimeKind(udid)) === "tv";
   } catch {
-    // unknown runtime — treat as non-TV
+    return false;
   }
-  return false;
+}
+
+/** Test-only: clear the remote runtime-kind memo so cases don't leak verdicts. */
+export function __resetRemoteSimulatorRuntimeKindCacheForTesting(): void {
+  remoteRuntimeKindCache.clear();
 }
 
 export async function simctlBoot(udid: string): Promise<void> {

@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -111,6 +111,17 @@ A directory run prints only failing steps plus a final flow summary;
 --recursive walks subdirectories too (dot-directories and node_modules are
 skipped). An invalid flow file fails alone and the batch continues; an infra
 error stops the batch and counts the remaining flows skipped.
+
+A flow may declare a \`requires:\` block (platform / runtimeKind) naming the
+targets it supports. In a directory run a flow the target does not satisfy is
+skipped, so one command runs a mixed suite; running that same flow on its own
+is an error instead, since you asked for it by name. Skipping needs the check
+to have ANSWERED: a requirement that could not be verified (the device's
+runtime kind was unreadable) fails the flow instead, so a broken probe cannot
+pose as a filter. A directory run in which nothing failed and no step executed
+exits 2 — nothing ran, which is not a pass; one failed flow exits 1 instead,
+since a red result is not an empty one. A single flow that executes nothing
+still exits 0 — its own report lists every step it skipped and why.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -305,14 +316,27 @@ export function renderFailedSteps(report: FlowReport): string[] {
   return lines;
 }
 
-/** Flow-level verdict of a directory run, mirroring renderSummary's shape. */
-export function renderBatchSummary(counts: {
-  total: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-}): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
+/**
+ * Flow-level verdict of a directory run, mirroring renderSummary's shape. A
+ * batch that found flows, failed none of them, and ran none of them either is
+ * neither PASS nor FAIL: nothing proved anything, so it gets its own word
+ * rather than a "PASS" that contradicts the non-zero exit. A failure outranks
+ * that — a red result is not an empty one — which is why the FAIL arm is tested
+ * first. The caller decides `ranNothing` from executed steps, not the flow
+ * counts here, because a flow whose steps were all `when:`-skipped still
+ * classifies as a flow-level pass.
+ */
+export function renderBatchSummary(
+  counts: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  },
+  ranNothing: boolean
+): string {
+  const verdict = counts.failed > 0 ? "FAIL" : ranNothing ? "NONE RAN" : "PASS";
+  return `${verdict} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
 }
 
 /**
@@ -957,7 +981,45 @@ interface BatchFlowResult {
   status: "pass" | "fail" | "skip";
   report?: FlowReport;
   error?: string;
+  /** Why a skipped flow was skipped — its unmet `requires`, or the batch stop. */
+  skipReason?: string;
+  /**
+   * The rejection's classification, on a flow the tool-server threw on — what
+   * separates an unverifiable `requires:` probe from an invalid file. A flow
+   * that ran and failed carries neither.
+   */
+  errorCode?: string;
+  errorKind?: string;
 }
+
+/**
+ * The failure a flow raises when its `requires:` block excludes the run's
+ * target. A directory run turns exactly this into a per-flow skip: a mixed
+ * suite is meant to hold flows for platforms this run is not on, so filtering
+ * them out is the feature, not a fault. Every other validation rejection stays
+ * a failure — a broken file, or a probe that could not answer.
+ */
+const REQUIREMENTS_UNMET_CODE: string = FAILURE_CODES.FLOW_REQUIREMENTS_UNMET;
+
+/**
+ * Step kinds that prove no work of their own: the `when:` and `run:` markers,
+ * whose guarded and composed steps are expanded into the same flat step list
+ * and counted there instead, plus `echo:` narration, which the tool-server's
+ * own summary omits too. Hand-mirrored, not imported: the CLI takes no
+ * tool-server dependency and types `kind` as a bare string, so a marker kind
+ * added there has to be added here as well or this guard silently reopens.
+ * NESTED_FLOW_TOOL is the fourth such shape, kept beside the set because its
+ * kind is `tool`, not a marker kind of its own.
+ */
+const NON_EXECUTING_STEP_KINDS: ReadonlySet<string> = new Set(["when", "run", "echo"]);
+
+/**
+ * The `tool:` spelling of a composition — hand-authored only, since the
+ * recorder captures a recorded flow-execute as `run:`. Its report is one step
+ * for work performed entirely inside another flow, so it proves no more than
+ * the `run:` marker does.
+ */
+const NESTED_FLOW_TOOL = "flow-execute";
 
 /**
  * Run every discovered flow in `dir` sequentially. Reports failures only (no
@@ -1002,7 +1064,7 @@ async function runFlowDirectory(
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
     if (stopped) {
-      results.push({ path: rel, status: "skip" });
+      results.push({ path: rel, status: "skip", skipReason: "batch stopped" });
       if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
       continue;
     }
@@ -1019,8 +1081,23 @@ async function runFlowDirectory(
       if (data && typeof data === "object" && "steps" in data) report = data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof ToolInvocationError && err.errorCode === REQUIREMENTS_UNMET_CODE) {
+        results.push({ path: rel, status: "skip", skipReason: message });
+        if (!args.json) console.log(`  ${STATUS_GLYPH.skip} skipped — ${message}`);
+        continue;
+      }
       console.error(message);
-      results.push({ path: rel, status: "fail", error: message });
+      results.push({
+        path: rel,
+        status: "fail",
+        error: message,
+        ...(err instanceof ToolInvocationError && err.errorCode
+          ? { errorCode: err.errorCode }
+          : {}),
+        ...(err instanceof ToolInvocationError && err.errorKind
+          ? { errorKind: err.errorKind }
+          : {}),
+      });
       const rejectedThisFlowOnly =
         err instanceof ToolInvocationError && err.errorKind === "validation";
       if (!rejectedThisFlowOnly) stopped = true;
@@ -1054,10 +1131,44 @@ async function runFlowDirectory(
     failed: results.filter((r) => r.status === "fail").length,
     skipped: results.filter((r) => r.status === "skip").length,
   };
+  // A batch where nothing ran is not a pass, and "ran" means executed steps,
+  // not flows: a flow whose steps all sat behind `when:` guards is a flow-level
+  // pass with zero steps executed, and such a vacuous pass must not green-light
+  // a suite where a mistyped `requires` filtered everything else out. Failures
+  // still dominate (exit 1): a rejected file is a red result, not an empty one.
+  // Walked rather than read off report.passed: a met `when:` guard and a `run:`
+  // step each contribute a passing marker to that count, so one guarded or
+  // composed flow would satisfy the guard on its own while every authored step
+  // under it was skipped.
+  const executedSteps = results.reduce(
+    (n, r) =>
+      n +
+      (r.report?.steps ?? []).filter(
+        (s) =>
+          !NON_EXECUTING_STEP_KINDS.has(s.kind) &&
+          s.tool !== NESTED_FLOW_TOOL &&
+          s.status !== "skip"
+      ).length,
+    0
+  );
+  const ranNothing = counts.failed === 0 && counts.total > 0 && executedSteps === 0;
   if (args.json) {
-    console.log(JSON.stringify({ ok: counts.failed === 0, ...counts, flows: results }, null, 2));
+    console.log(
+      JSON.stringify({ ok: counts.failed === 0 && !ranNothing, ...counts, flows: results }, null, 2)
+    );
   } else {
-    console.log(`\n${renderBatchSummary(counts)}`);
+    console.log(`\n${renderBatchSummary(counts, ranNothing)}`);
+  }
+  // On stderr in --json mode too: the per-flow error prints above go to stderr
+  // regardless, and a CI leg that archives stdout and surfaces stderr must not
+  // get an exit-2 build with an empty log.
+  if (ranNothing) {
+    console.error(
+      `No step executed: every flow in ${dir} was skipped or passed vacuously (no step ` +
+        `did work of its own). Check the requires: blocks and when: guards against the ` +
+        `target this run selected.`
+    );
+    return exitAfterFlush(2);
   }
   return exitAfterFlush(counts.failed === 0 ? 0 : 1);
 }

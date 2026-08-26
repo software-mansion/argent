@@ -7,8 +7,17 @@ import {
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
-import { simctlListDevices } from "../../utils/sim-remote";
+import {
+  listIosSimulators,
+  isIosOrTvOsRuntimeId,
+  runtimeKindFromRuntimeId,
+  type IosSimulator,
+} from "../../utils/ios-devices";
+import {
+  simctlListDevices,
+  listedRuntimeEntries,
+  listedRuntimeDevices,
+} from "../../utils/sim-remote";
 import { withRemotePrefix } from "../../utils/device-info";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
@@ -24,6 +33,10 @@ type IosRemoteDevice = {
   name: string;
   state: string;
   runtime: string;
+  // The verdict the local listing already carries, read off `runtime` — a reader
+  // of this payload must not have to re-derive it from the raw id to tell a
+  // remote Apple TV from a remote iPhone.
+  runtimeKind: "mobile" | "tv";
 };
 
 type AndroidDevice = {
@@ -82,8 +95,14 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
   try {
     const result = await simctlListDevices();
     const out: IosRemoteDevice[] = [];
-    for (const [runtime, devices] of Object.entries(result.devices)) {
-      for (const d of devices) {
+    // The same entry and row shape checks `getRemoteSimulatorRuntimeKind` shares,
+    // answered this branch's way — an unreadable payload is an absent platform by
+    // decision, not a TypeError the catch below happens to swallow.
+    for (const [runtime, devices] of listedRuntimeEntries(result) ?? []) {
+      // Same iOS/tvOS filter the local listing applies: a remote watchOS / xrOS sim
+      // has no interaction surface, so it must not be advertised as an ios-remote target.
+      if (!isIosOrTvOsRuntimeId(runtime)) continue;
+      for (const d of listedRuntimeDevices(devices)) {
         if (d.isAvailable === false) continue;
         out.push({
           platform: "ios-remote",
@@ -91,6 +110,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           name: d.name,
           state: d.state,
           runtime,
+          runtimeKind: runtimeKindFromRuntimeId(runtime),
         });
       }
     }

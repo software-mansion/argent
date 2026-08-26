@@ -85,6 +85,7 @@ vi.mock("../src/utils/chromium-discovery", async () => {
 vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }));
 
 import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { __resetAndroidRuntimeKindCacheForTesting } from "../src/utils/adb";
 import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
 
@@ -127,8 +128,34 @@ function simctlJson(): string {
   });
 }
 
+// `sim-remote simctl list devices --json` mirrors Apple's payload, so the remote
+// listing sees the same watchOS / xrOS runtimes the local one does. An
+// unsupported runtime leads, so a filter that aborts the walk instead of
+// skipping the entry loses every row behind it.
+function simRemoteJson(): string {
+  return JSON.stringify({
+    devices: {
+      "com.apple.CoreSimulator.SimRuntime.watchOS-11-4": [
+        { udid: "33333333-3333-3333-3333-333333333333", name: "Apple Watch", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.iOS-18-2": [
+        { udid: "11111111-1111-1111-1111-111111111111", name: "iPhone 16", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.tvOS-17-5": [
+        { udid: "22222222-2222-2222-2222-222222222222", name: "Apple TV", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.xrOS-2-5": [
+        { udid: "44444444-4444-4444-4444-444444444444", name: "Vision Pro", state: "Shutdown" },
+      ],
+    },
+  });
+}
+
 beforeEach(() => {
   execFileMock.mockReset();
+  // The runtime-kind memo outlives a single call, so a cached verdict would let
+  // a later case pass without the probe it means to exercise.
+  __resetAndroidRuntimeKindCacheForTesting();
 });
 
 describe("list-devices", () => {
@@ -198,6 +225,40 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
+  it("tags Android rows with runtimeKind, the enrichment this tool opts into", async () => {
+    // listAndroidDevices skips the `pm list features` probe unless asked, so this
+    // tool's opt-in is the only thing putting the field on an Android row. A
+    // flow's `requires: { runtimeKind }` auto-detect filters on it, and dropping
+    // the opt-in loses it silently.
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return {
+          stdout: "List of devices attached\nemulator-5560\tdevice\nemulator-5562\tdevice\n",
+          stderr: "",
+        };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd === "pm list features") {
+          return args[1] === "emulator-5560"
+            ? { stdout: "feature:android.software.leanback\n", stderr: "" }
+            : { stdout: "feature:android.hardware.touchscreen\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const android = result.devices.filter((d) => d.platform === "android") as Array<{
+      serial: string;
+      runtimeKind?: "mobile" | "tv";
+    }>;
+    expect(android).toHaveLength(2);
+    expect(android.find((d) => d.serial === "emulator-5560")?.runtimeKind).toBe("tv");
+    expect(android.find((d) => d.serial === "emulator-5562")?.runtimeKind).toBe("mobile");
+  });
+
   it("readAvdName prefers the modern avd_name prop over the legacy one (now probed concurrently)", async () => {
     // The two getprops run in parallel (so a wedged device costs 5s, not 10s), but
     // precedence must be unchanged: `ro.boot.qemu.avd_name` (modern, emulator 30+)
@@ -224,6 +285,153 @@ describe("list-devices", () => {
     }>;
     expect(android).toHaveLength(1);
     expect(android[0]!.avdName).toBe("ModernName");
+  });
+
+  it("lists remote iOS/tvOS simulators only, never a remote watchOS or visionOS sim", async () => {
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return { stdout: simRemoteJson(), stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const remote = result.devices.filter((d) => d.platform === "ios-remote") as Array<{
+      udid: string;
+      name: string;
+    }>;
+    expect(remote.map((d) => d.name).sort()).toEqual(["Apple TV", "iPhone 16"]);
+    expect(remote.map((d) => d.udid)).toContain("remote:11111111-1111-1111-1111-111111111111");
+  });
+
+  it("tags a remote simulator with the runtimeKind its runtime id states", async () => {
+    // The remote row's runtime id is the same fact the local listing turns into
+    // `runtimeKind`; leaving it raw made every consumer of this payload read a
+    // remote Apple TV as an unclassified device.
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return { stdout: simRemoteJson(), stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const remote = result.devices.filter((d) => d.platform === "ios-remote") as Array<{
+      name: string;
+      runtime: string;
+      runtimeKind?: "mobile" | "tv";
+    }>;
+    const appleTv = remote.find((d) => d.name === "Apple TV");
+    const iPhone = remote.find((d) => d.name === "iPhone 16");
+    expect(appleTv?.runtimeKind).toBe("tv");
+    expect(iPhone?.runtimeKind).toBe("mobile");
+    // The raw id stays alongside it — this adds a field rather than replacing one.
+    expect(appleTv?.runtime).toBe("com.apple.CoreSimulator.SimRuntime.tvOS-17-5");
+  });
+
+  it("reports no ios-remote devices when sim-remote answers JSON that is not a listing", async () => {
+    // An orchestrator that answers `{"error":...}` at exit 0 parses fine.
+    // `getRemoteSimulatorRuntimeKind` turns that into a descriptive throw; here the
+    // platform is simply absent, and the rest of the fan-out must still answer.
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return { stdout: JSON.stringify({ error: "not authorized" }), stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    expect(result.devices.filter((d) => d.platform === "ios-remote")).toHaveLength(0);
+    expect(result.devices.filter((d) => d.platform === "android")).toHaveLength(1);
+  });
+
+  it("skips a runtime entry that is not a device array rather than losing the whole listing", async () => {
+    // A malformed entry under a runtime the filter accepts is the costly one: walking
+    // its value throws mid-loop, discarding every remote simulator already collected.
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              "com.apple.CoreSimulator.SimRuntime.iOS-17-0": "nope",
+              "com.apple.CoreSimulator.SimRuntime.iOS-18-2": 7,
+              "com.apple.CoreSimulator.SimRuntime.iOS-18-4": [
+                {
+                  udid: "11111111-1111-1111-1111-111111111111",
+                  name: "iPhone 16",
+                  state: "Booted",
+                },
+              ],
+              "com.apple.CoreSimulator.SimRuntime.tvOS-17-5": [
+                {
+                  udid: "22222222-2222-2222-2222-222222222222",
+                  name: "Apple TV",
+                  state: "Shutdown",
+                },
+              ],
+            },
+          }),
+          stderr: "",
+        };
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const remote = result.devices.filter((d) => d.platform === "ios-remote") as Array<{
+      udid: string;
+      name: string;
+    }>;
+    expect(remote.map((d) => d.name).sort()).toEqual(["Apple TV", "iPhone 16"]);
+    expect(remote.map((d) => d.udid).sort()).toEqual([
+      "remote:11111111-1111-1111-1111-111111111111",
+      "remote:22222222-2222-2222-2222-222222222222",
+    ]);
+  });
+
+  it("skips a malformed device row rather than losing every other remote simulator", async () => {
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              "com.apple.CoreSimulator.SimRuntime.iOS-18-2": [
+                null,
+                { name: "No udid", state: "Shutdown" },
+                {
+                  udid: "11111111-1111-1111-1111-111111111111",
+                  name: "iPhone 16",
+                  state: "Booted",
+                },
+              ],
+              "com.apple.CoreSimulator.SimRuntime.tvOS-17-5": [
+                {
+                  udid: "22222222-2222-2222-2222-222222222222",
+                  name: "Apple TV",
+                  state: "Shutdown",
+                },
+              ],
+            },
+          }),
+          stderr: "",
+        };
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const remote = result.devices.filter((d) => d.platform === "ios-remote") as Array<{
+      udid: string;
+      name: string;
+    }>;
+    expect(remote.map((d) => d.name).sort()).toEqual(["Apple TV", "iPhone 16"]);
+    expect(remote.map((d) => d.udid).sort()).toEqual([
+      "remote:11111111-1111-1111-1111-111111111111",
+      "remote:22222222-2222-2222-2222-222222222222",
+    ]);
   });
 
   it("silently omits iOS when xcrun is unavailable — other platforms still returned", async () => {

@@ -21,7 +21,7 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows
 2. **Record checks when their states appear.** Record `await-ui-element` live, then convert it during polish. An echo records intent or diagnostic context, not app behavior or a verdict. A screenshot is human evidence, not an executable verdict. For absence, record the same selector as `visible`, perform the removing action, then record it as `hidden`.
 3. **Use semantic targets.** Prefer a strict id, then stable text or an accessibility label. Use `scroll-to` for off-screen elements. Resolve every raw-point warning immediately through the [coordinate fallback gate](references/reliability-and-recovery.md#coordinate-fallback-gate).
 4. **Prove every screen change.** Record a destination-only identity check. During polish, follow it with `await: { idle: true }`. Stillness does not prove identity, and `idle` can pass with a warning.
-5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, and the documented Chromium packaging `launch:`.
+5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, the documented Chromium packaging `launch:`, and a `requires:` block, which fences targets rather than adding a step.
 6. **Replay the final YAML end to end.** A normal flow needs one uninterrupted full pass. `argent-qa-flows` requires two consecutive passes.
 
 ### Stable selectors
@@ -37,7 +37,7 @@ During polish, use `within`, `after`, and `next` to disambiguate repeated elemen
 1. Choose the flow type:
    - **e2e:** the first non-echo step is `launch:`. The flow controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
-2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
+2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay. Once `flow-finish-recording` returns, [ask the user whether it needs a `requires:` block](references/live-authoring.md#ask-about-requires). With no block it runs against every target.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
 
 ## Proactive recording
