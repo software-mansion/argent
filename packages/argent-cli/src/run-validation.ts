@@ -35,11 +35,12 @@ interface ValidationIssue {
  * default are not marked required by the schema generator, so this cannot reject an invocation
  * the server would have accepted.
  *
- * Retired keys are skipped, because this and `formatSchemaUsage` read the same schema and must
- * agree about which fields exist: usage renders a retirement as a notice rather than a flag row,
- * and the parser refuses every spelling of it. Both shipped retirements are `.optional()`, so
- * they never reach `required`; one declared without it would be demanded as `missing required
- * flag --settle` for a flag the help does not show and no input can satisfy.
+ * Retired keys are skipped, because this, `describeServerValidationFailure` and `formatSchemaUsage`
+ * read the same schema and must agree about which fields exist: usage renders a retirement as a
+ * notice rather than a flag row, and the parser refuses every spelling of it. Both shipped
+ * retirements are `.optional()`, so they never reach `required`; one declared without it would be
+ * demanded as `missing required flag --settle` for a flag the help does not show and no input can
+ * satisfy.
  */
 export function findMissingRequired(
   payload: Record<string, unknown>,
@@ -108,7 +109,10 @@ export function describeServerValidationFailure(
     (typeof issue.path[0] === "string" && Object.hasOwn(properties, issue.path[0]));
   if (!parsed.every(addressesThisTool)) return null;
 
-  const required = new Set(schema?.required ?? []);
+  // Retired keys are skipped as in `findMissingRequired`: a retirement is never a flag to pass.
+  const required = new Set(
+    (schema?.required ?? []).filter((name) => !isRetiredField(properties[name] ?? {}))
+  );
   const missing: string[] = [];
   const invalid: InvalidField[] = [];
   for (const issue of parsed) {

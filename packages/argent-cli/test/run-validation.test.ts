@@ -230,6 +230,22 @@ describe("describeServerValidationFailure", () => {
     ]);
   });
 
+  it("does not call a retired key a missing required flag", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    const message = "Invalid input: expected never, received undefined";
+    const err = new Error(JSON.stringify([{ code: "invalid_type", path: ["settle"], message }]));
+    const report = describeServerValidationFailure(err, { udid: "X" }, schema);
+    expect(report?.missing).toEqual([]);
+    expect(report?.invalid).toEqual([{ path: ["settle"], message }]);
+  });
+
   it("treats an explicitly supplied null as rejected, not missing", () => {
     const err = new Error(
       JSON.stringify([
