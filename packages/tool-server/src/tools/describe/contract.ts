@@ -77,11 +77,25 @@ export type DescribeSource =
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.
+/**
+ * The read did not complete: the tree source never answered (timed out, daemon
+ * died mid-read). Distinct from a read that answered with no elements — that
+ * one is evidence the screen is blank, this one is evidence of nothing. Callers
+ * that reason about emptiness (the wait tools, the auto-capture) must treat it
+ * as "unknown", not as "nothing there".
+ */
+export interface DescribeUnreadable {
+  stage: "ax-service" | "native-devtools";
+  error_code: string;
+  message: string;
+}
+
 export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
   hint?: string;
+  unreadable?: DescribeUnreadable;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
@@ -94,6 +108,7 @@ export interface DescribeResult {
   source: DescribeSource;
   should_restart?: boolean;
   hint?: string;
+  unreadable?: DescribeUnreadable;
 }
 
 export function parseDescribeResult(input: unknown): DescribeNode {

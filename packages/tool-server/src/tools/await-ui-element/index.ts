@@ -264,8 +264,13 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // poll and the tree has since gone blank mid-navigation.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   if (data.tree.children.length > 0) return false;
-  return Boolean(data.hint || data.should_restart || everMatched);
+  return Boolean(data.unreadable || data.hint || data.should_restart || everMatched);
 }
+
+// Floor on the per-poll accessibility read budget: bounded by the wait's
+// remaining budget so a stalled app is caught within this call, never below
+// this so a large tree is not mistaken for a stalled one.
+const MIN_AX_READ_MS = 3000;
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
 // the real cause rather than a bare "no element matched".
@@ -328,10 +333,16 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     params: Params,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    remainingMs: number
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
-      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
+      return describeIos(
+        registry,
+        device,
+        { bundleId: params.bundleId },
+        { isTvOs, axTimeoutMs: Math.max(remainingMs, MIN_AX_READ_MS) }
+      );
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
@@ -423,8 +434,10 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       // undefined at the deadline means no read ever did.
       let lastTrustedReadAt: number | undefined;
 
+      const deadline = start + timeoutMs;
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: () =>
+          fetchTree(device, params, services, isTvOs, androidIsTv, deadline - Date.now()),
         timeoutMs,
         pollIntervalMs,
         signal,

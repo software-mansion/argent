@@ -39,6 +39,8 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  AUTO_DESCRIBE_TIMEOUT_MS,
+  autoDescribeUnavailableNote,
 } from "./auto-capture.js";
 import { toMcpTool } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -328,15 +330,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // returns well under the cap. If the call fails (e.g. a tool-server
         // without that tool), fall back to sleeping the full budget.
         const maxWaitMs = getAutoScreenshotDelayMs(params.name);
+        // Set when the readiness poll reports the tree source stopped answering:
+        // the tree read below would only queue behind the same stuck walk.
+        let treeUnreadable: string | undefined;
         if (maxWaitMs > 0) {
           try {
             const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
+            const idleResult = idle.result as Record<string, unknown>;
+            const unreadable = idleResult.unreadable as { message?: string } | undefined;
+            if (unreadable) treeUnreadable = unreadable.message ?? "the screen could not be read";
             await spyLog({
               ts: new Date().toISOString(),
               event: "auto_screenshot_readiness",
               name: params.name,
               maxWaitMs,
-              ...(idle.result as Record<string, unknown>),
+              ...idleResult,
             });
           } catch {
             await new Promise((r) => setTimeout(r, maxWaitMs));
@@ -371,12 +379,38 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // a `describe` round-trip before its next tap. Measured on Sonnet over
         // 70 runs: −21% turns, −23% wall time, −17% cost at equal task success
         // (see PR #958). The tree is a few hundred tokens per action.
-        if (wantTree) {
+        if (wantTree && treeUnreadable) {
+          content = [
+            ...content,
+            { type: "text" as const, text: autoDescribeUnavailableNote(treeUnreadable) },
+          ];
+          await spyLog({
+            ts: new Date().toISOString(),
+            event: "auto_describe",
+            name: params.name,
+            durationMs: 0,
+            skipped: "unreadable_at_readiness",
+          });
+        } else if (wantTree) {
           const t1 = Date.now();
           try {
-            const d = await callTool("describe", { udid });
-            const desc = (d.result as { description?: unknown } | null)?.description;
-            if (typeof desc === "string" && desc.length > 0) {
+            const d = await callTool("describe", { udid, timeoutMs: AUTO_DESCRIBE_TIMEOUT_MS });
+            const result = d.result as {
+              description?: unknown;
+              unreadable?: { message?: string };
+            } | null;
+            const desc = result?.description;
+            if (result?.unreadable) {
+              content = [
+                ...content,
+                {
+                  type: "text" as const,
+                  text: autoDescribeUnavailableNote(
+                    result.unreadable.message ?? "the read did not complete."
+                  ),
+                },
+              ];
+            } else if (typeof desc === "string" && desc.length > 0) {
               content = [
                 ...content,
                 { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` },
@@ -388,6 +422,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
               name: params.name,
               durationMs: Date.now() - t1,
               chars: typeof desc === "string" ? desc.length : 0,
+              ...(result?.unreadable ? { unreadable: result.unreadable } : {}),
             });
           } catch (e) {
             await spyLog({

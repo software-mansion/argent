@@ -65,10 +65,17 @@ export interface AXDescribeResponse {
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
-  describe(): Promise<AXDescribeResponse>;
+  /**
+   * `timeoutMs` bounds the read (default {@link DEFAULT_DESCRIBE_TIMEOUT_MS}).
+   * A read that times out also retires the daemon: it handles requests
+   * serially, so the stuck walk would otherwise hold every later read too.
+   */
+  describe(opts?: { timeoutMs?: number }): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
 }
+
+export const DEFAULT_DESCRIBE_TIMEOUT_MS = 10_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -253,6 +260,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
     const pendingRpc = new Map<number, PendingRpc>();
     let nextRpcId = 1;
+    // Highest request id the daemon has answered, including answers to requests
+    // whose caller had already given up. Ids are handed out in send order and
+    // the daemon replies in that order, so an answer to a LATER id proves the
+    // daemon got past the request whose timer is firing: slow, not stuck.
+    let lastAnsweredId = 0;
     let daemonSocket: net.Socket | null = null;
     let disposed = false;
 
@@ -283,6 +295,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           return;
         }
         if (typeof msg.id !== "number") return;
+        lastAnsweredId = Math.max(lastAnsweredId, msg.id);
         const pending = pendingRpc.get(msg.id);
         if (!pending) return;
         pendingRpc.delete(msg.id);
@@ -334,6 +347,23 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const proc = host.spawnAxDaemon(udid, endpoint);
+
+    // The daemon answers requests one at a time, so a `describe` that never
+    // returns (the app's main thread is pinned and the AX walk into it blocks)
+    // holds every request queued behind it until the walk ends — measured at a
+    // full 10s per queued read. Retiring the instance fails the queue at once
+    // and lets the next resolve spawn a fresh daemon (~1s), instead of every
+    // read paying the timeout in turn. Skipped when the daemon has answered a
+    // later request by the time the timer fires: then it was merely slow, and
+    // killing it would cut a healthy read that is in flight right now.
+    const retireAfterTimeout = (id: number, err: FailureError): void => {
+      if (disposed || lastAnsweredId > id) return;
+      disposed = true;
+      failPending(err);
+      if (daemonSocket && !daemonSocket.destroyed) daemonSocket.destroy();
+      if (!proc.killed) proc.kill("SIGTERM");
+      events.emit("terminated", err);
+    };
 
     proc.on("exit", (code) => {
       if (disposed) return;
@@ -398,14 +428,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         const timer = setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
-            reject(
-              new FailureError(`ax-service query timed out: ${command}`, {
-                error_code: FAILURE_CODES.AX_QUERY_TIMEOUT,
-                failure_stage: "ax_service_query_socket",
-                failure_area: "tool_server",
-                error_kind: "timeout",
-              })
-            );
+            const err = new FailureError(`ax-service query timed out: ${command}`, {
+              error_code: FAILURE_CODES.AX_QUERY_TIMEOUT,
+              failure_stage: "ax_service_query_socket",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+            });
+            reject(err);
+            if (command === "describe") retireAfterTimeout(id, err);
           }
         }, timeoutMs);
         pendingRpc.set(id, { resolve, reject, timer });
@@ -416,8 +446,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const api: AXServiceApi = {
       degraded: !entitlementBypassActive,
 
-      async describe(): Promise<AXDescribeResponse> {
-        const result = (await query("describe", 10_000)) as AXDescribeResponse & {
+      async describe(opts): Promise<AXDescribeResponse> {
+        const timeoutMs = opts?.timeoutMs ?? DEFAULT_DESCRIBE_TIMEOUT_MS;
+        const result = (await query("describe", timeoutMs)) as AXDescribeResponse & {
           error?: string;
         };
         if (result.error) {

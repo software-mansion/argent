@@ -14,7 +14,9 @@ import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
-import type { DescribeNode, DescribeTreeData } from "../describe/contract";
+import { sleepOrAbort } from "../../utils/timing";
+import type { DescribeNode, DescribeTreeData, DescribeUnreadable } from "../describe/contract";
+import { capturePixelsWithin, comparePixels, statusBarMaskFraction } from "../flows/flow-pixels";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
@@ -24,6 +26,28 @@ export const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_MIN_STABLE_MS = 250;
+
+// Per-poll accessibility read budget. Each read is bounded so an app that stops
+// answering is caught INSIDE the wait, with PIXEL_RESERVE_MS left to judge
+// stillness from screen captures instead — but never below MIN_AX_READ_MS, so a
+// merely large tree (a long web page reads in ~700ms) is not mistaken for a
+// stalled one. A wait shorter than the floor cannot switch to pixels; it reports
+// the unanswered read instead (see `unreadable` on the result).
+const MIN_AX_READ_MS = 3000;
+const PIXEL_RESERVE_MS = 1500;
+
+function axReadBudget(remainingMs: number): number {
+  return Math.max(MIN_AX_READ_MS, remainingMs - PIXEL_RESERVE_MS);
+}
+
+// The verdict for a wait whose only read never came back: not a stall proven by
+// a timeout, but the same fact for the caller — the tree source did not answer
+// within the budget, so an empty result is not evidence of a blank screen.
+const UNANSWERED: DescribeUnreadable = {
+  stage: "ax-service",
+  error_code: "AX_READ_UNANSWERED",
+  message: "the accessibility read did not answer within the wait budget",
+};
 
 const zodSchema = z.object({
   udid: z
@@ -64,6 +88,15 @@ interface IdleResult {
   settled: boolean;
   waitedMs: number;
   polls: number;
+  /**
+   * How the verdict was reached. `tree`: the element tree held still. `pixels`:
+   * the tree source stopped answering (see `unreadable`), so stillness was
+   * judged from two screen captures instead — motion is still caught, but
+   * "has content" is not: a blank screen that holds still counts as settled.
+   */
+  method: "tree" | "pixels";
+  /** Set when the tree source did not answer within the budget. */
+  unreadable?: DescribeUnreadable;
 }
 
 const capability: ToolCapability = {
@@ -95,10 +128,19 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     device: DeviceInfo,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    remainingMs: number
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
-      return describeIos(registry, device, {}, { isTvOs });
+      // A settle probe never pays for the native fallback: an app that isn't
+      // answering AX isn't answering a main-thread RPC either, and the probe
+      // has a pixel fallback of its own.
+      return describeIos(
+        registry,
+        device,
+        {},
+        { isTvOs, axTimeoutMs: axReadBudget(remainingMs), fallbackOnUnreadable: false }
+      );
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
@@ -119,8 +161,10 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
-${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls } — settled=false means the screen never went
-still before the timeout. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
+${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls, method, unreadable? } — settled=false means the
+screen never went still before the timeout. If the tree source stops answering (a busy app), the wait switches to
+comparing screen captures for the rest of the budget: method="pixels", and \`unreadable\` names the read that did not
+complete. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
@@ -145,16 +189,27 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
       const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
+      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+      const start = Date.now();
+      const deadline = start + timeoutMs;
 
       let stableSignature: string | undefined;
       let stableSince = 0;
+      let unreadable: DescribeUnreadable | undefined;
 
-      const poll = await pollDescribeTree<true>({
-        fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
-        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      const poll = await pollDescribeTree<"settled" | "unreadable">({
+        fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv, deadline - Date.now()),
+        timeoutMs,
+        pollIntervalMs,
         signal: ctx?.signal,
         onSample: (data, nowMs) => {
+          // The source never answered: polling it again only queues behind the
+          // same stuck read. Hand over to the pixel comparison below.
+          if (data.unreadable) {
+            unreadable = data.unreadable;
+            return { done: true, result: "unreadable" };
+          }
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
             stableSignature = undefined;
@@ -163,17 +218,57 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
           }
           const signature = treeSignature(data.tree);
           if (signature === stableSignature) {
-            if (nowMs - stableSince >= minStableMs) return { done: true, result: true };
+            if (nowMs - stableSince >= minStableMs) return { done: true, result: "settled" };
           } else {
             stableSignature = signature;
             stableSince = nowMs;
-            if (minStableMs === 0) return { done: true, result: true };
+            if (minStableMs === 0) return { done: true, result: "settled" };
           }
           return { done: false };
         },
       });
 
-      return { settled: poll.result === true, waitedMs: poll.elapsedMs, polls: poll.polls };
+      if (poll.result !== "unreadable") {
+        const unanswered = poll.lastData === null && !poll.lastAttemptSettled && !poll.aborted;
+        return {
+          settled: poll.result === "settled",
+          waitedMs: poll.elapsedMs,
+          polls: poll.polls,
+          method: "tree",
+          ...(unanswered ? { unreadable: UNANSWERED } : {}),
+        };
+      }
+
+      // Pixel settle for the rest of the budget. A screen capture never touches
+      // the app's accessibility path, so it answers while the app is pinned;
+      // two captures minStableMs apart that differ only by a caret or a spinner
+      // count as still, the same verdict the flow runner uses.
+      const env = { registry, device, signal: ctx?.signal };
+      const mask = await statusBarMaskFraction(device);
+      let polls = poll.polls;
+      let prev = await capturePixelsWithin(env, deadline, true);
+      if (prev) polls += 1;
+      while (prev && Date.now() < deadline) {
+        const gap = Math.min(
+          Math.max(minStableMs, pollIntervalMs),
+          Math.max(0, deadline - Date.now())
+        );
+        if (!(await sleepOrAbort(gap, ctx?.signal))) break;
+        const next = await capturePixelsWithin(env, deadline, false);
+        if (!next) break;
+        polls += 1;
+        if (comparePixels(prev, next, mask) !== "moving") {
+          return {
+            settled: true,
+            waitedMs: Date.now() - start,
+            polls,
+            method: "pixels",
+            unreadable,
+          };
+        }
+        prev = next;
+      }
+      return { settled: false, waitedMs: Date.now() - start, polls, method: "pixels", unreadable };
     },
   };
 }

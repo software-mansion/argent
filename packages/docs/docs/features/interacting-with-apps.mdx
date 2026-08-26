@@ -29,6 +29,8 @@ The agent does not read coordinates from a screenshot. Before a tap, the agent h
 
 After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
+A busy app does not answer the accessibility read. Argent then marks the read as `unreadable` instead of returning an empty tree, and the wait tools judge stillness from screen captures. The agent waits for the app to settle and reads the screen again.
+
 ## Launching apps
 
 The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data.

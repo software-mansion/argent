@@ -8,7 +8,10 @@ import {
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
   autoScreenshotEnabled,
   AUTO_DESCRIBE_TOOLS,
+  AUTO_DESCRIBE_HEADER,
+  AUTO_DESCRIBE_TIMEOUT_MS,
   autoDescribeEnabled,
+  autoDescribeUnavailableNote,
   shouldAutoDescribe,
   containsSecretPlaceholder,
   getUdidFromArgs,
@@ -331,5 +334,21 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The appended tree is bounded, and its absence is explained in place.
+// ---------------------------------------------------------------------------
+describe("auto-describe budget and note", () => {
+  it("bounds the appended read well under the accessibility default", () => {
+    expect(AUTO_DESCRIBE_TIMEOUT_MS).toBeLessThanOrEqual(3000);
+  });
+
+  it("explains a missing tree under the same header the tree would carry", () => {
+    const note = autoDescribeUnavailableNote("the read did not complete.");
+    expect(note.startsWith(AUTO_DESCRIBE_HEADER)).toBe(true);
+    expect(note).toMatch(/Not available: the read did not complete\./);
+    expect(note).toMatch(/call `describe`/i);
   });
 });

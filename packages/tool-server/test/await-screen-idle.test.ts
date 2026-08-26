@@ -111,3 +111,66 @@ describe("await-screen-idle tool", () => {
     expect(result.polls).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A tree source that stops answering hands the verdict to the pixel comparison.
+// ---------------------------------------------------------------------------
+vi.mock("../src/tools/flows/flow-pixels", async () => {
+  const actual = await vi.importActual<typeof import("../src/tools/flows/flow-pixels")>(
+    "../src/tools/flows/flow-pixels"
+  );
+  const frame = () => ({ width: 4, height: 4, data: Buffer.alloc(4 * 4 * 4, 0x80) });
+  return {
+    ...actual,
+    statusBarMaskFraction: async () => 0,
+    capturePixelsWithin: async () => frame(),
+  };
+});
+
+describe("await-screen-idle — tree source not answering", () => {
+  beforeEach(() => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
+  const timedOut = (): AXServiceApi => ({
+    degraded: false,
+    describe: async () => {
+      throw Object.assign(new Error("ax-service query timed out: describe"), {
+        signal: { error_code: "AX_QUERY_TIMEOUT", error_kind: "timeout" },
+      });
+    },
+    alertCheck: async () => false,
+    ping: async () => true,
+  });
+
+  it("switches to pixel comparison and settles on a still screen", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(timedOut()));
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 20 }
+    );
+    expect(result.method).toBe("pixels");
+    expect(result.settled).toBe(true);
+    expect(result.unreadable?.stage).toBe("ax-service");
+    expect(result.waitedMs).toBeLessThan(2000);
+  });
+
+  it("reports an unanswered read when the only poll never came back", async () => {
+    const hanging: AXServiceApi = {
+      degraded: false,
+      describe: () => new Promise(() => {}),
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitScreenIdleTool(iosRegistry(hanging));
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 60, pollIntervalMs: 10, minStableMs: 20 }
+    );
+    expect(result.settled).toBe(false);
+    expect(result.method).toBe("tree");
+    expect(result.polls).toBe(1);
+    expect(result.unreadable?.error_code).toBe("AX_READ_UNANSWERED");
+  });
+});

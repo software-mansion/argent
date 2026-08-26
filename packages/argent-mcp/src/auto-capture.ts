@@ -89,6 +89,23 @@ export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
+/**
+ * Budget for the appended tree. A read that overruns it comes back
+ * `unreadable` and is replaced by a one-line note: the tree is a convenience
+ * that saves the agent a `describe` call, not something worth holding the
+ * action for — an app whose main thread is pinned would otherwise cost the
+ * full 10s accessibility timeout plus the 5s native fallback on EVERY action.
+ */
+export const AUTO_DESCRIBE_TIMEOUT_MS = 3000;
+
+/** The note appended in place of a tree that could not be read. */
+export function autoDescribeUnavailableNote(reason: string): string {
+  return (
+    `${AUTO_DESCRIBE_HEADER}\nNot available: ${reason} The app was still busy after the action; ` +
+    "the screenshot above is current. Call `describe` once the screen settles to get the tree."
+  );
+}
+
 export function shouldAutoDescribe(toolName: string): boolean {
   return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
 }

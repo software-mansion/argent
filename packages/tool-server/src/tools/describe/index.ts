@@ -28,6 +28,12 @@ function withDescription(data: DescribeTreeData): DescribeResult {
   };
   if (data.should_restart) out.should_restart = data.should_restart;
   if (data.hint) out.hint = data.hint;
+  if (data.unreadable) {
+    // Say it in the text too: the description is the one field every caller
+    // reads, and an unlabelled empty tree reads as a blank screen.
+    out.unreadable = data.unreadable;
+    out.description = `SCREEN NOT READ (${data.unreadable.stage}: ${data.unreadable.message})\n${out.description}`;
+  }
   return out;
 }
 
@@ -45,6 +51,18 @@ const zodSchema = z.object({
       "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
         "and the describe tool falls back to native-devtools inspection. " +
         "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
+    ),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(250)
+    .max(60_000)
+    .optional()
+    .describe(
+      "iOS only. Budget for the accessibility read in milliseconds (default 10000, plus a 5s native-devtools " +
+        "fallback when it comes back empty). When the budget elapses the result carries `unreadable`, the " +
+        "description starts with `SCREEN NOT READ`, and the native fallback is skipped. Use a short budget " +
+        "when a fast answer matters more than a complete one."
     ),
 });
 
@@ -98,7 +116,11 @@ function makeDescribeExecute(
           : withDescription(
               withBootCaveatOncePerDevice(
                 device.id,
-                await describeIos(registry, device, params, { isTvOs: false })
+                await describeIos(registry, device, params, {
+                  isTvOs: false,
+                  axTimeoutMs: params.timeoutMs,
+                  fallbackOnUnreadable: params.timeoutMs === undefined,
+                })
               )
             ),
     },
@@ -111,7 +133,11 @@ function makeDescribeExecute(
         withDescription(
           withBootCaveatOncePerDevice(
             device.id,
-            await describeIos(registry, device, params, { isTvOs: false })
+            await describeIos(registry, device, params, {
+              isTvOs: false,
+              axTimeoutMs: params.timeoutMs,
+              fallbackOnUnreadable: params.timeoutMs === undefined,
+            })
           )
         ),
     },
@@ -155,7 +181,7 @@ app (the toolkit attaches at launch) and try again.
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 
-Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
+Returns \`{ description, source, unreadable? }\` where \`description\` is a text rendering of the UI tree — one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
 are normalized [0,1] fractions of the screen / window width/height (not pixels) — the same space as
 gesture-tap / gesture-swipe / gesture-pinch.
@@ -163,6 +189,10 @@ gesture-tap / gesture-swipe / gesture-pinch.
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
+
+When the read does not complete (the app is busy and does not answer the accessibility query within the
+budget) the result carries \`unreadable: { stage, error_code, message }\` and the description starts with
+\`SCREEN NOT READ\`. That is not a blank screen: wait for the app to settle and call describe again.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).

@@ -1,4 +1,10 @@
-import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+  type ToolDependency,
+} from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
   buildAppStateMessage,
@@ -10,7 +16,12 @@ import {
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
+import {
+  DescribeTreeData,
+  parseDescribeResult,
+  type DescribeNode,
+  type DescribeUnreadable,
+} from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
@@ -102,6 +113,11 @@ const NON_INJECTABLE_HINT =
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
+// An accessibility read that answers empty only after this long is treated as
+// unreadable (see the read site). A healthy empty read — a blank screen — is
+// answered in well under a second.
+const SLOW_EMPTY_READ_MS = 5000;
+
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
     role: "AXGroup",
@@ -118,6 +134,16 @@ export interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  /** Bound on the accessibility read; the blueprint default when omitted. */
+  axTimeoutMs?: number;
+  /**
+   * Whether an accessibility read that did NOT complete (timed out) still
+   * tries the native-devtools hierarchy. Default true. A caller on a budget —
+   * a settle probe, the auto-capture — passes false: an app that isn't
+   * answering AX is usually not answering a main-thread RPC either, and the
+   * fallback costs it a fixed 5s.
+   */
+  fallbackOnUnreadable?: boolean;
 }
 
 // The ax-service blueprint factory shells out to `xcrun simctl spawn`. Without
@@ -142,35 +168,89 @@ export async function describeIos(
   let degraded: boolean;
   // A resolver failure that names its own cause, which outranks the boot caveat.
   let resolverHint: string | undefined;
+  // Set when the accessibility read did not COMPLETE (timed out, daemon died):
+  // the empty tree is then no evidence about the screen at all, and must not be
+  // dressed up as a blind read of a badly booted simulator.
+  let unreadable: DescribeUnreadable | undefined;
 
+  let axApi: AXServiceApi | undefined;
   try {
     const axRef = axServiceRef(device);
-    const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
-    const response = await axApi.describe();
-    tree = adaptAXDescribeToDescribeResult(response);
-    degraded = axApi.degraded;
+    axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
   } catch (err) {
-    // Carry on with an empty tree so the native-devtools fallback below still
-    // runs. A missing TCP-transport artifact is a config error, not a boot-state
-    // one, so it must not read as degraded.
-    tree = emptyTree();
+    // A missing TCP-transport artifact is a config error, not a boot-state one,
+    // so it must not read as degraded. Anything else that keeps the service from
+    // coming up is the external-boot case.
     resolverHint = tcpArtifactHint(err);
+  }
+  if (axApi) {
+    degraded = axApi.degraded;
+    const readStart = Date.now();
+    try {
+      const response = await axApi.describe({ timeoutMs: options.axTimeoutMs });
+      tree = adaptAXDescribeToDescribeResult(response);
+      // AXRuntime gives up on an app that does not service its queries after
+      // roughly 9s and hands back NO elements rather than an error — the same
+      // pinned main thread the timeout above catches a second later, seen from
+      // the other side of the race. An empty answer that took this long is not
+      // a blank screen.
+      const readMs = Date.now() - readStart;
+      if (tree.children.length === 0 && readMs >= SLOW_EMPTY_READ_MS) {
+        unreadable = {
+          stage: "ax-service",
+          error_code: "AX_READ_SLOW_EMPTY",
+          message: `the accessibility read answered with no elements after ${(readMs / 1000).toFixed(1)}s`,
+        };
+      }
+    } catch (err) {
+      // Carry on with an empty tree so the native-devtools fallback below can
+      // still corroborate — unless the caller declined to pay for it.
+      tree = emptyTree();
+      unreadable = {
+        stage: "ax-service",
+        error_code: getFailureSignal(err)?.error_code ?? "unknown",
+        message: errMsg(err),
+      };
+    }
+  } else {
+    tree = emptyTree();
     degraded = resolverHint === undefined;
   }
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
   // returned: the native-devtools fallback fills it from the injected app's own
   // view hierarchy, which carries no SpringBoard chrome and no system dialogs,
-  // so it is no evidence the AX subsystem works.
+  // so it is no evidence the AX subsystem works. A read that never completed
+  // produced nothing, so it earns the standing caveat at most, never the blind
+  // one — that would prescribe a reboot for an app that is merely busy.
   const degradedHint = !degraded
     ? undefined
-    : tree.children.length === 0
+    : tree.children.length === 0 && !unreadable
       ? DEGRADED_BLIND_HINT
       : DEGRADED_STANDING_HINT;
   const hint = resolverHint ?? degradedHint;
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
+  }
+
+  // Stamps the unreadable verdict on an empty-tree return so the caller can tell
+  // "never answered" from "answered nothing".
+  const ax = (data: DescribeTreeData): DescribeTreeData =>
+    unreadable ? { ...data, unreadable } : data;
+
+  // An accessibility read that TIMED OUT means the app's main thread is not
+  // answering; the native-devtools RPC dispatches onto that same thread, so the
+  // fallback would only add its own 5s timeout to the bill. Other read failures
+  // (the daemon died, the socket closed) say nothing about the app, so they
+  // still get the fallback unless the caller declined to pay for it.
+  const skipFallback =
+    unreadable !== undefined &&
+    (options.fallbackOnUnreadable === false ||
+      unreadable.error_code === FAILURE_CODES.AX_QUERY_TIMEOUT ||
+      unreadable.error_code === "AX_READ_SLOW_EMPTY");
+  if (unreadable && skipFallback) {
+    return ax({ tree, source: "ax-service", hint: unreadableHint(hint, unreadable) });
   }
 
   // The launchd env carrying the bootstrap dylib is simulator-wide, so a system
@@ -188,7 +268,11 @@ export async function describeIos(
   // system app's tree, at which point `describe`, not a screenshot, is the
   // right tool.
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
-    return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
+    return ax({
+      tree,
+      source: "ax-service",
+      hint: unreadable ? unreadableHint(hint, unreadable) : (hint ?? NON_INJECTABLE_HINT),
+    });
   }
 
   let nativeApi: NativeDevtoolsApi;
@@ -200,7 +284,7 @@ export async function describeIos(
     // rejects only when the service failed to come up. A failed attempt at
     // corroboration, not an absence of one, so the empty read is as unexplained
     // here as it is below.
-    return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
+    return ax({ tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) });
   }
 
   try {
@@ -225,8 +309,8 @@ export async function describeIos(
       const diagnosis = buildAppStateMessage(target.bundleId, state);
       const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
       return state === "unregistered" || state === "connecting"
-        ? { tree, source: "ax-service", hint: merged }
-        : { tree, source: "ax-service", should_restart: true, hint: merged };
+        ? ax({ tree, source: "ax-service", hint: merged })
+        : ax({ tree, source: "ax-service", should_restart: true, hint: merged });
     }
 
     const rawResult = (await nativeApi.queryViewHierarchy(
@@ -235,7 +319,11 @@ export async function describeIos(
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (rawResult.error) {
-      return { tree, source: "ax-service", hint: unexplainedHint(hint, rawResult.error, params) };
+      return ax({
+        tree,
+        source: "ax-service",
+        hint: unexplainedHint(hint, rawResult.error, params),
+      });
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
@@ -249,8 +337,34 @@ export async function describeIos(
     // so with neither set a `hidden` wait resolves against an element that may
     // still be on screen. Nothing was resolved here, so there is no remedy to
     // invent beyond the message the resolver already carries.
-    return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
+    //
+    // A fallback that timed out is a second source that never answered: the
+    // verdict is then unreadable at that stage, whether or not AX answered
+    // empty before it.
+    if (getFailureSignal(err)?.error_kind === "timeout") {
+      unreadable = {
+        stage: "native-devtools",
+        error_code: getFailureSignal(err)?.error_code ?? "unknown",
+        message: errMsg(err),
+      };
+      return ax({ tree, source: "ax-service", hint: unreadableHint(hint, unreadable) });
+    }
+    return ax({ tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) });
   }
+}
+
+/**
+ * The read never completed, which says nothing about the screen. Leads with the
+ * one thing that helps — wait, then read again — and never with a reboot or a
+ * restart, since a busy app is fixed by neither.
+ */
+function unreadableHint(hint: string | undefined, u: DescribeUnreadable): string {
+  const why =
+    `The screen could not be read: the ${u.stage} read did not complete (${u.message}). ` +
+    "The app is probably busy (main-thread work, a heavy transition), so this empty tree is " +
+    "NOT evidence that the screen is blank. Wait for the screen to settle and call `describe` " +
+    "again, or take a `screenshot` to see what is there.";
+  return hint ? `${hint} ${why}` : why;
 }
 
 function errMsg(err: unknown): string {
