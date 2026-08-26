@@ -20,8 +20,10 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
+const ANDROID_DEVICE = "emulator-5554"; // Android serial shape
 let tmpDir: string;
 
 function n(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): DescribeNode {
@@ -64,12 +66,41 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-async function run(name: string): Promise<FlowRunResult & { taps: TapCall[] }> {
+async function run(
+  name: string,
+  device: string = DEVICE
+): Promise<FlowRunResult & { taps: TapCall[] }> {
   const taps: TapCall[] = [];
   const tool = createRunFlowTool(mockRegistry(taps));
-  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }));
+  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device }));
   return Object.assign(result, { taps });
 }
+
+// An Android screen as the flow adapter emits it. The scrollable keep-gate
+// (flow-android-tree) makes an id-less, label-less RN ScrollView / Compose
+// LazyColumn a leaf so the scroll-to nudge can resolve it as a container - and
+// a leaf is a match candidate for every selector, including the relational
+// forms below. Built through the real adapter so these stay tied to that gate.
+function androidTree(bodyXml: string): DescribeNode {
+  return adaptFullAndroidHierarchyToDescribeResult(
+    `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+${bodyXml}
+  </node>
+</hierarchy>`,
+    1080,
+    1920
+  );
+}
+
+// Rows of a list, inset below whatever holds them.
+const ANDROID_ROWS = `        <node index="0" class="android.view.ViewGroup" resource-id="row-1" package="com.acme.app" bounds="[0,200][1080,320]">
+          <node index="0" class="android.widget.TextView" text="Row 1" package="com.acme.app" bounds="[20,220][1060,300]" />
+        </node>
+        <node index="1" class="android.view.ViewGroup" resource-id="row-2" package="com.acme.app" bounds="[0,340][1080,460]">
+          <node index="0" class="android.widget.TextView" text="Row 2" package="com.acme.app" bounds="[20,360][1060,440]" />
+        </node>`;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-within-"));
@@ -227,6 +258,31 @@ describe("within (descendant) selector resolution", () => {
     expect(result.steps[0].reason).toContain('within (id="billing-card")');
     expect(result.taps).toHaveLength(0);
   }, 10_000);
+
+  it("a universal selector scoped to an Android panel resolves its scroller, not the first row", async () => {
+    // `any: true` names a REGION, so it picks topmost-leftmost (compareBelowPick)
+    // among everything the scope holds. The scroller's own top inset puts its
+    // top edge above the first row's, so the scroller wins and the
+    // tap lands at the LIST centre - where before the scrollable keep-gate the
+    // scroller was no leaf and the first row won. Pinned, not endorsed: scope
+    // an `any: true` to the row, or name the row, to target a row.
+    currentTree = () =>
+      androidTree(`    <node index="0" class="android.view.ViewGroup" resource-id="panel" package="com.acme.app" bounds="[0,100][1080,1900]">
+      <node index="0" class="android.view.ViewGroup" scrollable="true" package="com.acme.app" bounds="[0,140][1080,1900]">
+${ANDROID_ROWS}
+      </node>
+    </node>`);
+
+    await writeFlow("anyscroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { any: true, within: { identifier: "panel" } } }],
+    });
+
+    const result = await run("anyscroller", ANDROID_DEVICE);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    // Centre of the scroller [0,140][1080,1900], not of row-1 (0.1354).
+    expect(result.taps[0].y).toBeCloseTo(1020 / 1920, 6);
+  });
 });
 
 // A settings list: three rows, each a label plus a switch to its right. The
@@ -366,4 +422,28 @@ describe("after / next (sibling) selector resolution", () => {
     expect(result.steps[0].reason).toContain('next (text="Wi-Fi")');
     expect(result.taps).toHaveLength(0);
   }, 10_000);
+
+  it("a `next` scope reduces to the Android scroller before ranking can prefer a row", async () => {
+    // `next` is the one relation that reduces the match SET (nearestAfter keeps
+    // ONE follower per anchor), so it runs before selectorToFrame's exact →
+    // smallest-frame ranking and that ranking cannot recover a row it dropped.
+    // The scroller and the rows are all role ViewGroup - the class-fallback
+    // role RN emits - and the scroller starts higher, so it is the follower
+    // kept and the tap lands at the list centre.
+    currentTree = () =>
+      androidTree(`    <node index="0" class="android.widget.TextView" text="Inbox" package="com.acme.app" bounds="[0,0][1080,100]" />
+    <node index="1" class="android.view.ViewGroup" scrollable="true" package="com.acme.app" bounds="[0,100][1080,1900]">
+${ANDROID_ROWS}
+    </node>`);
+
+    await writeFlow("nextscroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { role: "ViewGroup", next: { text: "Inbox" } } }],
+    });
+
+    const result = await run("nextscroller", ANDROID_DEVICE);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    // Centre of the scroller [0,100][1080,1900], not of row-1 (0.1354).
+    expect(result.taps[0].y).toBeCloseTo(1000 / 1920, 6);
+  });
 });

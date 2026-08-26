@@ -114,7 +114,23 @@ Use the launch map for cross-platform flows. A bare launch applies everywhere an
 
 An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the flow as a fragment.
 
-In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
+Add `scroll-to` when a target can be off-screen. `tap`, `type`, and `long-press` do not auto-scroll. In a `scroll-to` map, put the selector under `target:`. `direction` defaults to `down`. Use `up` above the viewport and `left` or `right` in horizontal carousels. Use `within` for a nested scroller.
+
+A scroll round that does not change its container stops the search. The step then accepts a visible target or reports the scroll limit before it exhausts attempts. The search ignores changes outside the container, such as a spinner or clock. iOS and Android detect id-less scroll containers. Chromium omits id-less overflow scrollers, so page animation can exhaust attempts.
+
+A visible target clear of the screen edge it entered from causes no gesture. On touch devices, a flush `down` or `right` target is nudged slightly further in along the same direction, at most three times, so the following `tap` or `snapshot` is not under the home indicator, gesture-nav bar, or floating tab bar. A nudge travels one and a half times the shortfall, never below about a twentieth of the screen because a shorter swipe registers as a tap, and never above half the target's room at the far edge. Every shortfall the runner acts on, up to about a thirtieth of the screen, therefore costs that same minimum swipe, and a fully flush landing shifts the viewport by about a seventh of the screen.
+
+An uncropped snapshot baseline recorded right after such a landing can require one re-recording, and a landing that sits on the edge of the runner acting can alternate between no shift and the minimum one across runs, so use `cropOn` for the target instead. A nudge the runner could not dispatch, or could not read back, leaves the step passing with a warning that names what went wrong.
+
+The nudge never runs on Chromium, where no system control overlays the viewport, though `scroll-to` itself works there. It never runs on `up` or `left`, where a continuing drag would be pull-to-refresh. It is also skipped when:
+
+- The target sits in no scroll container, or `within` names a region that is not a scroller.
+- That container is inset from the screen edge by more than a twentieth, so it already clears the chrome.
+- The target has too little room at the far edge to move.
+- A smaller scroller that does not hold the target covers the container's center, so it would take the drag.
+- The device is a tvOS simulator or an Android TV, neither of which takes touch input.
+
+A pinned control that overlaps the scroller edge can still cause one bounded gesture.
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 

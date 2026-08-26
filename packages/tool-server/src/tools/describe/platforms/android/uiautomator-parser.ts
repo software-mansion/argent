@@ -181,6 +181,20 @@ export function isUiAutomatorLayoutContainer(className: string): boolean {
   return !className || LAYOUT_CONTAINERS.has(className);
 }
 
+/**
+ * The same scaffolding as the roles a describe tree carries, derived from
+ * {@link LAYOUT_CONTAINERS} rather than respelt so "not a role target" cannot
+ * mean two different things. Scaffolding reaches the flow tree only when it
+ * carries an id, a label, focus, or the scrollable flag, so the recorder (which
+ * records off that tree) must never fall
+ * back to its role: `{ role: "FrameLayout" }` names the container rather than
+ * the element under the tap, and replays at the container's centre (see
+ * `GENERIC_ROLES` in ui-tree-match).
+ */
+export const LAYOUT_CONTAINER_ROLES: ReadonlySet<string> = new Set(
+  Array.from(LAYOUT_CONTAINERS, (cls) => deriveUiAutomatorRole(cls))
+);
+
 const SCROLL_CLASSES = new Set([
   "android.widget.ScrollView",
   "android.widget.HorizontalScrollView",

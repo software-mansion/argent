@@ -115,7 +115,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
-| `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
+| `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. See [Scroll to a target](#scroll-to-a-target)                 |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
 | `rotate`     | `{ on: <selector>, by }`                                           | Two-finger rotation in degrees, clockwise positive. This is a gesture, not the device orientation |
 | `await`      | `{ <condition>, timeout }` or `{ idle: true, stableFor, timeout }` | Wait for a condition. Default `timeout` 7500 ms                                                   |
@@ -133,6 +133,8 @@ A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills
 
 A coordinate `tap`, or a `pinch` or `rotate` without `on`, passes with a warning when the runner cannot read the UI tree. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
+A `scroll-to` step also passes with a warning when Argent cannot complete an edge nudge. See [Scroll to a target](#scroll-to-a-target).
+
 ### Launch map
 
 Use the map form for a flow that runs on more than one platform:
@@ -145,6 +147,29 @@ Use the map form for a flow that runs on more than one platform:
 `native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
+
+### Scroll to a target
+
+```yaml
+- scroll-to: { target: { id: submit-button } }
+- scroll-to: { target: { text: Terms }, direction: right, within: { id: carousel } }
+```
+
+Argent scrolls the container until the target is visible. `direction` is `down` (default), `up`, `left` or `right`. Use `within` for a nested scroller. A scroll round that does not change the container stops the search. The step then accepts a visible target, or reports the scroll limit before it uses every attempt. The search ignores a change outside the container, such as a spinner or a clock. On Chromium, Argent does not report a scroll container without an id. Page animation can then use every attempt, unless the step names `within`.
+
+A target that is already visible and clear of the screen edge it entered from causes no gesture. On a touch device, screen chrome can cover a target that lands flush against that edge. The chrome is a home indicator, a gesture navigation bar or a floating tab bar. Argent then sends an edge nudge. The nudge scrolls the target further along the same direction, at most three times. The next `tap` or `snapshot` then acts on the target and not on the screen chrome.
+
+An edge nudge shifts the content. A fully flush landing shifts the content by about a seventh of the screen. The smallest nudge is about a twentieth of the screen, because a shorter swipe registers as a tap. An uncropped baseline can need one update after a nudged landing. A landing at the threshold where Argent starts to nudge can alternate between no shift and the smallest shift across runs. Use `cropOn` with the target selector for a snapshot after a `scroll-to` step.
+
+An edge nudge never fails the step. The step passes with a warning when Argent cannot send the nudge, or cannot confirm where the target landed. The warning names the reason. Read the warning, then check that the next step acts on the target.
+
+Argent skips the edge nudge on Chromium, where no screen chrome covers the content. `scroll-to` itself works on Chromium. Argent also skips the edge nudge for `direction: up` and `direction: left`, where a drag that continues the scroll can start pull-to-refresh. Argent skips the edge nudge in these cases too:
+
+- The target sits in no scroll container, or `within` names a region that is not a scroller.
+- The container is inset from the screen edge by more than a twentieth of the screen, so the container already clears the chrome.
+- The target has too little room at the far edge to move.
+- A smaller scroller that does not hold the target covers the center of the container.
+- The device is a tvOS simulator or an Android TV. These devices do not take touch input.
 
 ## Conditions
 
@@ -236,7 +261,7 @@ A snapshot compares the current screen, or the frame of `cropOn`, with a stored 
 
 Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. Review each baseline before you commit it.
 
-Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
+Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run. A `scroll-to` step can shift the content before a snapshot. See [Scroll to a target](#scroll-to-a-target).
 
 ## The `argent flow` command
 

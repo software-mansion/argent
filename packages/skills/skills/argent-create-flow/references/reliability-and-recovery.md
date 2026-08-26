@@ -107,15 +107,16 @@ Keep a dismissal swipe only when the UI supports it. Pass it through the coordin
 
 Classify before editing:
 
-| Outcome            | Meaning                                        | Response                                                                                                                                                |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                      |
-| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict — treat it as a hard failure |
-| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                               |
-| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                     |
-| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                             |
-| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                      |
-| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                       |
+| Outcome            | Meaning                                        | Response                                                                                                                                                                |
+| ------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                                      |
+| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict — treat it as a hard failure                 |
+| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                                               |
+| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                                     |
+| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                                             |
+| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                                      |
+| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                                       |
+| Nudge warning      | A `scroll-to` passes on an unconfirmed landing | Read what the runner could not dispatch or read back after its [nudge](flow-yaml.md#directives), then confirm the next step acts on the target and not on screen chrome |
 
 Then:
 

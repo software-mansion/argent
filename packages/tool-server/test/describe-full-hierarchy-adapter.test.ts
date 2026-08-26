@@ -4,7 +4,9 @@ import {
   assertText,
   evaluateCondition,
   findAll,
+  nodeAtPoint,
   selectorToFrame,
+  treeFingerprint,
 } from "../src/utils/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
@@ -536,6 +538,316 @@ describe("describe full-hierarchy adapter", () => {
     expect(selectorToFrame(tree, { text: "Cell 9" })).toBeUndefined();
     // ...and the clipped cell's text is not hoisted onto the grid.
     expect(findAll(tree, { identifier: "grid" })[0]!.subtreeText).toBe("Cell 1");
+  });
+
+  // Cell classes contain the TableView/CollectionView substrings but do not
+  // scroll their content. Reporting them as AXScrollArea made every row a
+  // scroll container, and the edge-avoid nudge's smallest-containing-scroller
+  // resolution then picked the cell over its list - see targetScrollerFrame.
+  it("classifies cell classes as cells, not scroll areas", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: [
+                {
+                  className: "UITableViewCell",
+                  identifier: "cell",
+                  windowFrame: { x: 0, y: 100, width: 400, height: 50 },
+                  children: [
+                    {
+                      className: "UITableViewCellContentView",
+                      identifier: "cell-content",
+                      windowFrame: { x: 0, y: 100, width: 400, height: 50 },
+                      children: [
+                        {
+                          className: "UILabel",
+                          label: "Row 14",
+                          windowFrame: { x: 16, y: 110, width: 200, height: 30 },
+                          children: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  // SwiftUI List / collection cells hit the same substrings.
+                  className: "ListTableViewCell",
+                  identifier: "swiftui-cell",
+                  windowFrame: { x: 0, y: 150, width: 400, height: 50 },
+                  children: [],
+                },
+                {
+                  className: "AnyListCollectionViewCell",
+                  identifier: "swiftui-collection-cell",
+                  windowFrame: { x: 0, y: 200, width: 400, height: 50 },
+                  children: [],
+                },
+                {
+                  className: "UICollectionViewCell",
+                  identifier: "grid-cell",
+                  windowFrame: { x: 0, y: 250, width: 400, height: 50 },
+                  children: [],
+                },
+              ],
+            },
+            {
+              className: "UICollectionView",
+              identifier: "grid",
+              windowFrame: { x: 0, y: 400, width: 400, height: 200 },
+              children: [],
+            },
+            {
+              className: "UIScrollView",
+              identifier: "pane",
+              windowFrame: { x: 0, y: 600, width: 400, height: 200 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    // The scrollers themselves keep the role...
+    for (const id of ["list", "grid", "pane"]) {
+      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXScrollArea");
+    }
+    // ...while every row shape is a cell...
+    for (const id of ["cell", "swiftui-cell", "swiftui-collection-cell", "grid-cell"]) {
+      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXCell");
+    }
+    // ...and a row's internals stay a plain group.
+    expect(findAll(tree, { identifier: "cell-content" })[0]!.role).toBe("AXGroup");
+  });
+
+  // UIKit class names are suffix-typed, so the tail names the kind of view, and
+  // the cell and scroller tests both read it. Reading either word anywhere in
+  // the name is wrong at both ends: it promotes a row's internals to a row and
+  // demotes genuine scrollers whose name happens to carry "Cell".
+  it("keys the cell and scroll-area roles on the class name suffix, not on a substring", () => {
+    const cases: [string, string][] = [
+      // Plain scrollers.
+      ["UIScrollView", "AXScrollArea"],
+      ["UITableView", "AXScrollArea"],
+      ["UICollectionView", "AXScrollArea"],
+      // Rows: they do not scroll, and they are not scaffolding either - a stock
+      // one carries no id and no label, so only their own role keeps them.
+      ["UITableViewCell", "AXCell"],
+      ["UICollectionViewCell", "AXCell"],
+      ["SwiftUI.ListCollectionViewCell", "AXCell"],
+      ["MyPhotoCell", "AXCell"],
+      // A row's internals and a list's chrome: neither a row nor a scroller.
+      ["UITableViewCellContentView", "AXGroup"],
+      ["_UITableViewCellSeparatorView", "AXGroup"],
+      ["UITableViewWrapperView", "AXGroup"],
+      ["_UIScrollViewScrollIndicator", "AXGroup"],
+      // Genuine scrollers a "Cell" test on the whole name would demote: UIKit's
+      // swipe-actions scroller under a row, and an app's own class.
+      ["UITableViewCellScrollView", "AXScrollArea"],
+      ["PhotoCellCollectionView", "AXScrollArea"],
+      // A Swift GENERIC class arrives mangled with its type arguments after the
+      // class name (here SwiftUI's ScrollView backing view, and a List cell);
+      // a plain Swift class still ends with it.
+      ["_TtGC7SwiftUI19UIHostingScrollViewVS_7AnyView_", "AXScrollArea"],
+      ["_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_", "AXCell"],
+      ["_TtC7SwiftUI33UpdateCoalescingCollectionView", "AXScrollArea"],
+      // A name that opens like a generic mangling but carries no length
+      // component where one belongs (a mangling scheme the parse does not
+      // know). The whole name is then the best available suffix, so the row
+      // still reads as a row - dropping the unparsed name instead would leave
+      // the suffix tests nothing to match and demote every such view to a
+      // group, taking anonymous rows out of the tree with it.
+      ["_TtGCMyAppPhotoCell", "AXCell"],
+    ];
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: cases.map(([className], i) => ({
+            className,
+            identifier: `v${i}`,
+            windowFrame: { x: 0, y: i * 40, width: 400, height: 40 },
+            children: [],
+          })),
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    const actual = cases.map(([className], i): [string, string | undefined] => [
+      className,
+      findAll(tree, { identifier: `v${i}` })[0]!.role,
+    ]);
+    expect(actual).toEqual(cases);
+  });
+
+  // The role is not cosmetic - it is what carries a row past the leaf gate. A
+  // stock UIKit cell has no identifier and no label, so any role the gate treats
+  // as scaffolding drops the whole row: the list's rows leave the flow tree, and
+  // a tap on a row's dead space resolves to the list that covers the screen.
+  it("emits an anonymous cell of every form as a leaf", () => {
+    const forms = [
+      "UITableViewCell",
+      "UICollectionViewCell",
+      "SwiftUI.ListCollectionViewCell",
+      "_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_",
+      "MyPhotoCell",
+    ];
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: forms.map((className, i) => ({
+                className,
+                // No identifier, no label - exactly what UIKit reports.
+                windowFrame: { x: 0, y: 100 + i * 100, width: 400, height: 100 },
+                children: [],
+              })),
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    expect(findAll(tree, { role: "AXCell" })).toHaveLength(forms.length);
+    // ...and the row is what a tap on its dead space finds, not the list.
+    const hit = nodeAtPoint(tree, { x: 0.75, y: 0.306 });
+    expect(hit?.role).toBe("AXCell");
+    expect(hit?.frame.y).toBeCloseTo(200 / 800, 5); // the second row, at y=200
+  });
+
+  // An anonymous cell clears the leaf gate on its own role, so it carries the
+  // list's motion into treeFingerprint - the end-of-scroll and settle signal.
+  // A row class that is NOT a cell still needs something nameable in it.
+  it("fingerprints a list through anonymous cells, and a non-cell row through its children", () => {
+    const rows = (
+      rowClass: string,
+      offset: number,
+      children: (row: number, y: number) => unknown[]
+    ): unknown => ({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: [0, 1].map((row) => {
+                const y = 100 + row * 100 - offset;
+                return {
+                  // No identifier, no label: named only by its class kind.
+                  className: rowClass,
+                  windowFrame: { x: 0, y, width: 400, height: 100 },
+                  children: children(row, y),
+                };
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    const named = (row: number, y: number): unknown[] => [
+      {
+        className: "UILabel",
+        label: `Row ${row}`,
+        windowFrame: { x: 16, y: y + 10, width: 200, height: 30 },
+        children: [],
+      },
+      {
+        className: "UIImageView",
+        windowFrame: { x: 300, y: y + 10, width: 40, height: 40 },
+        children: [],
+      },
+    ];
+    const anonymous = (_row: number, y: number): unknown[] => [
+      {
+        className: "UIView",
+        windowFrame: { x: 16, y: y + 10, width: 200, height: 30 },
+        children: [],
+      },
+    ];
+
+    // The list, both cells, and each row's text and image...
+    const tree = adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 0, named));
+    expect(findAll(tree, { role: "AXCell" })).toHaveLength(2);
+    expect(tree.children).toHaveLength(7);
+    // ...all move with their row, so a scroll shows.
+    expect(treeFingerprint(tree)).not.toBe(
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 40, named)))
+    );
+
+    // The cells alone are enough: rows with nothing nameable inside them still
+    // move the fingerprint.
+    const bareCells = adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 0, anonymous));
+    expect(bareCells.children).toHaveLength(3);
+    expect(treeFingerprint(bareCells)).not.toBe(
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 40, anonymous)))
+    );
+
+    // The documented residual: a non-cell row class with nothing nameable
+    // anywhere leaves only the list itself, whose frame does not move, so the
+    // scroll reads as finished. Unnamed React Native and custom UIView rows
+    // have always behaved this way.
+    const bare = adaptFullHierarchyToDescribeResult(rows("RCTView", 0, anonymous));
+    expect(bare.children).toHaveLength(1);
+    expect(treeFingerprint(bare)).toBe(
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("RCTView", 40, anonymous)))
+    );
+  });
+
+  // The scroll-clip flag rides on the same role, so a cell must not clip
+  // either: a badge hanging outside its cell's rect (the overflowing-parent
+  // shape above, with a Cell class name) stays in the tree.
+  it("does not scroll-clip a child overflowing its cell", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableViewCell",
+              identifier: "cell",
+              windowFrame: { x: 0, y: 300, width: 400, height: 50 },
+              children: [
+                {
+                  className: "RCTView",
+                  identifier: "badge",
+                  label: "3 unread",
+                  // Entirely outside the cell's frame, on screen.
+                  windowFrame: { x: 360, y: 270, width: 40, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    expect(findAll(tree, { identifier: "badge" })).toHaveLength(1);
   });
 
   // Scoping: text belongs to its NEAREST identified ancestor. A self-identified

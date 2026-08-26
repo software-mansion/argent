@@ -25,9 +25,13 @@ import {
  * agent-facing `describe` is purely host-side parsing — its interactables-only
  * trim collapses a testID-only container (no label, not clickable) into a
  * passthrough and discards the node carrying the id. This module parses the
- * same dump without that trim. The trim's scroll-clip prune IS preserved (see
- * `flattenHoisting`), so both trees agree on what is visible. Throws rather
- * than degrade to the trimmed uiautomator tree — see `fetchFlowTree`.
+ * same dump without that trim, keeping every view a selector could address
+ * plus the two the runner needs whether or not a selector can name them: the
+ * focused view and a framework-marked scrollable one (see
+ * `projectAndroidNode` for what each buys). The trim's scroll-clip prune IS
+ * preserved (see `flattenHoisting`), so both trees agree on what is visible.
+ * Throws rather than degrade to the trimmed uiautomator tree — see
+ * `fetchFlowTree`.
  */
 
 // Above the helper's 5000 default: flows keep far more of the dump than the
@@ -110,6 +114,7 @@ function projectAndroidNode(
   // Every non-layout class is a role target, including controls whose role is
   // only the class-name fallback (SeekBar, Spinner, ProgressBar).
   const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
+  const isScrollable = attrs.scrollable === "true";
 
   // Mirrors what `nodeText` reads off the leaf (label plus a distinct value) —
   // never the secret behind a password.
@@ -123,9 +128,18 @@ function projectAndroidNode(
   let frame: DescribeFrame | null = null;
   // Keep any view a selector could address — resource-id (RN testID), label or
   // concrete role — plus the focused view, which the type directive's focus
-  // wait needs even for an anonymous EditText. Scaffolding is dropped but still
-  // walked, so a testID nested under it survives.
-  if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
+  // wait needs even for an anonymous EditText, and any scrollable view: the
+  // scroll-to nudge resolves a target's scroll container by geometric
+  // containment over emitted leaves, and an id-less RN ScrollView / Compose
+  // LazyColumn (a scrollable bare ViewGroup / View) would otherwise yield no
+  // candidate - the nudge would silently skip on Android while the same app
+  // nudges on iOS. The same leaf also scopes plain search rounds: scroll-to
+  // fingerprints the scroll containers under its gesture anchor for
+  // end-of-scroll, so without it that scope falls back to the whole screen and
+  // a header spinner masks the end (see anchorScrollFrames in flow-actions).
+  // Scaffolding is dropped but still walked, so a testID nested under it
+  // survives.
+  if (!skip && (identifier || label || hasSemanticRole || isFocused || isScrollable)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role, frame, children: [] };
@@ -134,7 +148,7 @@ function projectAndroidNode(
       if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
       if (attrs["long-clickable"] === "true") leaf.longClickable = true;
-      if (attrs.scrollable === "true") leaf.scrollable = true;
+      if (isScrollable) leaf.scrollable = true;
       if (attrs.checkable === "true") leaf.checkable = true;
       if (attrs.checked === "true") leaf.checked = true;
       if (attrs.enabled === "false") leaf.disabled = true;
@@ -165,8 +179,9 @@ function projectAndroidNode(
 /**
  * Flatten a full-hierarchy `uiautomator`-schema XML dump into the
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
- * only on-screen views with a `resource-id`, label or specific semantic role.
- * Layout scaffolding is dropped, its selectable descendants preserved.
+ * only on-screen views with a `resource-id`, label, specific semantic role,
+ * focus, or a scrollable flag. Other layout scaffolding is dropped, its
+ * selectable descendants preserved.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,

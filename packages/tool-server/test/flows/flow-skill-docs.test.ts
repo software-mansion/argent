@@ -78,6 +78,25 @@ describe("create-flow selector-scope docs", () => {
   });
 });
 
+// The edge-avoid nudge made "already visible" insufficient for "dispatches
+// nothing": a visible target flush at a screen edge now gets a bounded
+// gesture. Both agent-facing surfaces have to carry that - a reader relying
+// on the old unconditional no-op claim records baselines the nudge then
+// invalidates.
+describe("create-flow scroll-to docs", () => {
+  it("neither surface claims an already-visible target is an unconditional no-op", () => {
+    const reference = readFileSync(FLOW_YAML, "utf8");
+    expect(reference).not.toMatch(/already visible, the step is a safe no-op/);
+    expect(reference).toContain("nudged slightly further in");
+    // The Chromium exclusion must read as nudge-only, never as scroll-to
+    // being unsupported in a browser.
+    expect(reference).toMatch(/`scroll-to` itself works there/);
+
+    const description = createRunFlowTool({} as unknown as Registry).description;
+    expect(description).toMatch(/nudged clear of the screen edge/);
+  });
+});
+
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
 // warn-instead-of-fail change: the two agent-facing descriptions of `idle`

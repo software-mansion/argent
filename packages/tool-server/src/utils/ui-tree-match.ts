@@ -5,6 +5,7 @@ import { describeIos } from "../tools/describe/platforms/ios";
 import { describeAndroid } from "../tools/describe/platforms/android";
 import { describeChromium } from "../tools/describe/platforms/chromium";
 import { describeVega } from "../tools/describe/platforms/vega";
+import { LAYOUT_CONTAINER_ROLES } from "../tools/describe/platforms/android/uiautomator-parser";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp";
 
 /**
@@ -567,7 +568,7 @@ export function frameContains(frame: DescribeFrame, x: number, y: number): boole
   return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
 
-function frameArea(frame: DescribeFrame): number {
+export function frameArea(frame: DescribeFrame): number {
   return frame.width * frame.height;
 }
 
@@ -691,6 +692,18 @@ const GENERIC_ROLES = new Set([
   "viewgroup",
   "android.view.view",
   "android.view.viewgroup",
+  // Android layout scaffolding, taken from the parser's own list so the two
+  // cannot drift (`viewgroup`/`view` above are the overlap that already did).
+  // The flow tree emits such a node only for an id, a label, focus, or the
+  // scrollable flag, so a tap on dead space over an id-less scrollable
+  // FrameLayout must keep its coordinates rather than become
+  // `{ role: "FrameLayout" }`, which replays at the scroller's centre.
+  ...Array.from(LAYOUT_CONTAINER_ROLES, (role) => role.toLowerCase()),
+  // The iOS counterpart: a cell is a list's scaffolding, not an element, and
+  // every row on the screen shares the role. A tap on a row's dead space must
+  // keep its coordinates rather than become `{ role: "AXCell" }`, which replays
+  // at whichever cell the ranking elects - the first row, not the tapped one.
+  "axcell",
 ]);
 
 /**
