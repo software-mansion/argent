@@ -69,6 +69,18 @@ export function resolveFfmpeg(): Promise<string | null> {
   return resolveBinary("ffmpeg", FFMPEG_FALLBACK_PATHS);
 }
 
+/**
+ * The ffprobe next to that ffmpeg; null if absent. Ships with ffmpeg in every
+ * common package, but is optional here — it only reads back the length and
+ * frame size of a finished file.
+ */
+export function resolveFfprobe(): Promise<string | null> {
+  return resolveBinary(
+    "ffprobe",
+    FFMPEG_FALLBACK_PATHS.map((p) => p.replace(/ffmpeg$/, "ffprobe"))
+  );
+}
+
 // yuv420p subsamples chroma 2x, so crop/scale dimensions AND offsets must be
 // even: on an odd value ffmpeg rounds the video crop down but scales the rgba
 // logo to the odd value, and maskedmerge aborts on the size mismatch.
