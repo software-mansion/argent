@@ -4,13 +4,10 @@ import { zodObjectToJsonSchema } from "@argent/registry";
 import { run } from "../src/run.js";
 
 // A flag the parser refuses is a rejected invocation like any other, so it owes `--json` callers
-// the same contract the missing-required and server-rejected paths already keep: one object on
-// stderr, nothing on stdout. It used to answer with the human help block on stdout regardless,
-// which puts prose in the result channel and makes `--json | jq` a parse error.
-//
-// The retired-key refusal is the spelling that matters most - it is reached by scripted callers
-// migrating off the old name, the exact audience `--json` exists for - but the defect and the fix
-// are general, so a plain bad-number typo is pinned alongside it.
+// the same contract the missing-required and server-rejected paths keep: one object on stderr,
+// nothing on stdout. It used to answer with the human help block on stdout regardless, which puts
+// prose in the result channel and makes `--json | jq` a parse error. The defect is general, so a
+// plain bad-number typo is pinned beside the retired-key refusal.
 
 const toolsClientMock = vi.hoisted(() => ({
   fetchTool: vi.fn(),

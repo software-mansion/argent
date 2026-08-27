@@ -96,8 +96,8 @@ describe("gesture-drag", () => {
   it("paces each frame off a deadline so the dispatch round-trip counts toward the 16ms budget", async () => {
     // Simulate an ~11ms CDP round-trip per dispatch and capture the delay every
     // `sleep` requests. A fixed sleep(16) would charge 16ms on top of each
-    // dispatch (the ~1.5x overrun); the deadline charges only the remainder, so
-    // the frame stays ~16ms total. durationMs 320 → 20 steps → a 16ms frame.
+    // dispatch; the deadline charges only the remainder. durationMs 320 → 20
+    // steps → a 16ms frame.
     const dispatchCostMs = 11;
     const { sleepDelays } = await runOnVirtualClock(
       {
@@ -119,9 +119,8 @@ describe("gesture-drag", () => {
 
   it("delivers the whole requested press→release span, not one frame short", async () => {
     // Pacing `steps - 1` frames off a fixed 16ms landed the release a frame
-    // early — 32ms of a requested 50 (0.64x) — and short durations are exactly
-    // where apps threshold a flick against a drag. The run-start deadline spends
-    // that last frame before the release instead.
+    // early - 32ms of a requested 50 - where apps threshold a flick against a
+    // drag. The run-start deadline spends that last frame before the release.
     for (const durationMs of [50, 100, 300, 1000]) {
       const { stamps } = await runOnVirtualClock({
         udid: "chromium-cdp-19222",
@@ -150,10 +149,10 @@ describe("gesture-drag", () => {
   });
 
   it("momentum: false eases the moves out (release at ~0 pointer velocity); with momentum they stay linear, by default and by name", async () => {
-    // Web drag libraries compute their fling from the release velocity of this
-    // very mouse stream, so the eased curve must genuinely decay into the
-    // release. durationMs 64 samples 4 frames, under the ease-out floor, so the
-    // eased path runs on the floor's 8-frame grid while the plain one keeps 4.
+    // Web drag libraries compute their fling from this mouse stream's release
+    // velocity, so the eased curve must genuinely decay into the release.
+    // durationMs 64 samples 4 frames, under the ease-out floor, so the eased path
+    // runs on the floor's 8-frame grid while the plain one keeps 4.
     const params = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
     const startPx = 0.25 * 800;
     const deltaPx = (0.75 - 0.25) * 800;
@@ -187,10 +186,9 @@ describe("gesture-drag", () => {
       expect(xs[i] - xs[i - 1]).toBeLessThan(xs[i - 1] - xs[i - 2]);
     }
 
-    // The control for the ease-out above, run both ways round so the flag's
-    // polarity is pinned from both sides rather than only where it is set - a
-    // predicate reading any stated `momentum` as momentum-free stays green on
-    // the default leg alone.
+    // The control for the ease-out above, run both ways so the flag's polarity is
+    // pinned from both sides: a predicate reading any stated `momentum` as
+    // momentum-free stays green on the default leg alone.
     for (const momentum of [undefined, true]) {
       const control = fakeChromiumApi();
       await gestureDragTool.execute(
@@ -210,11 +208,10 @@ describe("gesture-drag", () => {
   });
 
   it("floors the ease-out sample count so the final frame before the release is a sliver of the travel", async () => {
-    // An ease-out only decelerates as finely as it is sampled, and the last
-    // frame of the cubic covers (1/steps)^3 of the travel. At the 2 samples
-    // durationMs/16 gives a 32ms drag that is 12.5% of the distance crossed in
-    // the frame the page reads as release velocity — `momentum: false`
-    // measured as a no-op there. The floor drops it to ~0.2%.
+    // The last frame of the cubic covers (1/steps)^3 of the travel. At the 2
+    // samples durationMs/16 gives a 32ms drag that is 12.5%, crossed in the frame
+    // the page reads as release velocity - `momentum: false` measured as a no-op
+    // there. The floor drops it to ~0.2%.
     const params = { udid: "chromium-cdp-19222", fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
     const finalFrameFraction = (stamps: { x: number }[]) => {
       const last = stamps[stamps.length - 1];
@@ -224,10 +221,9 @@ describe("gesture-drag", () => {
       const eased = await runOnVirtualClock({ ...params, durationMs, momentum: false });
       expect(eased.stamps.slice(1, -1)).toHaveLength(7);
       expect(finalFrameFraction(eased.stamps)).toBeLessThan(0.005);
-      // Same duration with momentum: sampling untouched, and its final frame
-      // still carries a sixth to a half of the travel — the contrast is the
-      // whole point of the flag. Named `true` has to land on the same grid as
-      // the default, or the floor and the curve reach a drag that asked for
+      // Same duration with momentum: sampling untouched, its final frame still
+      // carrying a sixth to a half of the travel. Named `true` has to land on the
+      // same grid as the default, or the floor reaches a drag that asked for
       // momentum out loud.
       for (const momentum of [undefined, true]) {
         const plain = await runOnVirtualClock({ ...params, durationMs, momentum });
@@ -261,9 +257,8 @@ describe("gesture-drag", () => {
       expect(span(eased.stamps)).toBeCloseTo(durationMs, 6);
     }
     // Below that, eight frames no longer fit at one round-trip each and the span
-    // stretches to what the transport can deliver — the accepted cost of an
-    // ease-out that isn't a no-op (the flow swipe directive floors duration at
-    // 150ms, so only a direct tool call reaches here).
+    // stretches to what the transport can deliver - the accepted cost of an
+    // ease-out that isn't a no-op, and only a direct tool call reaches here.
     const overrun = await runOnVirtualClock(
       { ...params, durationMs: 32, momentum: false },
       { dispatchCostMs: 9 }
@@ -272,11 +267,9 @@ describe("gesture-drag", () => {
   });
 
   it("clamps a normalized 1.0 endpoint to the last addressable pixel so the release stays in the viewport", async () => {
-    // The flow swipe directive saturates `by` deltas to [0, 1], so a 1.0
-    // endpoint is routine — unclamped it maps to pixel == width/height, one
-    // past the viewport, where a release was observed reaching the page
-    // without its pointerup. See the clamp's comment for why that observation
-    // is kept as build-specific rather than a universal Chromium rule.
+    // The flow swipe directive saturates `by` deltas to [0, 1], so a 1.0 endpoint
+    // is routine - unclamped it maps one past the viewport, where a release was
+    // observed reaching the page without its pointerup.
     const api = fakeChromiumApi();
     const result = await gestureDragTool.execute(
       { chromium: api } as never,
@@ -317,10 +310,9 @@ describe("gesture-drag", () => {
   });
 });
 
-// A drag holds the left button down for the whole durationMs, one frame per
-// ~16ms, so a run cancelled mid-drag that never consults the signal keeps
-// driving the page - and worse than a swipe does, because a press left down
-// captures every later click. Same contract gesture-rotate has on touch.
+// A drag holds the left button down for the whole durationMs, so a cancelled run
+// that never consults the signal keeps driving the page - and worse than a swipe
+// does, because a press left down captures every later click.
 describe("gesture-drag abort", () => {
   // 300 steps if it ever ran to completion; frameMs stays ~16.
   const long = {
@@ -373,10 +365,9 @@ describe("gesture-drag abort", () => {
   });
 
   it("still rejects with the AbortError when the release dispatch fails, carrying it as the cause", async () => {
-    // A cancel is exactly when the CDP session can be going away, so the
-    // best-effort release can reject. Awaiting it before building the abort
-    // error let the transport error replace the AbortError, so the tool's own
-    // rejection no longer said the run was cancelled.
+    // A cancel is when the CDP session can be going away, so the best-effort
+    // release can reject - and the transport error must not replace the
+    // AbortError, or the rejection stops saying the run was cancelled.
     const api = fakeChromiumApi();
     const controller = new AbortController();
     const releaseFailure = new Error("CDP session closed while releasing");
@@ -418,10 +409,9 @@ describe("gesture-drag abort", () => {
 
   it("releases where the pointer is when the abort lands on the final frame", async () => {
     // The move loop stops one short of the release, so this frame sits OUTSIDE
-    // it: unchecked, a drag cancelled here spent the last wait, released at the
-    // authored end point and returned { dragged: true } with the signal already
-    // aborted. gesture-swipe covers the same frame from inside its `i <= steps`
-    // loop (see tools/gesture-swipe.test.ts).
+    // it: unchecked, a drag cancelled here released at the authored end point and
+    // returned { dragged: true } on an aborted signal. gesture-swipe covers the
+    // same frame from inside its `i <= steps` loop.
     const api = fakeChromiumApi();
     const controller = new AbortController();
     // 3 steps at durationMs 48, so dispatch 3 is the last interpolated move and
@@ -454,12 +444,9 @@ describe("gesture-drag abort", () => {
 
   it("releases where the pointer is when the abort lands inside the final frame's wait", async () => {
     // The wait before the release is the one window the check above it cannot
-    // see: unchecked on the far side, a drag cancelled there still spent the
-    // wait, released at the authored end point and returned { dragged: true }
-    // on an already-aborted signal. Every move has gone out by then and the
-    // release is the dispatch under test, so the only deterministic hook left is
-    // the `sleep` itself - drive it through a setTimeout spy that fires the
-    // abort inside the last one.
+    // see. Every move has gone out by then and the release is the dispatch under
+    // test, so the only deterministic hook left is the `sleep` itself - a
+    // setTimeout spy that fires the abort inside the last one.
     const api = fakeChromiumApi();
     const controller = new AbortController();
     // 3 steps at durationMs 48: two in-loop waits, then the one before the
@@ -565,9 +552,8 @@ describe("gesture-drag duration ceiling", () => {
   });
 
   it("rejects a non-finite durationMs, which no ordering of the bound catches", () => {
-    // Math.round(Infinity / 16) is Infinity, so the frame loop would never end,
-    // and frameMs would be NaN. Being inside a bound is not the same test as
-    // being a number; z.number() refuses all three up front.
+    // Math.round(Infinity / 16) is Infinity, so the frame loop never ends, and
+    // frameMs would be NaN.
     for (const durationMs of [Infinity, -Infinity, NaN]) {
       expect(gestureDragTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(false);
     }
@@ -581,10 +567,10 @@ describe("gesture-drag duration ceiling", () => {
   });
 });
 
-// `settle` was this flag's stack-build spelling with the opposite polarity, and
-// every dispatch path forwards only `safeParse(...).data` - left undeclared,
-// the non-strict object would strip a stack-build recording's `settle: true`
-// and run the flinging default, green and silent.
+// `settle` was this flag's earlier spelling with the opposite polarity, and every
+// dispatch path forwards only `safeParse(...).data` - left undeclared, the
+// non-strict object would strip a recording's `settle: true` and run the flinging
+// default, green and silent.
 describe("gesture-drag retired `settle` param", () => {
   const schema = gestureDragTool.zodSchema!;
   const base = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
@@ -595,8 +581,7 @@ describe("gesture-drag retired `settle` param", () => {
     expect(parsed.success).toBe(false);
     const issue = parsed.error!.issues[0];
     expect(issue.path).toEqual(["settle"]);
-    // The caller has to learn the new spelling *and* the flipped sense from
-    // the error alone - nothing else in the run report names the key.
+    // The error is the only place the new spelling and the flipped sense appear.
     expect(issue.message).toContain("momentum: false");
   });
 

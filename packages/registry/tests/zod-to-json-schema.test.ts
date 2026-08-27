@@ -71,17 +71,12 @@ describe("zodObjectToJsonSchema", () => {
   });
 
   it("emits { not: {} } with no type for a retired z.never().optional() key", () => {
-    // Pinned at the producer because three consumers recognise a retired key by
-    // this exact shape - `not` present and empty, no `type` - and none of them
-    // by name: `isRetiredField` in packages/argent-cli/src/flag-parser.ts, which
-    // keeps the key out of the usage block and refuses every spelling of it, and
-    // `retiredKeyGuidance` plus the pre-run gate reading it in
-    // packages/tool-server/src/tools/flows/flow-run.ts. A converter swap
-    // emitting, say, { type: "null" } or a bare {} would keep every other
-    // registry test green while silently turning `--settle` back into an offered
-    // flag, so the property is asserted whole rather than probed for `not`.
-    // Consumer-side counterpart, over this same serializer:
-    // packages/argent-cli/test/flag-parser.test.ts.
+    // Pinned at the producer because its consumers recognise a retired key by
+    // this exact shape - `not` present and empty, no `type` - and never by name:
+    // `isRetiredField` in packages/argent-cli/src/flag-parser.ts and
+    // `retiredKeyGuidance` in the tool-server's flow-run.ts. A converter swap
+    // emitting { type: "null" } or a bare {} would keep every other registry test
+    // green while turning `--settle` back into an offered flag.
     const schema = zodObjectToJsonSchema(
       z.object({
         settle: z

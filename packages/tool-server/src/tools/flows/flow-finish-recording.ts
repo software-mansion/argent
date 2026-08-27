@@ -371,17 +371,14 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. ${step.kind}: ${target}${times}${held}`;
     }
     case "swipe": {
-      // The summary always runs over `parseFlow`'s output, and parse enforces
-      // exactly one of direction/to/by — so with the first two absent, `to` is
-      // present. The cast is that invariant, not an assumption about the
-      // recorder: an `undefined` here would mean the parser stopped enforcing
-      // it, which its own tests would catch first.
+      // The summary runs over `parseFlow`'s output, and parse enforces exactly
+      // one of direction/to/by, so with the first two absent `to` is present.
+      // The cast is that invariant.
       const travel =
         step.direction ??
         (step.by ? `by ${swipeByLabel(step.by)}` : `to ${targetLabel(step.to as GestureTarget)}`);
       const from = step.from ? ` from ${targetLabel(step.from)}` : "";
-      // Present options only — otherwise distinct gestures collapse into
-      // one line in the very summary read before hand-editing the YAML.
+      // Present options only, so distinct gestures don't collapse into one line.
       const options = [
         ...(step.momentum === false ? ["momentum-free"] : []),
         ...(step.duration !== undefined ? [`${step.duration}ms`] : []),

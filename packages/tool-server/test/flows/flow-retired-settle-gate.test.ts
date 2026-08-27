@@ -1,49 +1,15 @@
 /**
  * End-to-end regression for the retired `settle` key on the production dispatch
- * path.
+ * path, where two independent lines refuse it: flow-execute's pre-run pass, and
+ * `registry.invokeTool`'s schema validation.
  *
- * gesture-swipe and gesture-drag declare-and-refuse `settle` (renamed to
- * `momentum` with the opposite sense) via a `z.never()` field, and the refusal
- * is enforced twice: flow-execute's pre-run pass refuses a `tool:` step
- * carrying it before the run starts, and `registry.invokeTool`'s schema
- * validation refuses it on every other dispatch path. The schema-level tests in
- * test/tools pin the declaration by calling `safeParse` directly, but every
- * flow test runs against the mock registry in ./harness.ts, whose `invokeTool`
- * validates nothing and whose tools declare no such field - so a raw `tool:`
- * step carrying `settle` would sail through that suite green even if either
- * line were removed.
+ * Neither existing suite can see them. The schema tests in test/tools call
+ * `safeParse` directly, and every other flow test runs against ./harness.ts's
+ * mock registry, whose `invokeTool` validates nothing - so a raw `tool:` step
+ * carrying `settle` sails through both green even with either line removed. This
+ * file drives a REAL `Registry` with the REAL tool definitions instead.
  *
- * This file drives a REAL `Registry` with the REAL tool definitions, so what it
- * pins is the refusal actually reaching a flow-run caller:
- *
- *   - a flow with a recorded step carrying `settle: true` is refused at load,
- *     with no step reported at all, and the refusal teaches the new spelling
- *     (`momentum`) and the flipped sense (`momentum: false`);
- *   - the refusal beats step ORDER: an earlier `echo` never reports pass, which
- *     is the whole point of gating before the run rather than letting the step
- *     fail when it is reached, after earlier steps have driven the device;
- *   - the position the refusal names is the AUTHORED one - the step's place in
- *     the file, echo included - and the message says which counting it uses,
- *     since the report renderers do not agree on one;
- *   - a recorded `run-sequence` batch is covered too: its nested `steps[].args`
- *     reach the sub-tool's schema exactly as a `tool:` step's args reach its
- *     tool's, and the refusal names the nested position and the nested tool;
- *   - that nested pass reads only args the carrying tool DECLARES, so a stray
- *     value shaped like an invocation under an undeclared key - which the tool's
- *     schema strips, and which therefore invokes nothing - is left alone;
- *   - the same step with `momentum: false` instead passes both the gate and
- *     validation - it then fails at service resolution (this bare registry has
- *     no blueprints, which is deterministic and never touches a device backend),
- *     proving the control got past them;
- *   - `registry.invokeTool` still refuses the key on its own, so the gate is the
- *     earlier of two independent lines rather than the only one.
- *
- * One last check steps outside the flow path: the guidance both tools publish is
- * pinned whole here, because the argent-cli fixtures driving the CLI's own
- * refusal and usage notice hand-copy it and cannot see it change.
- *
- * Each case gets its own temp project root, passed explicitly to `flow-execute`,
- * so nothing is shared between them.
+ * Each case gets its own temp project root, passed explicitly to `flow-execute`.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
@@ -209,10 +175,9 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
-  // The comment's scenario, and the reason the gate is pre-run rather than
-  // per-step: refused at the step, this flow reports step 1 pass and step 2
-  // error - after the echo has run and, in a real recording, after every
-  // preceding step has driven the device.
+  // The reason the gate is pre-run rather than per-step: refused at the step,
+  // this flow reports step 1 pass and step 2 error - after the echo has run and,
+  // in a real recording, after every preceding step has driven the device.
   it("refuses a settle step that FOLLOWS an echo, so the echo never reports pass", async () => {
     await writeSteps("echo-then-settle", [
       { kind: "echo", message: "runs first" },
@@ -226,17 +191,11 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(messageOf(err)).toContain("momentum: false");
   });
 
-  // The numbering itself, and the contract it commits to: the position is the
-  // step's place in the FILE as written, so an echo ahead of it DOES shift the
-  // number - the same swipe is step 2 behind one and step 1 without. That is
-  // the deliberate choice, not an oversight to be "fixed" toward a renderer: a
-  // flow refused before the run starts has no report line to point at, and no
-  // report numbering would serve anyway (argent-cli's four renderers skip echo,
-  // argent-mcp's flowRunToMcpContent counts it, and both number flat across a
-  // block's body where this numbers per level). The message therefore carries
-  // the counting rule, which is what makes a bare "step 2" readable - and it is
-  // the whole agent-facing contract, since the MCP hop drops error_code and
-  // failure_stage.
+  // The numbering itself: the position is the step's place in the FILE as
+  // written, so an echo ahead of it DOES shift the number. Deliberate, since a
+  // flow refused before the run starts has no report line to point at and the
+  // renderers do not agree on a numbering anyway. The message therefore carries
+  // the counting rule, which is what makes a bare "step 2" readable.
   it("names the step's authored position, echo counted, and says which counting that is", async () => {
     await writeSteps("gate-echo", [
       { kind: "echo", message: "runs first" },
@@ -342,10 +301,8 @@ describe("flow-execute refuses the retired `settle` key through the real registr
   });
 
   // Controls: the renamed spelling gets PAST the gate and validation. The step
-  // still errors - this registry has no blueprints, so `execute` is never
-  // reached - but at service resolution, which proves both were cleared: a
-  // refusal would carry "retired" or "Invalid params" and never mention a
-  // service.
+  // still errors, but at service resolution - this registry has no blueprints -
+  // which is what proves both lines were cleared.
   it("control: gesture-swipe with momentum: false passes validation and fails only at service resolution", async () => {
     await writeFlow("swipe-momentum", "gesture-swipe", {
       fromX: 0.5,
@@ -398,9 +355,7 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 
   // The nested pass reads only args the carrying tool DECLARES. A non-batching
   // tool's schema strips an unknown field before execute, so a stray value that
-  // merely looks like `{ tool, args }` never becomes an invocation - reading it
-  // as one would refuse the whole flow before any step runs, over a call to a
-  // tool this step never makes.
+  // merely looks like `{ tool, args }` never becomes an invocation.
   it("control: an arg the tool does not declare is not read as a nested invocation", async () => {
     await writeSteps("swipe-junk", [
       swipeStep({ junk: { tool: "gesture-drag", args: { settle: true } } }),
@@ -432,12 +387,11 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 });
 
 // The description is the only retirement text the CLI's parse refusal and usage
-// notice can render: the property serializes to `{description, not: {}}`, so the
-// `z.never` error text is not in the schema they read. `@argent/cli` does not
-// depend on the tool-server and cannot derive the string, so it is hand-copied
-// into packages/argent-cli/test/flag-parser.test.ts and
-// packages/argent-cli/test/run-flag-parse-failure.test.ts. The guard lives here,
-// where the string is: if this fails, update both fixtures in the same change.
+// notice can render - the property serializes to `{description, not: {}}`, so the
+// `z.never` error text is not in the schema they read. `@argent/cli` cannot
+// depend on the tool-server, so the string is hand-copied into
+// packages/argent-cli/test/flag-parser.test.ts and run-flag-parse-failure.test.ts:
+// if this fails, update both fixtures in the same change.
 describe("the retired `settle` guidance the CLI tests hand-copy", () => {
   it.each([["gesture-swipe"], ["gesture-drag"]])(
     "%s publishes it whole, behind the `Retired: ` label every caller strips",

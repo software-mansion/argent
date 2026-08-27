@@ -12,48 +12,21 @@ const MOMENTUM_FREE_EASE_EXPONENT = 3;
 
 const DEFAULT_DURATION_MS = 300;
 
-// Wall clock a `momentum: false` swipe needs to exist. Both OS velocity
-// trackers fit a curve to the last frames before the lift, and that fit needs
-// elapsed time to read a slowing finger as a stop. Given less it reads the
-// ease-out as a flick and does not merely degrade but inverts: measured against
-// a scrollable page, fromY 0.8 -> toY 0.2, a 24ms momentum-free swipe flung an
-// API 34 emulator's list all the way BACK to the top on every run, and iOS 26.5
-// forward 11624px against the same swipe's 7345px with momentum. Still true at
-// 50ms.
-//
-// Sample count is not the variable. Holding the wall clock at 24ms and sleeping
-// sub-frame to add samples, 2, 9 and 16 samples all still reversed, while those
-// same 9 samples across 144ms ran +421, +703, +412.
-//
-// The floor is a mitigation, not a cure: at 150ms Android medians 419px and iOS
-// 368px against the plain swipe's 1773px / 2088px, but reversal only becomes
-// rare, 2 of the 47 runs of the train 149ms and 150ms both emit against every
-// run at 24ms. The quiet regime starts nearer 300ms (532-541px over 8 runs).
-// Refused rather than floored to a step count the way Chromium's `gesture-drag`
-// floors its own: there a floored frame no longer fits the duration anyway (one
-// CDP round trip already overruns it), while here every frame is a real 16ms
-// sleep, so a floor would quietly stretch a 16ms gesture to 150ms - and this is
-// the raw tool flows point at precisely when durationMs has to mean what it says.
+// Wall clock a `momentum: false` swipe needs. Both OS velocity trackers fit a
+// curve to the last frames before the lift; given less elapsed time they read
+// the ease-out as a flick and fling harder than a plain swipe - on Android,
+// backwards. 150ms only makes that rare (2 of 47 runs); the quiet regime starts
+// nearer 300ms. Refused rather than floored the way `gesture-drag` floors its
+// step count, because every frame here is a real 16ms sleep and a floor would
+// quietly stretch a 16ms gesture to 150ms.
 const MOMENTUM_FREE_MIN_DURATION_MS = 150;
 
 // Ceiling on the travel time. Every frame below is a real 16ms sleep with the
-// finger held down, so durationMs is wall clock the run spends AND wall clock
-// the device spends under a touch it cannot shake off: durationMs 10000 costs
-// 11.0s in process against a no-op transport, reproducible anywhere, and 11.2s
-// end to end on a booted iPhone 17 Pro. And 1e21 - finite, positive, past
-// every check that existed before this one - is 6.25e19 frames,
-// a loop that outlives the client and goes on feeding the simulator until the
-// tool-server is restarted, its samples interleaving into every later gesture
-// sent to that device. The abort check in execute unwinds a CANCELLED run; a
-// caller that simply waits needs this instead.
-//
-// 10s is the envelope the `rotate:` flow directive derives its own `by` limit
-// from (MAX_DERIVED_ROTATE_MS), applied here to the same thing: one continuous
-// finger-down-to-lift stroke. It is 626 frames, against the 300ms default and
-// the 600ms `scroll-to` asks for, so the slowest deliberate stroke - a reorder
-// handle dragged across a list, a pull-to-refresh held open - still fits with an
-// order of magnitude to spare. It is deliberately NOT idle.stableFor's 600_000:
-// that bounds a WAIT, which holds nothing down and cancels on a timer.
+// finger held down, so durationMs is wall clock both the run and the device
+// spend under a touch neither can shake off - and 1e21, finite and positive, is
+// a loop that outlives the client and feeds the simulator until the tool-server
+// restarts. 10s is the envelope `rotate:` derives MAX_DERIVED_ROTATE_MS from,
+// applied to the same thing: one finger-down-to-lift stroke.
 const MAX_DURATION_MS = 10_000;
 
 const zodSchema = z
@@ -78,10 +51,9 @@ const zodSchema = z
       .describe(
         `Whether the swipe releases with momentum; default true (a natural flinging swipe). Pass false for a momentum-free swipe at the default durationMs: the finger decelerates into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use false for scroll-to-element loops. momentum: false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards). At ${MOMENTUM_FREE_MIN_DURATION_MS} itself the swipe lands short of where the finger stopped, and 2 of 47 runs still flung backwards.`
       ),
-    // `settle` was `momentum`'s shipped spelling, with the opposite polarity.
-    // Declared-and-refused rather than left out: this non-strict object strips
-    // unknown keys, so an upgrading caller's `settle: true` would parse clean and
-    // fling — the exact inverse of the gesture it asked for.
+    // `momentum`'s shipped spelling, with the opposite polarity. Declared so this
+    // non-strict object refuses it instead of stripping it and flinging - the exact
+    // inverse of the gesture the caller asked for.
     settle: z
       .never({
         error:
@@ -145,47 +117,27 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
     const momentumFree = params.momentum === false;
     const timestampMs = Date.now();
     const api = services.simulatorServer as SimulatorServerApi;
-    // No sample floor on this ramp, unlike `momentum: false` above: a fast swipe is
-    // delivered as fast as it was authored, and that is faithful rather than
-    // broken. At durationMs 16 the whole travel is one Move in one frame, the
-    // hardest flick either OS can be handed, but what comes back tracks the
-    // velocity asked for and saturates at the platform's own ceiling rather
-    // than at anything invented here: measured on an API 34 emulator against a
-    // scrollable page, a 16ms swipe settles 952px for a travel of 0.05 of the
-    // screen, 3264px for 0.10, then 7452px for 0.30 and 7727px for 0.60 - the
-    // last two the same saturated fling, apart by the 275px of extra finger
-    // travel, Android clamping release velocity at its maximum (iOS 26.5 has no
-    // such clamp and reaches 14343px for that 0.60). Flooring the count would
-    // only turn durationMs into a lie; a caller who wants a smaller fling
-    // authors a shorter travel or a longer duration.
+    // No sample floor on this ramp, unlike `momentum: false` above: a fast swipe
+    // is delivered as fast as it was authored. At durationMs 16 the whole travel
+    // is one Move, the hardest flick either OS can be handed, but the fling
+    // saturates at the platform's own ceiling rather than at anything invented
+    // here. Flooring the count would only turn durationMs into a lie.
     const steps = Math.max(1, Math.round(duration / 16));
     // Last dispatched sample, so an abort can lift from where the finger is.
     let lastX = 0;
     let lastY = 0;
     // Neither touch backend delivers the Up's coordinates: on both, the finger
-    // lifts wherever the last Move landed. Measured on iOS 26.5 and an Android
-    // emulator alike - a Down/Move/Up train whose Up jumped a further 0.2 of the
-    // screen lifted at the Move's position, and a bare Down/Up pair 0.6 of a
-    // screen apart scrolled nothing at all. So the end point has to be repeated
-    // as a Move or the swipe is delivered short of where it was authored. How
-    // short depends on the ramp below: a plain swipe stops a full step out, at
-    // authored × (steps-1)/steps (5% at the default duration, 50% at
-    // durationMs 32); a momentum-free swipe's ease-out has already closed all but
-    // (1/steps)^n of the travel — orders of magnitude nearer, but still not the
-    // end point, so the repeat is unconditional rather than gated on
-    // `!momentumFree` — and `scroll-to` always asks for momentum-free. The
-    // duplicate sample does not damp the iOS fling, which is the reason it used
-    // to be withheld there: the same default swipe settles a scrollable page
-    // 806px down with the repeat against 803px without (n=14 each, run-to-run
-    // spread ~20px), so any effect is well inside the noise.
+    // lifts wherever the last Move landed. So the end point has to be repeated as
+    // a Move or the swipe lands short of where it was authored - a full step out
+    // for a plain swipe (50% at durationMs 32), (1/steps)^n for a momentum-free
+    // one. Unconditional, because the duplicate sample does not damp the iOS
+    // fling it used to be withheld for (806px with against 803px without, n=14).
     for (let i = 0; i <= steps; i++) {
       // Every frame below is a 16ms sleep, so without this a cancelled run keeps
-      // driving the device for the rest of the duration - the client is gone and
-      // the finger is still down, its samples interleaving into whatever gesture
-      // is sent to that device next.
+      // driving the device for the rest of the duration, its samples interleaving
+      // into whatever gesture is sent to that device next.
       if (ctx?.signal?.aborted) {
-        // Once Down has been dispatched the synthetic finger is on the glass -
-        // send a terminal Up so a cancelled run doesn't leave it held down.
+        // Down has already landed, so lift the finger before unwinding.
         if (i > 0) {
           sendCommand(api, {
             cmd: "touch",
@@ -212,8 +164,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
       const x = params.fromX + (params.toX - params.fromX) * progress;
       const y = params.fromY + (params.toY - params.fromY) * progress;
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-      // Emitted in the Up's own frame, with no added sleep, so the total
-      // duration and the move cadence are unchanged.
+      // In the Up's own frame, with no added sleep, so the cadence is unchanged.
       if (type === "Up") {
         sendCommand(api, {
           cmd: "touch",

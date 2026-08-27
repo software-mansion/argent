@@ -97,10 +97,8 @@ describe("long-press: parse/serialize", () => {
     ["a literal that clears parsePositiveMs's finite check", "1e21"],
   ])("rejects a duration of %s as longer than a hold can be dispatched", (_description, value) => {
     // Unbounded, this parsed clean and then died inside the registry on Chromium
-    // alone: there a long-press IS a gesture-drag (from == to) and that tool's
-    // own durationMs stops at 10s, so the step reported the tool's raw schema
-    // message as an error. The bound belongs at parse, where the author is told
-    // once, at authoring time, on every platform.
+    // alone, where a long-press IS a gesture-drag whose own durationMs stops at
+    // 10s. The bound belongs at parse, where the author is told on every platform.
     expect(() => parseFlow(`steps:\n  - long-press: { on: A, duration: ${value} }\n`)).toThrow(
       /long-press\.duration is \S+ms - above the maximum long-press duration of 10000ms/i
     );

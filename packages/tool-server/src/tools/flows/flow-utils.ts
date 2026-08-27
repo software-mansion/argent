@@ -585,18 +585,15 @@ export type Launch =
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
 /**
- * Direction of a `swipe` — the FINGER's travel (the Maestro/Appium
- * convention), which is the OPPOSITE sense of `scroll-to`'s content
- * direction: `swipe: left` flings content leftward, revealing what is to the
- * right.
+ * Direction of a `swipe` — the FINGER's travel, the opposite sense of
+ * `scroll-to`'s content direction: `swipe: left` reveals what is to the right.
  */
 export type SwipeDirection = "up" | "down" | "left" | "right";
 
 /**
  * A resolved gesture target as a step stores it: an element selector or a raw
- * normalized point. The point form is act-only — a point can be acted on but
- * not observed — so only the gesture directives (`tap`, `long-press`,
- * `swipe`) carry targets; the observation directives store bare selectors.
+ * normalized point. The point form is act-only, so only the gesture directives
+ * carry targets; the observation directives store bare selectors.
  */
 export type GestureTarget = { selector: FlowSelector } | { x: number; y: number };
 
@@ -862,21 +859,14 @@ type YamlTarget = YamlSelector | { x: number; y: number };
 type TapBody = YamlTarget | { on: YamlTarget; times?: number };
 
 /**
- * A `swipe` body: a bare direction (`swipe: left` — the whole-screen flick;
- * unambiguous, since a bare selector could never express a valid swipe) or
- * the options form. The travel is exactly one of `direction` (semantic
- * preset), `to` (explicit endpoint target), or `by` (signed relative delta);
- * `from` anchors the start on a target and defaults to the direction's
- * standard start point, or screen centre for `to` and — NOMINALLY — for `by`:
- * an unanchored `by` too large to fit from the centre slides its whole
- * start→end segment on-screen rather than truncating the delta, so its
- * touch-down is the centre only while each axis delta stays within 0.5 (see
- * runSwipe). `momentum` defaults to true (a natural flinging swipe); `false`
- * is the momentum-free variant that lands exactly where the finger lifts.
- * `duration` is the travel time in milliseconds, floored at
- * {@link SWIPE_MIN_DURATION_MS} — shorter overshoots the travel it asks for
- * instead of landing on it. It is also capped at
- * {@link SWIPE_MAX_DURATION_MS}: the finger stays down for exactly that long.
+ * A `swipe` body: a bare direction (`swipe: left`) or the options form. The
+ * travel is exactly one of `direction` (semantic preset), `to` (endpoint
+ * target), or `by` (signed relative delta); `from` anchors the start and
+ * defaults to the direction's standard start point, or screen centre. An
+ * unanchored `by` too large to fit from the centre slides its whole start→end
+ * segment on-screen rather than truncating the delta (see runSwipe).
+ * `momentum` defaults to true; `duration` is the travel time in milliseconds,
+ * bounded by {@link SWIPE_MIN_DURATION_MS} and {@link SWIPE_MAX_DURATION_MS}.
  */
 type SwipeBody =
   | SwipeDirection
@@ -969,9 +959,8 @@ type YamlFlowFile = {
  * on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
-  // `parseSelector` accepts a closed key set, so a hand-built selector carrying
-  // anything else serializes into a flow file the parser refuses - or, on the
-  // bare-string path below, loses the key in silence.
+  // `parseSelector` accepts a closed key set, so anything else serializes into a
+  // flow the parser refuses - or, on the bare-string path below, is lost silently.
   const unknown = Object.keys(sel).filter((key) => !WRITABLE_SELECTOR_KEYS.includes(key));
   if (unknown.length > 0) {
     throw new Error(
@@ -1203,16 +1192,13 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
 }
 
 /** Serialize a swipe's `from`/`to`, adding the unknown-key check parseTarget
- * applies to a coordinate target — without it a programmatic `{ x, y, z }`
- * drops the junk key in silence and parse then refuses the file serialize just
- * wrote. It cannot live in targetToYaml: `tap`/`long-press` hand that the whole
- * FlowStep, whose `kind`/`times`/`duration` are legitimate keys there, and
- * swipe is the only caller passing a dedicated target sub-object. */
+ * applies to a coordinate target. It cannot live in targetToYaml: `tap` and
+ * `long-press` hand that the whole FlowStep, whose own keys are legitimate
+ * there. */
 function swipeTargetToYaml(target: GestureTarget, label: string): YamlTarget {
   const yaml = targetToYaml(target);
-  // Read the coordinate/selector split off targetToYaml's verdict rather than
-  // re-deriving it from the input, so the two cannot drift on which shape a
-  // given target is.
+  // Read the coordinate/selector split off targetToYaml's verdict, so the two
+  // cannot drift on which shape a target is.
   if (
     typeof yaml !== "string" &&
     "x" in yaml &&
@@ -1226,91 +1212,48 @@ function swipeTargetToYaml(target: GestureTarget, label: string): YamlTarget {
 /**
  * The tap/swipe boundary, not a magnitude policy: a travel-vector magnitude
  * under the platform recognizers' slop (~8dp Android, ~10pt iOS) is read as a
- * tap, so a swipe below this floor cannot be delivered as a swipe.
- *
- * It is one conservative NORMALIZED floor because the flow layer is
- * device-independent (DeviceInfo carries no point dimensions), so it cannot
- * turn the physical slop into a per-axis fraction. Slop-as-a-fraction is
- * largest on the shortest axis of the smallest phones (~10pt ÷ 440pt ≈ 0.023
- * on a flagship width, but ÷ ~330pt ≈ 0.03 on a compact one), so 0.03 sits at
- * or just above the slop on the narrowest axis of any phone and a floor-length
- * swipe is recognized as a swipe on either axis. The cost is over-rejecting a
- * thin band of deliverable travel on longer axes (0.03 of a 956pt height ≈
- * 29pt, well past the ~10pt slop) — the right way to err for a boundary that
- * would otherwise turn a swipe into a silent tap. An envelope on faithful
- * delivery, not a judgment that short swipes are bad style.
+ * tap. One conservative NORMALIZED floor, because the flow layer has no point
+ * dimensions to convert the physical slop with: 0.03 sits at or just above the
+ * slop on the narrowest axis of any phone, at the cost of over-rejecting a thin
+ * band of deliverable travel on longer axes.
  */
 export const SWIPE_MIN_TRAVEL = 0.03;
 
 /**
- * The same tap/swipe boundary on the TIME axis: gesture-swipe interpolates one
- * move per ~16ms frame, so a sub-floor duration leaves the content too few of
- * them to track the travel it was given. At 16ms that used to arrive as a
- * bare Down/Up pair, no intermediate move at all, and the gesture landed as a
- * tap on the start point however far it was meant to go. Now that the end point
- * is repeated as a Move before the lift, the same duration arrives as the fastest
- * flick either platform can be handed, and the content overshoots the authored
- * travel by multiples: measured against a scrollable page, travel 0.6 of the
- * screen, settled scroll, durationMs 16 moves iOS 26.5 by 14343px and an API 34
- * emulator by 7727px (its saturated maximum fling), against 1247px / 1001px for
- * the same swipe at the default 300ms. The overshoot decays with the frame count
- * rather than switching off at some sample count - on iOS 7678px at 33ms (two
- * moves), 5231px at 50ms (three), 2088px at this floor - so the boundary is an
- * envelope, not a cliff. A bare Down/Up pair still scrolls 0: at 16ms on both
- * platforms, at 33ms on iOS.
- *
- * 150ms is 9 moves across 9 frames: 8 interpolated plus that repeat. It is also
- * the wall clock `momentum: false`'s ease-out needs to be read as a stop instead
- * of inverting; gesture-swipe refuses `momentum: false` below this same duration,
- * a shorter one being fitted as a flick rather than a stop (a fling back to the
- * top of the list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
- * platform, though Chromium's `gesture-drag` floors its own step count and so
- * never degenerates to a bare press/release: there the floor is margin rather
- * than a rescue. An envelope on faithful delivery, not a judgment that fast
- * flicks are bad style: a genuinely sub-floor flick belongs in a raw
+ * The same boundary on the TIME axis: gesture-swipe interpolates one move per
+ * ~16ms frame, so a sub-floor duration leaves the content too few of them to
+ * track the travel and it overshoots by multiples (0.6 of the screen at 16ms
+ * moves iOS 14343px, against 1247px at the default 300ms). The overshoot decays
+ * with the frame count rather than switching off, so this is an envelope, not a
+ * cliff. 150ms is also the wall clock `momentum: false`'s ease-out needs to read
+ * as a stop rather than a flick; a genuinely sub-floor flick belongs in a raw
  * `tool: gesture-swipe` step.
  */
 const SWIPE_MIN_DURATION_MS = 150;
 
 /**
- * The other end of the same axis. Unlike the floor this is not about delivery
- * fidelity - a 60s swipe is delivered exactly as authored - but about what
- * authoring it costs: the dispatch is one real 16ms sleep per frame with the
- * finger held down, so `duration` is wall clock the run spends, and wall clock
- * the device spends under a touch nothing can cancel from outside. `duration:
- * 10000` costs 11.0s of run time in process against a no-op transport,
- * reproducible anywhere, and 11.2s end to end on a booted iPhone 17 Pro;
- * `duration: 1e21` cleared the floor, cleared parsePositiveMs's finite check,
- * and never returned - 6.25e19 frames, still dispatching Moves into the
- * simulator long after the CLI was killed and interleaving its samples into
- * every later gesture on that device, until the tool-server was restarted.
- *
- * 10s is the envelope MAX_DERIVED_ROTATE_MS (flow-rotate-geometry) already sets
- * for one continuous gesture, applied to the other. Against a 300ms default and
- * the 600ms `scroll-to` dispatches, it leaves an order of magnitude for a
- * deliberately slow stroke and still bounds the damage at 626 frames. Not
- * `idle.stableFor`'s 600_000: that bounds a WAIT, which holds nothing down. The
- * tools carry the same ceiling on their own `durationMs` - the flow directive is
- * one of several ways in, and the abort check only rescues a cancelled run.
+ * The other end of the same axis, about cost rather than fidelity: the dispatch
+ * is one real 16ms sleep per frame with the finger held down, so `duration` is
+ * wall clock the run spends and wall clock the device spends under a touch
+ * nothing can cancel from outside. `duration: 1e21` cleared every other check
+ * and never returned. 10s is the envelope MAX_DERIVED_ROTATE_MS already sets for
+ * one continuous gesture, an order of magnitude above the 300ms default.
  */
 const SWIPE_MAX_DURATION_MS = 10_000;
 
 /**
- * The same ceiling on `long-press.duration`, which buys the same thing on the
- * same axis: a held finger costs wall clock whether it travels or not. Written
- * as the swipe bound rather than a second 10_000 because on Chromium it IS that
- * bound - a long-press dispatches `gesture-drag` with from == to, whose own
- * `durationMs` stops there and is the platform's only press-hold-release tool -
- * so the two cannot drift without the flow parsing clean and then dying inside
- * the registry on one platform. Bounded at parse so the author is told at
- * authoring time, on every platform, instead of at run time on one; a hold that
- * genuinely needs longer is a raw `tool: gesture-custom` step on touch.
+ * The same ceiling on `long-press.duration`: a held finger costs wall clock
+ * whether it travels or not. Written as the swipe bound because on Chromium it
+ * IS that bound - a long-press dispatches `gesture-drag` with from == to - so
+ * the two cannot drift without the flow parsing clean and then dying inside the
+ * registry on one platform. Bounded at parse so the author hears about it at
+ * authoring time, on every platform.
  */
 const LONG_PRESS_MAX_DURATION_MS = SWIPE_MAX_DURATION_MS;
 
-/** Serialize a relative swipe delta without producing a body parseSwipeBy
- * would reject. FlowStep is also constructed programmatically, so its
- * deliberately convenient optional-axis type is not enough at runtime. */
+/** Serialize a relative swipe delta without producing a body parseSwipeBy would
+ * reject - FlowStep is also constructed programmatically, where the optional-axis
+ * type is not enough. */
 function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number } {
   const keys = Object.keys(by);
   if (keys.some((key) => key !== "x" && key !== "y")) {
@@ -1332,8 +1275,8 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
     }
     result[axis] = value;
   }
-  // Gate the COMBINED travel on its vector magnitude (matching parseSwipeBy), so
-  // serialize accepts exactly what parse accepts and the round-trip stays exact.
+  // Match parseSwipeBy and gate the COMBINED travel on its vector magnitude, so
+  // serialize accepts exactly what parse accepts.
   const magnitude = Math.hypot(result.x ?? 0, result.y ?? 0);
   if (magnitude < SWIPE_MIN_TRAVEL) {
     throw new Error(
@@ -1343,11 +1286,9 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
   return result;
 }
 
-/** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
- * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
- * recording summary, so the two never disagree on it. That is all they share:
- * the recording summary goes on to append an options tail
- * (`(momentum-free, 800ms)`) that the report's target does not carry. */
+/** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`), shared by the
+ * run report's stepTarget and the recording summary so the two never disagree on
+ * it. The summary appends an options tail the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
@@ -1368,10 +1309,8 @@ function positiveMsToYaml(value: number, label: string): number {
   return value;
 }
 
-/** Serialize a swipe's travel time, gating it on both SWIPE_MIN_DURATION_MS and
- * SWIPE_MAX_DURATION_MS as swipeByToYaml gates the delta on SWIPE_MIN_TRAVEL, so
- * serialize accepts exactly what parseSwipe accepts and the round-trip stays
- * exact. */
+/** Serialize a swipe's travel time against both duration bounds, so serialize
+ * accepts exactly what parseSwipe accepts. */
 function swipeDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "swipe.duration");
   if (duration < SWIPE_MIN_DURATION_MS) {
@@ -1387,9 +1326,8 @@ function swipeDurationToYaml(value: number): number {
   return duration;
 }
 
-/** Serialize a long-press hold time, gating it on LONG_PRESS_MAX_DURATION_MS as
- * swipeDurationToYaml gates the travel time, so serialize accepts exactly what
- * parseLongPress accepts and the round-trip stays exact. */
+/** Serialize a long-press hold time against its ceiling, so serialize accepts
+ * exactly what parseLongPress accepts. */
 function longPressDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "long-press.duration");
   if (duration > LONG_PRESS_MAX_DURATION_MS) {
@@ -1479,30 +1417,23 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     }
     case "swipe": {
-      // FlowStep can be constructed outside the YAML parser. Enforce the same
-      // exactly-one travel invariant here before applying direction sugar;
-      // otherwise direction + by/to silently loses a travel specification,
-      // while a travel-less step serializes to YAML that cannot be parsed.
+      // FlowStep can be built outside the parser, so enforce the exactly-one
+      // travel invariant before the direction sugar below drops the other fields.
       const travels = (["direction", "to", "by"] as const).filter((key) => step[key] !== undefined);
       if (travels.length !== 1) {
         throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
       }
 
-      // Same reason on `momentum`, and it has to land before the sugar below:
-      // both that sugar and the body builder test the field against `false`
-      // only, so a programmatic non-boolean is dropped instead of refused —
-      // `momentum: "false"` and `momentum: 0` both serialize to the momentum
-      // the author asked to turn off. parseSwipe takes nothing but a boolean.
+      // Same reason, and before the sugar below: that sugar and the body builder
+      // both test against `false` only, so `momentum: 0` would serialize to the
+      // momentum the author asked to turn off.
       if (step.momentum !== undefined && typeof step.momentum !== "boolean") {
         throw new Error("Cannot serialize flow swipe.momentum: must be true or false");
       }
 
-      // Canonical minimal spelling: a direction with no other field
-      // round-trips to the bare-direction sugar (`swipe: left`). Any
-      // `momentum` but the explicit `false` counts as no field, matching the
-      // body builder below and parseSwipe's normalization of `momentum: true`
-      // to absent — otherwise a programmatically-built step carrying the
-      // default would serialize to the verbose form.
+      // A direction with no other field round-trips to the bare sugar
+      // (`swipe: left`). Any `momentum` but the explicit `false` counts as no
+      // field, matching parseSwipe's normalization of `momentum: true` to absent.
       if (
         step.direction !== undefined &&
         step.from === undefined &&
@@ -1636,9 +1567,9 @@ function badEntry(raw: unknown, detail: string): never {
 }
 
 /**
- * Parse a positive millisecond value at the YAML boundary. The finite check is
- * intentional: YAML `.inf` (and an overflowing literal such as `1e400`) parses
- * to a number, but would turn a gesture or await into an unbounded operation.
+ * Parse a positive millisecond value at the YAML boundary. The finite check
+ * matters: YAML `.inf` parses to a number, which would leave the gesture or
+ * wait unbounded.
  */
 function parsePositiveMs(raw: unknown, entry: unknown, label: string, example: string): number {
   if (!isPositiveMs(raw)) {
@@ -1736,10 +1667,9 @@ const SELECTOR_KEYS: readonly string[] = [
   ...SELECTOR_RELATIONS,
 ];
 
-// Every field of {@link FlowSelector}, kept exact by `Record`, which rejects
-// both a missing field and an extra key. Deliberately not SELECTOR_KEYS: `id`
-// is the YAML-only spelling of `identifier`, so an in-memory selector carrying
-// it is junk the match engine ignores, not an identifier constraint.
+// Every field of {@link FlowSelector}, kept exact by `Record`. Deliberately not
+// SELECTOR_KEYS: `id` is the YAML-only spelling of `identifier`, so an in-memory
+// selector carrying it is junk the match engine ignores.
 const WRITABLE_SELECTOR_KEYS = Object.keys({
   text: true,
   textMatches: true,
@@ -2825,14 +2755,11 @@ const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "righ
 const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "momentum", "duration"] as const;
 
 /**
- * Parse a swipe's `by:` delta: signed normalized fractions of the screen,
- * `{ x }` (horizontal), `{ y }` (vertical), or `{ x, y }` (diagonal). Each
- * present axis must be a number in [-1, 1] — an explicit zero is a spelled-out
- * no-travel axis, so it's rejected with "omit it instead" rather than stored;
- * junk keys are rejected like a point target's. The combined travel VECTOR must
- * then clear {@link SWIPE_MIN_TRAVEL} of magnitude, or it's rejected as a tap in
- * disguise — gated on the magnitude, not per axis, so a diagonal whose
- * components are each sub-floor still passes when its length does.
+ * Parse a swipe's `by:` delta: signed normalized fractions of the screen. Each
+ * present axis must be a non-zero number in [-1, 1]. The combined travel VECTOR
+ * must then clear {@link SWIPE_MIN_TRAVEL}, or it is rejected as a tap in
+ * disguise — gated on magnitude, not per axis, so a diagonal whose components
+ * are each sub-floor still passes when its length does.
  */
 function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
   if (raw === null || typeof raw !== "object") {
@@ -2855,13 +2782,9 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
     }
     by[axis] = v;
   }
-  // Gate the COMBINED travel on its vector magnitude, not each axis: a diagonal
-  // whose per-axis components are each sub-floor can still clear the floor and
-  // must be accepted, so the tap/swipe boundary matches `to`/`direction` and
-  // stays monotonic in distance. `by`'s delta is static, so this device-less
-  // magnitude is the whole check — the runtime `by` branch adds no second guard
-  // (re-checking there would spuriously reject a delta that lands one ulp under
-  // the floor after an in-bounds passthrough).
+  // `by`'s delta is static, so this device-less magnitude is the whole check -
+  // the runtime `by` branch adds no second guard, which would spuriously reject a
+  // delta landing one ulp under the floor after an in-bounds passthrough.
   const magnitude = Math.hypot(by.x ?? 0, by.y ?? 0);
   if (magnitude < SWIPE_MIN_TRAVEL) {
     badEntry(
@@ -2873,14 +2796,12 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
 }
 
 /**
- * Parse a `swipe` body: a bare direction (`swipe: left` — whole-screen; the
- * one directive whose bare string is NOT a selector, because a selector alone
- * could never express a valid swipe, so there is no ambiguity to protect) or
- * the options form `{ from?, direction|to|by, momentum?, duration? }`. The
- * travel is exactly one of `direction` (semantic preset with
- * Maestro-compatible geometry — see SWIPE_GEOMETRY in flow-actions.ts), `to`
- * (explicit endpoint target), or `by` (relative delta). `direction` is the
- * FINGER's direction — the opposite sense of scroll-to's content direction.
+ * Parse a `swipe` body: a bare direction (`swipe: left`) or the options form
+ * `{ from?, direction|to|by, momentum?, duration? }`. The bare string is a
+ * direction rather than a selector, since a selector alone could never express a
+ * valid swipe. `direction` is the FINGER's direction — the opposite sense of
+ * scroll-to's content direction — and its geometry is SWIPE_GEOMETRY in
+ * flow-actions.ts.
  */
 function parseSwipe(body: unknown, entry: unknown): FlowStep {
   if (typeof body === "string") {
@@ -2910,11 +2831,9 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
     );
   }
   // `settle` was this flag's old spelling, with the opposite polarity. Rejected
-  // by name rather than left to rejectUnknownKeys' generic message, and never
-  // aliased: `settle: true` maps to `momentum: false`, so a silent key rewrite
-  // would invert what the author wrote. The name was retired because `settle`
-  // also means "wait for the tree to quiesce" throughout the runner — the very
-  // wait this step performs afterwards, whichever way the flag is set.
+  // by name rather than by rejectUnknownKeys' generic message, and never aliased:
+  // `settle: true` maps to `momentum: false`, so a silent rewrite would invert
+  // what the author wrote.
   if (obj.settle !== undefined) {
     badEntry(
       entry,
@@ -2959,18 +2878,12 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
   }
   if (obj.duration !== undefined) {
     const duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
-    // The time-axis twin of parseSwipeBy's magnitude gate: too short and the
-    // dispatch packs the travel into so few frames that what the content does
-    // stops tracking what was authored.
     if (duration < SWIPE_MIN_DURATION_MS) {
       badEntry(
         entry,
         `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
       );
     }
-    // The ceiling is a cost gate, not a fidelity one: the dispatch sleeps 16ms
-    // per frame with the finger down, so this number is wall clock the run and
-    // the device both spend, and an unbounded one is an unbounded held touch.
     if (duration > SWIPE_MAX_DURATION_MS) {
       badEntry(
         entry,

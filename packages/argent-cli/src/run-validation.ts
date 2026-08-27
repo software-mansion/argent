@@ -35,12 +35,9 @@ interface ValidationIssue {
  * default are not marked required by the schema generator, so this cannot reject an invocation
  * the server would have accepted.
  *
- * Retired keys are skipped, because this, `describeServerValidationFailure` and `formatSchemaUsage`
- * read the same schema and must agree about which fields exist: usage renders a retirement as a
- * notice rather than a flag row, and the parser refuses every spelling of it. Both shipped
- * retirements are `.optional()`, so they never reach `required`; one declared without it would be
- * demanded as `missing required flag --settle` for a flag the help does not show and no input can
- * satisfy.
+ * Retired keys are skipped: usage renders a retirement as a notice rather than a flag row, and the
+ * parser refuses every spelling of it, so demanding one would ask for a flag the help does not show
+ * and no input can satisfy.
  */
 export function findMissingRequired(
   payload: Record<string, unknown>,

@@ -221,7 +221,7 @@ Examples:
 
   // The one place a rejected invocation is reported, so the three ways one can be refused
   // (unparseable flags, locally detected, server-reported) cannot drift apart in wording, output
-  // channel or exit code. Only the telemetry signal distinguishes them.
+  // channel or exit code.
   const failInvocation = async (
     summary: string,
     report: ValidationReport | null,
@@ -230,8 +230,8 @@ Examples:
     if (json) {
       // One object on stderr and nothing on stdout, so `--json | jq` on a failed run reads an
       // empty stream and a non-zero status.
-      // The keys are unconditional: flags that never parsed carry no report, and reporting its
-      // fields empty rather than absent lets one reader take `.error` off any rejected invocation.
+      // The keys stay present when flags never parsed and carry no report, so one reader
+      // handles every rejected invocation.
       console.error(
         JSON.stringify(
           {

@@ -67,9 +67,8 @@ describe("gesture-swipe", () => {
   });
 
   // 160ms is 10 steps, so nine interpolated Moves sit between the Down and the
-  // Up. Both curves are spelled out as literal progress rather than recomputed
-  // from the tool's own formula — a test that re-derives the curve cannot catch
-  // a changed exponent or a flag read backwards.
+  // Up. Both curves are literal progress rather than recomputed from the tool's
+  // formula - a test that re-derives it cannot catch a changed exponent.
   const EASED_PROGRESS = [0.271, 0.488, 0.657, 0.784, 0.875, 0.936, 0.973, 0.992, 0.999];
   const LINEAR_PROGRESS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
   /** Where progress p lands on this describe's `base` vector (0.7 → 0.2). */
@@ -108,8 +107,8 @@ describe("gesture-swipe", () => {
   });
 
   it("leaves a swipe with momentum on the straight linear grid, by default and by name", async () => {
-    // The control for the ease-out above, run both ways round so the flag's
-    // polarity is pinned from both sides rather than only where it is set.
+    // The control for the ease-out above, run both ways so the flag's polarity
+    // is pinned from both sides.
     for (const momentum of [undefined, true]) {
       const plain = await swipeTrain({ ...base, durationMs: 160, momentum });
 
@@ -127,11 +126,8 @@ describe("gesture-swipe", () => {
 
 // An ease-out needs wall clock, not samples: given less than ~150ms both OS
 // velocity trackers fit the deceleration as a flick and `momentum: false`
-// delivers the opposite of what it promises. Measured against a scrollable
-// page, durationMs 24 flings the content back to the top of the list on an API
-// 34 emulator and 11624px forward on iOS 26.5, where the same swipe with
-// momentum runs 7345px. The combination is refused at the schema, which is
-// where every dispatch path (HTTP, run-sequence, flow-execute) validates.
+// delivers the opposite of what it promises - on Android, a fling back to the
+// top of the list. Refused at the schema, where every dispatch path validates.
 describe("gesture-swipe momentum-free duration floor", () => {
   const params = { udid: IOS_UDID, fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, momentum: false };
 
@@ -165,8 +161,7 @@ describe("gesture-swipe momentum-free duration floor", () => {
   });
 
   it("leaves a plain swipe free at any duration: its fling is the one asked for", () => {
-    // The short-duration fling is not a momentum-free artifact and is not gated.
-    // At durationMs 16 the ramps are the same train (one Move, one frame), and
+    // The short-duration fling is not a momentum-free artifact and is not gated:
     // what comes back tracks the authored velocity up to the platform's own clamp.
     for (const durationMs of [1, 16, 33]) {
       expect(
@@ -178,8 +173,8 @@ describe("gesture-swipe momentum-free duration floor", () => {
 
 // `settle` shipped as this flag's name with the opposite polarity, and both
 // dispatch paths forward only `safeParse(...).data` — left undeclared, the
-// non-strict object would strip it and run an upgrading caller's `settle: true`
-// as the flinging default, green and silent.
+// non-strict object would strip an upgrading caller's `settle: true` and run the
+// flinging default, green and silent.
 describe("gesture-swipe retired `settle` param", () => {
   const schema = gestureSwipeTool.zodSchema!;
 
@@ -189,8 +184,7 @@ describe("gesture-swipe retired `settle` param", () => {
     expect(parsed.success).toBe(false);
     const issue = parsed.error!.issues[0];
     expect(issue.path).toEqual(["settle"]);
-    // An upgrading caller has to learn the new spelling *and* the flipped sense
-    // from the error alone — nothing else in the run report names the key.
+    // The error is the only place the new spelling and the flipped sense appear.
     expect(issue.message).toContain("momentum: false");
   });
 
@@ -239,15 +233,11 @@ describe("gesture-swipe end-point delivery", () => {
   it("repeats it on iOS too: the Up's coordinates are dropped there as well", async () => {
     await gestureSwipeTool.execute(services, { udid: IOS_UDID, ...across });
 
-    // iOS drops the lift's coordinates exactly as Android does. Measured on a
-    // booted iPhone 17 Pro / iOS 26.5: a Down at 0.5 / Move to 0.45 / Up at 0.25
-    // train landed the lift at the Move's y (331.33px, never the 156px asked
-    // for), a bare Down 0.8 / Up 0.2 pair scrolled neither Settings nor a web
-    // page at all, and an unrepeated default swipe arrived 5% short (50% at
-    // durationMs 32) - the shortfall tracking frame count, as it only can if
-    // the lift carries no position of its own. Repeating does not cost the
-    // fling: the same swipe settles a page 806px down with the repeat vs 803px
-    // without (n=14 each, spread ~20px), so any effect is inside the noise.
+    // iOS drops the lift's coordinates exactly as Android does. Measured on iOS
+    // 26.5: a Down 0.5 / Move 0.45 / Up 0.25 train lifted at the Move's y, and an
+    // unrepeated default swipe arrived 5% short (50% at durationMs 32) - the
+    // shortfall tracking frame count, as it only can if the lift carries no
+    // position of its own.
     expect(sent.map((e) => `${e.type}@${e.x.toFixed(3)}`)).toEqual([
       "Down@0.600",
       "Move@0.400",
@@ -269,8 +259,7 @@ describe("gesture-swipe end-point delivery", () => {
 
   it("delivers travel the shared swipe floor gates on, at the default duration", async () => {
     // Authored magnitude 0.031 clears the 0.03 floor at parse; short-delivered it
-    // arrived as 0.029, the very "silent tap instead of a swipe" the floor exists
-    // to prevent.
+    // arrived as 0.029, the silent tap the floor exists to prevent.
     await gestureSwipeTool.execute(services, {
       udid: ANDROID_SERIAL,
       fromX: 0.5,
@@ -302,14 +291,11 @@ describe("gesture-swipe end-point delivery", () => {
   });
 });
 
-// Every frame is a real 16ms sleep with the finger down, so a run that is
-// cancelled and never consults the signal keeps driving the device for the rest
-// of its duration: measured against a booted iPhone 17 Pro, an abandoned
-// gesture went on dispatching Moves for minutes after its client was killed,
-// interleaving its samples into every later gesture on that device (three
-// vertical swipes arrived as the abandoned stream alone) until the tool-server
-// was restarted. Same contract as gesture-rotate's, tested the same way (see
-// gesture-rotate-radius.test.ts).
+// Every frame is a real 16ms sleep with the finger down, so a cancelled run that
+// never consults the signal keeps driving the device for the rest of its
+// duration, interleaving its samples into every later gesture until the
+// tool-server is restarted. Same contract as gesture-rotate's, tested the same
+// way (see gesture-rotate-radius.test.ts).
 describe("gesture-swipe abort", () => {
   // 300 steps → 301 frames if it ever ran to completion.
   const long = { ...base, durationMs: 4800 };
@@ -328,18 +314,16 @@ describe("gesture-swipe abort", () => {
 
     // Down + 2 Moves before the abort lands, then only the terminal Up.
     expect(sent.map((e) => e.type)).toEqual(["Down", "Move", "Move", "Up"]);
-    // The lift is at the last dispatched sample, not the authored end point: a
-    // finger teleporting to the end of a gesture the caller cancelled would
-    // deliver the travel anyway.
+    // The lift is at the last dispatched sample: teleporting to the end point
+    // would deliver the travel the caller cancelled.
     expect(sent.at(-1)).toMatchObject({ x: sent.at(-2)!.x, y: sent.at(-2)!.y });
     expect(sent.at(-1)!.y).toBeGreaterThan(base.toY);
   });
 
   it("lifts instead of completing when the abort lands on the final frame", async () => {
-    // 3 steps, so the 4th and last frame is the one that would dispatch the
-    // end-point Move and the Up. `i <= steps` is what puts that frame inside the
-    // checked loop; gesture-drag's `i < steps` needs a check after its own loop
-    // to cover it (see chromium-drag.test.ts).
+    // 3 steps, so the 4th and last frame would dispatch the end-point Move and
+    // the Up. `i <= steps` puts that frame inside the checked loop, where
+    // gesture-drag's `i < steps` needs a check after its own.
     const controller = new AbortController();
     afterSend = (count) => {
       if (count === 3) controller.abort();
@@ -379,13 +363,11 @@ describe("gesture-swipe abort", () => {
   });
 });
 
-// Unlike the floor this is not about delivery fidelity - a 60s swipe is
-// delivered exactly as authored - but about what authoring it costs: durationMs
-// is wall clock the call spends AND wall clock the device spends under a touch.
-// On the schema rather than only on the flow directive because the tool is
-// dispatched directly from HTTP, MCP, run-sequence and the CLI, and because the
-// abort check above only rescues a caller who cancels - one that simply waits
-// gets the whole duration.
+// Not about delivery fidelity - a 60s swipe is delivered exactly as authored -
+// but about what authoring it costs: durationMs is wall clock the call spends AND
+// wall clock the device spends under a touch. On the schema rather than only on
+// the flow directive, because the tool is dispatched directly from HTTP, MCP,
+// run-sequence and the CLI.
 describe("gesture-swipe duration ceiling", () => {
   const params = { udid: IOS_UDID, fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2 };
 
@@ -400,10 +382,9 @@ describe("gesture-swipe duration ceiling", () => {
   });
 
   it("rejects a non-finite durationMs, which no ordering of the bound catches", () => {
-    // Math.round(Infinity / 16) is Infinity, so the frame loop would never end;
-    // Math.max(1, NaN) is NaN, so `i <= NaN` is false at once and the tool would
-    // report a swipe it never sent. z.number() refuses all three up front -
-    // being inside a bound is not the same test as being a number.
+    // Math.round(Infinity / 16) is Infinity, so the frame loop never ends;
+    // Math.max(1, NaN) is NaN, so `i <= NaN` is false at once and the tool reports
+    // a swipe it never sent.
     for (const durationMs of [Infinity, -Infinity, NaN]) {
       expect(gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(false);
     }
@@ -428,14 +409,10 @@ describe("gesture-swipe duration ceiling", () => {
 });
 
 // The ease-out rides on the interpolated Moves: steps = max(1, round(duration/16))
-// and the loop emits a Move only for 0 < i < steps, so 23ms is 1 step (Down
-// straight to the end-point repeat and the Up, nothing eased) and 24ms is 2
-// (Math.round(1.5) === 2) for exactly one eased sample. Unreachable through the
-// schema - momentum: false is refused below 150ms - so this pins execute's own
-// arithmetic, on both platforms, the end-point repeat being gated on neither
-// steps nor platform; the eased sample is told apart by position, since the
-// cubic puts it at 1-(1-0.5)^3 = 87.5% of the travel (x 0.075), never on the
-// end point.
+// and a Move is emitted only for 0 < i < steps, so 23ms is 1 step (nothing eased)
+// and 24ms is 2, for exactly one eased sample. Unreachable through the schema, so
+// this pins execute's own arithmetic. The eased sample is told apart by position:
+// the cubic puts it at 87.5% of the travel, never on the end point.
 describe("gesture-swipe interpolated-Move boundary", () => {
   const across = { fromX: 0.6, fromY: 0.5, toX: 0.0, toY: 0.5, momentum: false };
 

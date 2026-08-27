@@ -521,17 +521,13 @@ export async function settleTree(
 
 /**
  * Poll until EVERY given selector matches on ONE settled tree, returning the
- * frames positionally (an undefined slot — a gesture end carrying raw
- * coordinates — stays undefined and, if no slot holds a selector, reads no tree
- * at all). Resolving a pair through two sequential waits instead reads whichever
- * end goes first from a tree older than the other end's wait, so that end's
- * frame is already stale when the gesture dispatches. One deadline covers the
- * whole set: waiting per selector would multiply a step's worst case by the
- * number of ends. Returns "aborted" when the run was cancelled or the first
- * still-unresolved selector in argument order once the deadline passes — the two
- * misses must stay distinguishable, or a cancelled step would be reported as a
- * genuine "element not found" failure, and argument order decides which end
- * carries the blame when several are missing.
+ * frames positionally (an undefined slot stays undefined, and a set holding no
+ * selector reads no tree at all). Two sequential waits would instead read
+ * whichever end goes first from a tree older than the other end's wait. One
+ * deadline covers the whole set. Returns "aborted" when the run was cancelled,
+ * or the first still-unresolved selector in argument order once the deadline
+ * passes — the two must stay distinguishable, or a cancelled step reads as a
+ * genuine "element not found".
  */
 async function waitForFrames(
   env: ActionEnv,
@@ -730,9 +726,8 @@ async function scrollIncrement(
       durationMs: 600,
     });
   } catch (err) {
-    // The tool rejects when cancelled mid-gesture. Swallow that here and let
-    // scrollToVisible's next-iteration abort check produce the uniform aborted
-    // skip, rather than surfacing the tool's message as a scroll-to error.
+    // The tool rejects when cancelled mid-gesture. Let scrollToVisible's next
+    // abort check produce the uniform aborted skip instead of surfacing that.
     if (env.signal?.aborted) return;
     throw err;
   }
@@ -982,10 +977,9 @@ async function resolveTargetPoint(
 
 /**
  * The tree-free half of {@link resolveTargetPoint}, for callers that resolved
- * the selector themselves (a swipe resolves both ends on one tree): the
- * already-resolved frame's centre, else the target's raw coordinates. Reading
- * no tree, it settles none: the coordinate branch's {@link settleForGesture}
- * stays in `resolveTargetPoint`, around this call.
+ * the selector themselves (a swipe resolves both ends on one tree). Reading no
+ * tree, it settles none: the coordinate branch's {@link settleForGesture} stays
+ * in `resolveTargetPoint`, around this call.
  */
 function targetPointFromFrame(
   target: { selector?: FlowSelector; x?: number; y?: number },
@@ -1251,19 +1245,13 @@ async function runRotate(
 }
 
 /**
- * Per-direction swipe geometry, byte-for-byte Maestro's table. The
- * asymmetries are deliberate edge-gesture avoidance, not noise: a `down`
- * swipe starting at the very top would grab the notification shade /
- * Notification Center, and an `up` swipe starting near the bottom lands in
- * the home-indicator gesture zone — so `down` starts at 20% height and `up`
- * at the centre. Direction is the FINGER's travel: each entry is a default
- * start point and the end line that start travels to on the travel axis. An
- * explicit `from` replaces the start and keeps its own cross-axis coordinate,
- * and the line then only fixes the travel's signed magnitude (`end` minus the
- * default start) — which the anchor travels, rather than landing on the line.
- * Those preset margins are defaults, not constraints: an authored anchor is
- * used verbatim once its resolved centre is confirmed to be physically
- * on-screen, even when it lies inside an OS gesture zone.
+ * Per-direction swipe geometry, byte-for-byte Maestro's table. The asymmetries
+ * are edge-gesture avoidance: a `down` swipe starting at the very top would grab
+ * the notification shade, and an `up` swipe starting near the bottom lands in the
+ * home-indicator zone. Each entry is a default start point and the end line that
+ * start travels to on the travel axis; an explicit `from` replaces the start,
+ * keeps its own cross-axis coordinate, and travels the line's signed magnitude
+ * rather than landing on it.
  */
 const SWIPE_GEOMETRY: Record<
   SwipeDirection,
@@ -1276,22 +1264,16 @@ const SWIPE_GEOMETRY: Record<
 };
 
 /**
- * One semantic finger travel (dismiss a card, page a carousel, open a
- * drawer), distinct from goal-seeking `scroll-to`. The start is `from`
- * (target → same resolution as tap) or the travel spec's default; the end
- * comes from exactly one of `direction` (Maestro-compatible preset —
- * {@link SWIPE_GEOMETRY} — clamped short at the screen edge), `by` (signed
- * relative delta delivered exactly: an unanchored start slides on-screen to
- * fit it, an authored anchor fails instead), or `to` (explicit target). Touch
- * dispatches one `gesture-swipe` (natural fling; `momentum: false` opts into
- * the engine's momentum-free variant); Chromium has no touch, so a swipe is a
- * mouse drag (`gesture-drag`) — swipe-as-scroll is already `scroll-to`'s job
- * there, and a `from` on a draggable node (`<img>`, `<a href>`,
- * `draggable="true"`) hands the gesture to the browser's own drag-and-drop,
- * exactly as a real mouse would. `momentum` rides both dispatches: web apps
- * derive their fling from the pointer stream's release velocity just as the
- * OS does from the touch stream, and the ease-out zeroes both. Either way the
- * step then waits out the motion it started — see the settle after dispatch.
+ * One semantic finger travel (dismiss a card, page a carousel, open a drawer),
+ * distinct from goal-seeking `scroll-to`. The start is `from` or the travel
+ * spec's default; the end comes from exactly one of `direction`
+ * ({@link SWIPE_GEOMETRY}, clamped short at the screen edge), `by` (signed
+ * relative delta delivered exactly: an unanchored start slides on-screen to fit
+ * it, an authored anchor fails instead), or `to`. Touch dispatches one
+ * `gesture-swipe`; Chromium has no touch, so a swipe is a mouse drag
+ * (`gesture-drag`), where a `from` on a draggable node hands the gesture to the
+ * browser's own drag-and-drop exactly as a real mouse would. `momentum` rides
+ * both dispatches.
  */
 async function runSwipe(
   env: ActionEnv,
@@ -1304,11 +1286,9 @@ async function runSwipe(
     duration?: number;
   }
 ): Promise<DirectiveOutcome> {
-  // Both selector ends come from ONE settled tree, so neither is read before
-  // the other's auto-wait: either order of two independent waits leaves the end
-  // that went first pointing where it was before the other end rendered or
-  // moved. `from` leads the pair so a swipe where NEITHER end ever appears is
-  // blamed on the anchor, the element the finger needs first.
+  // Both selector ends come from ONE settled tree, so neither is read before the
+  // other's auto-wait. `from` leads the pair so a swipe where NEITHER end ever
+  // appears is blamed on the anchor, the element the finger needs first.
   const ends = [step.from, step.to] as const;
   const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
   const frames = await waitForFrames(env, selectors);
@@ -1317,8 +1297,8 @@ async function runSwipe(
   const [fromFrame, toFrame] = frames;
 
   // A selector end already resolved against a settled tree; with neither end
-  // carrying one, `waitForFrames` read no tree at all, so this is the only thing
-  // between the touch-down and whatever motion earlier steps left behind.
+  // carrying one, `waitForFrames` read no tree, so this is the only wait between
+  // the touch-down and whatever motion earlier steps left behind.
   let settle: GestureSettle = {};
   if (selectors.every((selector) => selector === undefined)) {
     settle = await settleForGesture(env);
@@ -1338,24 +1318,18 @@ async function runSwipe(
     if ("fail" in p) return p.fail;
     start = p;
   } else if (step.direction) {
-    // Copied, not aliased: SWIPE_GEOMETRY is a module-level table shared by
-    // every swipe in the process, and the unanchored `by` arm below slides the
-    // local start in place (`start[axis] = …`). Only the branch structure keeps those
-    // two apart today, so the copy is what makes a preset entry impossible to
-    // corrupt for all subsequent steps no matter how the arms are rearranged.
+    // Copied, not aliased: SWIPE_GEOMETRY is shared by every swipe in the
+    // process, and the unanchored `by` arm below slides the local start in place.
     start = { ...SWIPE_GEOMETRY[step.direction].start };
   } else {
     start = { x: 0.5, y: 0.5 };
   }
 
-  // Selector frames come from the platform's layout tree rather than the
-  // parser, so their centres are not covered by parseTarget's [0, 1] point
-  // validation. describeFrameSchema bounds each frame field to [0, 1]
-  // independently, so a schema-conformant frame can still centre off-screen —
-  // this guard is the last defense when an adapter's viewport clipping
-  // regresses. Never dispatch an off-screen touch-down (including a direction
-  // swipe whose unchanged cross-axis coordinate is off-screen), and don't
-  // silently move an element anchor to make the gesture valid.
+  // Selector frames come from the platform's layout tree, so their centres are
+  // not covered by parseTarget's [0, 1] validation - describeFrameSchema bounds
+  // each field independently, so a conformant frame can still centre off-screen.
+  // Never dispatch an off-screen touch-down, and never silently move an element
+  // anchor to make the gesture valid.
   if (
     !Number.isFinite(start.x) ||
     start.x < 0 ||
@@ -1374,18 +1348,16 @@ async function runSwipe(
   if (step.direction) {
     const g = SWIPE_GEOMETRY[step.direction];
     const startOnTravelAxis = start[g.axis];
-    // The preset line is the endpoint only for the unanchored default start;
-    // for any other anchor, travel the preset's signed magnitude from where the
-    // finger goes down (clamped on-screen), so an element in the last band of
-    // the axis — a drawer handle, bottom sheet, tab bar — still swipes in the
-    // requested direction instead of reversing or collapsing onto the preset.
+    // The preset line is the endpoint only for the unanchored default start; any
+    // other anchor travels the preset's signed magnitude from where the finger
+    // goes down, so an element in the last band of the axis still swipes in the
+    // requested direction instead of reversing.
     const endOnTravelAxis = step.from
       ? clamp01(startOnTravelAxis + (g.end - g.start[g.axis]))
       : g.end;
     end = g.axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
     // Clamping can only shorten travel, never flip its sign, so a below-floor
-    // result means the anchor sits too near the target edge to swipe, not that
-    // the direction reversed.
+    // result means the anchor sits too near the edge to swipe.
     const travel = Math.abs(endOnTravelAxis - startOnTravelAxis);
     if (travel < SWIPE_MIN_TRAVEL) {
       return {
@@ -1394,27 +1366,23 @@ async function runSwipe(
       };
     }
   } else if (step.by) {
-    // `by` is a QUANTITATIVE delta — its magnitude AND its angle are the
-    // authored intent — so it must land the exact vector or fail; it may never
-    // truncate one axis or rotate a diagonal to fit the screen. That is what
-    // sets it apart from `direction`, the semantic "swipe that way, clamp-short
-    // at the edge" spelling. An axis overflows when start + by leaves [0, 1].
+    // `by` is a QUANTITATIVE delta — magnitude AND angle are the authored intent
+    // — so it lands the exact vector or fails, never truncating an axis or
+    // rotating a diagonal to fit. An axis overflows when start + by leaves [0, 1].
     const overflowAxis = (["x", "y"] as const).find((axis) => {
       const d = step.by![axis];
       return d !== undefined && (start[axis] + d < 0 || start[axis] + d > 1);
     });
     if (overflowAxis === undefined) {
-      // Deliverable as authored: land the exact endpoint (an absent axis stays
-      // put). No clamp touches an in-bounds endpoint, so a delta landing one
-      // ulp inside the bound is passed through untouched.
+      // Deliverable as authored: land the exact endpoint, an absent axis staying
+      // put. No clamp touches it, so a delta one ulp inside the bound survives.
       end = {
         x: step.by.x !== undefined ? start.x + step.by.x : start.x,
         y: step.by.y !== undefined ? start.y + step.by.y : start.y,
       };
     } else if (step.from) {
       // A fixed anchor can't absorb the overflow: delivering the delta runs
-      // off-screen, and clamping would truncate its magnitude or rotate its
-      // angle. Fail truthfully on the first overflowing axis.
+      // off-screen, and clamping would truncate its magnitude or rotate its angle.
       const requested = step.by[overflowAxis]!;
       const raw = start[overflowAxis] + requested;
       return {
@@ -1422,11 +1390,9 @@ async function runSwipe(
         reason: `swipe.by.${overflowAxis} of ${requested} from ${overflowAxis}=${start[overflowAxis]} lands at ${raw}, off the normalized screen; reduce the delta so from + by stays within [0, 1]`,
       };
     } else {
-      // Unanchored default start: no fixed anchor to honor, so slide each
-      // overflowing axis's start→end segment into [0, 1], preserving the exact
-      // delta (magnitude and angle). The parser bounds |by[axis]| ≤ 1, so a
-      // shift always exists. Both start and end move — the dispatch reads start
-      // as fromX/fromY.
+      // Unanchored default start: slide each overflowing axis's start→end segment
+      // into [0, 1], preserving the exact delta. The parser bounds |by[axis]| ≤ 1,
+      // so a shift always exists.
       end = { x: start.x, y: start.y };
       for (const axis of ["x", "y"] as const) {
         const d = step.by[axis];
@@ -1444,17 +1410,11 @@ async function runSwipe(
     }
   } else {
     end = toPoint!;
-    // The start guard's exposure, at the other end of the travel: `to` is the
-    // only spelling whose endpoint can leave the screen, since `direction` ends
-    // on a preset line or a clamped travel from the anchor, and `by` either
-    // lands in-bounds, slides, or fails. Only a SELECTOR endpoint can trip this
-    // — an authored `to: {x, y}`
-    // was already bounded to a finite [0, 1] point by parseTarget — so the
-    // check leaves explicit endpoints author-controlled while still refusing to
-    // lift the finger off-screen when an adapter's viewport clipping regresses.
-    // It runs before the travel gate so an off-screen endpoint is reported as
-    // off-screen rather than as a distance verdict it only incidentally passes
-    // (a far off-screen point clears the floor) or fails.
+    // The start guard's twin at the other end: `to` is the only spelling whose
+    // endpoint can leave the screen, and only through a SELECTOR - an authored
+    // `to: {x, y}` was already bounded by parseTarget. It runs before the travel
+    // gate so an off-screen endpoint is reported as off-screen rather than as a
+    // distance verdict it only incidentally passes.
     if (
       !Number.isFinite(end.x) ||
       end.x < 0 ||
@@ -1468,12 +1428,10 @@ async function runSwipe(
         reason: `swipe.to resolved outside the normalized screen: (${end.x}, ${end.y}); both coordinates must be between 0 and 1`,
       };
     }
-    // A selector endpoint only resolves at run time, so the parser cannot see
-    // that it lands within tap range of the start and would dispatch a tap,
-    // not a swipe. Gate on the travel VECTOR's magnitude (straight-line
-    // distance start→end), so the tap/swipe boundary matches `by`/`direction`
-    // and stays monotonic in distance: a longer diagonal never fails where a
-    // shorter straight-line swipe passes.
+    // A selector endpoint only resolves at run time, so the parser cannot see it
+    // landing within tap range of the start. Gate on the travel VECTOR's
+    // magnitude, so the boundary matches `by`/`direction` and stays monotonic in
+    // distance.
     if (Math.hypot(end.x - start.x, end.y - start.y) < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
@@ -1503,17 +1461,16 @@ async function runSwipe(
     throw err;
   }
 
-  // The momentum this swipe created is this step's business: only a SELECTOR
-  // target makes the next step wait, so a following point target would touch
-  // down mid-deceleration, where the scroll view eats the touch to arrest the
-  // scroll and both steps still report pass. Unconditional, momentum-free or
-  // not — that flag zeroes the finger's release velocity, not the app's
-  // animations — and best effort, since a fling can outlast SETTLE_TIMEOUT_MS.
+  // The momentum this swipe created is this step's business: a following point
+  // target would otherwise touch down mid-deceleration, where the scroll view
+  // eats the touch and both steps still report pass. Unconditional, since
+  // `momentum: false` zeroes the finger's release velocity, not the app's
+  // animations.
   try {
     await settleTree(env);
   } catch {
-    // Tree-source outage AFTER the device performed the gesture: proceed as
-    // runSnapshot's settle does rather than fail a swipe that actually happened.
+    // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
+    // settle does rather than fail a swipe that happened.
   }
   // settleTree returns undefined only on abort, which must read as the uniform
   // aborted skip, never a pass.

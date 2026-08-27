@@ -211,13 +211,11 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("gesture-scroll");
   });
 
-  // gesture-swipe now consults the abort signal per 16ms frame and rejects
-  // instead of holding a finger down for the rest of the duration. Its rejection
-  // reaches the flow through invokeOnDevice for the directives and through
-  // invokeSubTool for a raw `tool:` step, so every dispatch site has to map it
-  // back onto the uniform abort skip - otherwise a cancelled run reports the
-  // tool's own message as a step error and the whole run reads as broken rather
-  // than cancelled.
+  // gesture-swipe consults the abort signal per 16ms frame and rejects instead of
+  // holding a finger down for the rest of the duration. That rejection reaches the
+  // flow through invokeOnDevice and invokeSubTool, so every dispatch site has to
+  // map it back onto the uniform abort skip - otherwise a cancelled run reads as
+  // broken rather than cancelled.
   function abortingGestureRegistry(
     calls: string[],
     controller: AbortController,

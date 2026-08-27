@@ -518,17 +518,16 @@ describe("boolean value syntax is discoverable from --help", () => {
 });
 
 /**
- * A tool carrying a retired key: `z.never().optional().describe(...)` (e.g.
- * gesture-swipe's `settle`) serializes via zodObjectToJsonSchema to
- * `{description, not: {}}` with no `type`. Rendered as a flag row it would read
- * as `--settle <value>  any`: an offer, indistinguishable in shape from the
- * live optional flags, and the e2e harness (see the legend test above) would
- * pick it up as a real flag. Carrying no `type`, it also matches none of the
- * parser's branches, so every spelling of it must be refused outright.
+ * A tool carrying a retired key: `z.never().optional().describe(...)` serializes
+ * to `{description, not: {}}` with no `type`. Rendered as a flag row it would
+ * read as `--settle <value>  any`, indistinguishable from the live optional
+ * flags, and the e2e harness would pick it up as a real flag. Carrying no
+ * `type`, it also matches none of the parser's branches, so every spelling of it
+ * must be refused outright.
  *
  * The fixtures below run the REAL registry serializer over a REAL zod object
- * rather than hand-writing that shape, so what is tested is whatever
- * `z.toJSONSchema` emits today; the shape itself is pinned by the first test.
+ * rather than hand-writing that shape; the shape itself is pinned by the first
+ * test.
  */
 function schemaFrom(shape: z.ZodRawShape): JsonSchema {
   return zodObjectToJsonSchema(z.object(shape)) as unknown as JsonSchema;
@@ -551,11 +550,9 @@ const retiredSchema = schemaFrom({
 
 describe("retired (never-typed) keys in usage", () => {
   it("serializes to the {description, not: {}} shape the retirement check keys on", () => {
-    // Everything below - the usage notice and every parse refusal - recognises
-    // a retired key by `not: {}` with no `type`. If the serializer's output for
-    // `z.never().optional()` ever changes, it must fail loudly HERE rather than
-    // silently regressing usage to a `--settle <value>  any` row and the parse
-    // side to the unknown-scalar tail.
+    // Everything below recognises a retired key by `not: {}` with no `type`, so a
+    // change in what the serializer emits for `z.never().optional()` must fail
+    // HERE rather than regress usage to a `--settle <value>  any` row.
     expect(retiredSchema.properties?.settle).toEqual({ description: RETIREMENT_NOTE, not: {} });
     // The live siblings keep a plain `type` and no `not`, so the check above is
     // matching the retirement rather than everything the serializer emits.
@@ -594,11 +591,9 @@ describe("retired (never-typed) keys in parseFlags", () => {
     "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
 
   // A retired key has no `type`, so every spelling used to find a wrong branch:
-  // bare `--settle` fell to the unknown-scalar tail, `--no-settle` was not a
-  // known boolean and fell there too (demanding a value, then filing a literal
-  // `no-settle` key), and `--settle-json` filed a `settle` key for the
-  // non-strict server schema to strip. All of them now resolve to one refusal,
-  // so the rename guidance is reachable from whatever the caller last typed.
+  // bare `--settle` and `--no-settle` fell to the unknown-scalar tail, and
+  // `--settle-json` filed a `settle` key for the server schema to strip. All of
+  // them now resolve to one refusal, reachable from whatever the caller typed.
   const spellings = [
     ["--settle"],
     ["--settle", "true"],
@@ -618,18 +613,16 @@ describe("retired (never-typed) keys in parseFlags", () => {
         err = e;
       }
       expect(err).toBeInstanceOf(FlagParseException);
-      // Asserted whole: the message must name the retired FIELD (`--settle`,
-      // never `--no-settle-json`) and carry the guidance with its leading
-      // "Retired: " label dropped, or it would read "is retired: Retired: ...".
+      // Asserted whole: the message must name the retired FIELD (`--settle`, never
+      // `--no-settle-json`) and carry the guidance minus its "Retired: " label.
       expect((err as Error).message).toBe(REFUSAL);
     });
   }
 
   it("refuses before consuming anything, so the next flag is not blamed", () => {
     // The pre-refusal failure mode for the bare form: `--settle` took the
-    // following flag as its value and the real flag's value fell out as a
-    // positional, so the user was told about `--durationMs` (or nothing at all)
-    // and never about the retirement.
+    // following flag as its value, so the user was told about `--durationMs` and
+    // never about the retirement.
     expect(() => parseFlags(["--settle", "--durationMs", "300"], retiredSchema)).toThrow(REFUSAL);
     expect(() => parseFlags(["--durationMs", "300", "--settle"], retiredSchema)).toThrow(REFUSAL);
   });
@@ -661,8 +654,7 @@ const liveNoPrefixSchema = schemaFrom({
 
 // A live `y-json` beside a retired `y`: `--y-json` is both the live field's own
 // name and the retired field's JSON hatch. Again the declared name wins, so the
-// token keeps routing through the hatch to field `y` exactly as it did before
-// the refusal existed.
+// token keeps routing through the hatch to field `y`.
 const liveJsonSuffixSchema = schemaFrom({
   "y-json": z.string().optional(),
   "y": z.never().optional().describe("Retired: pass it as `y-json`."),
