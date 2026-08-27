@@ -2278,11 +2278,40 @@ describe("installer preserves foreign MCP config", () => {
     fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
+  // While permissions.json is missing or unparseable Cursor falls back to the
+  // IDE allowlist, but an `mcpAllowlist` key overrides that in-app allowlist
+  // entirely. Creating the file would discard the user's IDE entries, so
+  // addAllowlist leaves an absent or empty one alone.
+  it.each([
+    ["missing", null],
+    ["empty", ""],
+    ["an empty object", "{}\n"],
+  ])("Cursor addAllowlist leaves %s permissions.json untouched", (_label, contents) => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    if (contents !== null) {
+      fs.mkdirSync(path.dirname(permPath), { recursive: true });
+      fs.writeFileSync(permPath, contents);
+    }
+
+    expect(cursor.addAllowlist!(tmpDir, "global")).toBe(false);
+
+    if (contents === null) {
+      expect(fs.existsSync(permPath)).toBe(false);
+    } else {
+      expect(fs.readFileSync(permPath, "utf8")).toBe(contents);
+    }
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
   it("Cursor removeAllowlist deletes the file when argent was the only rule", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
     homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
-    cursor.addAllowlist!(tmpDir, "global"); // fresh create: { mcpAllowlist: ["argent:*"] }
+    // As an older argent left it: addAllowlist no longer creates this file.
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["argent:*"] }));
     cursor.removeAllowlist!(tmpDir, "global");
     expect(fs.existsSync(permPath)).toBe(false);
     fs.rmSync(homedirOverride, { recursive: true, force: true });

@@ -54,8 +54,16 @@ export async function configureAllowlist(args: {
       continue;
     }
     try {
-      adapter.addAllowlist!(effectiveRoot, scope);
-      lines.push(`${pc.green("+")} ${adapter.name}`);
+      // `false` means the adapter skipped on purpose: writing the rule would
+      // override an allowlist the editor is managing itself.
+      const applied = adapter.addAllowlist!(effectiveRoot, scope);
+      if (applied === false) {
+        lines.push(
+          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(left the in-app allowlist in charge)")}`
+        );
+      } else {
+        lines.push(`${pc.green("+")} ${adapter.name}`);
+      }
     } catch (err) {
       lines.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
     }

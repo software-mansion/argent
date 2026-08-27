@@ -85,7 +85,10 @@ export interface McpConfigAdapter {
   // Report argent state outside the projectPath/globalPath pair that can keep
   // the entry written at `writtenScope` from taking effect.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
-  addAllowlist?(root: string, scope: "local" | "global"): void;
+  // Returns false when the adapter deliberately left the config untouched
+  // because writing an allowlist would make the user's permissions stricter.
+  // void (every other adapter) counts as applied.
+  addAllowlist?(root: string, scope: "local" | "global"): void | boolean;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
@@ -382,7 +385,8 @@ function cursorDirLooksArgentOnly(dir: string): boolean {
       return jsonLooksArgentServerOnly(full, "mcpServers");
     }
     if (entry === "permissions.json") {
-      // Written by this adapter's addAllowlist: { mcpAllowlist: ["argent:*"] }.
+      // As an older addAllowlist left it: { mcpAllowlist: ["argent:*"] }. It no
+      // longer creates this file, but installs that predate that still have one.
       const config = parseJsoncStrict(full);
       if (config === null) return false;
       const keys = Object.keys(config);
@@ -674,12 +678,27 @@ const cursorAdapter: McpConfigAdapter = {
 
   // The allowlist lives in a separate ~/.cursor/permissions.json that may carry
   // the user's own rules, so edit that one key instead of rewriting the file.
-  addAllowlist(): void {
+  //
+  // Skip an absent or empty one rather than creating it. Per Cursor's docs
+  // (cursor.com/docs/reference/permissions), the file is not an additive layer:
+  // while it is missing, unparseable or has no `mcpAllowlist` key Cursor "falls
+  // back to the IDE allowlist for that key", but defining the key "overrides
+  // the in-app MCP allowlist entirely" - unlisted servers go back to needing
+  // approval, and the allowlist editor turns read-only with its "Add to
+  // allowlist" button hidden. Creating the file to add argent would therefore
+  // discard whatever the user had allowed in the IDE and lock them out of the
+  // UI that manages it, to grant a permission the IDE allowlist can already
+  // hold. Only extend a file the user has already opted into.
+  addAllowlist(): boolean {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
     const config = readJsonc(permPath);
+    // Covers a missing file, an empty/whitespace one, `{}`, and unparseable
+    // content - readJsonc collapses all of them to an empty object.
+    if (Object.keys(config).length === 0) return false;
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
-    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return true;
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
+    return true;
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
