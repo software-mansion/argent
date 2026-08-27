@@ -6,7 +6,6 @@ import {
   secretNames,
   secretPlacementAdvice,
   secretSources,
-  SECRET_ENV_PREFIX,
   type SecretSource,
   type SecretSourceOptions,
 } from "@argent/configuration-core";
@@ -24,7 +23,6 @@ import {
  * arbitrary host secrets through the mechanism.
  */
 
-export { SECRET_ENV_PREFIX };
 export type { SecretSourceOptions };
 
 /** Copied in packages/argent-mcp/src/auto-screenshot.ts, which cannot depend on this package. */
@@ -37,7 +35,7 @@ export function availableSecretNames(options: SecretSourceOptions = {}): string[
   return secretNames(secretSources(options));
 }
 
-export interface ResolvedSecretText {
+interface ResolvedSecretText {
   /** The input with every placeholder replaced by its secret value. */
   text: string;
   /** The substituted secrets; empty when the input had none. */

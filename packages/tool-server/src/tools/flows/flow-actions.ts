@@ -57,6 +57,38 @@ import {
   type ScrollDirection,
 } from "./flow-utils";
 
+/**
+ * The app an iOS tree read should describe, and how far the runner will vouch
+ * for it (see `queryFullHierarchyTree` for what each level buys).
+ */
+export interface FlowTreeTarget {
+  /**
+   * App id of the run's most recent successful `launch` step - or, after a
+   * `tool:` `launch-app`/`restart-app` step, of the app that step started.
+   */
+  bundleId: string;
+  /**
+   * Whether the runner still vouches that `bundleId` is what is on screen. A
+   * pinned read targets it directly, skipping the auto-resolve fan-out that
+   * probes every connected app. Unpinned, it is only a hint: auto-resolve
+   * decides the target, and `bundleId` breaks the tie solely when that
+   * resolution times out.
+   */
+  pinned: boolean;
+  /**
+   * Whether a pinned read's `Application.getState` probe has ever answered for
+   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
+   * after construction) so every read of the same pin sees it — `deviceEnv`
+   * shallow-spreads the run state, so they all reach the same object.
+   *
+   * It is the only evidence the runner has that the app's main queue was ever
+   * serviced, which tells the two causes of a timed-out probe apart. A later
+   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
+   * an unpinned target neither consults nor arms it.
+   */
+  probeAnswered: boolean;
+}
+
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
   registry: Registry;
@@ -64,30 +96,30 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * Bundle id of the last successful native `launch:` in this RUN, shared with
-   * nested `run:` flows (ExecState is per-run). Undefined until a launch runs;
-   * cleared by `tool:` steps that can change the foreground app (launch-app,
-   * restart-app, open-url, button, reinstall-app).
-   *
-   * iOS tree reads use it only where auto-targeting cannot answer, both
-   * following from it resolving out of the connected list rather than into it:
-   * as an arbiter when auto-resolution times out, and to name the app whose
-   * disconnection needs explaining when that list is empty (see
-   * `queryFullHierarchyTree`). Never to override a resolution that answered.
+   * The app the run's most recent successful `launch` step started - or, after
+   * a `tool:` `launch-app`/`restart-app` step, the app that step's own args
+   * named - and whether the runner still vouches for it being on screen.
+   * Demoted to an unpinned hint by a raw `tool:` step (its effect on the
+   * foreground is opaque to the runner), dropped outright by a `tool:` step
+   * that can change the foreground app and by a launch attempt until it
+   * succeeds (see `FOREGROUND_CHANGING_TOOLS` in flow-run). Shared with nested
+   * `run:` flows, since ExecState is per-run. Only iOS tree reads consume it
+   * (see `fetchFlowTree`).
    */
-  launchedNativeApp?: string;
+  treeTarget?: FlowTreeTarget;
   /**
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
-   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), and
-   * by a nested orchestrator step, which can do either out of this holder's
-   * sight. One holder per run, built in flow-run's ExecState and shared by
-   * every `deviceEnv`. A `tool:` step's read clears nothing: it goes through
+   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
+   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget}, and by
+   * a nested orchestrator step, which can do either out of this holder's sight.
+   * One holder per run, built in flow-run's ExecState and shared by every
+   * `deviceEnv`. A `tool:` step's own read clears nothing: it goes through
    * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
-   * ordered against the step running — `idle` stops waiting on its read at the
-   * round budget, so that read can land later and retire a verdict minted after
-   * it was issued.
+   * ordered against the step running —
+   * `idle` stops waiting on its read at the round budget, so that read can land
+   * later and retire a verdict minted after it was issued.
    *
    * Only {@link settleForGesture} READS it, and only to skip a settle already
    * shown to be unaffordable; the gesture then warns its step report that it
@@ -143,7 +175,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 };
 
 /** The condition/action steps {@link runDirective} handles. */
-export type DirectiveStep = Extract<
+type DirectiveStep = Extract<
   FlowStep,
   {
     kind:
@@ -395,7 +427,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });
@@ -823,9 +855,9 @@ type GestureSettle = { aborted?: true; warning?: string };
  * outage. Only the outage path warns; a window that expired without converging
  * did settle.
  *
- * It is also the caller `skipProvenOutage` exists for: an app that cannot load
- * the instrumentation fails every read (an Apple system app, which flows drive
- * by coordinates for exactly that reason), so every step of such a flow arrives
+ * It is also the caller `skipProvenOutage` exists for: an app the tree source
+ * refuses fails every read (an Apple system app, which flows drive by
+ * coordinates for exactly that reason), so every step of such a flow arrives
  * here and would otherwise be charged a window for the same verdict.
  *
  * A platform with no tree source at all is the one case that settles nothing and

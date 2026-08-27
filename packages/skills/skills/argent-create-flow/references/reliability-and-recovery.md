@@ -53,9 +53,9 @@ Use the same explicit UDID throughout. Multiple booted simulators are not an inj
 
 This fallback applies only to `com.apple.*` system apps. A connection failure in another app never authorizes it.
 
-Apple system apps are platform binaries with library validation, so the instrumentation cannot be relied on to load into them — it has been seen both loading and not loading, depending on the simulator runtime. Either way it is no basis for a selector.
+Argent refuses `com.apple.*` bundle ids at every native-devtools read that names one, because a system app is never the app under test. The instrumentation has been seen both loading and not loading into one, depending on the simulator runtime — either way it is no basis for a selector. `restart-app`, `launch-app`, and `describe` still work on one; it just never gets a flow tree.
 
-Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the impossibility bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the injection-free form:
+Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the refusal bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the tree-free form:
 
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
@@ -66,9 +66,9 @@ Every point tap or long-press in such a flow passes **carrying a warning** for a
 
 A recorded wait carries a different warning: it adds about one second and reports that the runner tree is unavailable. That warning is expected too. Keep the wait as a raw `tool:` step.
 
-Report that the flow is injection-free and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
+Report that the flow has no flow tree and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
 
-A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id injection may never reach. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first non-echo step is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
+A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first non-echo step is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
 ## Tree source recovery on Android, Chromium, and Vega
 

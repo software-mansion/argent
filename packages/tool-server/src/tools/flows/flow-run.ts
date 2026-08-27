@@ -305,13 +305,14 @@ export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
- * invalidates {@link ActionEnv.launchedNativeApp} and spends
- * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
+ * drops {@link ActionEnv.treeTarget} outright instead of keeping it as an
+ * unpinned hint, since the launched app may no longer be on screen at all, and
+ * spends {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
  * distinguishing button kinds would couple this list to that tool's arg schema.
  *
  * `launch-app` and `restart-app` re-set the id from their own `bundleId` once
- * they return — they name the app they switched to, where the rest leave it
- * unknown.
+ * they return, as an unpinned hint — they name the app they switched to, where
+ * the rest leave it unknown.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -343,8 +344,8 @@ async function waitForNativeDevtools(
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
-    // Withheld for the same reason as the timeout below: an app that may never
-    // load the dylib was never going to be served by this service.
+    // Withheld for the same reason as the timeout below: an app the native
+    // tools refuse to target was never going to be served by this service.
     if (!isInjectableBundleId(bundleId)) return null;
     return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
@@ -355,9 +356,9 @@ async function waitForNativeDevtools(
     if (Date.now() >= deadline) break;
     if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
   }
-  // Timed out with no connection. An app that may never load the dylib has no
-  // hierarchy to wait for, so that is its expected outcome rather than a launch
-  // failure; the impossibility bites only where a selector needs the hierarchy,
+  // Timed out with no connection. An app the native tools refuse to target has
+  // no hierarchy to wait for, so that is its expected outcome rather than a
+  // launch failure; the refusal bites only where a selector needs the hierarchy,
   // and `fetchFlowTree` reports it there.
   //
   // The wait itself still runs, deliberately: whether the dylib loads into a
@@ -503,7 +504,7 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * surface a raw tree-source error.
  *
  * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and for an iOS app whose hierarchy may never be servable at all (see
+ * aborted, and for an iOS app the native tools refuse to target (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed.
  * Otherwise the reason to report.
  */
@@ -571,6 +572,9 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
+  // The previous app is terminating and the new one has not started, so a
+  // failed or aborted launch must not leave the old target behind.
+  state.treeTarget = undefined;
   let restart: unknown;
   try {
     restart = await invokeOnDevice(env, "restart-app", { bundleId });
@@ -593,11 +597,9 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
-  // Remember the launched app for the rest of the RUN (nested `run:` flows
-  // share this state, so a nested launch retargets the whole run). iOS tree
-  // reads use it to explain a read they could not take, and to arbitrate a
-  // target auto-resolution stalled out on.
-  state.launchedNativeApp = bundleId;
+  // A FRESH object every time, never a mutation of the previous target: the
+  // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
+  state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
   return { ok: true };
 }
 
@@ -1050,7 +1052,11 @@ export function createRunFlowTool(
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+ready (on iOS it also pins later element lookups to that app rather than auto-detecting the frontmost
+one); \`tool\` calls dispatch through the registry (a raw \`tool\` step ends that iOS pin, so lookups
+auto-detect again until the next \`launch\`, though a tool that cannot change the foreground app leaves the
+launched id as a fallback for a timed-out auto-detect, and \`launch-app\`/\`restart-app\` leave the id they
+started as that fallback instead); \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
@@ -2346,25 +2352,32 @@ async function execLeafStep(
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }
+      // A raw tool step's effect on the device is opaque to the runner, so it
+      // stops vouching for the foreground app: reads go back to auto-resolve,
+      // the only honest target after it, keeping the launched app as an
+      // unpinned hint unless the tool could change the foreground app outright.
+      // Applied BEFORE invoking, since a tool that throws mid-way may still
+      // have switched apps. The next `launch` step re-pins.
+      if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
+        state.treeTarget = undefined;
+        // A relaunch is also the repair a proven tree outage asks for by name -
+        // the same clear `runLaunch` makes for the directive spelling.
+        if (state.treeOutage) state.treeOutage.proven = undefined;
+      } else if (state.treeTarget?.pinned) {
+        state.treeTarget = { ...state.treeTarget, pinned: false };
+        // A verdict proven against the pinned branch's gates says nothing
+        // about the auto-resolve path the demote switches reads onto.
+        if (state.treeOutage) state.treeOutage.proven = undefined;
+      }
+      // A nested orchestrator runs its tools outside this run's holder -
+      // `flow-execute` on an ExecState of its own, `run-sequence` on none - so
+      // a tree read or relaunch inside it retires nothing here. Cleared before
+      // the invoke for the same reason as above, and over-clearing only costs a
+      // later gesture a window it would have skipped.
+      if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
+        state.treeOutage.proven = undefined;
+      }
       try {
-        // These sub-tools can change (or relaunch) the foreground app, so the
-        // `launch:`-derived hint no longer names what is on screen, and a
-        // relaunch is the repair a proven tree outage asks for by name - the
-        // same clear `runLaunch` makes for the directive spelling. Cleared
-        // BEFORE invoking: a tool that throws mid-way may still have switched
-        // apps, and a stale hint is worse than no hint.
-        if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
-          state.launchedNativeApp = undefined;
-          if (state.treeOutage) state.treeOutage.proven = undefined;
-        }
-        // A nested orchestrator runs its tools outside this run's holder -
-        // `flow-execute` on an ExecState of its own, `run-sequence` on none -
-        // so a tree read or relaunch inside it retires nothing here.
-        // Over-clearing only costs a later gesture a window it would have
-        // skipped.
-        if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
-          state.treeOutage.proven = undefined;
-        }
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
@@ -2422,15 +2435,18 @@ async function execLeafStep(
             args,
           };
         }
-        // The launch-derived hint the clear above spent, restored for the two
-        // tools whose args name the app they just started: they change WHICH
-        // app is in front, not whether the run has one, so discarding the id
-        // drops the iOS tree source back to auto-targeting's "Launch or restart
-        // the app first". After the invoke, like `runLaunch`: a tool that threw
-        // started nothing.
+        // The target the clear above dropped, restored for the two tools whose
+        // args name the app they just started: they change WHICH app is in
+        // front, not whether the run has one, so discarding the id sends the
+        // iOS tree source back to auto-targeting's "Launch or restart the app
+        // first" — the very advice the measured diagnosis replaces. UNPINNED,
+        // like any other raw tool step. After the invoke, like `runLaunch`: a
+        // tool that threw started nothing.
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
-          if (typeof launched === "string") state.launchedNativeApp = launched;
+          if (typeof launched === "string") {
+            state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
+          }
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

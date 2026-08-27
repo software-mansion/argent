@@ -129,15 +129,15 @@ const TVOS_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
-// Apple system apps (`com.apple.*`) cannot be relied on to load argent's dylib,
-// so the native-devtools fallback can't read their view hierarchy and restarting
-// them would never help — returning `should_restart` here puts the agent in an
+// Apple system apps (`com.apple.*`) are not targets argent's native devtools
+// support, so the fallback can't read their view hierarchy and restarting them
+// would never help — returning `should_restart` here puts the agent in an
 // unbounded restart-app → describe loop. Reached only once the ax-service path
 // has already returned empty, so it leads with `screenshot`: re-recommending
 // `describe` would be circular.
 const NON_INJECTABLE_HINT =
-  "This is an Apple system app (com.apple.*), which cannot be relied on to load argent's native-devtools " +
-  "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
+  "This is an Apple system app (com.apple.*), which argent's native-devtools instrumentation " +
+  "does not support — the native view hierarchy is unavailable and restarting the app will NOT " +
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
@@ -157,11 +157,11 @@ function lendsNativeDevtools(deviceId: string): boolean {
   return Boolean(external?.capabilities.has("native-devtools") && external.nativeDevtools);
 }
 
-export interface DescribeIosParams {
+interface DescribeIosParams {
   bundleId?: string;
 }
 
-export interface DescribeIosOptions {
+interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
@@ -240,8 +240,8 @@ export async function describeIos(
   //
   // The gate sits BEFORE the native-devtools fallback: injectability is a static
   // property of the explicit bundle id, so the terminal hint must not depend on
-  // service resolution succeeding, and no service is spawned for an app that may
-  // never inject. Auto-resolution (no bundleId) needs no gate — it only ever
+  // service resolution succeeding, and no service is spawned for an app the gate
+  // refuses. Auto-resolution (no bundleId) needs no gate — it only ever
   // yields a connected, hence injected, app. A degraded ax-service keeps its
   // reboot guidance instead: a proper boot may let the ax-service read this
   // system app's tree, at which point `describe`, not a screenshot, is the

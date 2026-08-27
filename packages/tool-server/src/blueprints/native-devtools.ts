@@ -24,17 +24,18 @@ import {
 // Re-exported for native-devtools-env.test.ts, which imports it from here.
 export { buildDyldInsertLibraries };
 
-export type NativeDevtoolsTransport = "unix" | "tcp";
+type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
 /**
- * Whether the Argent native devtools dylib can ever be injected into an app.
+ * Whether an app is a supported target for the Argent native devtools.
  *
- * Apple system apps (bundle ids under `com.apple.`) are platform binaries with
- * library validation, so the simulator may or may not honour
- * `DYLD_INSERT_LIBRARIES` for them — runtime-dependent, and no relaunch changes
- * which way it goes (#453 recorded `connected: false` for
+ * Apple system apps (bundle ids under `com.apple.`) are not: they are never the
+ * app under test, and the ones seen connected are background-launched processes
+ * that may never service their main queue, so a read hangs or describes UI
+ * nobody is looking at — and whether one connects at all is
+ * runtime-dependent anyway (#453 recorded `connected: false` for
  * `com.apple.Preferences` on iOS 26.5, an E2E run `connected: true` on 18.5).
  * Answering "not injectable" for both gives the native-* tools a terminal
  * signal instead of an unbounded restart-app → retry loop; an app that MIGHT
@@ -329,16 +330,16 @@ export async function precheckNativeDevtools(
   // knowable without any env state, so this fires before the env plumbing below
   // — a given-up sim or a transient ensureEnvReady failure must not mask the
   // terminal signal behind init_failed's "re-boot the simulator" guidance (a
-  // reboot cannot make a system app injectable), and no env-setup work is spent
-  // on an app that may never load the dylib. Throwing (rather than returning a
+  // reboot cannot make a system app a supported target), and no env-setup work
+  // is spent on an app the gate refuses. Throwing (rather than returning a
   // restart-required block) makes the native-* feature tools surface a hard
   // error instead of an unbounded restart→retry loop. The 2-arg overload
   // (bundleId undefined) must NOT throw: native-devtools-status reports the
   // state instead, and launch-app / restart-app run it too — launching or
-  // restarting a system app is legitimate, it just may not inject.
+  // restarting a system app is legitimate, it just is not a target.
   if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
     throw new FailureError(
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools cannot be relied on to inject into it — treat it as unavailable rather than retrying. ` +
+      `${bundleId} is an Apple system app: it is never the app under test, so Argent native devtools refuse to read one — treat it as unavailable rather than retrying. ` +
         NON_INJECTABLE_RECOVERY,
       {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,

@@ -92,7 +92,7 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
 
 /**
  * The app this recording last started, from the recorder's `launch` steps — the
- * session's stand-in for the runner's {@link ActionEnv.launchedNativeApp}. Last
+ * session's stand-in for the runner's {@link FlowTreeTarget.bundleId}. Last
  * rather than first: a mid-recording relaunch retargets what follows, exactly as
  * a nested `launch:` retargets a run.
  */
@@ -594,11 +594,12 @@ async function probeAgainstRunnerTree(
  * replay tree keeps. A describe-derived selector could fail — or hit a
  * different element — at replay while recording reported success.
  *
- * The launched app is passed because a recording relaunches the app AFTER this
- * tool-server bound its listener: the first tap reads during the connect
- * window, where that id is the only one the iOS tree source can measure, and it
- * yields a measured reason instead of auto-targeting's "Launch or restart the
- * app first".
+ * The launched app is passed — unpinned, unlike replay, since recording has no
+ * run state vouching for the foreground app — because a recording relaunches
+ * the app AFTER this tool-server bound its listener: the first tap reads during
+ * the connect window, where that id is the only one the iOS tree source can
+ * measure, and it yields a measured reason instead of auto-targeting's "Launch
+ * or restart the app first".
  */
 async function captureTapSelector(
   registry: Registry,
@@ -609,7 +610,11 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(registry, device, launched);
+    const { tree, source } = await fetchFlowTree(
+      registry,
+      device,
+      launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
+    );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);

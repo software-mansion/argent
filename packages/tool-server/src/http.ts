@@ -266,7 +266,7 @@ function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknow
   };
 }
 
-export interface HttpAppOptions {
+interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;

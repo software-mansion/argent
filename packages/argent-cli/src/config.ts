@@ -5,6 +5,7 @@
 
 import * as path from "node:path";
 import pc from "picocolors";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import {
   CONFIG_SCHEMA,
   configDir,
@@ -195,38 +196,24 @@ interface ParsedArgs {
   json: boolean;
 }
 
+const CONFIG_OPTIONS = {
+  scope: { kind: "value", choices: ["global", "project"] },
+  json: { kind: "boolean" },
+} as const satisfies OptionSpecs;
+
 function parseArgs(argv: string[]): ParsedArgs {
-  const positionals: string[] = [];
-  let scope: FlagScope | null = null;
-  let json = false;
-
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    if (tok === "--json") {
-      json = true;
-      continue;
-    }
-    if (tok === "--scope") {
-      scope = parseScope(argv[++i]);
-      continue;
-    }
-    if (tok.startsWith("--scope=")) {
-      scope = parseScope(tok.slice("--scope=".length));
-      continue;
-    }
-    if (tok.startsWith("--")) {
-      console.error(`Error: unknown flag "${tok}".`);
-      process.exit(2);
-    }
-    positionals.push(tok);
+  try {
+    const { positionals, options } = parseCommandArgs(argv, CONFIG_OPTIONS);
+    return {
+      positionals,
+      scope: (options.scope as FlagScope | undefined) ?? null,
+      json: options.json === true,
+    };
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}.`);
+    process.exit(2);
   }
-  return { positionals, scope, json };
-}
-
-function parseScope(raw: string | undefined): FlagScope {
-  if (raw === "global" || raw === "project") return raw;
-  console.error(`Error: --scope must be "global" or "project"${raw ? `, got "${raw}"` : ""}.`);
-  process.exit(2);
 }
 
 function wantsHelp(argv: string[]): boolean {

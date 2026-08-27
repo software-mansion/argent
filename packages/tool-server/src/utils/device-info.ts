@@ -14,7 +14,7 @@ const IOS_UDID_SHAPE =
  * simulator. The UUID after it has the same shape as a local iOS UDID, so the
  * prefix is the only thing telling the two apart.
  */
-export const REMOTE_PREFIX = "remote:";
+const REMOTE_PREFIX = "remote:";
 
 export function stripRemotePrefix(id: string): string {
   return id.startsWith(REMOTE_PREFIX) ? id.slice(REMOTE_PREFIX.length) : id;
@@ -32,7 +32,7 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  * `ro.serialno` is vendor-defined, so a colliding Android serial would be
  * misrouted to the Vega paths.
  */
-export const VEGA_SERIAL_PREFIX = "amazon-";
+const VEGA_SERIAL_PREFIX = "amazon-";
 
 export function classifyDevice(udid: string): Platform {
   /**

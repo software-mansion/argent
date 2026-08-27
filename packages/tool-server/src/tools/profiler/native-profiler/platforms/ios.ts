@@ -484,7 +484,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   );
 }
 
-export interface IosStartParams {
+interface IosStartParams {
   device_id: string;
   app_process?: string;
   template_path?: string;

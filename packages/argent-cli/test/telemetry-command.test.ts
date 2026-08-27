@@ -122,4 +122,21 @@ describe("argent telemetry — scopes", () => {
     expect(globalConfig()).toBeNull();
     expect(projectConfig()).toBeNull();
   });
+
+  // `argent <command> --help` is what the top-level help tells the user to run,
+  // and every other subcommand honours it after its own subcommand too.
+  it.each([
+    ["--help"],
+    ["-h"],
+    ["status", "--help"],
+    ["status", "-h"],
+    ["enable", "--help"],
+    ["disable", "-h"],
+  ])("prints usage for %s and writes nothing", async (...args) => {
+    await telemetry(args);
+    expect(output()).toContain("argent telemetry status");
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(globalConfig()).toBeNull();
+    expect(projectConfig()).toBeNull();
+  });
 });

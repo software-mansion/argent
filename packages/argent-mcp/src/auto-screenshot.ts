@@ -62,7 +62,7 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
  * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
  * on.
  */
-export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 /**
  * Deep-scan tool args for a secret placeholder; when one is present the
