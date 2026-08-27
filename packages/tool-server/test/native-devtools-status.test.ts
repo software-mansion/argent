@@ -1212,22 +1212,48 @@ describe("native-* tool descriptions document every precheck outcome", () => {
   // emits — which no runtime assertion catches, because both sides still agree
   // with themselves. Exhaustive by construction: a record fails to compile when
   // a state joins the union unlisted, where a hand-written array silently omits.
-  const ALL_STATES: Record<NativeDevtoolsAppState, true> = {
-    connected: true,
-    not_running: true,
-    stale_process: true,
-    unregistered: true,
-    connecting: true,
-    indeterminate: true,
-    provider_attached: true,
+  //
+  // The value says where each state is documented. `provider_attached` occurs
+  // only on a provider's device, so the description (read by every agent) omits
+  // it and its `message` explains it when it happens.
+  const ALL_STATES: Record<NativeDevtoolsAppState, "description" | "message"> = {
+    connected: "description",
+    not_running: "description",
+    stale_process: "description",
+    unregistered: "description",
+    connecting: "description",
+    indeterminate: "description",
+    provider_attached: "message",
   };
 
   it("spells every emitted state exactly as the description names it", () => {
-    const states = Object.keys(ALL_STATES) as NativeDevtoolsAppState[];
-    for (const state of states) {
+    for (const [state, documentedIn] of Object.entries(ALL_STATES)) {
+      if (documentedIn !== "description") continue;
       expect(nativeDevtoolsStatusTool.description, `description must name ${state}`).toContain(
         `"${state}"`
       );
+    }
+  });
+
+  it("keeps a provider-only state out of the description and explains it in message", () => {
+    for (const [state, documentedIn] of Object.entries(ALL_STATES)) {
+      if (documentedIn !== "message") continue;
+
+      expect(
+        nativeDevtoolsStatusTool.description,
+        `${state} occurs only on a provider's device, so the description must not name it`
+      ).not.toContain(state);
+
+      /** What the agent gets instead, when the state occurs. */
+      const message = buildAppStateMessage(
+        "com.example.App",
+        state as Exclude<NativeDevtoolsAppState, "connected">
+      );
+
+      expect(message, `${state} has no message to stand in for the description`).toBeTypeOf(
+        "string"
+      );
+      expect(message.length).toBeGreaterThan(0);
     }
   });
 

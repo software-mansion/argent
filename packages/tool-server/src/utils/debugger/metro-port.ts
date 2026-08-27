@@ -29,9 +29,14 @@ export const metroPortField = z.coerce
   .min(1)
   .max(65535)
   .optional()
+  /**
+   * No mention of providers: twenty tools ship this field's text, in every
+   * session. "Omit it" is also safer, an agent told the default is 8081 passes
+   * 8081, which counts as explicit and beats a provider's port.
+   */
   .describe(
-    "Metro server port. Optional: defaults to the port the device's provider publishes for it, " +
-      "otherwise 8081. Ignored for Chromium, whose CDP port is encoded in device_id."
+    "Metro server port. Optional — omit it to use this device's port, 8081 by default. " +
+      "Ignored for Chromium, whose CDP port is encoded in device_id."
   );
 
 /**

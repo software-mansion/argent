@@ -207,6 +207,29 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
+  /**
+   * The common case, which the suite-wide setup already models. No provider
+   * registered, so the result must not carry a word about them.
+   */
+  it("says nothing about external devices when no provider is registered", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
+  });
+
   it("readAvdName prefers the modern avd_name prop over the legacy one (now probed concurrently)", async () => {
     // The two getprops run in parallel (so a wedged device costs 5s, not 10s), but
     // precedence must be unchanged: `ro.boot.qemu.avd_name` (modern, emulator 30+)
@@ -615,5 +638,27 @@ describe("list-devices — external provider shadows", () => {
 
     expect(iPad).toHaveLength(1);
     expect(iPad[0]).not.toHaveProperty("external");
+  });
+
+  /** The rules ride on the result, so they cost nothing until one is listed. */
+  it("explains the provider rules in the result once an external device is listed", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.hint).toBeDefined();
+    /** The two rules that differ from a device argent booted itself. */
+    expect(result.hint).toContain("boot-device");
+    expect(result.hint).toContain("provider.workspace.path");
   });
 });

@@ -197,6 +197,14 @@ run_phase() {
     fail "$P" list-devices "external device listed" "$(printf '%s' "$RT_JSON" | tr '\n' ' ' | cut -c1-200)"
   fi
 
+  # The rules ride on the result, not the description. One device IS listed
+  # here, so the hint must be present and carry the boot-device rule.
+  if printf '%s' "$RT_JSON" | jq -e '(.hint // "") | test("boot-device")' >/dev/null 2>&1; then
+    pass "$P" list-devices "result explains the provider rules"
+  else
+    fail "$P" list-devices "result explains the provider rules" "hint missing or incomplete"
+  fi
+
   # The provider claimed this serial, so the plain adb row must be gone — a
   # duplicate would let an agent target the same device by two ids, one of which
   # would spawn a SECOND simulator-server against a device already being driven.
@@ -304,6 +312,13 @@ run_phase() {
     fail "$P" providers-withdraw "device gone from list-devices" "$DEV is still listed"
   else
     pass "$P" providers-withdraw "device gone from list-devices"
+  fi
+
+  # The other half of the gate: no provider left, so no hint.
+  if printf '%s' "$RT_JSON" | jq -e 'has("hint")' >/dev/null 2>&1; then
+    fail "$P" providers-withdraw "no provider prose once none is registered" "hint is still emitted"
+  else
+    pass "$P" providers-withdraw "no provider prose once none is registered"
   fi
 
   local DOC="$E2E_WORK/provider-descriptor.json"
