@@ -272,6 +272,42 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
   }
 }
 
+/**
+ * Start recording the remote simulator's video stream. Returns as soon as the
+ * runner is buffering frames — the recording then runs unattended until
+ * `streamRecordStop`, which is what lets it span other tool calls.
+ *
+ * `showTouches` draws simulator-server's touch visualizer into the capture;
+ * it stays on in the live stream until the stop turns it off.
+ */
+export async function streamRecordStart(
+  udid: string,
+  opts: { showTouches: boolean; bufferMb: number }
+): Promise<void> {
+  const args = [
+    "stream-record",
+    "start",
+    stripRemotePrefix(udid),
+    "--buffer-mb",
+    String(opts.bufferMb),
+  ];
+  if (opts.showTouches) args.push("--show-touches");
+  await run(args);
+}
+
+/**
+ * Stop the recording and download the mp4 to `outputFile`, overwriting it.
+ *
+ * The transfer is the whole video over the control connection, so it gets its
+ * own budget rather than the default: a long capture of a high-resolution
+ * device is hundreds of megabytes.
+ */
+export async function streamRecordStop(udid: string, outputFile: string): Promise<void> {
+  await run(["stream-record", "stop", stripRemotePrefix(udid), outputFile, "--force"], {
+    timeoutMs: 10 * 60_000,
+  });
+}
+
 export interface MoqInfo {
   url: string;
   fingerprint: string;
