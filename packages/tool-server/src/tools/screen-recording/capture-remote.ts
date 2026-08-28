@@ -40,10 +40,10 @@ import { buildWatermarkGraph, resolveFfmpeg, resolveFfprobe, writeLogoTemp } fro
 
 const OUTPUT_FPS = 30;
 /**
- * Runner-side frame buffer. It is a cap, not an allocation: frames spill to
- * the runner's disk and the oldest are dropped once it fills, so this bounds
- * how much of a long recording survives. 2 GB comfortably covers the 600s
- * maximum at a phone's native resolution.
+ * Runner-side frame buffer. It is a cap, not an allocation: the encoded frames
+ * spill to the runner's disk and the oldest are dropped once it fills, so this
+ * bounds how much of a long recording survives. 2 GB comfortably covers the
+ * 600s maximum at a phone's native resolution.
  */
 const BUFFER_MB = 2000;
 /** Bound the post-pass so a wedged ffmpeg cannot hold the stop open. */
