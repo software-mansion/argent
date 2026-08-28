@@ -138,24 +138,35 @@ export async function describeIos(
     return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
 
-  let tree: DescribeNode;
+  let tree: DescribeNode = emptyTree();
   let degraded: boolean;
   // A resolver failure that names its own cause, which outranks the boot caveat.
   let resolverHint: string | undefined;
+  // The daemon came up but the read itself failed (a query timeout, an RPC
+  // error). That says nothing about how the sim was booted, so it must not be
+  // reported as the boot caveat — which prescribes a reboot the developer pays
+  // for and that would not have helped.
+  let readFailureHint: string | undefined;
 
+  let axApi: AXServiceApi | undefined;
   try {
     const axRef = axServiceRef(device);
-    const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
-    const response = await axApi.describe();
-    tree = adaptAXDescribeToDescribeResult(response);
+    axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
   } catch (err) {
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
     // one, so it must not read as degraded.
-    tree = emptyTree();
     resolverHint = tcpArtifactHint(err);
     degraded = resolverHint === undefined;
+  }
+
+  if (axApi) {
+    try {
+      tree = adaptAXDescribeToDescribeResult(await axApi.describe());
+    } catch (err) {
+      readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+    }
   }
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
@@ -167,7 +178,13 @@ export async function describeIos(
     : tree.children.length === 0
       ? DEGRADED_BLIND_HINT
       : DEGRADED_STANDING_HINT;
-  const hint = resolverHint ?? degradedHint;
+  const hint =
+    resolverHint ??
+    (readFailureHint
+      ? degradedHint
+        ? `${degradedHint}. ${readFailureHint}`
+        : readFailureHint
+      : degradedHint);
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
