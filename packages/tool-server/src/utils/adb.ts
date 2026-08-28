@@ -87,7 +87,7 @@ export async function emulatorSupportsFlag(
   const cached = emulatorFlagSupportCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  let output = "";
+  let output: string;
   let failure: string | null = null;
   try {
     const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
