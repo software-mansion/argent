@@ -73,6 +73,23 @@ describe("findMissingRequired", () => {
     expect(findMissingRequired({}, schema)).toEqual(["constructor"]);
   });
 
+  it("never asks for a retired key", () => {
+    // `formatSchemaUsage` filters retired keys out of the usage block and the parser refuses every
+    // spelling of one, so this reader must agree with them. A retirement declared without
+    // `.optional()` lands in `required` and would be reported as `missing required flag --settle`
+    // for a flag the help does not show and no input can supply.
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    expect(findMissingRequired({}, schema)).toEqual(["udid"]);
+    expect(findMissingRequired({ udid: "X" }, schema)).toEqual([]);
+  });
+
   it("reports nothing when the schema requires nothing", () => {
     expect(findMissingRequired({}, { type: "object", properties: {} })).toEqual([]);
     expect(findMissingRequired({}, undefined)).toEqual([]);
@@ -210,6 +227,22 @@ describe("describeServerValidationFailure", () => {
     expect(report?.invalid).toEqual([
       { path: ["clickCount"], message: "condition requires clickCount" },
     ]);
+  });
+
+  it("does not call a retired key a missing required flag", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    const message = "Invalid input: expected never, received undefined";
+    const err = new Error(JSON.stringify([{ code: "invalid_type", path: ["settle"], message }]));
+    const report = describeServerValidationFailure(err, { udid: "X" }, schema);
+    expect(report?.missing).toEqual([]);
+    expect(report?.invalid).toEqual([{ path: ["settle"], message }]);
   });
 
   it("treats an explicitly supplied null as rejected, not missing", () => {

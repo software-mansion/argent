@@ -48,7 +48,7 @@ export interface AggregatorInputRow {
   sampleCount?: number;
 }
 
-export interface AggregatorOptions {
+interface AggregatorOptions {
   platform: "ios" | "android";
   /** Timestamps that fell inside a UI hang window — set `duringHang`. */
   hangSampleTimestamps?: Set<number>;

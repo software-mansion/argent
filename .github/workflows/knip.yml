@@ -31,17 +31,26 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Knip reads source directly (mapping each package's dist entry back to
-      # src), so no workspace build is required. The first pass reports the
-      # enforced classes on their own, keeping a real failure from landing
-      # underneath the parked backlog.
+      # src), so there is no build step here. That mapping resolves each
+      # workspace's OWN entry, though - it does not form the edge from one
+      # workspace to another, which needs a dist that this job never creates. So
+      # a symbol another workspace calls can still be reported unused; that is
+      # the case the annotation below and knip.jsonc's @public section are about,
+      # and it is why a local run has to skip the build too. The two passes
+      # partition the issue types between them (see knip.jsonc); both must come
+      # back empty.
       - name: Knip
         id: knip
         run: npm run knip
 
-      # A ceiling breach announces nothing — knip just exits 1 under parked
-      # findings that name files and symbols exactly like a real one. Section
-      # headers are the only thing that tells the two apart.
+      # The report names the file and symbol but not what to do about it, and
+      # the answer differs per section. Give all three remedies, for class
+      # members as well as exports and types: a finding whose only caller is out
+      # of knip's reach reads exactly like a dead one. Say
+      # which wrong delete goes unnoticed, too — deleting another workspace's
+      # caller fails `tsc --build` and that workspace's tests, but argent-private
+      # `require()`s a built `dist/*.js` no job here checks out.
       - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. If the only sections above are the parked ones — unused exports, unused exported types, unused exported class members, or either of their in-used-namespace variants — the second pass exceeded the --max-issues ceiling in package.json, and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."
+          echo "::error::Dead Code failed. There is no allowance to fall back on — the gate runs at --max-issues 0, so every section above is a real finding introduced by this change. For an unused export, type or class member, there are three remedies. Drop the export keyword if the symbol is still used inside its own file; a class member has none, so for that section it is the two below. Delete it if nothing uses it. Add a /** @public */ tag if the only caller is somewhere knip cannot see — another workspace, because CI analyses an unbuilt tree and cross-workspace edges do not form, or the argent-private submodule, which is in ignoreWorkspaces and is not checked out in this job. Unused exported class members is almost always that third case here. Look for that caller before you delete. This gate stays green either way, but the two cases differ after that: deleting a symbol another workspace calls turns the build and that workspace's unit tests red in the same check run, while deleting one only argent-private requires breaks nothing CI runs at all. For anything else, the section header names the class. Reproduce it locally with npm run knip against a tree with no build output, which is how CI runs it — knip.jsonc explains why that matters."

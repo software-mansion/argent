@@ -240,7 +240,7 @@ function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknow
   return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
 }
 
-export interface HttpAppOptions {
+interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;

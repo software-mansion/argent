@@ -18,7 +18,7 @@ import { AI_CLIENTS } from "./ai-identity.js";
 // Last gate before export: unknown keys and invalid values never reach the
 // OTLP collector.
 
-export type Validator = (v: unknown) => unknown | undefined;
+type Validator = (v: unknown) => unknown | undefined;
 
 const oneOf =
   <T extends string>(opts: readonly T[]): Validator =>
@@ -303,5 +303,3 @@ export function sanitize(event: string, raw: Record<string, unknown>): Record<st
   }
   return out;
 }
-
-export const _testValidators = { oneOf, matches, finiteNonNeg, bool, arrayOf };

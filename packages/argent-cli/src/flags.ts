@@ -3,6 +3,7 @@
 // storage live in `@argent/configuration-core`.
 
 import pc from "picocolors";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import {
   FLAG_REGISTRY,
   getFlagDefinition,
@@ -31,58 +32,24 @@ interface ParsedToggleArgs {
   scope: FlagScope;
 }
 
+// "project" first so the error lists the scopes in the order the help does.
+const TOGGLE_OPTIONS = {
+  scope: { kind: "value", choices: ["project", "global"] },
+} as const satisfies OptionSpecs;
+
 function parseToggleArgs(argv: string[], command: "enable" | "disable"): ParsedToggleArgs {
-  let name: string | null = null;
-  let scope: FlagScope = "global";
-  let positionalOnly = false;
-
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-
-    if (positionalOnly) {
-      if (name !== null) throw new Error(`Unexpected extra argument: "${tok}"`);
-      name = tok;
-      continue;
-    }
-
-    if (tok === "--") {
-      positionalOnly = true;
-      continue;
-    }
-    if (tok === "--scope") {
-      const v = argv[i + 1];
-      if (v === undefined) throw new Error("--scope requires a value (project|global)");
-      scope = parseScope(v);
-      i += 1;
-      continue;
-    }
-    if (tok.startsWith("--scope=")) {
-      scope = parseScope(tok.slice("--scope=".length));
-      continue;
-    }
-    if (tok.startsWith("--")) {
-      throw new Error(`Unknown flag: ${tok}`);
-    }
-    if (name !== null) {
-      throw new Error(`Unexpected extra argument: "${tok}"`);
-    }
-    name = tok;
-  }
-
-  if (name === null) {
-    throw new Error(`Usage: argent ${command} <flag-name> [--scope project|global]`);
+  const { positionals, options } = parseCommandArgs(argv, TOGGLE_OPTIONS);
+  const [name, extra] = positionals;
+  if (extra !== undefined) throw new UsageError(`Unexpected extra argument: "${extra}"`);
+  if (name === undefined) {
+    throw new UsageError(`Usage: argent ${command} <flag-name> [--scope project|global]`);
   }
   if (!FLAG_NAME_RE.test(name)) {
-    throw new Error(
+    throw new UsageError(
       `Invalid flag name "${name}". Must start with a letter and contain only letters, digits, ".", "_", or "-".`
     );
   }
-  return { name, scope };
-}
-
-function parseScope(raw: string): FlagScope {
-  if (raw === "global" || raw === "project") return raw;
-  throw new Error(`--scope must be "project" or "global", got "${raw}"`);
+  return { name, scope: (options.scope as FlagScope | undefined) ?? "global" };
 }
 
 // Shown in --help so users see what they can toggle without running `argent flags`.
