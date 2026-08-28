@@ -156,7 +156,7 @@ An Android app that starts from a non-launcher activity has no `launch:` form. R
 - swipe: { from: { id: drag-handle }, to: { id: drop-zone }, settle: true }
 ```
 
-A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. For example, `swipe: left` moves the content to the left and shows what is on the right. Use `scroll-to`, not `swipe`, to bring an element on screen.
+A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
 
 | Option      | Value                                                                                                                                      |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -164,12 +164,12 @@ A swipe moves one finger across the screen. `direction` is the travel of the fin
 | `direction` | `up`, `down`, `left` or `right`. Argent moves the finger a preset distance. With `from`, Argent clamps the travel on screen                |
 | `to`        | The end point. A selector or `{ x, y }`                                                                                                    |
 | `by`        | A signed delta `{ x, y }` in screen fractions. Argent delivers the exact delta. With `from`, a delta that leaves the screen fails the step |
-| `settle`    | `true` removes the momentum at the default `duration`. The content stops where the finger stops                                            |
+| `settle`    | `true` removes the momentum at the default `duration`                                                                                      |
 | `duration`  | The travel time in milliseconds. Default 300, minimum 150, maximum 10000                                                                   |
 
-A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run. A `direction` with `from` fails when Argent clamps the travel to less than 0.03 at the screen edge.
+A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
 
-On Chromium, Argent runs a swipe as a mouse drag. A `from` on a draggable node, for example an image or a link, starts the drag and drop of the browser. On Vega, a swipe fails like the other touch directives.
+On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
 
 ## Conditions
 

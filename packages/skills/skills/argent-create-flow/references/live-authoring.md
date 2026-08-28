@@ -123,9 +123,9 @@ If characters are lost, restore the field with direct calls. Do not record a dup
 
 Record the required live gesture. During polish:
 
-- Convert element-seeking movement to selector-based `scroll-to`. A swipe followed by a step that needs something it was meant to reveal is a scroll in disguise — always `scroll-to`, never `swipe:`.
-- Convert a swipe that is a gesture in its own right — swipe-to-dismiss, paging a carousel, revealing a row action — to `swipe:`, anchoring `from` on the gesture's **subject** (the card being dismissed, the row being revealed), not on whatever content happened to be under the finger. `direction` is the **finger's** travel.
-- Retain a raw gesture tool only for what `swipe` deliberately doesn't express — an edge swipe (system back), a multi-touch `gesture-custom`, or exotic velocity control.
+- Convert element-seeking movement to selector-based `scroll-to`.
+- Convert a swipe that is a gesture in its own right - swipe-to-dismiss, paging a carousel, revealing a row action - to `swipe:`, anchoring `from` on the gesture's **subject** (the card being dismissed, the row being revealed), not on whatever content happened to be under the finger.
+- Retain a raw gesture tool only for what `swipe` deliberately doesn't express - an edge swipe (system back), a multi-touch `gesture-custom`, or exotic velocity control.
 
 For every retained raw gesture, add an echo and a recorded result check.
 
