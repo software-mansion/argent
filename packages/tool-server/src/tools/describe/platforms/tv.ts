@@ -2,7 +2,7 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
-import { describeAndroid } from "./android";
+import { describeAndroid, ANDROID_TRUNCATED_HINT } from "./android";
 import type {
   TvControlApi,
   TvDescribeResponse,
@@ -118,12 +118,18 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     // throws an actionable error (device locked / keyguard / DRM / secure
     // overlay, or an adb failure), more useful than the generic EMPTY_HINT.
     const data = await describeAndroid(registry, device.id, undefined, true);
+    // This path writes its own hint in place of describeAndroid's, so a partial
+    // capture would lose its notice here — carry it over. The tree it replaces
+    // the focus view with is the same tree, budget and all.
+    const hint = data.truncated
+      ? `${ANDROID_FOCUS_EMPTY_HINT} ${ANDROID_TRUNCATED_HINT}`
+      : ANDROID_FOCUS_EMPTY_HINT;
     return {
-      description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
+      description: `${hint}\n\n${formatDescribeTree(data.tree, {
         source: data.source,
       })}`,
       source: data.source,
-      hint: ANDROID_FOCUS_EMPTY_HINT,
+      hint,
     };
   }
 

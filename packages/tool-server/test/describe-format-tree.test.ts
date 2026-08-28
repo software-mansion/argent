@@ -56,7 +56,7 @@ describe("formatDescribeTree", () => {
             }),
             leaf({
               role: "WebView",
-              label: "[web-view] About",
+              label: "About",
               frame: { x: 0, y: 0.4, width: 1, height: 0.4 },
             }),
           ],
@@ -67,12 +67,34 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("Mode: nested");
     expect(out).toContain("ScrollView");
     expect(out).toMatch(/Button\s+"Like".*\[clickable\]/);
-    expect(out).toContain("[web-view] About");
+    expect(out).toMatch(/WebView\s+"About"/);
     const lines = out.split("\n");
     const buttonLine = lines.find((l) => l.includes('"Like"'))!;
     const scrollLine = lines.find((l) => l.includes("ScrollView"))!;
     // child indented deeper than its parent
     expect(buttonLine.search(/\S/)).toBeGreaterThan(scrollLine.search(/\S/));
+  });
+
+  it("keeps an undecorated WebView landmark that has no children", () => {
+    // A WebView whose renderer has published no accessible DOM carries no
+    // label, no id and no gesture flag — the shape Chromium emits right after
+    // launch and for a page with no accessible content. The role gate is the
+    // only thing that keeps the element covering the whole screen on the page.
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "WebView", frame: { x: 0, y: 0, width: 1, height: 1 } }),
+        leaf({
+          role: "StaticText",
+          label: "WVProbe",
+          frame: { x: 0.04, y: 0.07, width: 0.2, height: 0.03 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "android-devtools" });
+    expect(elementLines(out)).toHaveLength(2);
+    expect(out).toMatch(/WebView\s+\(0\.000, 0\.000, 1\.000, 1\.000\)/);
   });
 
   it("escapes embedded newlines so per-line alignment survives", () => {

@@ -4,7 +4,10 @@ import type { DeviceInfo } from "@argent/registry";
 // The Android empty-focus fallback shells out to uiautomator via describeAndroid;
 // stub it so the TV-describe routing can be tested without adb.
 const describeAndroidMock = vi.fn();
-vi.mock("../src/tools/describe/platforms/android", () => ({
+vi.mock("../src/tools/describe/platforms/android", async (importOriginal) => ({
+  // Only the entry point is stubbed: the module's hint constants are the real
+  // text the fallback re-uses, so they must not be mocked away.
+  ...(await importOriginal<typeof import("../src/tools/describe/platforms/android")>()),
   describeAndroid: (...a: unknown[]) => describeAndroidMock(...a),
 }));
 
@@ -144,5 +147,28 @@ describe("describe (TV) — Android skips the focus-engine retries", () => {
     // The Android uiautomator fallback supplied the rendering + its hint.
     expect(describeAndroidMock).toHaveBeenCalledTimes(1);
     expect(res.hint).toMatch(/Android TV focus engine/i);
+  });
+
+  // The fallback writes its own hint in place of describeAndroid's, so the
+  // partial-capture notice has to be carried over explicitly — otherwise a
+  // truncated tree reaches the agent on this path looking complete.
+  it("still says the tree is partial when the capture hit the node budget", async () => {
+    const frame = { x: 0, y: 0, width: 100, height: 50 };
+    describeAndroidMock.mockResolvedValue({
+      tree: { role: "RCTView", frame, children: [] },
+      source: "android-devtools",
+      hint: "some android hint",
+      truncated: true,
+    });
+
+    const res = await describeTv(
+      makeRegistry(makeApi(vi.fn().mockResolvedValue(empty))),
+      ANDROID_TV_DEVICE
+    );
+
+    expect(res.hint).toMatch(/Android TV focus engine/i);
+    expect(res.hint).toContain("PARTIAL");
+    // The agent reads the rendering, so the notice has to be in it too.
+    expect(res.description).toContain("PARTIAL");
   });
 });

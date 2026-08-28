@@ -82,6 +82,11 @@ export interface DescribeTreeData {
   source: DescribeSource;
   should_restart?: boolean;
   hint?: string;
+  // The source stopped at its walker budget, so the tree is missing on-screen
+  // content. Kept next to `hint` rather than folded into it because a caller
+  // that writes its own hint (the Android TV focus fallback) still has to say
+  // the tree is partial.
+  truncated?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set

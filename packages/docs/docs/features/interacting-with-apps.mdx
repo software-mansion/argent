@@ -27,6 +27,10 @@ The agent does not read coordinates from a screenshot. Before each tap, the agen
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
+On Android, the agent also reads the content of a `WebView`. Chromium puts the web page into the accessibility tree. Thus the agent gets the elements of the page and the native elements around them in one tree. An HTML `id` becomes the element id, so the agent taps a web control in the same way as a native control.
+
+The renderer needs a moment to publish the page. Before it does, the agent sees the `WebView` and no content in it. The agent waits for an element of the page, then continues.
+
 After a screen change, the agent reads the screen again. Most actions return a screenshot, so the agent sees the result without an extra call.
 
 ## Launching apps
@@ -81,5 +85,6 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
+- A screen can hold more elements than one capture carries. The agent then gets a part of the tree and a message that says so.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

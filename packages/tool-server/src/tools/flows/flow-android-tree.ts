@@ -2,10 +2,11 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   clipBoundsToScreen,
-  deriveUiAutomatorRole,
+  deriveUiAutomatorRoleInContext,
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
   isUiAutomatorScrollable,
+  isUiAutomatorWebView,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
@@ -91,7 +92,8 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  inWebView: boolean
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome yields false matches (a system "Back"); SVG implementation
@@ -106,7 +108,13 @@ function projectAndroidNode(
   const rawText = (attrs.text ?? "").trim();
   const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
   const className = attrs.class ?? "";
-  const role = deriveUiAutomatorRole(className);
+  // Read the role in the context of the tree, exactly as the describe trim
+  // does, so a `role` an author copies out of `describe` matches at replay.
+  const role = deriveUiAutomatorRoleInContext(className, attrs, {
+    inWebView,
+    label,
+    hasChildren: childNodes(node).length > 0,
+  });
   // Every non-layout class is a role target, including controls whose role is
   // only the class-name fallback (SeekBar, Spinner, ProgressBar).
   const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
@@ -158,8 +166,26 @@ function projectAndroidNode(
     // its subtree, so a row scrolled out of view — but still on the device
     // screen — is dropped, matching the describe path's prune.
     rect,
-    scrolls: isUiAutomatorScrollable(attrs),
+    scrolls: isUiAutomatorScrollable(attrs, inWebView),
   };
+}
+
+/**
+ * Every node below an `android.webkit.WebView` is web DOM, not a native widget.
+ * The shared flatten hands the projection one node at a time with no parent
+ * context, so mark the descendants up front in one walk. The describe trim
+ * carries the same flag down its own traversal frame.
+ */
+function collectWebViewDescendants(root: ParsedXmlNode): Set<ParsedXmlNode> {
+  const inWebView = new Set<ParsedXmlNode>();
+  const stack: Array<{ node: ParsedXmlNode; under: boolean }> = [{ node: root, under: false }];
+  while (stack.length > 0) {
+    const { node, under } = stack.pop()!;
+    if (under) inWebView.add(node);
+    const childUnder = under || isUiAutomatorWebView(node.attrs.class ?? "");
+    for (const c of childNodes(node)) stack.push({ node: c, under: childUnder });
+  }
+  return inWebView;
 }
 
 /**
@@ -177,8 +203,9 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
+      const webDom = collectWebViewDescendants(root);
       for (const c of childNodes(root)) {
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, webDom.has(n)), children);
       }
     }
   }

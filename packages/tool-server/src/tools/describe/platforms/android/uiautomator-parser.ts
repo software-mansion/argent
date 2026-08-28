@@ -193,12 +193,28 @@ const SCROLL_CLASSES = new Set([
  * `scrollable` (RN's ScrollView dumps as a scrollable ViewGroup). Its bounds become
  * the clip window for the scroll-clip prune. Shared with `flow-android-tree` so
  * both trees agree on which containers clip.
+ *
+ * Inside a WebView the class name is Chromium's mapping of an HTML tag, not a
+ * real scroll container: a `<ul>` arrives as `android.widget.ListView` and a
+ * `<table>` as `android.widget.GridView`, neither of which scrolls — the page's
+ * only scroller is the WebView itself. Trust the framework's own `scrollable`
+ * flag there and never the class name, so an element positioned outside its
+ * list's box is not treated as scrolled away and dropped.
  */
-export function isUiAutomatorScrollable(attrs: Record<string, string>): boolean {
+export function isUiAutomatorScrollable(attrs: Record<string, string>, inWebView = false): boolean {
+  if (inWebView) return attrIsTrue(attrs, "scrollable");
   return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
 }
 
 const WEBVIEW_CLASSES = new Set(["android.webkit.WebView", "android.webkit.WebViewChromium"]);
+
+/**
+ * Whether a raw class hosts web content. Shared with the flow tree adapter
+ * (`flow-android-tree`) so both trees agree on where the web DOM starts.
+ */
+export function isUiAutomatorWebView(className: string): boolean {
+  return WEBVIEW_CLASSES.has(className);
+}
 
 interface PixelRect {
   x: number;
@@ -224,6 +240,13 @@ interface UiNode {
   password: boolean;
   scrollHidden: number;
   children: UiNode[];
+  // Set only on the landmark emitted for a real `WEBVIEW_CLASSES` host, so the
+  // doubled-WebView merge can recognise its own kind. The role cannot: any
+  // class whose name contains "webview" derives the role "WebView", including
+  // an app's own `MyWebView` subclass, which is a separate control. Internal to
+  // this module — `finalizeUiNode` copies named fields only, so it never
+  // reaches the public tree.
+  hostsWebContent?: boolean;
 }
 
 interface PruneOptions {
@@ -236,18 +259,67 @@ export function attrIsTrue(attrs: Record<string, string>, key: string): boolean 
   return attrs[key] === "true";
 }
 
-function isInteractive(attrs: Record<string, string>): boolean {
-  if (
+/**
+ * Whether the node itself receives touch/selection input. Narrower than
+ * `isInteractive`, which also counts a labelled focusable node. Inside a
+ * WebView `focusable` does not track what a user can act on — Chromium sets it
+ * on some plain text runs and leaves it off others — so only the gesture flags
+ * separate a link from a paragraph.
+ */
+function isTapTarget(attrs: Record<string, string>): boolean {
+  return (
     attrIsTrue(attrs, "clickable") ||
     attrIsTrue(attrs, "long-clickable") ||
     attrIsTrue(attrs, "checkable") ||
     attrIsTrue(attrs, "scrollable")
-  ) {
-    return true;
-  }
+  );
+}
+
+function isInteractive(attrs: Record<string, string>): boolean {
+  if (isTapTarget(attrs)) return true;
   // Focusable without a label is just a focus trap on a layout wrapper.
   if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
   return false;
+}
+
+/**
+ * Role for a node read in the context of the tree around it, rather than from
+ * its class name alone. Chromium maps a generic web text run onto a bare
+ * `android.view.View`, which `deriveUiAutomatorRole` reports as "View": it
+ * reads wrong in the tree, and `View` is a generic role no selector can use.
+ *
+ * The remap is deliberately contextual rather than a rule inside
+ * `deriveUiAutomatorRole`: on a native screen a bare `android.view.View` is a
+ * Compose semantics node with no widget mapping, and reclassifying those would
+ * shift matching on every native screen. Gating on `inWebView` touches web
+ * content only.
+ *
+ * Both Android trees call this — the agent-facing `describe` trim and the flow
+ * selector tree (`flow-android-tree`) — so a `role` an agent reads out of
+ * `describe` still matches when a flow replays it.
+ */
+export function deriveUiAutomatorRoleInContext(
+  className: string,
+  attrs: Record<string, string>,
+  // `hasChildren` is the RAW published child count, never the count that
+  // survives a trim: the two trees prune differently, so a role derived from
+  // each tree's own survivors would drift apart on exactly the nodes this
+  // function exists to keep in step.
+  ctx: { inWebView: boolean; label: string; hasChildren: boolean }
+): string {
+  if (
+    ctx.inWebView &&
+    className === "android.view.View" &&
+    ctx.label !== "" &&
+    !ctx.hasChildren &&
+    // A tappable web node is a control (a link, a custom button), not a text
+    // run. Gesture flags are the only signal that separates the two: inside a
+    // WebView `focusable` says nothing, so `isInteractive` cannot be used here.
+    !isTapTarget(attrs)
+  ) {
+    return "StaticText";
+  }
+  return deriveUiAutomatorRole(className);
 }
 
 export function labelOf(attrs: Record<string, string>): string {
@@ -372,8 +444,13 @@ function makeUiNode(
 function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
   // Iterative post-order. Each frame carries the clip this node must enforce on
   // its own children, so the filter fires at the parent of the clipped node.
-  type Frame = { parsed: ParsedXmlNode; scrollClip: PixelRect | null; visited: boolean };
-  const stack: Frame[] = [{ parsed: root, scrollClip: null, visited: false }];
+  type Frame = {
+    parsed: ParsedXmlNode;
+    scrollClip: PixelRect | null;
+    inWebView: boolean;
+    visited: boolean;
+  };
+  const stack: Frame[] = [{ parsed: root, scrollClip: null, inWebView: false, visited: false }];
   const outputs = new Map<ParsedXmlNode, UiNode[]>();
 
   while (stack.length > 0) {
@@ -382,17 +459,29 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
       top.visited = true;
       const attrs = top.parsed.attrs;
       const myBounds = parseUiAutomatorBounds(attrs.bounds ?? "");
-      const isScroll = isUiAutomatorScrollable(attrs);
+      const isScroll = isUiAutomatorScrollable(attrs, top.inWebView);
       // Children inherit my bounds if I scroll, else the clip I was handed.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;
+      // Everything below a WebView is web DOM, not native widgets — the flag
+      // rides down the frame the same way `scrollClip` does, so the contextual
+      // role remap needs no second walk.
+      const childInWebView = top.inWebView || WEBVIEW_CLASSES.has(attrs.class ?? "");
       for (let i = top.parsed.children.length - 1; i >= 0; i--) {
         const c = top.parsed.children[i]!;
         if (c.tag === "node") {
-          stack.push({ parsed: c, scrollClip: childClip, visited: false });
+          stack.push({
+            parsed: c,
+            scrollClip: childClip,
+            inWebView: childInWebView,
+            visited: false,
+          });
         }
       }
     } else {
-      outputs.set(top.parsed, computeNodeOutput(top.parsed, top.scrollClip, outputs, opts));
+      outputs.set(
+        top.parsed,
+        computeNodeOutput(top.parsed, top.scrollClip, top.inWebView, outputs, opts)
+      );
       stack.pop();
     }
   }
@@ -402,6 +491,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
 function computeNodeOutput(
   parsed: ParsedXmlNode,
   scrollClip: PixelRect | null,
+  inWebView: boolean,
   outputs: Map<ParsedXmlNode, UiNode[]>,
   opts: PruneOptions
 ): UiNode[] {
@@ -429,12 +519,58 @@ function computeNodeOutput(
     }
   }
 
-  // The DOM is opaque to uiautomator: emit one sentinel leaf and discard the
-  // misleading accessibility scaffold underneath.
+  // WebView: the DOM *is* published to the accessibility tree — on most builds
+  // Chromium maps an HTML `id` onto `resource-id`, so web controls are
+  // addressable exactly like native ones (some WebView versions publish no ids
+  // at all, and then only text and frames identify a control). Keep the WebView
+  // as a landmark and let the normal trim rules run over the DOM underneath.
+  //
+  // The landmark is often unlabelled: some builds put the page <title> in the
+  // node's `text`, current ones leave `text` and `content-desc` empty. The
+  // renderer keeps the node in the describe output either way — "WebView" is
+  // one of its content roles — so an unlabelled landmark still reports its
+  // bounds instead of vanishing.
+  //
+  // The visibility guard matches every other branch: a WebView clipped to zero
+  // area whose children are still on screen must not take the subtree down
+  // with it.
   if (WEBVIEW_CLASSES.has(cls)) {
-    if (!visible) return [];
+    if (!visible && keptChildren.length === 0) return [];
     const own = labelOf(attrs);
-    return [makeUiNode(attrs, "WebView", bounds, "[web-view] " + (own || "(no label)"), [])];
+    // Chromium emits the host WebView twice, nested, so without a merge the
+    // tree reads `WebView > WebView > ...`. The generic duplicate-wrapper
+    // collapse further down cannot help: this branch returns before reaching
+    // it, and the pair is rarely clickable anyway. The two nodes sit at
+    // identical bounds on some builds and a few pixels apart on others, so the
+    // merge must not depend on the bounds matching. Keep the outer node's
+    // on-screen bounds and whichever of the two carries a label.
+    let webChildren = keptChildren;
+    let webLabel = own;
+    let inner: UiNode | undefined;
+    if (keptChildren.length === 1 && keptChildren[0]!.hostsWebContent) {
+      inner = keptChildren[0]!;
+      webChildren = inner.children;
+      if (!webLabel && inner.label) webLabel = inner.label;
+    }
+    const webView = makeUiNode(attrs, "WebView", bounds, webLabel, webChildren);
+    webView.hostsWebContent = true;
+    if (inner) {
+      // Either half of the pair can be the one the framework marked, and which
+      // half varies by WebView build, so the merged landmark inherits the union
+      // rather than whichever side happened to survive. The flags decide
+      // whether an agent treats the region as tappable or scrollable at all.
+      webView.clickable ||= inner.clickable;
+      webView.longClickable ||= inner.longClickable;
+      webView.scrollable ||= inner.scrollable;
+      webView.checkable ||= inner.checkable;
+      webView.checked ||= inner.checked;
+      webView.disabled ||= inner.disabled;
+      if (!webView.identifier && inner.identifier) webView.identifier = inner.identifier;
+      if (!webView.value && inner.value) webView.value = inner.value;
+    }
+    const hiddenUnderWebView = hiddenInScroll + (inner?.scrollHidden ?? 0);
+    if (hiddenUnderWebView > 0) webView.scrollHidden = hiddenUnderWebView;
+    return [webView];
   }
 
   const interactive = isInteractive(attrs);
@@ -501,7 +637,18 @@ function computeNodeOutput(
     );
   }
 
-  const node = makeUiNode(attrs, deriveUiAutomatorRole(cls), bounds, label, keptChildren);
+  const role = deriveUiAutomatorRoleInContext(cls, attrs, {
+    inWebView,
+    label,
+    // The published child count, not `keptChildren`: a text run is childless in
+    // the dump itself, and the flow selector tree reads the same dump with its
+    // own (wider) trim. Reading survivors here would report `StaticText` for a
+    // container whose children this trim dropped while the flow tree still
+    // reported `View` — the mismatch a copied `role` selector then fails on.
+    hasChildren: parsed.children.some((c) => c.tag === "node"),
+  });
+
+  const node = makeUiNode(attrs, role, bounds, label, keptChildren);
   if (hiddenInScroll > 0) node.scrollHidden = hiddenInScroll;
   return [node];
 }

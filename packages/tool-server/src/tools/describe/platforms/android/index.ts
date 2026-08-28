@@ -24,6 +24,21 @@ const ANDROID_TV_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type, " +
   "rather than coordinate taps.";
 
+// The android-devtools helper stops walking at `maxNodes` accessibility nodes
+// and says so. A truncated capture looks exactly like a complete one once it
+// is a tree of text, and a WebView's web DOM can now spend that whole budget
+// on one page, so the agent must be told the tree is partial. Mirrors what the
+// Chromium describe path does with its own walker budget.
+export const ANDROID_TRUNCATED_HINT =
+  "describe hit the node budget and returned a PARTIAL tree — some on-screen content is " +
+  "missing, and web content inside a WebView can consume the whole budget. Scope the " +
+  "inspection to a smaller region (scroll to or collapse the relevant view) and describe again.";
+
+function joinHints(...hints: (string | undefined)[]): string | undefined {
+  const kept = hints.filter((h): h is string => Boolean(h));
+  return kept.length > 0 ? kept.join(" ") : undefined;
+}
+
 /**
  * Tries the `android-devtools` helper, falling back to `uiautomator dump` on any
  * error: the legacy path fails independently (APK install rejection, helper
@@ -46,12 +61,25 @@ export async function describeAndroid(
       const device = resolveDevice(serial);
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-      const [{ xml }, size] = await Promise.all([
+      const [{ xml, truncated }, size] = await Promise.all([
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
       const tree = parseUiAutomatorDump(xml, size.width, size.height);
-      return { tree, source: "android-devtools", hint };
+      if (truncated) {
+        // Server-side warning so a partial tree is visible to ops, matching the
+        // Chromium path.
+        process.stderr.write(
+          "[describe.android] hierarchy truncated at the helper's node budget; " +
+            "the screen exceeds what one capture can carry.\n"
+        );
+      }
+      return {
+        tree,
+        source: "android-devtools",
+        hint: joinHints(hint, truncated ? ANDROID_TRUNCATED_HINT : undefined),
+        ...(truncated ? { truncated: true } : {}),
+      };
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
       // shouldn't leak into the per-call result.

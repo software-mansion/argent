@@ -20,6 +20,14 @@ const CONTENT_ROLES = new Set([
   "AXHeading",
   "AXTabBar",
   "AXAdjustable",
+  // Android: an `android.webkit.WebView` landmark. Chromium publishes the web
+  // DOM as this node's children, but it publishes nothing while the renderer
+  // is still starting, and it labels the node only on some Android versions.
+  // Without the role gate such a WebView carries no label, no id and no
+  // gesture flag, so `hasContent` is false and the renderer drops the one
+  // element covering the screen. Listing the role keeps the landmark — and its
+  // bounds — visible exactly as an icon-only AXButton stays visible.
+  "WebView",
 ]);
 
 // Vega UIToolkit roles: the toolkit emits these as undecorated leaves, which
