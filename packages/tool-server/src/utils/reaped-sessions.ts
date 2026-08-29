@@ -16,9 +16,9 @@
  */
 
 /** Scopes the key, so two kinds on one device can't collide. */
-export type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
+type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
 
-export interface ReapedSession {
+interface ReapedSession {
   kind: ReapedSessionKind;
   deviceId: string;
   /** Teardown time, for the "…N seconds ago" phrasing. */

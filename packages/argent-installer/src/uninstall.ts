@@ -32,6 +32,7 @@ import {
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
@@ -52,8 +53,15 @@ const UNINSTALL_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
-// Terminal event for an otherwise unclassified throw, so the buffered
-// cli_uninstall_start still gets flushed.
+const UNINSTALL_NEEDS_TERMINAL: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_NEEDS_TERMINAL,
+  failure_stage: "installer_uninstall_prompt",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
+// Catch-all for any unexpected throw in the prune/cleanup section or a prompt,
+// so the buffered cli_uninstall_start still flushes with a terminal event.
 const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UNINSTALL_UNCLASSIFIED_FAILED,
   failure_stage: "installer_uninstall_unclassified",
@@ -61,12 +69,12 @@ const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
-export interface BundledContentRemoval {
+interface BundledContentRemoval {
   removedPaths: string[];
   removedRoot: boolean;
 }
 
-export interface SkillsLockCleanup {
+interface SkillsLockCleanup {
   removedSkills: string[];
   removedFile: boolean;
 }
@@ -362,6 +370,12 @@ export async function uninstall(args: string[]): Promise<void> {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
     if (!nonInteractive) {
+      if (!canPromptUser()) {
+        p.log.error(noTerminalMessage("argent uninstall"));
+        await finalizeUninstallTelemetry(false, false, UNINSTALL_NEEDS_TERMINAL);
+        process.exit(2);
+      }
+
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const proceed = await p.confirm({

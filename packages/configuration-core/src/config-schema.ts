@@ -88,8 +88,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     key: "telemetry.enabled",
     description:
       "Whether anonymous opt-out telemetry is enabled (on by default; environment opt-outs " +
-      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent).",
-    scopes: ["global"],
+      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent). " +
+      "`false` in either scope wins, so a committed project opt-out holds for every teammate.",
+    scopes: ["project", "global"],
     parse: asBoolean,
     merge: "prioritize-restrictive",
     // Opt-out: consent.ts reads an unstored value as enabled, so the config

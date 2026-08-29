@@ -1,4 +1,6 @@
 import pc from "picocolors";
+import type { FlagScope } from "@argent/configuration-core";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import {
   init as telemetryInit,
   isEnabled as telemetryIsEnabled,
@@ -8,10 +10,40 @@ import {
   status as telemetryStatus,
 } from "@argent/telemetry";
 
+const SCOPES: readonly FlagScope[] = ["global", "project"];
+
+const TELEMETRY_OPTIONS = {
+  scope: { kind: "value", choices: SCOPES },
+} as const satisfies OptionSpecs;
+
 // Telemetry is opt-out: on by default.
 export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
+  let scope: FlagScope = "global";
+  // Help is accepted in any position, including after a subcommand; the option
+  // parser below knows only `--scope` and would reject it as an unknown flag.
+  const wantsHelp = args.includes("--help") || args.includes("-h");
+  if (!wantsHelp) {
+    try {
+      const { positionals, options } = parseCommandArgs(args.slice(1), TELEMETRY_OPTIONS);
+      if (positionals.length > 0) {
+        throw new UsageError(`Unexpected argument "${positionals[0]}".`);
+      }
+      if (options.scope !== undefined) scope = options.scope as FlagScope;
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(`Error: ${err.message}`);
+      printUsage();
+      process.exit(2);
+    }
+  }
   telemetryInit("cli");
+
+  if (wantsHelp) {
+    printUsage();
+    await telemetryShutdown();
+    return;
+  }
 
   switch (sub) {
     case undefined:
@@ -23,15 +55,10 @@ export async function telemetry(args: string[]): Promise<void> {
       await telemetryShutdown();
       return;
     case "enable":
-      await cmdEnable();
+      await cmdEnable(scope);
       return;
     case "disable":
-      await cmdDisable();
-      return;
-    case "--help":
-    case "-h":
-      printUsage();
-      await telemetryShutdown();
+      await cmdDisable(scope);
       return;
     default:
       console.error(`Unknown subcommand: telemetry ${sub}`);
@@ -42,10 +69,18 @@ export async function telemetry(args: string[]): Promise<void> {
 
 function printUsage(): void {
   console.log(`Usage:
-  argent telemetry status    Show telemetry state and device id
-  argent telemetry enable    Enable telemetry
-  argent telemetry disable   Disable telemetry
+  argent telemetry status                             Show telemetry state and device id
+  argent telemetry enable  [--scope global|project]   Enable telemetry
+  argent telemetry disable [--scope global|project]   Disable telemetry
+
+The default scope is global (~/.argent/config.json). \`--scope project\` writes
+<project-root>/.argent/config.json instead — commit it and telemetry stays off
+for everyone who clones the repository. \`false\` in either scope wins.
 `);
+}
+
+function scopeLabel(scope: FlagScope): string {
+  return scope === "project" ? "project scope" : "global scope";
 }
 
 function printStatus(): void {
@@ -59,28 +94,53 @@ function printStatus(): void {
 
   console.log("telemetry:");
   console.log(`  state:     ${s.enabled ? "enabled" : "disabled"}`);
+  console.log(`  source:    ${describeSource(s.source)}`);
   console.log(`  device id: ${idLabel}`);
 }
 
-async function cmdEnable(): Promise<void> {
+function describeSource(source: ReturnType<typeof telemetryStatus>["source"]): string {
+  switch (source.source) {
+    case "env_do_not_track":
+    case "env_argent_telemetry":
+      return `environment (${source.detail ?? source.source})`;
+    case "config_file":
+      return source.detail ?? "config.json";
+    case "session_override":
+      return "this session";
+    case "default":
+      return "default (no opt-out set)";
+  }
+}
+
+async function cmdEnable(scope: FlagScope): Promise<void> {
   const wasEnabled = telemetryIsEnabled();
-  markEnabled();
-  if (wasEnabled) {
-    console.log(pc.dim("Telemetry was already enabled."));
+  markEnabled(scope);
+  const nowEnabled = telemetryIsEnabled();
+  if (!nowEnabled) {
+    // The other scope (or an env override) still says no — restrictive merge.
+    console.log(
+      pc.yellow(
+        `Telemetry set to enabled at ${scopeLabel(scope)}, but it stays disabled: ` +
+          `${describeSource(telemetryStatus().source)} still opts out.`
+      )
+    );
+  } else if (wasEnabled) {
+    console.log(pc.dim(`Telemetry was already enabled (written at ${scopeLabel(scope)}).`));
   } else {
-    console.log(pc.green("Telemetry enabled."));
+    console.log(pc.green(`Telemetry enabled (${scopeLabel(scope)}).`));
   }
   await telemetryShutdown();
 }
 
-async function cmdDisable(): Promise<void> {
+async function cmdDisable(scope: FlagScope): Promise<void> {
   const wasEnabled = telemetryIsEnabled();
+  // Still write when already off: a global opt-out and a committed project
+  // opt-out are different guarantees, and the user asked for this one.
+  await markDisabled(scope);
   if (!wasEnabled) {
-    console.log(pc.dim("Telemetry was already disabled."));
-    await telemetryShutdown();
-    return;
+    console.log(pc.dim(`Telemetry was already disabled (written at ${scopeLabel(scope)}).`));
+  } else {
+    console.log(pc.red(`Telemetry disabled (${scopeLabel(scope)}).`));
   }
-  await markDisabled();
-  console.log(pc.red("Telemetry disabled."));
   await telemetryShutdown();
 }

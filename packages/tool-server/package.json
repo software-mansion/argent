@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -33,7 +33,6 @@
     "ini": "^7.0.0",
     "pngjs": "^7.0.0",
     "semver": "^7.8.5",
-    "source-map-js": "^1.2.1",
     "stacktrace-parser": "^0.1.11",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2",

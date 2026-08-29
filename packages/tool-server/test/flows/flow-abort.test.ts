@@ -10,7 +10,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // lands the abort deterministically inside a directive's auto-wait / focus-wait
 // poll (no timer races).
 let currentFetch: () => DescribeTreeData;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentFetch()),
 }));
 
@@ -50,9 +51,14 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-async function run(name: string, registry: Registry, signal: AbortSignal): Promise<FlowRunResult> {
+async function run(
+  name: string,
+  registry: Registry,
+  signal: AbortSignal,
+  device = DEVICE
+): Promise<FlowRunResult> {
   return asRun(
-    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device: DEVICE }, {
+    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device }, {
       signal,
     } as never)
   );
@@ -203,6 +209,148 @@ describe("run cancellation mid-directive", () => {
     expect(result.steps[0].reason).toBe("run aborted");
     expect(calls).not.toContain("gesture-swipe");
     expect(calls).not.toContain("gesture-scroll");
+  });
+
+  // gesture-swipe consults the abort signal per 16ms frame and rejects instead of
+  // holding a finger down for the rest of the duration. That rejection reaches the
+  // flow through invokeOnDevice and invokeSubTool, so every dispatch site has to
+  // map it back onto the uniform abort skip - otherwise a cancelled run reads as
+  // broken rather than cancelled.
+  function abortingGestureRegistry(
+    calls: string[],
+    controller: AbortController,
+    gestureTool = "gesture-swipe"
+  ): Registry {
+    return {
+      invokeTool: vi.fn(async (id: string) => {
+        calls.push(id);
+        if (id === "list-devices") return { devices: [] };
+        if (id === gestureTool) {
+          controller.abort();
+          const err = new Error(
+            `${gestureTool} aborted - cancelled mid-gesture after 3 of 301 frames`
+          );
+          err.name = "AbortError";
+          throw err;
+        }
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+  }
+
+  it("reports a swipe cancelled inside the gesture as a skip, not the tool's error", async () => {
+    const controller = new AbortController();
+    currentFetch = () => ({
+      tree: screen([n({ label: "Row 1", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-mid-swipe", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", direction: "left" }],
+    });
+
+    const result = await run(
+      "cancelled-mid-swipe",
+      abortingGestureRegistry(calls, controller),
+      controller.signal
+    );
+
+    expect(calls).toContain("gesture-swipe");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.aborted).toBe(true);
+  });
+
+  it("reports a scroll-to cancelled inside its increment as a skip, not the tool's error", async () => {
+    const controller = new AbortController();
+    // The target never appears and the tree is stable, so the settle completes
+    // and scroll-to dispatches its first swipe increment - which is where the
+    // cancellation lands here, one layer deeper than the settle-read case above.
+    currentFetch = () => ({
+      tree: screen([n({ label: "Row 1", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-mid-increment", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await run(
+      "cancelled-mid-increment",
+      abortingGestureRegistry(calls, controller),
+      controller.signal
+    );
+
+    expect(calls).toContain("gesture-swipe");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.aborted).toBe(true);
+  });
+
+  it("reports a raw tool step cancelled inside the gesture as a skip, not the tool's error", async () => {
+    const controller = new AbortController();
+    // The third dispatch site, and the one flow-yaml.md sends authors to for a
+    // flick faster than the swipe directive's floor: a raw `tool: gesture-swipe`
+    // step, whose signal invokeSubTool forwards to the tool itself.
+    currentFetch = () => ({ tree: screen([]), source: "native-devtools" });
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-raw-swipe", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tool",
+          name: "gesture-swipe",
+          args: { fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, durationMs: 16 },
+        },
+      ],
+    });
+
+    const result = await run(
+      "cancelled-raw-swipe",
+      abortingGestureRegistry(calls, controller),
+      controller.signal
+    );
+
+    expect(calls).toContain("gesture-swipe");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tool:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    // Not the tool's own "aborted - cancelled mid-gesture after N of M frames".
+    expect(result.steps[0].reason).not.toMatch(/frames/);
+    expect(result.aborted).toBe(true);
+  });
+
+  it("reports a chromium long-press cancelled inside the hold as a skip, not the tool's error", async () => {
+    const controller = new AbortController();
+    // On chromium a long-press IS a gesture-drag with from == to, so the tool's
+    // per-frame abort reaches this dispatch site as well.
+    currentFetch = () => ({
+      tree: screen([n({ label: "Row 3", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-mid-press", {
+      executionPrerequisite: "",
+      steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true } }],
+    });
+
+    const result = await run(
+      "cancelled-mid-press",
+      abortingGestureRegistry(calls, controller, "gesture-drag"),
+      controller.signal,
+      "chromium-cdp-9222"
+    );
+
+    expect(calls).toContain("gesture-drag");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["long-press:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.aborted).toBe(true);
   });
 
   it("dispatches no focus tap when a type step is cancelled during the settle-completing read", async () => {

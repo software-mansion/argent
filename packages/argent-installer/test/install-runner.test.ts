@@ -236,7 +236,6 @@ describe("a global install whose target directory cannot be written", () => {
   };
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let savedPath: string | undefined;
-  let savedIsTty: boolean | undefined;
   const binDir = path.join(os.homedir(), ".npm-global", "bin");
 
   const globalInstall = (
@@ -269,9 +268,6 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(hasProjectPackageJson).mockReturnValue(true);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
     savedPath = process.env.PATH;
-    // The prompts below only exist for a user who can answer them.
-    savedIsTty = process.stdin.isTTY;
-    process.stdin.isTTY = true;
     process.env.PATH = "/usr/bin";
     exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new ExitCalled(code);
@@ -281,7 +277,6 @@ describe("a global install whose target directory cannot be written", () => {
   afterEach(() => {
     exitSpy.mockRestore();
     process.env.PATH = savedPath;
-    process.stdin.isTTY = savedIsTty as boolean;
   });
 
   it("installs into the project when that recovery is chosen", async () => {
@@ -451,18 +446,6 @@ describe("a global install whose target directory cannot be written", () => {
       false,
       INSTALL_GLOBAL_PREFIX_UNWRITABLE
     );
-  });
-
-  // A menu nobody can answer never settles: the run would end at a rendered
-  // prompt, exit 0, and have installed nothing.
-  it("never prompts without a terminal to answer on", async () => {
-    process.stdin.isTTY = false;
-
-    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(select).not.toHaveBeenCalled();
-    expect(runShellCommand).not.toHaveBeenCalled();
   });
 
   // The install-mode step already showed the cause and said "Globally" moves

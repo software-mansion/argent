@@ -1,9 +1,10 @@
 import { z } from "zod";
+
 import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 const ALLOWED_TOOLS = new Set([
@@ -104,9 +105,9 @@ a prior tap), use individual tool calls instead.
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
   gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
+  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android]
   gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [chromium only]
+  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
@@ -196,8 +197,9 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
         }
 
+        const toolArgs = { ...step.args, udid };
+
         try {
-          const toolArgs = { ...step.args, udid };
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetUiWaitResult(step.tool, result)) {
             const note = (result as { note?: string }).note;
@@ -209,9 +211,16 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          const reframed = describeNestedParamError(
+            registry,
+            err,
+            step.tool,
+            toolArgs,
+            step.args ?? {}
+          );
           results.push({
             tool: step.tool,
-            error: err instanceof Error ? err.message : String(err),
+            error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
         }

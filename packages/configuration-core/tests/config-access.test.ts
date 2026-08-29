@@ -120,8 +120,8 @@ describe("setConfigValue — validation", () => {
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
     // A settable, global-only definition supplied through the registry param
-    // (telemetry.enabled is global-only too, but it's manageCommand-delegated so
-    // it throws ConfigManagedElsewhereError first — this isolates the scope check).
+    // (no shipped key is global-only any more, so a synthetic one isolates the
+    // scope check).
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -193,7 +193,7 @@ describe("listConfig", () => {
     expect(lens.effective).toBe("codex");
     const telemetry = entries.find((e) => e.key === "telemetry.enabled")!;
     expect(telemetry.manageCommand).toBe("argent telemetry");
-    expect(telemetry.scopes).toEqual(["global"]);
+    expect(telemetry.scopes).toEqual(["project", "global"]);
   });
 });
 
