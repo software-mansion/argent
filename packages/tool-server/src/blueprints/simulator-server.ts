@@ -11,7 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
+import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
@@ -45,8 +45,8 @@ export function simulatorServerRef(device: DeviceInfo): {
 
 const getPaths = () => {
   const BINARY_PATH = simulatorServerBinaryPath();
-  const BINARY_DIR = simulatorServerBinaryDir();
-  return { BINARY_PATH, BINARY_DIR };
+  const RUN_DIR = simulatorServerRunDir();
+  return { BINARY_PATH, RUN_DIR };
 };
 
 const READY_TIMEOUT_MS = 30_000;
@@ -143,13 +143,13 @@ async function spawnSimulatorServerProcess(
   // the binary is told which set to attach through; default-set devices keep the
   // bare argv.
   const deviceSet = subcommand === "ios" ? await deviceSetForUdid(udid) : null;
-  const { BINARY_PATH, BINARY_DIR } = getPaths();
+  const { BINARY_PATH, RUN_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = [subcommand, "--id", udid];
     if (deviceSet) args.push("--device-set", deviceSet);
 
     const proc = spawn(BINARY_PATH, args, {
-      cwd: BINARY_DIR,
+      cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
