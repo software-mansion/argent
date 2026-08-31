@@ -153,6 +153,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
 Use for work no device step can do: seed a database, write a fixture file, call an API, clean up after a run. Record it where it belongs in the walkthrough — a setup script goes BEFORE the restart-app it prepares for, because that is where it runs at replay.
 UNLIKE flow-add-step, a failure records NOTHING: the step is appended only when the script passes, because a failed script did not establish the state the rest of the recording would be walked against. Nothing the script did before it stopped is rolled back, and \`message\` says whether anything ran — clean up, or make the re-run safe, before calling again. A call that ends in a TRANSPORT error returns no \`message\` at all and may have run the script more than once.
 \`log\` is the script's stdout and stderr, capped at 64 KiB. \`logTruncated\` says output is missing from it: the cap cut it, or the executor collapsed a fatal error's frame dump. Neither leaves a mark in the text, so read the flag rather than trusting what you see. \`outputJson\` is the document the script returned; no flow step can reference it yet.
+Returns { message, status, stepCount, reason?, durationMs?, log?, logTruncated?, outputJson?, outputTruncated?, recorded?, savedTo? } — \`reason\` says what stopped a call that did not pass, \`outputTruncated\` says the 64 KiB render limit cut \`outputJson\`, which leaves a prefix that NO LONGER PARSES as JSON, and \`recorded\` and \`savedTo\` come back only on a pass.
 Refused when the recording's project root is not on this tool server's filesystem: the .mjs stays on the client, so there is nothing here to run.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
@@ -302,12 +303,20 @@ Refused when the recording's project root is not on this tool server's filesyste
       );
     }
 
+    const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
       message:
         `Script step added to "${params.name}" flow — it ran here exactly as it will at replay. ` +
-        `\`outputJson\` is what the script returned; no flow step can reference it yet.`,
-      ...(result?.output ? renderOutput(result.output) : {}),
+        // A cut document is not merely short: it stops being JSON. Say so here
+        // rather than leave `outputTruncated` to contradict a sentence that
+        // otherwise reads as a whole-document guarantee.
+        (rendered?.outputTruncated
+          ? `\`outputJson\` is the first ${OUTPUT_RENDER_LIMIT_BYTES / 1024} KiB of what the ` +
+            `script returned — the rest was cut, so it no longer parses as JSON; `
+          : `\`outputJson\` is what the script returned; `) +
+        `no flow step can reference it yet.`,
+      ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),
       savedTo,

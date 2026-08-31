@@ -190,6 +190,12 @@ describe("recording a script step", () => {
     expect(result.outputTruncated).toBe(true);
     expect(result.outputJson).toMatch(/^\{"blob":"y+$/);
     expect(result.stepCount).toBe(1);
+    // A cut document stops being JSON, so the pass message must not read as a
+    // whole-document guarantee — `outputTruncated` alone contradicting it puts
+    // the correction in a field the sentence tells the reader not to need.
+    expect(result.message).toContain("the rest was cut, so it no longer parses as JSON");
+    expect(result.message).not.toContain("is what the script returned");
+    expect(() => JSON.parse(result.outputJson!)).toThrow();
   });
 
   it("stops the script when the caller cancels the call", async () => {
@@ -313,6 +319,7 @@ describe("recording a script step", () => {
 
     expect(result.outputJson).toBe(JSON.stringify({ blob: "y".repeat(1000) }));
     expect(result).not.toHaveProperty("outputTruncated");
+    expect(result.message).toContain("`outputJson` is what the script returned");
   });
 
   it("never cuts a multi-byte character in half", async () => {
