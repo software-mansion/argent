@@ -463,6 +463,55 @@ describe("where a script path resolves", () => {
   });
 });
 
+describe("which project root a script runs from", () => {
+  /**
+   * `flow-add-script` runs the script with the RECORDING's `project_root`; the
+   * runner uses the ROOT run's. A fragment recorded in one project and composed
+   * by a flow in another therefore runs its script somewhere else than where it
+   * was recorded — which is what the tool's "it ran here as a replay of this
+   * flow will" is qualified against.
+   */
+  it("gives a composed fragment's script the ROOT run's project root", async () => {
+    const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));
+    try {
+      await write(
+        "scripts/where.mjs",
+        `import { writeFileSync } from "node:fs";\n` +
+          `writeFileSync("./where.txt", process.cwd());`
+      );
+      await flow("frag", "steps:\n  - script: { path: ../../scripts/where.mjs }\n");
+      const composed = path.join(composer, ".argent", "flows", "main.yaml");
+      await fs.mkdir(path.dirname(composed), { recursive: true });
+      // `run:` is always relative to the flow file that names it.
+      const target = path
+        .relative(path.dirname(composed), path.join(root, ".argent", "flows", "frag.yaml"))
+        .split(path.sep)
+        .join("/");
+      await fs.writeFile(composed, `steps:\n  - run: ${target}\n`, "utf8");
+
+      const direct = await runFlow("frag");
+      expect(direct.result.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(true);
+      await fs.rm(path.join(root, "where.txt"));
+
+      // A flow that uses `run:` resolves a device even when every leaf is a
+      // script — see "still resolves a device when the same flow uses run:".
+      const { registry } = mockRegistry({ booted: [DEVICE] });
+      const composedRun = await run(registry, {
+        project_root: composer,
+        name: "main",
+        device: DEVICE,
+      });
+
+      expect(composedRun.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(composer, "where.txt"))).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(false);
+    } finally {
+      await fs.rm(composer, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("a script step and the run's device", () => {
   it("lets a script-only flow run with nothing booted", async () => {
     await write("scripts/seed.mjs", `console.log("no device needed");`);

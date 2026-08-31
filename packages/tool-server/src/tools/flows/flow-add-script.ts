@@ -149,7 +149,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). It runs the file exactly as a replay will.
+  description: `Run a local .mjs file and record it as a \`script:\` step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). It runs the file the way a replay of THIS flow will. One divergence: the working directory is the ROOT run's \`project_root\`, so a flow in another project that composes this one with \`run:\` runs the script from that project's root, and a relative path the script reads or writes lands there instead.
 Use for work no device step can do: seed a database, write a fixture file, call an API, clean up after a run. Record it where it belongs in the walkthrough — a setup script goes BEFORE the restart-app it prepares for, because that is where it runs at replay.
 UNLIKE flow-add-step, a failure records NOTHING: the step is appended only when the script passes, because a failed script did not establish the state the rest of the recording would be walked against. Nothing the script did before it stopped is rolled back, and \`message\` says whether anything ran — clean up, or make the re-run safe, before calling again. A call that ends in a TRANSPORT error returns no \`message\` at all and may have run the script more than once.
 \`log\` is the script's stdout and stderr, capped at 64 KiB. \`logTruncated\` says output is missing from it: the cap cut it, or the executor collapsed a fatal error's frame dump. Neither leaves a mark in the text, so read the flag rather than trusting what you see. \`outputJson\` is the document the script returned; no flow step can reference it yet.
@@ -307,7 +307,8 @@ Refused when the recording's project root is not on this tool server's filesyste
     return {
       ...common,
       message:
-        `Script step added to "${params.name}" flow — it ran here exactly as it will at replay. ` +
+        `Script step added to "${params.name}" flow — it ran here as a replay of this flow will; ` +
+        `composed into a flow under another project root with \`run:\`, it runs from that root. ` +
         // A cut document is not merely short: it stops being JSON. Say so here
         // rather than leave `outputTruncated` to contradict a sentence that
         // otherwise reads as a whole-document guarantee.

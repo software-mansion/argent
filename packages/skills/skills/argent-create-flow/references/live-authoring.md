@@ -21,7 +21,7 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
-`flow-add-script` runs a local `.mjs` file and records it as a `script:` step. **Call it only when the user asks for a script in the prompt.** Its `path` resolves against the flow file being recorded, not against `project_root`. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) for the rest of the syntax. The file runs the way replay runs it.
+`flow-add-script` runs a local `.mjs` file and records it as a `script:` step. **Call it only when the user asks for a script in the prompt.** Its `path` resolves against the flow file being recorded, not against `project_root`. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) for the rest of the syntax. The file runs the way a replay of this flow runs it. A flow under another project root that composes this one with `run:` gives the script that root as its working directory.
 
 **Argent does not undo what a failed script did.** Read `message`: it says whether anything ran, or that the runner cannot tell. A transport error returns no `message`, and the call can have run the script more than one time. Check the state that the script touches before you retry.
 
