@@ -260,7 +260,7 @@ export function takeReapedSession(
  * kinds reach this clause. Only three things are certain — they held output,
  * nothing read it, and no id reaches their record now. Their log files are named
  * anyway: the exact-id-set rule above guards the DELETION of a stranger's file,
- * and a reader already sent to `~/.argent/tmp` could open every one of them.
+ * and a path costs a reader one grep to reject where a directory costs a listing.
  */
 function describeReplacedRecords(entry: ReapedSession): string {
   const count = entry.superseded ?? 0;
