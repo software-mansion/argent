@@ -147,6 +147,8 @@ On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`,
 
 A **selector-less gesture** — a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:` — resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
 
+A **raw `tool:` step that succeeded** carries a warning where the tool answered with a `note`, which is the tool saying its own result misleads read alone. The warning is that note verbatim: the `debugger-*` ones name the log file a crashed session kept, `open-url` says an https link opened the browser rather than the app. Act on what it says — the debugger ones are spent by the read that produced them, so a rerun will not raise the same warning twice.
+
 ## Verification conditions
 
 ```yaml
