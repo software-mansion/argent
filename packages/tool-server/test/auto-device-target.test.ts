@@ -6,6 +6,7 @@ import { createHttpApp } from "../src/http";
 import { createRegistry } from "../src/utils/setup-registry";
 import { deviceEntryId, isBooted } from "../src/utils/booted-devices";
 import { AUTO_DEVICE_TARGET_PROBE } from "../src/utils/auto-device-target";
+import { DependencyMissingError } from "../src/utils/check-deps";
 
 const IPHONE = "6DBF83B4-0000-4000-8000-00000000AAAA";
 const ANDROID = "emulator-5554";
@@ -589,6 +590,64 @@ describe("an unresolvable device is refused the way a bad param is", () => {
     const { app } = harness([], undefined, { recordFailure });
     await request(app).post("/tools/poke").send({});
     expect(recordFailure.mock.calls[0]![1]).toMatchObject({ invalid_params: ["udid"] });
+  });
+});
+
+describe("the enumeration can fail on its own account", () => {
+  // `list-devices` shells xcrun / adb / vega. Left to throw, it reaches
+  // express's default handler and answers text/html with a stack trace and
+  // absolute paths, which the client reads as a bare "500" with no cause.
+  function failingHarness(err: Error, options?: Parameters<typeof createHttpApp>[1]) {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: async () => {
+        throw err;
+      },
+    });
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z.object({ udid: z.string().describe("Target device id.") }),
+      services: () => ({}),
+      async execute() {
+        return {};
+      },
+    });
+    return createHttpApp(registry, options).app;
+  }
+
+  it("answers JSON with the cause, not an HTML stack trace", async () => {
+    const app = failingHarness(new Error("adb: command not found"));
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(500);
+    expect(res.headers["content-type"]).toMatch(/application\/json/);
+    expect(JSON.stringify(res.body)).toContain("adb: command not found");
+    expect(JSON.stringify(res.body)).not.toContain("at Registry.invokeTool");
+  });
+
+  it("reports a missing dependency as 424 with what is missing", async () => {
+    const app = failingHarness(
+      new DependencyMissingError(
+        [{ name: "adb", hint: "install platform-tools" } as never],
+        "adb is missing"
+      )
+    );
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(424);
+    expect(res.body.missing).toHaveLength(1);
+  });
+
+  it("buckets it as a device-resolution fault, not a validation one", async () => {
+    const recordFailure = vi.fn();
+    const app = failingHarness(new Error("simctl exploded"), { recordFailure });
+    await request(app).post("/tools/poke").send({});
+    expect(recordFailure.mock.calls[0]![2]).toMatchObject({
+      error_code: "HTTP_DEVICE_RESOLUTION_FAILED",
+      failure_stage: "http_auto_device_target",
+      error_kind: "unknown",
+    });
   });
 });
 

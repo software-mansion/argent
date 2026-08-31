@@ -824,7 +824,29 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             });
             return;
           }
-          throw err;
+          // `list-devices` shells xcrun / adb / vega and probes CDP, so it can
+          // fail on its own account. Left to throw, it reaches express's default
+          // handler: a text/html 500 carrying a stack trace and absolute paths,
+          // which the client's `res.json()` turns into a bare "500" with no
+          // cause. Answer the way the invoke below answers the same two classes.
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
+              failure_stage: "http_auto_device_target",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            bodyArgs
+          );
+          const depErr = findDependencyMissing(err);
+          if (depErr) {
+            res
+              .status(424)
+              .json({ error: depErr.message, missing: depErr.missing, ...errorSignalFields(err) });
+            return;
+          }
+          res.status(500).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
+          return;
         }
       }
 
