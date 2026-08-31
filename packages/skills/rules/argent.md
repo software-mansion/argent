@@ -55,7 +55,10 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 </tapping_rule>
 
 <device_selection_rule>
-Before booting, running, or interacting with any app, call `list-devices` first - prefer running devices.
+Device tools take `udid` as an optional argument: omit it and the server acts on the one booted
+device that supports the tool, and refuses with the full device list when none or several do. So
+call `list-devices` only when you need to CHOOSE - to boot something, or when the user named a
+platform or device and you have to find it. Prefer running devices.
 
 Decision order:
 
@@ -102,7 +105,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
+If the user did not specify a platform, do not default to iOS: with one device booted the tools resolve it themselves, and with several they answer with the list to pick from. Call `list-devices` when you need to see what is there before booting. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`

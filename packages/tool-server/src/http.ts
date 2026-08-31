@@ -39,6 +39,7 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
+import { AutoDeviceTargetError, resolveAutoDeviceTarget } from "./utils/auto-device-target";
 import { resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
@@ -689,6 +690,41 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           return;
         }
         throw err;
+      }
+
+      // Auto-target: the advertised schema presents `udid` as optional for tools
+      // that cannot run without one, so a caller may legitimately omit it. Fill
+      // it in BEFORE validation, which is what lets the zod schema keep it
+      // required — non-HTTP callers (flows, run-sequence) still have to name a
+      // device, and every branch below this point sees a udid that is present.
+      const wantsAutoTarget =
+        def.autoDeviceTargetParam !== undefined &&
+        typeof bodyArgs === "object" &&
+        bodyArgs !== null &&
+        !Array.isArray(bodyArgs) &&
+        bodyArgs[def.autoDeviceTargetParam] === undefined;
+      if (wantsAutoTarget) {
+        try {
+          bodyArgs = {
+            ...bodyArgs,
+            [def.autoDeviceTargetParam!]: await resolveAutoDeviceTarget(registry, undefined, def),
+          };
+        } catch (err) {
+          if (err instanceof AutoDeviceTargetError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_AUTO_DEVICE_TARGET_UNRESOLVED,
+                failure_stage: "http_auto_device_target",
+                failure_area: "http",
+                error_kind: "validation",
+              },
+              bodyArgs
+            );
+            res.status(400).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
       }
 
       let parsedData = bodyArgs;

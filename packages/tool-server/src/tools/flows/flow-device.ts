@@ -1,7 +1,13 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import {
+  describeDevice,
+  deviceEntryId,
+  isBooted,
+  listDevices,
+  type ListedDevice,
+} from "../../utils/booted-devices";
 import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
 
 // The flows directory's one platform set — LAUNCH_PLATFORMS in flow-utils,
@@ -53,40 +59,7 @@ const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
  */
 const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
-interface RawDevice {
-  platform: FlowPlatform;
-  state?: string;
-  udid?: string;
-  serial?: string;
-  id?: string;
-}
-
-function deviceEntryId(d: RawDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
-  if (d.platform === "chromium") return d.id;
-  return d.serial; // android, vega
-}
-
-function isBooted(d: RawDevice): boolean {
-  switch (d.platform) {
-    case "ios":
-      return d.state === "Booted";
-    case "android":
-      return d.state === "device";
-    case "vega":
-      return d.state === "running" || d.state === "device";
-    case "chromium":
-      return true; // a discovered chromium device is, by definition, reachable
-    default:
-      return false;
-  }
-}
-
-function describeDevice(d: RawDevice): string {
-  return `${deviceEntryId(d) ?? "?"} (${d.platform}${d.state ? `, ${d.state}` : ""})`;
-}
-
-function deviceResolutionError(message: string, all: RawDevice[]): FailureError {
+function deviceResolutionError(message: string, all: ListedDevice[]): FailureError {
   const list = all.length ? all.map(describeDevice).join(", ") : "none";
   return new FailureError(`${message} Available devices: ${list}.`, {
     error_code: FAILURE_CODES.FLOW_DEVICE_RESOLUTION,
@@ -108,9 +81,7 @@ export async function resolveFlowDevice(
 ): Promise<DeviceInfo> {
   if (opts.device) return resolveDevice(opts.device);
 
-  const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
-    devices: RawDevice[];
-  };
+  const devices = await listDevices(registry, ctx);
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
 

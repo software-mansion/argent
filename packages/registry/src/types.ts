@@ -204,6 +204,14 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * Enforced by tool-server/test/tool-input-schema-contract.test.ts.
    */
   inputSchema?: Record<string, unknown>;
+  /**
+   * Set at registration, never by hand: the arg a dispatcher fills in with the
+   * single booted device this tool supports when the caller omits it. Present
+   * exactly when `inputSchema` declared `udid` required, in which case that key
+   * is dropped from the advertised `required` list. See
+   * `auto-device-target.ts` for why the set is derived rather than declared.
+   */
+  autoDeviceTargetParam?: string;
   /** Hint for adapters (e.g. "image" makes MCP return base64 image content). */
   outputHint?: string;
   /**

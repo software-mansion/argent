@@ -23,6 +23,7 @@ import {
 import { FAILURE_CODES } from "./failure-codes";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
+import { AUTO_DEVICE_TARGET_PARAM, relaxAutoDeviceTarget } from "./auto-device-target";
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 
@@ -82,6 +83,16 @@ export class Registry {
     }
     if (definition.zodSchema && !definition.inputSchema) {
       definition.inputSchema = zodObjectToJsonSchema(definition.zodSchema);
+    }
+    // The zod schema keeps `udid` REQUIRED, so every non-HTTP caller (flows,
+    // run-sequence) must still name its device; only the ADVERTISED schema
+    // relaxes it, backed by the fill-in the HTTP dispatcher does before parsing.
+    if (definition.inputSchema) {
+      const relaxed = relaxAutoDeviceTarget(definition.inputSchema);
+      if (relaxed !== definition.inputSchema) {
+        definition.inputSchema = relaxed;
+        definition.autoDeviceTargetParam = AUTO_DEVICE_TARGET_PARAM;
+      }
     }
     this.tools.set(definition.id, { definition });
     this.events.emit("toolRegistered", definition.id);
