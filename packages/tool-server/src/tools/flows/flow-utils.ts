@@ -3519,15 +3519,35 @@ export type FlowSavedTo = string | ClientFileDirective;
  * step still lands in the file it was recorded for, and only the NEXT call on
  * the key reports the recording gone.
  */
-function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+/**
+ * Whether this session still holds its key, and if not, how it lost it.
+ *
+ * `restarted` means a DIFFERENT session occupies the key; `gone` means the key
+ * is empty, which is either a finish or the MAX_RECORDINGS backstop — the
+ * server cannot tell those apart after the fact. {@link assertSessionStillLive}
+ * asks this for a caller about to WRITE, and throws on anything but `live`. A
+ * caller whose step already ran and has nothing to write still has a report to
+ * make, and every claim in it about the flow file — that it is unchanged, and
+ * how many steps it holds — is about a file another take may already own.
+ * Outside the flow-file lock the answer can go stale the moment it returns, so
+ * such a caller reads it to qualify a sentence, never to decide a write.
+ */
+export function recordingSessionState(session: RecordingSession): "live" | "restarted" | "gone" {
   const current = recordings.get(session.key);
-  if (current === session) return;
+  if (current === session) return "live";
+  return current ? "restarted" : "gone";
+}
+
+function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+  const state = recordingSessionState(session);
+  if (state === "live") return;
   // A key that is occupied by a DIFFERENT session was restarted; an empty key
   // was either finished or evicted by the MAX_RECORDINGS backstop, which the
   // server cannot tell apart after the fact — so name both rather than guess.
-  const why = current
-    ? "it was restarted while this step was running, so the step belongs to the discarded take"
-    : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
+  const why =
+    state === "restarted"
+      ? "it was restarted while this step was running, so the step belongs to the discarded take"
+      : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
   // Do NOT send the agent to flow-start-recording here. It truncates
   // unconditionally, and on every branch there is something to lose: the live
   // take that just claimed this key, or the finished flow sitting on disk.
@@ -3538,11 +3558,12 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
   // because the key is empty, and `startRecordingSession` registers under this
   // key's lock — so naming a competing agent that does not exist would send the
   // reader after the wrong cause.
-  const whatIsAtStake = current
-    ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
-      `under a fresh name rather than restarting this one.`
-    : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
-      `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
+  const whatIsAtStake =
+    state === "restarted"
+      ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
+        `under a fresh name rather than restarting this one.`
+      : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
+        `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
   const alreadySpent =
     step.kind === "echo"
       ? ". "

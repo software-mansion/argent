@@ -12,6 +12,7 @@ import {
   countStepsOnDisk,
   parseScriptPath,
   parseScriptTimeout,
+  recordingSessionState,
   requireRecordingSession,
   type FlowSavedTo,
   type FlowStep,
@@ -100,22 +101,29 @@ async function recordedStepCount(
  * script could not be run answers "is there state to check?" with a no that the
  * rest of the same message then takes back.
  */
-const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string }> = {
+const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehind: string }> = {
   yes: {
     lead: "failed",
     nextMove:
       `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
       `either make the re-run safe to repeat or clean up first, then call this again.`,
+    leftBehind:
+      `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
+      `clean up or make a re-run safe first.`,
   },
   no: {
     lead: "could not be run",
     nextMove: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
+    leftBehind: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
   },
   unknown: {
     lead: "did not report a result",
     nextMove:
       `The runner failed around the script rather than inside it, so the script may never have ` +
       `started — check the state it touches before you call this again.`,
+    leftBehind:
+      `The runner failed around the script rather than inside it, so the script may never have ` +
+      `started — check the state it touches.`,
   },
 };
 
@@ -218,7 +226,38 @@ Refused when the recording's project root is not on this tool server's filesyste
     };
 
     if (outcome.status !== "pass") {
-      const { lead, nextMove } = FAILED_CALL[ran];
+      const { lead, nextMove, leftBehind } = FAILED_CALL[ran];
+      // The script ran outside the flow-file lock, so the recording this call
+      // resolved up front may have been finished or restarted in that window —
+      // the same race `appendStepToFlow` catches for a script that PASSED. This
+      // exit writes nothing and so never reaches that guard, and both claims it
+      // would otherwise make are then about a file another take owns: that the
+      // flow is as it was, and the count read back off it. Say what is true
+      // instead, and do not send the author back to a key that is no longer
+      // theirs — the retry `nextMove` invites appends into the take that
+      // replaced it. Split the two losses the way the guard does: a restart put
+      // a live take on the key, a finish left it free with a finished flow on
+      // disk, and only the first makes the file another take's.
+      const state = recordingSessionState(session);
+      if (state !== "live") {
+        const lost =
+          state === "restarted"
+            ? `it was restarted while the script was running, so ${session.filePath} belongs to ` +
+              `another take now and this call cannot say what is in it`
+            : `it was finished (or dropped by the concurrent-recording cap) while the script was ` +
+              `running, so ${session.filePath} holds that finished take`;
+        return {
+          ...common,
+          message:
+            `The script "${step.path}" ${lead}, and nothing was recorded — but recording ` +
+            `"${params.name}" in ${params.project_root} is no longer active either: ${lost}. ` +
+            `\`stepCount\` is this take's own last count, not a fresh read of the file. ` +
+            `${leftBehind} Re-record under a fresh name rather than restarting this one — ` +
+            `flow-start-recording truncates unconditionally, and on this key there is now ` +
+            `something to lose.`,
+          stepCount: session.flow.steps.length,
+        };
+      }
       const { stepCount, note } = await recordedStepCount(session);
       return {
         ...common,

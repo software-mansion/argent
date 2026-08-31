@@ -146,14 +146,29 @@ function addEcho(root: string, name: string, message: string) {
   return flowInsertEchoTool.execute({}, { name, project_root: root, message });
 }
 
-async function addScript(root: string, name: string, source = "output.ok = true;") {
+async function writeScript(root: string, source: string): Promise<void> {
   await fs.mkdir(path.join(root, "scripts"), { recursive: true });
   await fs.writeFile(path.join(root, "scripts", "seed.mjs"), source, "utf8");
+}
+
+/**
+ * Call the tool with the .mjs already on disk.
+ *
+ * The file write is a real await, so a test that races this call against a
+ * lock-holding tool needs the session resolved on the FIRST turn — writing the
+ * script inside the call would let the race resolve first.
+ */
+function runAddScript(root: string, name: string) {
   return flowAddScriptTool.execute({}, {
     name,
     project_root: root,
     path: "../../scripts/seed.mjs",
   } as never);
+}
+
+async function addScript(root: string, name: string, source = "output.ok = true;") {
+  await writeScript(root, source);
+  return runAddScript(root, name);
 }
 
 function finish(root: string, name: string) {
@@ -1413,6 +1428,66 @@ describe("a restart that lands while a step is still running", () => {
     expect((err as Error).message).toContain("logs and output document are lost");
 
     expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("tells a superseded FAILING script that its recording is gone, not that the flow is intact", async () => {
+    // The passing case above throws from the append guard. A script that FAILS
+    // never reaches an append, so this exit is the tool's own — and on the
+    // base wording it answered a restarted take with "the flow is exactly as
+    // it was" plus a step count read back off the replacement's file.
+    const root = await makeRoot("supersede-script-fail");
+    await start(root, "alpha");
+    await addEcho(root, "alpha", "one");
+    await addEcho(root, "alpha", "two");
+
+    await writeScript(root, "throw new Error('boom');");
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const restarting = start(root, "alpha");
+    const recording = runAddScript(root, "alpha");
+
+    gate.open();
+    await held;
+    expect((await restarting).restarted).toBe(true);
+
+    const result = (await recording) as { status: string; stepCount: number; message: string };
+    expect(result.status).toBe("fail");
+    expect(result.message).not.toContain("the flow is exactly as it was");
+    expect(result.message).toContain("no longer active");
+    expect(result.message).toContain("it was restarted while the script was running");
+    expect(result.message).toContain("fresh name");
+    // The replacement take owns the file and holds no steps; the count that
+    // comes back is this take's own, and the message says which it is.
+    expect(result.stepCount).toBe(2);
+    expect(result.message).toContain("this take's own last count");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("names the finished take, not a competing one, when a finish superseded the script", async () => {
+    // `gone` is the other half of the guard's split: the key is free, and the
+    // file holds the take that just finished rather than a rival's.
+    const root = await makeRoot("supersede-script-finish");
+    await start(root, "alpha");
+    await addEcho(root, "alpha", "one");
+
+    await writeScript(root, "throw new Error('boom');");
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const finishing = finish(root, "alpha");
+    const recording = runAddScript(root, "alpha");
+
+    gate.open();
+    await held;
+    await finishing;
+
+    const result = (await recording) as { status: string; stepCount: number; message: string };
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain(
+      "it was finished (or dropped by the concurrent-recording cap)"
+    );
+    expect(result.message).toContain("holds that finished take");
+    expect(result.message).not.toContain("belongs to another take");
+    expect(result.message).not.toContain("the flow is exactly as it was");
   });
 
   it("truncates and re-registers only once the flow's lock is free", async () => {
