@@ -19,7 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 
-export const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
+const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;

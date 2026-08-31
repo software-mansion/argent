@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  describeParamIssues,
   getFailureSignal,
   type FailureSignal,
   type FileInputSpec,
@@ -92,6 +93,15 @@ function isToolExposed(
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return findErrorInCauseChain(err, DependencyMissingError);
+}
+
+function omitKeys(args: unknown, keys: readonly string[]): unknown {
+  if (keys.length === 0 || args === null || typeof args !== "object" || Array.isArray(args)) {
+    return args;
+  }
+  const copy = { ...(args as Record<string, unknown>) };
+  for (const key of keys) delete copy[key];
+  return copy;
 }
 
 /**
@@ -230,7 +240,7 @@ function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknow
   return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
 }
 
-export interface HttpAppOptions {
+interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;
@@ -660,6 +670,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // neither in place nor via uploaded content.
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
+      let derivedTargets: string[];
       try {
         const resolved = await resolveFileInputs(def, req.body, (id) => {
           const entry = uploads.get(id);
@@ -668,6 +679,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         });
         bodyArgs = resolved.args;
         resolvedFileInputs = resolved.fileInputs;
+        derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
         res.once("close", () => void resolved.cleanup());
@@ -694,7 +706,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             req.body,
             { invalid_params: deriveInvalidParams(parseResult.error, declared) }
           );
-          res.status(400).json({ error: parseResult.error.message });
+          // `error` keeps the raw issue JSON. Every CLI released before
+          // `issues` existed reads this field and `JSON.parse`s it; prose here
+          // makes that parse throw, and the CLI then loses the flag
+          // attribution, the help block, exit 2, and `--json`'s object.
+          res.status(400).json({
+            error: parseResult.error.message,
+            message: describeParamIssues(parseResult.error, omitKeys(bodyArgs, derivedTargets)),
+            issues: parseResult.error.issues,
+          });
           return;
         }
         parsedData = parseResult.data;
@@ -904,6 +924,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
           res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
+          return;
+        }
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
+          res.status(400).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

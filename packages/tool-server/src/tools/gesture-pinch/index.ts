@@ -116,7 +116,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
+      await sendTouchEvent(api, type, x1, y1, x2, y2);
       if (i < steps) await sleep(16);
     }
 

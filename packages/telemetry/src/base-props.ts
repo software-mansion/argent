@@ -25,7 +25,7 @@ function readNodeVersionMajor(): string {
 
 export type Runtime = "installer" | "tool_server" | "cli";
 
-export interface BaseProps {
+interface BaseProps {
   cli_version: string;
   node_version_major: string;
   os: NodeJS.Platform;

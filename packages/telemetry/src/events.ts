@@ -23,7 +23,7 @@ export const PLATFORMS = [
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
-export type FailureTelemetryProps = Partial<FailureSignal>;
+type FailureTelemetryProps = Partial<FailureSignal>;
 
 export interface InstallationCliInitStartProps {
   package_manager: "npm" | "yarn" | "pnpm" | "bun" | "unknown";
@@ -89,9 +89,9 @@ export interface InstallationSkillRefreshResultProps extends FailureTelemetryPro
   failed_count: number;
 }
 
-export type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
+type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
 
-export type InstallationPackageAction =
+type InstallationPackageAction =
   | "fresh_install"
   | "already_installed"
   | "init_triggered_update"

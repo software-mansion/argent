@@ -31,7 +31,7 @@ import * as fs from "node:fs";
 import { classifyDevice } from "./device-info";
 
 /** Which session kind was reaped; scopes the key so two kinds can't collide. */
-export type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
+type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
 
 /**
  * What ended the session: `runtime-death` is a closed socket no `dispose()`
@@ -42,7 +42,7 @@ export type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-run
  */
 type ReapedSessionCause = "teardown" | "runtime-death";
 
-export interface ReapedSession {
+interface ReapedSession {
   kind: ReapedSessionKind;
   deviceId: string;
   /** Ties the copies filed under one device's several ids into one teardown. */

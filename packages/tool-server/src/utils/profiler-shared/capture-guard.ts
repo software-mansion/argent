@@ -7,7 +7,7 @@
  */
 
 /** Session flags that mean a capture is not yet settled. */
-export interface CaptureRecoveryState {
+interface CaptureRecoveryState {
   profilingActive: boolean;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
