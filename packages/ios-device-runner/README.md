@@ -96,3 +96,7 @@ outside the bundle (ts-node, tests) or unusual layouts.
   in-flight sends coalesce onto the single execution.
 - **Explicit targeting**: app commands require `appBundleId`; the runner
   never redirects them to its own host app.
+- **Observation without side effects**: the read-only `snapshot` never
+  re-fronts a backgrounded target; it answers `APP_BACKGROUNDED` instead.
+  Mutating commands, and the `viewport` read that precedes a gesture,
+  re-front a backgrounded target and stamp the reply `reactivated: true`.

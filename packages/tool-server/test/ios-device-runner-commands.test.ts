@@ -3,11 +3,16 @@ import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { getDescribeTapPoint } from "../src/tools/describe/contract";
 import {
   captureSnapshot,
+  dragBetween,
   getViewport,
   pressButton,
+  pressKeyboardReturn,
+  tapAt,
   toPoints,
+  typeText,
   type RunnerViewport,
 } from "../src/utils/ios-device/runner-commands";
+import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 import type { IosDeviceRunnerApi } from "../src/blueprints/ios-device-runner";
 
 const APP_FRAME: RunnerViewport = { x: 0, y: 0, width: 390, height: 844 };
@@ -76,6 +81,67 @@ describe("captureSnapshot single-flight", () => {
   });
 });
 
+describe("captureSnapshot on a backgrounded target", () => {
+  it("maps APP_BACKGROUNDED to the actionable observation error", async () => {
+    const run = vi.fn().mockRejectedValue(
+      new RunnerCommandError("app 'com.example.app' is running in the background", {
+        code: "APP_BACKGROUNDED",
+      })
+    );
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    const error = await captureSnapshot(api, "com.example.app").catch((caught: unknown) => caught);
+
+    expect((error as Error).message).toBe(
+      "The app under automation (com.example.app) is backgrounded; the screen is showing " +
+        "something else. Use screenshot for the current screen, launch-app to bring the " +
+        "app back, or launch-app com.apple.springboard to describe the home screen and " +
+        "system UI."
+    );
+    const signal = getFailureSignal(error);
+    expect(signal?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    expect(signal?.failure_stage).toBe("ios_device_snapshot_backgrounded");
+  });
+
+  it("passes every other runner failure through untouched", async () => {
+    const original = new RunnerCommandError("app 'com.example.app' is not running", {
+      code: "APP_NOT_AVAILABLE",
+    });
+    const run = vi.fn().mockRejectedValue(original);
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    const error = await captureSnapshot(api, "com.example.app").catch((caught: unknown) => caught);
+
+    expect(error).toBe(original);
+  });
+});
+
+describe("mutating replies surface the runner's reactivated stamp", () => {
+  const api = (data: unknown): IosDeviceRunnerApi => ({
+    udid: "00008110-000978540290401E",
+    run: vi.fn().mockResolvedValue(data),
+  });
+  const point = { x: 100, y: 200 };
+
+  it("tapAt, dragBetween, typeText and pressKeyboardReturn read it off the reply", async () => {
+    const stamped = { message: "ok", reactivated: true };
+    expect(await tapAt(api(stamped), "com.example.app", point)).toEqual({ reactivated: true });
+    expect(await dragBetween(api(stamped), "com.example.app", point, { x: 1, y: 2 })).toEqual({
+      reactivated: true,
+    });
+    expect(await typeText(api(stamped), "com.example.app", "hi")).toEqual({ reactivated: true });
+    expect(await pressKeyboardReturn(api(stamped), "com.example.app")).toEqual({
+      reactivated: true,
+    });
+  });
+
+  it("reports false for a reply without the stamp", async () => {
+    expect(await tapAt(api({ message: "ok" }), "com.example.app", point)).toEqual({
+      reactivated: false,
+    });
+  });
+});
+
 describe("getViewport", () => {
   it("reads the runner on every call (no stale keyboard/rotation cache)", async () => {
     const run = vi
@@ -90,6 +156,17 @@ describe("getViewport", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(first).toEqual({ x: 0, y: 0, width: 390, height: 844 });
     expect(second).toEqual({ x: 0, y: 0, width: 844, height: 390 });
+  });
+
+  it("surfaces the re-front stamp when the viewport read fronted the app", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValue({ x: 0, y: 0, width: 390, height: 844, reactivated: true });
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    const viewport = await getViewport(api, "com.example.app");
+
+    expect(viewport).toEqual({ x: 0, y: 0, width: 390, height: 844, reactivated: true });
   });
 
   it("stamps the viewport-unavailable rejection with a failure signal", async () => {

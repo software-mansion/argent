@@ -46,19 +46,26 @@ export function makeIosDeviceImpl(
 
       // XCTest types whole strings and has no per-keycode HID surface. delayMs is ignored.
       let keys = 0;
+      let reactivated = false;
 
       if (params.text) {
         // Secret placeholders are already resolved by the execute wrapper.
-        await typeText(api, bundleId, params.text);
+        const typed = await typeText(api, bundleId, params.text);
+        reactivated ||= typed.reactivated;
         keys += params.text.length;
       }
 
       if (key === "enter") {
-        await pressKeyboardReturn(api, bundleId);
+        const pressed = await pressKeyboardReturn(api, bundleId);
+        reactivated ||= pressed.reactivated;
         keys += 1;
       }
 
-      return { typed: params.text ?? params.key ?? "", keys };
+      return {
+        typed: params.text ?? params.key ?? "",
+        keys,
+        ...(reactivated ? { reactivated: true as const } : {}),
+      };
     },
   };
 }

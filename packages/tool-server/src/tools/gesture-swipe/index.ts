@@ -36,6 +36,12 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   swiped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this swipe, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 // Touch platforms only: on a desktop renderer a mouse drag selects text instead
@@ -60,7 +66,7 @@ Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
 On a physical iOS device, an edge gesture (e.g. a back-swipe) needs the start point at exactly the edge (fromX 0); a start a few thousandths in reports success without triggering the OS gesture.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, or the emulator backend for Android.`,
+Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this swipe (the foreground screen changed as a side effect). Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, or the emulator backend for Android.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
@@ -86,7 +92,7 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
       const bundleId = requireCurrentIosDeviceApp(device.id);
       const viewport = await getViewport(runner, bundleId);
 
-      await dragBetween(
+      const drag = await dragBetween(
         runner,
         bundleId,
         toPoints(viewport, params.fromX, params.fromY),
@@ -94,10 +100,14 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
         duration,
         settle
       );
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the drag then finds it foreground.
+      const reactivated = viewport.reactivated === true || drag.reactivated;
 
       return {
         swiped: true,
         timestampMs,
+        ...(reactivated ? { reactivated: true as const } : {}),
       };
     }
 

@@ -55,6 +55,12 @@ type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   events: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this gesture, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 const capability: ToolCapability = {
@@ -118,19 +124,20 @@ async function runOnIosDevice(
   const isSamePoint =
     Math.abs(up.x - down.x) <= SAME_POINT_EPSILON && Math.abs(up.y - down.y) <= SAME_POINT_EPSILON;
 
-  if (isSamePoint) {
-    await longPressAt(runner, bundleId, toPoints(viewport, down.x, down.y), durationMs);
-  } else {
-    await dragBetween(
-      runner,
-      bundleId,
-      toPoints(viewport, down.x, down.y),
-      toPoints(viewport, up.x, up.y),
-      durationMs
-    );
-  }
+  const gesture = isSamePoint
+    ? await longPressAt(runner, bundleId, toPoints(viewport, down.x, down.y), durationMs)
+    : await dragBetween(
+        runner,
+        bundleId,
+        toPoints(viewport, down.x, down.y),
+        toPoints(viewport, up.x, up.y),
+        durationMs
+      );
+  // Either leg can be the one that re-fronted a backgrounded target: the
+  // viewport read fronts it first, so the gesture then finds it foreground.
+  const reactivated = viewport.reactivated === true || gesture.reactivated;
 
-  return { events: 2 };
+  return { events: 2, ...(reactivated ? { reactivated: true as const } : {}) };
 }
 
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
@@ -148,7 +155,7 @@ For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
 On a physical iOS device only two shapes are executable (XCTest has no raw touch stream): a Down followed by an Up at the same point (press-hold) or at another point (straight drag): no second finger, no Move waypoints; use gesture-swipe for scrolls there.
-Returns { events: number } with the total count of events dispatched. Fails if the target device is not booted or an event type is invalid.
+Returns { events: number } with the total count of events dispatched. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this gesture (the foreground screen changed as a side effect). Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]

@@ -65,11 +65,13 @@ set, so clean replies stay byte-identical on the wire.
 ## Commands
 
 App-scoped (require `appBundleId`; a live but backgrounded target is re-fronted
-first and the reply stamped `reactivated: true`. Every other state fails with
-`APP_NOT_AVAILABLE`: both a target that reports `.notRunning` and one whose
-state is unreadable, which is what hardware reports for an app killed outside
-this session. Activating either would be a full launch, and launching is
-launch-app's job, never a command side effect):
+first and the reply stamped `reactivated: true`, except for `snapshot`, which
+is observation only: it never re-fronts and fails with `APP_BACKGROUNDED`
+naming the bundle id, so reading the screen cannot change what is on it. A
+target that reports `.notRunning`, and one whose state is unreadable, which is
+what hardware reports for an app killed outside this session, fail with
+`APP_NOT_AVAILABLE` on every command. Activating either would be a full
+launch, and launching is launch-app's job, never a command side effect):
 
 - `viewport` → `{x, y, width, height}`: `XCUIApplication.frame` (full app,
   keyboard included). Same rect describe normalizes against, so 0-1 tap
@@ -83,6 +85,8 @@ launch-app's job, never a command side effect):
   `TEXT_INPUT_NOT_FOCUSED` when nothing has keyboard focus.
 - `keyboardReturn` → `{message}`.
 - `snapshot` → `{nodes, quality}`: one-shot accessibility tree (below).
+  `APP_BACKGROUNDED` when the target is alive but backgrounded: observation
+  never re-fronts (see above).
 
 Device-scoped:
 
@@ -168,7 +172,9 @@ reasonCode?}`.
 ## Error codes
 
 `INVALID_REQUEST`, `APP_BUNDLE_ID_REQUIRED`, `APP_NOT_AVAILABLE`,
-`TEXT_INPUT_NOT_FOCUSED`, `UNSUPPORTED_OPERATION`, `RUNNER_BUSY` (the one
+`APP_BACKGROUNDED` (`snapshot` only: the target is alive but backgrounded, and
+observation never re-fronts it), `TEXT_INPUT_NOT_FOCUSED`,
+`UNSUPPORTED_OPERATION`, `RUNNER_BUSY` (the one
 retryable code), `RUNNER_WEDGED` (recycle the session),
 `XCTEST_RECORDED_FAILURE` (a mutation ran but XCTest recorded a real failure
 during it), `SNAPSHOT_FAILED`, `COMMAND_TIMED_OUT`, `COMMAND_FAILED`.

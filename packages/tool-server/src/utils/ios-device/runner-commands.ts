@@ -1,16 +1,43 @@
 import { FAILURE_CODES, withFailureSignal } from "@argent/registry";
 import type { IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { RunnerCommandError } from "./runner-client";
 
 /**
  * Typed helpers for Argent runner wire commands.
  * Tools use normalized 0-1 coordinates. The runner uses absolute points in XCUIApplication.frame.
  */
 
+/** Wire code the runner answers when a snapshot targets a backgrounded app. */
+const APP_BACKGROUNDED_ERROR_CODE = "APP_BACKGROUNDED";
+
+/** True when a success reply carries the runner's re-front stamp. */
+function repliedReactivated(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { reactivated?: unknown }).reactivated === true
+  );
+}
+
+/**
+ * Re-front marker unwrapped from one command reply. Tools surface it so the
+ * agent learns the action changed the foreground screen as a side effect.
+ */
+export interface MutationReply {
+  /** The runner re-fronted the backgrounded target app to run this command. */
+  reactivated: boolean;
+}
+
 export interface RunnerViewport {
   x: number;
   y: number;
   width: number;
   height: number;
+  /**
+   * The viewport read re-fronted a backgrounded target (the runner brings the
+   * app forward for it, as the prelude to a gesture). Set only when true.
+   */
+  reactivated?: true;
 }
 
 interface ViewportData {
@@ -38,6 +65,7 @@ export async function getViewport(
     y: data.y ?? 0,
     width: data.width ?? 0,
     height: data.height ?? 0,
+    ...(repliedReactivated(data) ? { reactivated: true as const } : {}),
   };
 
   if (!(viewport.width > 0) || !(viewport.height > 0)) {
@@ -90,8 +118,8 @@ export async function tapAt(
   bundleId: string,
   point: { x: number; y: number },
   numberOfTaps?: number
-): Promise<void> {
-  await api.run(
+): Promise<MutationReply> {
+  const data = await api.run(
     {
       command: "tap",
       appBundleId: bundleId,
@@ -101,6 +129,8 @@ export async function tapAt(
     },
     { timeoutMs: GESTURE_TIMEOUT_MS }
   );
+
+  return { reactivated: repliedReactivated(data) };
 }
 
 /**
@@ -113,11 +143,13 @@ export async function longPressAt(
   bundleId: string,
   point: { x: number; y: number },
   durationMs: number
-): Promise<void> {
-  await api.run(
+): Promise<MutationReply> {
+  const data = await api.run(
     { command: "longPress", appBundleId: bundleId, x: point.x, y: point.y, durationMs },
     { timeoutMs: GESTURE_TIMEOUT_MS }
   );
+
+  return { reactivated: repliedReactivated(data) };
 }
 
 /**
@@ -132,8 +164,8 @@ export async function dragBetween(
   to: { x: number; y: number },
   durationMs?: number,
   settle?: boolean
-): Promise<void> {
-  await api.run(
+): Promise<MutationReply> {
+  const data = await api.run(
     {
       command: "drag",
       appBundleId: bundleId,
@@ -146,6 +178,8 @@ export async function dragBetween(
     },
     { timeoutMs: GESTURE_TIMEOUT_MS }
   );
+
+  return { reactivated: repliedReactivated(data) };
 }
 
 /**
@@ -168,8 +202,8 @@ export async function typeText(
   api: IosDeviceRunnerApi,
   bundleId: string,
   text: string
-): Promise<void> {
-  await api.run(
+): Promise<MutationReply> {
+  const data = await api.run(
     {
       command: "type",
       appBundleId: bundleId,
@@ -177,14 +211,18 @@ export async function typeText(
     },
     { timeoutMs: 60_000 }
   );
+
+  return { reactivated: repliedReactivated(data) };
 }
 
 /** Press the software keyboard Return key. */
 export async function pressKeyboardReturn(
   api: IosDeviceRunnerApi,
   bundleId: string
-): Promise<void> {
-  await api.run({ command: "keyboardReturn", appBundleId: bundleId });
+): Promise<MutationReply> {
+  const data = await api.run({ command: "keyboardReturn", appBundleId: bundleId });
+
+  return { reactivated: repliedReactivated(data) };
 }
 
 /**
@@ -242,6 +280,32 @@ const inFlightSnapshots = new Map<
 >();
 
 /**
+ * The runner refuses to snapshot a backgrounded app: observation must not
+ * re-front it. Map that wire code to the actions the agent can take; every
+ * other error passes through untouched.
+ */
+function mapBackgroundedSnapshot(error: unknown, bundleId: string): unknown {
+  if (!(error instanceof RunnerCommandError) || error.code !== APP_BACKGROUNDED_ERROR_CODE) {
+    return error;
+  }
+
+  return withFailureSignal(
+    new Error(
+      `The app under automation (${bundleId}) is backgrounded; the screen is showing ` +
+        "something else. Use screenshot for the current screen, launch-app to bring the " +
+        "app back, or launch-app com.apple.springboard to describe the home screen and " +
+        "system UI."
+    ),
+    {
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "ios_device_snapshot_backgrounded",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
  * Capture an accessibility snapshot of the app.
  */
 export async function captureSnapshot(
@@ -257,10 +321,16 @@ export async function captureSnapshot(
   }
 
   const request = (async () => {
-    const data = (await api.run(
-      { command: "snapshot", appBundleId: bundleId },
-      { readOnly: true, timeoutMs: 45_000 }
-    )) as SnapshotData;
+    let data: SnapshotData;
+
+    try {
+      data = (await api.run(
+        { command: "snapshot", appBundleId: bundleId },
+        { readOnly: true, timeoutMs: 45_000 }
+      )) as SnapshotData;
+    } catch (error) {
+      throw mapBackgroundedSnapshot(error, bundleId);
+    }
 
     return {
       nodes: data.nodes ?? [],

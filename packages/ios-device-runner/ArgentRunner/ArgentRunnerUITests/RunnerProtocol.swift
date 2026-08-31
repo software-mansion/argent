@@ -148,6 +148,7 @@ enum RunnerErrorCode: String {
     case invalidRequest = "INVALID_REQUEST"
     case appBundleIdRequired = "APP_BUNDLE_ID_REQUIRED"
     case appNotAvailable = "APP_NOT_AVAILABLE"
+    case appBackgrounded = "APP_BACKGROUNDED"
     case textInputNotFocused = "TEXT_INPUT_NOT_FOCUSED"
     case unsupportedOperation = "UNSUPPORTED_OPERATION"
     case runnerBusy = "RUNNER_BUSY"

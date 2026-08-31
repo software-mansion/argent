@@ -111,7 +111,12 @@ extension ArgentRunnerSession {
                 )
             }
 
-            switch foregroundTarget(bundleId: bundleId) {
+            // snapshot observes the screen and must not change it, so it never
+            // re-fronts a backgrounded target; every other app command may.
+            switch foregroundTarget(
+                bundleId: bundleId,
+                reactivateBackgrounded: request.command != .snapshot
+            ) {
             case .unavailable(let envelope):
                 return envelope
             case .ready(let app, let reactivated):
@@ -193,10 +198,19 @@ extension ArgentRunnerSession {
         return .success(MessagePayload(message: "pressed \(button.rawValue)"))
     }
 
-    /// Resolves the target app and brings it frontmost. A live but backgrounded
-    /// target is re-fronted and the reply stamped `reactivated: true`. Any other
-    /// state is refused so that launching stays an explicit launch-app action.
-    private func foregroundTarget(bundleId: String) -> TargetResolution {
+    /// Resolves the target app for an app-scoped command. A live but
+    /// backgrounded target is re-fronted only when `reactivateBackgrounded` is
+    /// true (mutating commands and the viewport read that precedes a gesture),
+    /// and the reply is then stamped `reactivated: true`. The observation-only
+    /// snapshot passes false and is refused with APP_BACKGROUNDED instead, so
+    /// reading the screen never changes what is on it. A target that is not
+    /// running, or whose state is unreadable, is refused with APP_NOT_AVAILABLE
+    /// either way: activating it would be a full launch, and launching is
+    /// launch-app's job, never a command side effect.
+    private func foregroundTarget(
+        bundleId: String,
+        reactivateBackgrounded: Bool
+    ) -> TargetResolution {
         // A fresh proxy per command avoids stale-target bugs after the app is
         // relaunched behind the runner's back.
         let app = XCUIApplication(bundleIdentifier: bundleId)
@@ -205,6 +219,18 @@ extension ArgentRunnerSession {
         case .runningForeground:
             return .ready(app, reactivated: false)
         case .runningBackground, .runningBackgroundSuspended:
+            guard reactivateBackgrounded else {
+                return .unavailable(
+                    .failure(
+                        .appBackgrounded,
+                        "app '\(bundleId)' is running in the background; "
+                            + "the foreground screen is something else",
+                        hint:
+                            "Use screenshot for the current screen, or launch-app to bring the app back."
+                    )
+                )
+            }
+
             app.activate()
 
             guard app.wait(for: .runningForeground, timeout: 15) else {

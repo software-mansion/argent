@@ -36,6 +36,12 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   tapped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this tap, so the foreground screen changed as a side
+   * effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 function tapDescription(params: Params, tense: "present" | "past"): string {
@@ -97,7 +103,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.
+Returns { tapped: true, timestampMs }. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this tap (the foreground screen changed as a side effect). Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
@@ -130,8 +136,11 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       const viewport = await getViewport(runner, bundleId);
       const point = toPoints(viewport, params.x, params.y);
       // The whole multi-tap is one runner command. Per-tap round-trips would miss the OS double-tap window.
-      await tapAt(runner, bundleId, point, clickCount);
-      return { tapped: true, timestampMs };
+      const tap = await tapAt(runner, bundleId, point, clickCount);
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the tap then finds it foreground.
+      const reactivated = viewport.reactivated === true || tap.reactivated;
+      return { tapped: true, timestampMs, ...(reactivated ? { reactivated: true as const } : {}) };
     }
     const api = services.simulatorServer as SimulatorServerApi;
     for (let i = 1; i <= clickCount; i++) {
