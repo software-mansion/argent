@@ -894,6 +894,50 @@ describe("the reaped-session key", () => {
       expect(message).not.toContain(files[0]!);
     });
 
+    it("orders a carried file by the event that KEPT it, not the one carrying it", () => {
+      // A record hands its files on to whatever replaces it, so a late teardown
+      // can be carrying a log from long before the crash beside it. Ordering by
+      // the carrier would then put that ancient file ahead of newer ones and,
+      // with the cap below it, hide a log the reader actually wants while
+      // naming one they do not.
+      const files = [1, 2, 3, 4].map((n) => {
+        const file = path.join(dir, `argent-logs-22-${n}.log`);
+        fs.writeFileSync(file, "x");
+        return file;
+      });
+      // The oldest crash of all, on its own device.
+      recordReapedSession("js-runtime-debugger", ["logical-old"], "old crash", {
+        cause: "runtime-death",
+        keptAt: files[0],
+      });
+      // Three newer crashes on another, each ended by a teardown that keeps no
+      // file of its own, so none of them is reclaimed.
+      for (const file of [files[1], files[2], files[3]]) {
+        recordReapedSession("js-runtime-debugger", [UDID], "crash", {
+          cause: "runtime-death",
+          keptAt: file,
+        });
+        recordReapedSession("js-runtime-debugger", [UDID], "teardown", { cause: "teardown" });
+      }
+      // A LATE teardown on the old device: its record now carries the oldest
+      // file of all under the highest event number in the store.
+      recordReapedSession("js-runtime-debugger", ["logical-old"], "late teardown", {
+        cause: "teardown",
+      });
+      recordReapedSession("js-runtime-debugger", [UDID, "logical-old"], "both", {
+        cause: "teardown",
+      });
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", UDID)!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(
+        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more in the same directory.`
+      );
+      expect(message).not.toContain(files[0]!);
+    });
+
     it("keeps the file of a record a write in between had taken a key off", () => {
       // What the store can still see is what the record ANSWERS to, not what it
       // answered for: a session filed under both ids loses the udid to another

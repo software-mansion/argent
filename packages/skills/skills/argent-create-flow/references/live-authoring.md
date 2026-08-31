@@ -261,6 +261,6 @@ Manual rescue invalidates the pass. An `errored` step was never evaluated: an `i
 
 A [selector-less gesture](flow-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source, usually by relaunching the app so the instrumentation loads. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).
 
-A [raw `tool:` step](flow-yaml.md#directives) raises a third shape: the tool answered with a `note`, which the warning quotes. A `debugger-*` one names the log file a crashed session kept and is spent by the read that produced it, so it will not come back on a rerun — read it now.
+A [raw `tool: debugger-connect` or `tool: debugger-log-registry` step](flow-yaml.md#directives) raises a third shape: the answer held a `note`, which the warning quotes. It settles a session that ended holding console logs — naming its log file where one was kept, or saying the entries are gone. Both tools spend the record as they read it, so a rerun will not produce it again: read it in this report.
 
 One uninterrupted full pass completes a normal flow. `argent-qa-flows` requires two consecutive passes of unchanged YAML. For CI, use `argent flow run <name> [--platform ...]`; it exits non-zero on failure.

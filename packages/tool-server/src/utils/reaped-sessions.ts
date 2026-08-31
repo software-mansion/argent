@@ -32,6 +32,12 @@
 import * as fs from "node:fs";
 import { classifyDevice } from "./device-info";
 
+/** A log file a replaced record left behind, with the event that kept it. */
+interface KeptFile {
+  file: string;
+  event: number;
+}
+
 /** Which session kind was reaped; scopes the key so two kinds can't collide. */
 type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
 
@@ -62,9 +68,12 @@ interface ReapedSession {
   /**
    * …and the logs the rest kept, which nothing but this field still names.
    * Paths, not a flag: the read hands them out, and the sweep may have taken
-   * them first.
+   * them first. Each carries the event that kept it, because the read names
+   * only the newest few and a file outlives the record that kept it: a chain
+   * hands its files on to whatever replaces it, so the carrier's own age says
+   * nothing about theirs.
    */
-  supersededFilesLeft?: string[];
+  supersededFilesLeft?: KeptFile[];
   /** Keys this event was filed under; later writes narrow what it answers to. */
   filedKeys: readonly string[];
   cause: ReapedSessionCause;
@@ -138,7 +147,7 @@ export function recordReapedSession(
       filedKeys: readonly string[];
       keptAt?: string;
       carried: number;
-      carriedFiles: string[];
+      carriedFiles: readonly KeptFile[];
     }
   >();
   for (const [k, entry] of reaped) {
@@ -171,20 +180,19 @@ export function recordReapedSession(
     reaped.set(key(kind, deviceId, opts.scope), entry);
     filedNow.push(entry);
   }
-  const orphanedFiles = new Set<string>();
+  const orphanedFiles = new Map<string, number>();
   // Anything still in the store is unread — a read deletes every copy — so
   // replacing one is a second teardown arriving before the first was reported.
   let replacedUnread = 0;
   // The replaced records' files this write does not take. Nothing else records
   // them, so this field is the only thing that can still name them.
-  const filesLeftUnnamed = new Set<string>();
-  // Newest event first: `displaced` follows the store's key order, which is
-  // where each key was FIRST written, so a chain that grew a new id has its
-  // newest round sitting behind an older one. The read caps how many paths it
-  // names, and the newest round is the one most likely to hold what the reader
-  // came for.
-  const newestFirst = [...displaced.entries()].sort(([a], [b]) => b - a).map(([, e]) => e);
-  for (const previous of newestFirst) {
+  // Keyed by path so a file reached twice is recorded once, and holding the
+  // event that KEPT it: the read names only the newest few, and neither the
+  // store's order nor the carrier's age gives that. `displaced` follows the
+  // store's key order, which is where each key was first written; and a chain
+  // hands its files on, so a late teardown can carry an ancient log.
+  const filesLeftUnnamed = new Map<string, number>();
+  for (const [event, previous] of displaced) {
     // An event still holding a key this one did not take goes on answering under
     // it, so nothing of its has gone unreported.
     if ([...previous.keys].some((k) => !keys.has(k))) continue;
@@ -211,26 +219,26 @@ export function recordReapedSession(
       previous.filedKeys.length === keys.size && previous.filedKeys.every((k) => keys.has(k));
     const keptAt = previous.keptAt;
     if (keptAt !== undefined && keptAt !== opts.keptAt) {
-      if (opts.keptAt !== undefined && sameIds) orphanedFiles.add(keptAt);
-      else filesLeftUnnamed.add(keptAt);
+      if (opts.keptAt !== undefined && sameIds) orphanedFiles.set(keptAt, event);
+      else filesLeftUnnamed.set(keptAt, event);
     }
-    for (const carried of previous.carriedFiles) filesLeftUnnamed.add(carried);
+    for (const carried of previous.carriedFiles) filesLeftUnnamed.set(carried.file, carried.event);
   }
   // Before the flags below, so they answer for what is on disk rather than what
   // was intended: an unlink the filesystem refuses leaves the file there for the
   // clause to name, which is a leave. One already gone is a take either way.
   let anyTaken = false;
-  for (const file of orphanedFiles) {
+  for (const [file, event] of orphanedFiles) {
     try {
       fs.unlinkSync(file);
     } catch {
       // already gone, or never ours
     }
-    if (fs.existsSync(file)) filesLeftUnnamed.add(file);
+    if (fs.existsSync(file)) filesLeftUnnamed.set(file, event);
     else anyTaken = true;
   }
   if (replacedUnread > 0) {
-    const left = [...filesLeftUnnamed];
+    const left = [...filesLeftUnnamed].map(([file, event]) => ({ file, event }));
     for (const entry of filedNow) {
       entry.superseded = replacedUnread;
       if (anyTaken) entry.supersededFileTaken = true;
@@ -280,7 +288,15 @@ function describeReplacedRecords(entry: ReapedSession): string {
   // debugger blueprints and nothing else, so a kind that starts keeping files
   // needs wording of its own here. Existence is re-checked at read time because
   // a breadcrumb nobody read outlives the day-old sweep that reclaims them.
-  const left = entry.supersededFilesLeft?.filter((file) => fs.existsSync(file)) ?? [];
+  const left = (entry.supersededFilesLeft ?? [])
+    // Newest kept first, since the cap below drops the rest and the round that
+    // just died is the one a reader came for. By the event that KEPT each file,
+    // not the record carrying it: a chain hands its files on, so a late
+    // teardown carries logs far older than itself.
+    .slice()
+    .sort((a, b) => b.event - a.event)
+    .map(({ file }) => file)
+    .filter((file) => fs.existsSync(file));
   // The paths, not the directory holding them. A log file's name carries its
   // port and nothing else, and ~/.argent/tmp holds every device's, every port's
   // and every tool-server's, so a reader sent at the listing has to open each
@@ -290,8 +306,8 @@ function describeReplacedRecords(entry: ReapedSession): string {
   // Capped because the list grows by one path per unread supersession and this
   // string is a tool result: a crash loop with a teardown between the rounds
   // keeps every file, since neither event can reclaim across the one that kept
-  // none. Newest first, which is the order they accumulate in, and the rest are
-  // counted rather than named — they share a directory with the ones shown.
+  // none. The rest are counted rather than named — they share a directory with
+  // the ones shown.
   const shown = left.slice(0, MAX_NAMED_FILES);
   const unnamed = left.length - shown.length;
   const where =

@@ -247,12 +247,78 @@ steps:
     const steps = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
     expect(steps[0]!.status).toBe("pass");
     expect(steps[0]!.warning).toBe(CONNECTED_WITH_NOTE.note);
+    // The second arm: a CONNECTED log-registry carries the same note off an
+    // empty registry, and it is the tool the crash guidance reaches first.
+    const logFile = path.join(flowsDir, "logged.yaml");
+    await fs.writeFile(
+      logFile,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-log-registry
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+    const logged = asRun(
+      await createRunFlowTool(
+        makeRegistry(async () => ({
+          status: "connected",
+          totalEntries: 0,
+          note: CONNECTED_WITH_NOTE.note,
+        }))
+      ).execute({}, { name: "logged", project_root: PROJECT_ROOT, flow_file: logFile, device: "X" })
+    );
+    const loggedStep = logged.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(loggedStep.status).toBe("pass");
+    expect(loggedStep.warning).toBe(CONNECTED_WITH_NOTE.note);
     // A success is not a gate: the flow goes on, and the tap that follows runs.
     expect(result.ok).toBe(true);
     expect(steps[1]!.tool).toBe("gesture-tap");
     // And a note-less success stays a plain pass - the warning glyph is what
     // separates the two in every renderer.
     expect(steps[1]!.warning).toBeUndefined();
+  });
+
+  it("leaves a note alone on a tool that answers with one every call", async () => {
+    // `note` is a generic name on an unknown result, and other tools use it for
+    // a routine remark: `react-profiler-status` reports a healthy running
+    // session that way, and `open-url` says an https link's handling app cannot
+    // be observed. Warning on those makes a step that is working correctly warn
+    // on every run, with nothing for the reader to resolve - and the qa-flows
+    // contract requires resolving every passing-step warning. Only the two
+    // debugger tools SPEND the record they report, which is what makes their
+    // note unrecoverable from the result alone.
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "profiler.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: react-profiler-status
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+    const registry = makeRegistry(async () => ({
+      session_status: "active",
+      is_running: true,
+      note: "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling.",
+    }));
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "profiler", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const step = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toBeUndefined();
   });
 
   it("passes the gate and runs the whole flow on a connected result", async () => {

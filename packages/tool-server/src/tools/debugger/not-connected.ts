@@ -263,6 +263,22 @@ export async function resolveDebuggerService(
 }
 
 /**
+ * The `note` of a debugger tool that SUCCEEDED, which a flow step has to carry
+ * or lose outright: these two spend the record as they read it, so no later
+ * call reports the crashed session's kept log a second time.
+ *
+ * By tool id, the way {@link isDebuggerNotConnectedResult} is. `note` is a
+ * generic name on an `unknown` result, and other tools answer with one on their
+ * healthy path — `react-profiler-status` reports a running session that way —
+ * which a flow would then flag on every run with nothing to resolve.
+ */
+export function takenDebuggerNote(toolId: string, result: unknown): string | undefined {
+  if (toolId !== "debugger-connect" && toolId !== "debugger-log-registry") return undefined;
+  const note = (result as { note?: unknown } | null)?.note;
+  return typeof note === "string" && note ? note : undefined;
+}
+
+/**
  * A not_connected result is a successful tool return, but a flow step using
  * these tools as a connectivity gate must not green-pass on it. Mirrors
  * isUnmetUiWaitResult for await-ui-element.
