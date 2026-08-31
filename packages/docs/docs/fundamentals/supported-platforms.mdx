@@ -10,7 +10,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 | Platform          | Targets                                                                 | Interaction      |
 | ----------------- | ----------------------------------------------------------------------- | ---------------- |
-| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **iOS**           | Simulators, and physical iPhones/iPads (experimental)                   | Touch / gesture  |
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
@@ -32,6 +32,10 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   height={900}
   caption="The same interaction model on a physical Pixel connected over adb"
 />
+
+### Physical iPhones and iPads
+
+Argent also drives a physical iPhone or iPad over a USB cable. The support is experimental and behind the `ios-physical-devices` feature flag. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
 
 ## TV targets
 
