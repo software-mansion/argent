@@ -219,7 +219,9 @@ The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
 Argent runs the script from the project root, not from the directory of the script file. Thus `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`.
 
-Argent does not give the script your shell environment. Argent does not read a project `.env` file. There is no `env` key. Let the script read a secret or a URL from a file.
+Argent gives the script an allowlist of names from your shell, not your full environment. The allowlist holds `PATH`, `HOME`, the identity, shell, locale, terminal, temporary-directory, cache and configuration names of the host, the Windows platform names, the proxy and TLS names, the Node, npm, Android, Java and Apple toolchain names, `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`. Argent removes every other name, such as `NODE_ENV` and `DATABASE_URL`, and its own token and port. Argent does not read a project `.env` file. There is no `env` key. Let the script read a secret or a URL from a file.
+
+Two names in the allowlist carry a credential. `SSH_AUTH_SOCK` reaches the SSH agent. An `npm_config_` name can hold a registry token. Run a script only when you trust it.
 
 The failure verdict names the side at fault: **failed** names the script, and **errored** names the host that ran it.
 
