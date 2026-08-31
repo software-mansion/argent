@@ -2599,11 +2599,14 @@ const SCRIPT_MIN_TIMEOUT_MS = 100;
  * executor clamps whatever survives to the host's configured maximum and says
  * so in the step's report.
  *
- * The floor is what separates this from the other millisecond options, which
- * take any positive value: the work this one bounds starts a process first, so
- * a limit under the floor buys no short step — it buys one that ends at its
- * time limit, or one whose verdict tracks how busy the host was, and either way
- * an errored script step stops the flow. `timeout: 0.5` is the extreme of it:
+ * The floor is this option's own, not a shape the millisecond options share.
+ * Each draws its bound from the work it measures: `await`'s `timeout` takes 1
+ * and `wait` takes 0, `idle`'s `timeout` carries a 600ms floor derived from the
+ * settle reads it has to fit, and `idle.stableFor` a bounded integer range.
+ * What this one measures starts a PROCESS first, so a limit under the floor
+ * buys no short step — it buys one that ends at its time limit, or one whose
+ * verdict tracks how busy the host was, and either way an errored script step
+ * stops the flow. `timeout: 0.5` is the extreme of it:
  * Node holds no timer under 1ms, so the report quotes back a limit that never
  * ran. Refused here, deviceless and naming the key, rather than after the run
  * has started.

@@ -97,7 +97,7 @@ describe("script step rejections", () => {
     }
   });
 
-  it("admits a fractional time limit, as every other millisecond option does", () => {
+  it("admits a fractional time limit above the floor, unlike idle.stableFor", () => {
     expect(step("{ path: seed.mjs, timeout: 1500.5 }")).toEqual([
       { kind: "script", path: "seed.mjs", timeout: 1500.5 },
     ]);
