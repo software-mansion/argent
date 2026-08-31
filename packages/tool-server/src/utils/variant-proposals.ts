@@ -39,6 +39,12 @@ interface Variant {
    */
   previewImage?: string;
   /**
+   * Content hash of `previewImage`, set only when `propose_variant` captured the
+   * screen itself. `findDuplicatePreview` compares against it; an agent-supplied
+   * `previewImage` is never hashed, so it carries none.
+   */
+  previewHash?: string;
+  /**
    * Normalized [0..1] bounds of the target element AS IT APPEARED in this
    * variant's screenshot, so each thumbnail crops to its own re-laid-out element
    * instead of every variant sharing one frozen frame.
@@ -279,6 +285,15 @@ function slug(s: string): string {
     .slice(0, 40);
 }
 
+/** Identity of the element a proposal targets: variants merge onto one card by it. */
+function proposalKey(match: VariantMatch): string {
+  return `${match.by}:${match.value.trim().toLowerCase()}`;
+}
+
+function matchFor(input: { element: string; match?: VariantMatch }): VariantMatch {
+  return input.match ?? { by: "text", value: input.element };
+}
+
 export class VariantProposalStore {
   readonly events = new TypedEventEmitter<StoreEvents>();
 
@@ -444,6 +459,29 @@ export class VariantProposalStore {
     if (this.completed) this.reset();
   }
 
+  /**
+   * Name of the variant already on this element whose server-captured preview
+   * has the same bytes, or null. A byte-identical capture means the screen did
+   * not change between the two variants, so the two cards would show the same
+   * thumbnail — the failure the Lens exists to avoid.
+   *
+   * Scoped to ONE element deliberately: two elements of the same screen legitimately
+   * share a capture, each card cropping it to its own `frame`.
+   *
+   * A completed round compares against nothing: the next `proposeVariant` rolls
+   * it away, so its variants are not the ones the new capture would sit beside.
+   */
+  findDuplicatePreview(input: {
+    element: string;
+    match?: VariantMatch;
+    previewHash: string;
+  }): string | null {
+    if (this.completed) return null;
+    const key = proposalKey(matchFor(input));
+    const proposal = this.proposals.find((p) => proposalKey(p.match) === key);
+    return proposal?.variants.find((v) => v.previewHash === input.previewHash)?.name ?? null;
+  }
+
   proposeVariant(input: {
     element: string;
     match?: VariantMatch;
@@ -454,6 +492,7 @@ export class VariantProposalStore {
       code?: string;
       filePath?: string;
       previewImage?: string;
+      previewHash?: string;
       frame?: { x: number; y: number; width: number; height: number };
     };
   }): {
@@ -469,12 +508,10 @@ export class VariantProposalStore {
     // Remember the device so the window streams it directly; last non-empty wins.
     if (input.udid && input.udid.trim()) this.device = input.udid.trim();
 
-    const match: VariantMatch = input.match ?? { by: "text", value: input.element };
-    const key = `${match.by}:${match.value.trim().toLowerCase()}`;
+    const match = matchFor(input);
+    const key = proposalKey(match);
 
-    let proposal = this.proposals.find(
-      (p) => `${p.match.by}:${p.match.value.trim().toLowerCase()}` === key
-    );
+    let proposal = this.proposals.find((p) => proposalKey(p.match) === key);
     if (!proposal) {
       proposal = {
         id: `el-${slug(input.element) || "element"}-${this.proposals.length + 1}`,
@@ -493,6 +530,7 @@ export class VariantProposalStore {
       code: input.variant.code,
       filePath: input.variant.filePath,
       previewImage: input.variant.previewImage,
+      previewHash: input.variant.previewHash,
       frame: input.variant.frame,
       createdAt: Date.now(),
     };
@@ -601,6 +639,11 @@ export class VariantProposalStore {
   /** Whether a CLI-driven Lens session currently owns the window. */
   isCliSession(): boolean {
     return this.cliSession;
+  }
+
+  /** The device the round targets — the last non-empty udid, or null. */
+  getDevice(): string | null {
+    return this.device;
   }
 
   /** Record a device Lens booted itself, so it can be shut down on session end. */

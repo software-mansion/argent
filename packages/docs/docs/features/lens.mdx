@@ -22,8 +22,8 @@ Argent Lens is in development. The feature is behind the `argent-lens` flag and 
 ## How a review round works
 
 1. You ask the agent for a design change with an open design space, for example "restyle the header".
-2. The agent renders each variant in the app and captures a screenshot of it.
-3. The agent stages each variant with the `propose_variant` tool. The agent does not block. The Lens window opens on your screen.
+2. The agent renders each variant in the app.
+3. The agent stages each variant with the `propose_variant` tool while the variant is on screen. The tool screenshots the device for the preview image. The agent does not block. The Lens window opens on your screen.
 4. You review the variants in the Lens window. You pick one variant per element, or you leave an element as it is. You can add a comment on each element, a comment on any other element of the screen, and one overall comment.
 5. You press **Complete**. Lens sends your decision to the agent.
 6. The agent applies the chosen variants to the source files. If a comment asks for more changes, the agent makes the change or stages a new round of variants.
