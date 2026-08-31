@@ -283,9 +283,10 @@ function describeReplacedRecords(entry: ReapedSession): string {
 }
 
 /**
- * The sentence a tool shows in place of "no active session". Names what
- * happened, says it is not necessarily this agent's own doing (one tool-server
- * serves every agent), and points at whatever survived.
+ * The sentence a tool shows in place of "no active session", or attaches as a
+ * `note` beside an answer a reaped session would otherwise make misleading.
+ * Names what happened, says it is not necessarily this agent's own doing (one
+ * tool-server serves every agent), and points at whatever survived.
  *
  * Neither cause names a culprit. A disposer cannot see who triggered a
  * `teardown` — `Registry._teardown` calls `dispose()` with no caller — so the

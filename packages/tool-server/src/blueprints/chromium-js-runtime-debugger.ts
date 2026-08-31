@@ -265,9 +265,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         // Same breadcrumb the Hermes blueprint leaves, for the same reason:
-        // this dispose ends the capture session, and since
-        // `ChromiumJsRuntimeDebugger` joined `DEVICE_OWNED_NAMESPACES` it is
-        // routinely triggered by another agent's `stop-all-simulator-servers`.
+        // this dispose ends the capture session, and `ChromiumJsRuntimeDebugger`
+        // being in `DEVICE_OWNED_NAMESPACES` makes it routinely triggered by
+        // another agent's `stop-all-simulator-servers`.
         // Without it `debugger-log-registry` reports `totalEntries: 0` with no
         // note, and its description reads a bare zero as "nothing captured
         // since this session began" — with nothing to say the session changed,

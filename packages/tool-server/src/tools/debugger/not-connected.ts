@@ -43,10 +43,11 @@ export interface DebuggerNotConnectedResult {
 /**
  * `cdp_unreachable`'s two halves, kept apart because the second is dropped for
  * the tool that carries the record itself. Everything a crash leaves is behind
- * that pointer, and on Chromium this reason is the ONLY one a crashed renderer
- * produces — a non-OPEN socket is `reconnecting`, and the re-resolve after the
- * terminated cascade fails here — so an agent that follows this guidance
- * straight to a relaunch never learns the kept log exists.
+ * that pointer, and on Chromium it is the only reason a crashed renderer leaves
+ * standing: a read landing inside the terminated cascade gets `reconnecting`,
+ * which withholds the record for the retry its guidance asks for, and the
+ * re-resolve after that cascade fails here. So an agent that follows this
+ * guidance straight to a relaunch never learns the kept log exists.
  */
 const CDP_UNREACHABLE_RECOVERY =
   "The runtime's CDP endpoint could not be reached. Verify the app is running " +

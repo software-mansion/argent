@@ -340,7 +340,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         // This dispose ends the capture session — up to 50,000 captured console
         // entries stop being reachable through the registry, because the next
         // resolve builds a new writer over a new path. That is invisible, and
-        // since `JsRuntimeDebugger` joined the teardown's namespace set this
+        // `JsRuntimeDebugger` is in the teardown's namespace set, so this
         // dispose is routinely triggered by another agent's
         // `stop-all-simulator-servers`. Leave a breadcrumb so
         // `debugger-log-registry`'s otherwise silent `totalEntries: 0` can say
