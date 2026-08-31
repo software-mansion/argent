@@ -134,6 +134,8 @@ A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
+A `tool` step that succeeds and returns a `note` passes with a warning that repeats the note. A tool adds a note when its own result is misleading on its own: the debugger tools name the log file that a crashed session kept, and `open-url` says that the link opened the browser and not the app. The debugger tools remove the record when they report it, so no later call repeats it.
+
 ### Launch map
 
 Use the map form for a flow that runs on more than one platform:
