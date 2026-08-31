@@ -292,9 +292,10 @@ steps:
     // session that way, and `open-url` says an https link's handling app cannot
     // be observed. Warning on those makes a step that is working correctly warn
     // on every run, with nothing for the reader to resolve - and the qa-flows
-    // contract requires resolving every passing-step warning. Only the two
-    // debugger tools SPEND the record they report, which is what makes their
-    // note unrecoverable from the result alone.
+    // contract requires resolving every passing-step warning. The two debugger
+    // tools answer with one only where something IS wrong: a reaped session's
+    // record, which the read spends, or a log file that is not on disk, which
+    // returns until the reader repairs the directory.
     const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
     const file = path.join(flowsDir, "profiler.yaml");
     await fs.mkdir(flowsDir, { recursive: true });

@@ -264,13 +264,18 @@ export async function resolveDebuggerService(
 
 /**
  * The `note` of a debugger tool that SUCCEEDED, which a flow step has to carry
- * or lose outright: these two spend the record as they read it, so no later
- * call reports the crashed session's kept log a second time.
+ * or raise nowhere. Both report the record a reaped session left and spend it
+ * in the reading, so no later call names that kept log again.
+ * `debugger-log-registry` answers with a second kind beside it, that its own
+ * log file is not on disk, which nothing spends: a live fault, recomputed per
+ * call, so that one returns until the directory is writable again.
  *
  * By tool id, the way {@link isDebuggerNotConnectedResult} is. `note` is a
  * generic name on an `unknown` result, and other tools answer with one on their
  * healthy path — `react-profiler-status` reports a running session that way —
- * which a flow would then flag on every run with nothing to resolve.
+ * which a flow would then flag on every run with nothing to resolve. Neither of
+ * these two does: a session with a readable log and no record behind it answers
+ * with no note at all.
  */
 export function takenDebuggerNote(toolId: string, result: unknown): string | undefined {
   if (toolId !== "debugger-connect" && toolId !== "debugger-log-registry") return undefined;

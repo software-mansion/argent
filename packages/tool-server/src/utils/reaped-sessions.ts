@@ -418,7 +418,5 @@ export function describeLostHistory(captured: number, keptAt?: string): string {
 /** Test-only: drop all breadcrumbs so cases don't leak across tests. */
 export function __resetReapedSessionsForTesting(): void {
   reaped.clear();
-  // The counter too: it orders the files a note names, so a case that asserts
-  // which of them it names has to know where the numbering starts.
   nextEvent = 1;
 }
