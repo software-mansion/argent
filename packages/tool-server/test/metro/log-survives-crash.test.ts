@@ -15,6 +15,7 @@ import {
   recordReapedSession,
 } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
+import { modeBites } from "../helpers/mode-bites";
 
 /**
  * The console log file must outlive the app: when the CDP socket drops the
@@ -743,13 +744,18 @@ describe("console logs across an app crash", () => {
     expect(noise).not.toContain("LogFileWriter is closed");
   });
 
-  it("says there is no file at that path rather than sending a reader to grep it", async () => {
+  it("says there is no file at that path rather than sending a reader to grep it", async (ctx) => {
     // `open()` swallows its failure and buffers, so the counts and clusters are
     // real while `file` names a path that has never existed — and the documented
     // next step is to grep exactly that path.
     const logs = logDir();
     fs.mkdirSync(logs, { recursive: true });
     fs.chmodSync(logs, 0o555);
+    // Root ignores the mode, and then the writer opens a file after all.
+    if (!modeBites(logs)) {
+      fs.chmodSync(logs, 0o755);
+      ctx.skip();
+    }
     try {
       await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "nofile-device" });
 

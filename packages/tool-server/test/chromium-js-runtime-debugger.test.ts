@@ -14,6 +14,7 @@ import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
 import { takeReapedSession, __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 import { debuggerReapedScope } from "../src/tools/debugger/debugger-service-ref";
 import { scopeTempHome } from "./helpers/temp-home";
+import { modeBites } from "./helpers/mode-bites";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
@@ -276,7 +277,7 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     fs.rmSync(logPath, { force: true });
   });
 
-  it("names no file when the renderer dies and the writer never got one", async () => {
+  it("names no file when the renderer dies and the writer never got one", async (ctx) => {
     // `keptAt` is a conjunction with `hasFile()`: `open()` swallows its failure
     // and buffers, so a death in an unwritable ~/.argent/tmp has entries to
     // report and no file to point at. Without that half the breadcrumb names a
@@ -286,6 +287,11 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const logs = logDir();
     fs.mkdirSync(logs, { recursive: true });
     fs.chmodSync(logs, 0o555);
+    // Root ignores the mode, and then the writer opens a file after all.
+    if (!modeBites(logs)) {
+      fs.chmodSync(logs, 0o755);
+      ctx.skip();
+    }
     try {
       const fake = makeFakeChromiumCdpApi();
       let socketOpen = true;
@@ -429,7 +435,7 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     expect(listenerCount(fake.events, "disconnected")).toBe(0);
   });
 
-  it("leaves no listener on the shared client when the writer cannot be built", async () => {
+  it("leaves no listener on the shared client when the writer cannot be built", async (ctx) => {
     // `LogFileWriter`'s constructor mkdir -p's ~/.argent/tmp, which an
     // unwritable home makes throw. This client belongs to `ChromiumCdp` and
     // outlives the failed factory, so a listener attached before that throw
@@ -438,6 +444,11 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const argentDir = path.join(os.homedir(), ".argent");
     fs.mkdirSync(argentDir, { recursive: true });
     fs.chmodSync(argentDir, 0o555);
+    // Root ignores the mode, and then the constructor mkdir's happily.
+    if (!modeBites(argentDir)) {
+      fs.chmodSync(argentDir, 0o755);
+      ctx.skip();
+    }
     const fake = makeFakeChromiumCdpApi();
     try {
       await expect(

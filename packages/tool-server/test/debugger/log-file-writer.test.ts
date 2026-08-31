@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
+import { modeBites } from "../helpers/mode-bites";
 
 scopeTempHome("argent-log-writer-home-");
 
@@ -38,13 +39,18 @@ describe("LogFileWriter", () => {
     expect(writer.hasFile()).toBe(false);
   });
 
-  it("reports no file when the log could not be opened, though entries still count", () => {
+  it("reports no file when the log could not be opened, though entries still count", (ctx) => {
     // `open()` swallows its failure and buffers instead, so `totalEntries`
     // rises for a file that never existed. A breadcrumb built from the count
     // alone would tell an agent to read a path that has never been there.
     const logDir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(logDir, { recursive: true });
     fs.chmodSync(logDir, 0o555);
+    // Root ignores the mode, and then the writer opens a file after all.
+    if (!modeBites(logDir)) {
+      fs.chmodSync(logDir, 0o755);
+      ctx.skip();
+    }
     try {
       const w = new LogFileWriter(8888);
       w.write({ id: 1, timestamp: "t", level: "error", message: "buffered" });
@@ -166,12 +172,16 @@ describe("LogFileWriter", () => {
       pruner.close();
     });
 
-    it("opens anyway when the log directory cannot be listed", () => {
+    it("opens anyway when the log directory cannot be listed", (ctx) => {
       // The sweep is a courtesy; the session it runs for is not. A throw here
       // comes out of debugger-connect as a failed connect, on a machine where
       // the only thing wrong is that this directory belongs to someone else.
       let opened: LogFileWriter | undefined;
       fs.chmodSync(logDir, 0o000);
+      if (!modeBites(logDir)) {
+        fs.chmodSync(logDir, 0o755);
+        ctx.skip();
+      }
       try {
         // The mode has to actually bite, or the case below passes without ever
         // reaching the guard it is here for.
