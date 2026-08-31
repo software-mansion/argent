@@ -22,7 +22,7 @@ All interactions go through argent MCP tools. Ensure the simulator/emulator is r
 
 For implementation tasks that modify visible UI, this workflow can also serve as a visual acceptance path.
 
-1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
+1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, also stage a baseline before editing whenever feasible: `screenshot-diff { captureBaseline: true, udid }` captures it, keeps it for that device, and returns no image.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
    - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
@@ -30,7 +30,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay — but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
-   - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
+   - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff { captureCurrent: true, udid, outputDir }` against the baseline staged in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`.
    - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests. Note `debugger-log-registry` returns `{ status: "not_connected", reason, guidance }` with no log file when the debugger is unreachable — that is not evidence about the app; follow its `guidance` to reconnect, then re-verify.
    - **Mixed**: collect evidence for each relevant class.
@@ -45,7 +45,7 @@ Goal: Test [feature name]
 Steps:
 1. Classify expected result: visual / structural / runtime-log-network / mixed → choose evidence
 2. [Navigate / tap / type to reach stable comparable starting point] → verify auto-screenshot
-3. screenshot { scale: 1.0, includeImageInContext: false } → save baseline path when visual or mixed evidence needs diffing
+3. screenshot-diff { captureBaseline: true, udid } → stage a baseline when visual or mixed evidence needs diffing
 4. [Perform the action to test] → verify auto-screenshot
 5. Use screenshot-diff when requested or when comparable images add useful visual evidence
 6. Report: pass / fail with combined visual, structural, runtime/log/network evidence as applicable
@@ -83,10 +83,10 @@ Steps:
 ```
 1. Classify expected result as visual or mixed.
 2. Navigate to the stable starting state.
-3. screenshot { scale: 1.0, includeImageInContext: false } → save baseline path.
+3. screenshot-diff { captureBaseline: true, udid } → stage the baseline.
 4. describe / debugger-component-tree → find the control and use its returned tap coordinates.
 5. gesture-tap → perform the visual behavior under test.
-6. screenshot-diff { baselinePath, captureCurrent: true, udid, outputDir } → inspect visible change or stability.
+6. screenshot-diff { captureCurrent: true, udid, outputDir } → inspect visible change or stability against the staged baseline.
 7. describe / debugger-component-tree → verify selected state, label, route, or attributes if relevant.
 8. Report combined verdict from expected behavior, visual inspection, diff summary, and structural evidence.
 ```
