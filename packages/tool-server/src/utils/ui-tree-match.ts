@@ -1020,7 +1020,7 @@ export function matchNode(node: DescribeNode, selector: Selector): boolean {
 const WITHIN_EPS = 0.005;
 
 /** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
-function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+export function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
   return (
     inner.x >= outer.x - WITHIN_EPS &&
     inner.y >= outer.y - WITHIN_EPS &&

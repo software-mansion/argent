@@ -72,6 +72,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
+  // The test harness's mock DOM defines no HTMLElement constructor; degrade to
+  // a direct read (undefined on mocks) instead of throwing at script top.
+  const htmlProto = typeof HTMLElement === "undefined" ? {} : HTMLElement.prototype;
+  const getIsContentEditable = protoGetter(htmlProto, "isContentEditable");
   // Document's named getter is [LegacyOverrideBuiltIns] (like a form's): a
   // <form name="activeElement"> shadows document.activeElement, so both focus
   // reads go through prototype accessors. The typeof guard covers the test
@@ -431,6 +435,22 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
     if (scrollable) node.scrollable = true;
+    // Editability beyond the input/textarea tags: a bare contenteditable div
+    // reports its raw tag ("div") as the role, so nothing else marks it as a
+    // text receiver. The flow type directive's focus rule refuses to let a
+    // focused EDITABLE element vouch for a covered target behind it (the keys
+    // would land in the editor), so this flag must reach that rule intact.
+    // isContentEditable lives on HTMLElement.prototype without
+    // [LegacyLenientThis], so calling it with an SVGElement/MathMLElement
+    // receiver throws "Illegal invocation" and aborts the whole walk — and
+    // inline SVG is ubiquitous. SVG elements are never contenteditable, so
+    // gating on the receiver's type is semantically exact.
+    if (
+      (typeof HTMLElement === "undefined" || el instanceof HTMLElement) &&
+      getIsContentEditable.call(el)
+    ) {
+      node.editable = true;
+    }
     // Input focus: el is its document's activeElement. Deliberately emitted to
     // EVERY describe consumer (the agent-facing tool as much as the flow type
     // directive's focus wait) — where the caret is is useful targeting info.

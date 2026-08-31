@@ -28,6 +28,11 @@ export interface DescribeNode {
   checked?: boolean;
   disabled?: boolean;
   password?: boolean;
+  // Chromium only: the element accepts text input without being an
+  // input/textarea tag (isContentEditable). The flow type directive's focus
+  // rule uses it to recognize a bare contenteditable div as the editable
+  // element it is; other platforms leave it unset.
+  editable?: boolean;
   // Children dropped for falling fully outside an ancestor scroll's clip rect
   // — the agent should swipe before tapping.
   scrollHidden?: number;
@@ -53,6 +58,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),
       password: z.boolean().optional(),
+      editable: z.boolean().optional(),
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),

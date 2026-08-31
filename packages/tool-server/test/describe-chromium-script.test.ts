@@ -26,6 +26,9 @@ class MockElement extends MockNode {}
 class MockHTMLInputElement extends MockElement {}
 class MockHTMLTextAreaElement extends MockElement {}
 class MockHTMLImageElement extends MockElement {}
+class MockHTMLElement extends MockElement {}
+// SVG/MathML elements are Element subclasses but NOT HTMLElements.
+class MockSVGElement extends MockElement {}
 
 // The script reads childNodes / tagName / children through the native prototype getter
 // (Object.getOwnPropertyDescriptor(proto, prop).get.call(el)) so a DOM-clobbering <form>
@@ -56,6 +59,17 @@ defineNative(MockElement.prototype, "scrollHeight", "__scrollHeight");
 defineNative(MockElement.prototype, "clientHeight", "__clientHeight");
 defineNative(MockElement.prototype, "scrollWidth", "__scrollWidth");
 defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
+// isContentEditable is a WebIDL attribute on HTMLElement.prototype WITHOUT
+// [LegacyLenientThis]: invoked with a non-HTMLElement receiver (an inline
+// <svg>, say) real Chromium throws "Illegal invocation". Mirror that exactly —
+// the walker must never call it on such a receiver.
+Object.defineProperty(MockHTMLElement.prototype, "isContentEditable", {
+  get(this: MockElement) {
+    if (!(this instanceof MockHTMLElement)) throw new TypeError("Illegal invocation");
+    return (this as unknown as Record<string, unknown>).__contentEditable === true;
+  },
+  configurable: true,
+});
 // getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
 // The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
 // form can't shadow them to a control element (which would crash with "not a function").
@@ -188,6 +202,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
     HTMLInputElement: g.HTMLInputElement,
     HTMLTextAreaElement: g.HTMLTextAreaElement,
     HTMLImageElement: g.HTMLImageElement,
+    HTMLElement: g.HTMLElement,
   };
   g.window = {
     innerWidth: W,
@@ -264,6 +279,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
   g.HTMLImageElement = MockHTMLImageElement;
+  g.HTMLElement = MockHTMLElement;
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -336,6 +352,36 @@ afterEach(() => {
 });
 
 describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
+  // The walker reads isContentEditable to mark text-receiving elements for the
+  // flow type directive's focus rule. The attribute is WebIDL without
+  // [LegacyLenientThis]: calling it on an inline <svg>/<math> element throws
+  // "Illegal invocation", which would abort the ENTIRE walk — and inline SVG
+  // is everywhere. SVG elements are never contenteditable, so the walker must
+  // gate the read on the receiver being an HTMLElement.
+  it("marks contenteditable HTMLElements editable without dying on inline SVG receivers", () => {
+    const ceDiv = el({ tag: "div", rect: BOX }) as MockElement & Record<string, unknown>;
+    Object.setPrototypeOf(ceDiv, MockHTMLElement.prototype);
+    ceDiv.__contentEditable = true;
+    const svg = el({
+      tag: "svg",
+      rect: { x: 100, y: 100, w: 300, h: 200 },
+      children: [el({ tag: "rect", rect: { x: 120, y: 120, w: 50, h: 25 } })],
+    }) as MockElement & Record<string, unknown>;
+    Object.setPrototypeOf(svg, MockSVGElement.prototype);
+
+    const { tree } = run([ceDiv, svg]);
+    const roles: Record<string, unknown>[] = [];
+    const collect = (n: { role?: string; editable?: boolean; children?: typeof roles }): void => {
+      if (n.role) roles.push(n);
+      for (const c of n.children ?? []) collect(c);
+    };
+    collect(tree as never);
+
+    expect(roles.find((n) => n.role === "svg")?.editable).toBeUndefined();
+    expect(roles.find((n) => n.role === "rect")).toBeDefined(); // the SVG subtree survived
+    expect(roles.find((n) => n.role === "div")?.editable).toBe(true);
+  });
+
   it("surfaces content nested under a display:contents wrapper (the RNW bug)", () => {
     const { tree } = run([
       el({
