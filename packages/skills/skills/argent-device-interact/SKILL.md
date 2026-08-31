@@ -15,6 +15,8 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 > **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
 
+> **Physical iPhones/iPads (an iOS entry with kind `"device"`) follow a different contract:** automation is app-scoped and only a subset of these tools exists there. Use the `argent-ios-device-interact` skill instead.
+
 For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 
 ## 1. Before You Start

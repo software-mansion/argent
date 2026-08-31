@@ -9,6 +9,8 @@ Use `screenshot-diff` as supporting visual evidence for UI QA and visual regress
 
 Do not use screenshot diffing for tap-coordinate discovery. Use `describe`, `debugger-component-tree`, or `native-describe-screen` to find targets first.
 
+`screenshot-diff` rejects a physical iPhone/iPad (kind `"device"`) with a capability error. There, capture full-resolution screenshots of both states with `screenshot` (`scale: 1.0`, `includeImageInContext: false`) and compare the saved PNGs on the host instead.
+
 ## 2. When To Use
 
 Use `screenshot-diff` when pixel comparison can answer the verification question:
