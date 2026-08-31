@@ -55,9 +55,10 @@ class IosDeviceControlError extends Error {
 function resolveDevicectlHint(output: string): string {
   const lower = output.toLowerCase();
 
-  // CoreDeviceError 10002 is what a locked screen produces. Surface unlock first.
+  // CoreDeviceError 10002 covers any failed preflight check: a locked screen
+  // is the common cause, but a pending system prompt blocks launches too.
   if (lower.includes("failed to launch") || lower.includes("10002")) {
-    return "Unlock the device and keep the screen awake, then retry; a locked iPhone refuses app launches.";
+    return "Unlock the device and keep the screen awake, then retry; if it is already unlocked, check the phone's screen: a pending system prompt (for example a default-app choice) also blocks launches.";
   }
 
   if (lower.includes("developer disk image") || lower.includes("developer mode is disabled")) {
