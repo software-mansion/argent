@@ -26,7 +26,9 @@ async function startServer(): Promise<{
   let reply: Reply = "ok";
 
   const wss = await new Promise<WebSocketServer>((resolve) => {
-    const s = new WebSocketServer({ port: 0, host: "127.0.0.1" }, () => resolve(s));
+    const s: WebSocketServer = new WebSocketServer({ port: 0, host: "127.0.0.1" }, () =>
+      resolve(s)
+    );
   });
   wss.on("connection", (sock) => {
     sockets.add(sock);
@@ -88,7 +90,7 @@ describe("sendCommand — command acknowledgement", () => {
     const server = await startServer();
     server.setReply("error");
     const err = await sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
-    expect(getFailureSignal(err).error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
     expect(String(err)).toContain("NOT delivered to the device");
     await server.close();
   });
@@ -100,7 +102,7 @@ describe("sendCommand — command acknowledgement", () => {
     server.setReply("silent");
     const inFlight = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
     server.dropConnections();
-    expect(getFailureSignal(await inFlight).error_code).toBe(
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
       FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED
     );
     await server.close();
@@ -115,8 +117,8 @@ describe("sendCommand — command acknowledgement", () => {
     const inFlight = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(5_000);
     const signal = getFailureSignal(await inFlight);
-    expect(signal.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT);
-    expect(signal.error_kind).toBe("timeout");
+    expect(signal?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT);
+    expect(signal?.error_kind).toBe("timeout");
     vi.useRealTimers();
     await server.close();
   });
@@ -157,7 +159,7 @@ describe("gesture-tap — a lost tap is a failure, not `{ tapped: true }`", () =
       )
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
-    expect(getFailureSignal(err).error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
     // Bailed on the Down: the Up is never sent once the press is known lost.
     expect(server.received.map((m) => m.type)).toEqual(["Down"]);
     await server.close();
