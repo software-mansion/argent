@@ -14,6 +14,13 @@ vi.mock("../src/utils/ios-device/devicectl", () => ({
   installApp: (...a: unknown[]) => installApp(...a),
 }));
 
+// launch-app's post-launch signing probe; mocked so no test resolves signing
+// for real (which would read the env var or the developer's keychain).
+const resolveRunnerSigningConfig = vi.fn();
+vi.mock("../src/utils/ios-device/runner-build", () => ({
+  resolveRunnerSigningConfig: (...a: unknown[]) => resolveRunnerSigningConfig(...a),
+}));
+
 import type { DeviceInfo } from "@argent/registry";
 import { iosDeviceImpl as launchImpl } from "../src/tools/launch-app/platforms/ios-device";
 import { iosDeviceImpl as restartImpl } from "../src/tools/restart-app/platforms/ios-device";
@@ -37,6 +44,13 @@ beforeEach(() => {
   launchApp.mockReset().mockResolvedValue(undefined);
   uninstallApp.mockReset().mockResolvedValue(undefined);
   installApp.mockReset().mockResolvedValue(undefined);
+  // Signing resolves by default, so launch results stay note-free unless a
+  // case rejects it on purpose.
+  resolveRunnerSigningConfig.mockReset().mockResolvedValue({
+    teamId: "ABCDE12345",
+    appBundleId: "com.argent.runner.tabcde12345",
+    testBundleId: "com.argent.runner.tabcde12345.uitests",
+  });
   // The session map is module-level state; start every test without an entry.
   clearCurrentIosDeviceApp(UDID);
 });
@@ -112,5 +126,58 @@ describe("launch-app (ios-device): session-only registration unchanged", () => {
     ).resolves.toEqual({ launched: true, bundleId: "com.example.app" });
     expect(launchApp).toHaveBeenCalledWith(UDID, "com.example.app");
     expect(requireCurrentIosDeviceApp(UDID)).toBe("com.example.app");
+  });
+});
+
+describe("launch-app (ios-device): signing readiness note", () => {
+  // The `toEqual` cases above already pin the note-absent shape when signing
+  // resolves; these cover the unready and the slow-probe outcomes.
+  it("notes unready signing with the first sentence of the resolution error", async () => {
+    resolveRunnerSigningConfig.mockRejectedValue(
+      new Error(
+        "No Apple Development signing certificate was found in this Mac's keychain, " +
+          "so the on-device runner cannot be signed. Open Xcode > Settings > Accounts " +
+          "and sign in with your Apple ID."
+      )
+    );
+
+    const result = await launchImpl.handler(
+      {},
+      { udid: UDID, bundleId: "com.example.app" },
+      DEVICE
+    );
+
+    expect(result).toEqual({
+      launched: true,
+      bundleId: "com.example.app",
+      note:
+        "Runner signing is not ready: No Apple Development signing certificate was " +
+        "found in this Mac's keychain, so the on-device runner cannot be signed.",
+    });
+    // The launch itself already happened; the probe only annotates it.
+    expect(launchApp).toHaveBeenCalledWith(UDID, "com.example.app");
+  });
+
+  it("keeps a periodless resolution failure whole instead of truncating it away", async () => {
+    resolveRunnerSigningConfig.mockRejectedValue(new Error("keychain locked"));
+
+    await expect(
+      launchImpl.handler({}, { udid: UDID, bundleId: "com.example.app" }, DEVICE)
+    ).resolves.toMatchObject({ note: "Runner signing is not ready: keychain locked" });
+  });
+
+  it("bounds a hanging probe: the launch result returns note-free after the timeout", async () => {
+    // A first-probe `security` shellout on a wedged keychain can hang; the
+    // note is best-effort and must never gate the launch result on it.
+    resolveRunnerSigningConfig.mockImplementation(() => new Promise(() => {}));
+
+    vi.useFakeTimers();
+    try {
+      const pending = launchImpl.handler({}, { udid: UDID, bundleId: "com.example.app" }, DEVICE);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(pending).resolves.toEqual({ launched: true, bundleId: "com.example.app" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
