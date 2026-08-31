@@ -478,11 +478,13 @@ describe("console logs across an app crash", () => {
       expect(after.note).toContain(secondLog);
       expect(after.note).toContain("grep that file for the 1 captured console entry it holds");
       // And the round it replaced: counted as one, and its file reported taken
-      // rather than left where only a listing of ~/.argent/tmp could reach it.
+      // rather than named as still readable, which would send the agent to a
+      // path the reclaim has already unlinked.
       expect(after.note).toContain("An earlier session that answered here");
       expect(after.note).not.toContain("2 earlier sessions");
       expect(after.note).toContain("The log file it kept went with it");
-      expect(after.note).not.toContain("named by nothing");
+      expect(after.note).not.toContain("still on disk");
+      expect(after.note).not.toContain(firstLog);
       expect(fs.readFileSync(secondLog, "utf-8")).toContain("CRITICAL second-crash error");
 
       fs.rmSync(secondLog, { force: true });

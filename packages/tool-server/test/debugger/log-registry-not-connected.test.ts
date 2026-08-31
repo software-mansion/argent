@@ -319,7 +319,7 @@ describe("debugger-log-registry not-connected results", () => {
     >;
 
     expect(result.note).toContain("An earlier session that answered here");
-    expect(result.note).toContain(`Any log file it left is still in ~/.argent/tmp`);
+    expect(result.note).toContain(`Any log file it left is still on disk, at ${keptLog}.`);
   });
 
   it("leads the guidance with the note when the answer is carrying one", async () => {

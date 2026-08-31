@@ -308,7 +308,7 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("An earlier session that answered here");
       expect(message).toContain("The log file it kept went with it");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
       expect(fs.existsSync(older)).toBe(false);
     });
 
@@ -316,7 +316,7 @@ describe("the reaped-session key", () => {
       // The reclaim needs both events to have kept a file, so a teardown
       // landing on an unread crash replaces the record without touching the
       // log. Saying it went too would send the reader past a file that is
-      // still there — the listing fallback is all that can find it now.
+      // still there, and this clause is the only thing that names it.
       const older = path.join(dir, "argent-logs-3-6.log");
       fs.writeFileSync(older, "first");
       recordReapedSession("js-runtime-debugger", [UDID], "first", {
@@ -332,7 +332,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).toContain("Any log file it left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file it left is still on disk, at ${older}.`);
       expect(message).not.toContain("went with it");
       expect(fs.existsSync(older)).toBe(true);
     });
@@ -356,9 +356,8 @@ describe("the reaped-session key", () => {
       // Growing the id set takes every key the earlier event had without
       // matching it, so the file stays but the record is gone from the store
       // outright. Silence here reads as a complete account of the device, and
-      // the listing fallback is the only thing that can still find those
-      // entries — an answer that never mentions them is what stops the agent
-      // going to look.
+      // this clause is the only thing that still names the file those entries
+      // are in.
       const older = path.join(dir, "argent-logs-6-1.log");
       const newer = path.join(dir, "argent-logs-6-2.log");
       fs.writeFileSync(older, "first");
@@ -377,7 +376,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).toContain("Any log file it left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file it left is still on disk, at ${older}.`);
       expect(message).not.toContain("went with it");
       expect(fs.existsSync(older)).toBe(true);
     });
@@ -420,7 +419,7 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("An earlier session that answered here");
       expect(message).not.toContain("went with it");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
       expect(fs.existsSync(kept)).toBe(true);
     });
 
@@ -460,16 +459,16 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("2 earlier sessions that answered here");
       expect(message).toContain("The log file one of them kept went with it");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
       expect(fs.existsSync(files[0])).toBe(false);
       expect(fs.existsSync(files[1])).toBe(false);
     });
 
-    it("still points at the directory when the count reaches past the file it took", () => {
+    it("still names a file when the count reaches past the one it took", () => {
       // The reclaim needs an exact id-set match, so a chain whose ids widen
       // takes one file and leaves another on disk while the count reaches back
-      // to both. Reporting only the take tells the agent the listing fallback
-      // is not worth trying, and that log is what it would have found.
+      // to both. Reporting only the take reads as a complete account, and the
+      // log left behind then has nothing naming it.
       const first = path.join(dir, "argent-logs-9-1.log");
       const second = path.join(dir, "argent-logs-9-2.log");
       const third = path.join(dir, "argent-logs-9-3.log");
@@ -494,17 +493,15 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("2 earlier sessions that answered here");
       expect(message).toContain("The log file one of them kept went with it");
-      expect(message).toContain(
-        "Anything the others left is still in ~/.argent/tmp, named by nothing"
-      );
+      expect(message).toContain(`Anything the others left is still on disk, at ${first}.`);
       expect(fs.existsSync(second)).toBe(false);
       expect(fs.existsSync(first)).toBe(true);
     });
 
-    it("does not send the reader to ~/.argent/tmp for a kind that keeps no log there", () => {
+    it("names no log file for a kind that keeps none", () => {
       // A recording and a trace are written where the caller asked for them, so
-      // the replaced entry took the only record of its path with it. Naming the
-      // debugger's directory would send the agent to grep for a video.
+      // the replaced entry took the only record of its path with it. A log-file
+      // clause here would send the agent to grep for a video.
       recordReapedSession("screen-recording", UDID, "first recording");
       recordReapedSession("screen-recording", UDID, "second recording");
 
@@ -513,7 +510,7 @@ describe("the reaped-session key", () => {
         "screen recording"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
       expect(message).not.toContain("log file");
     });
 
@@ -689,10 +686,10 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).not.toContain("went with it");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
     });
 
-    it("names the subject of the directory sentence when the count carries", () => {
+    it("names the subject of the leave sentence when the count carries", () => {
       // A chain of crashes ended by a teardown, which keeps no file and so
       // takes none: the newest crash's log is still there, and the sentence
       // sending the agent to it has to agree with the subject above it.
@@ -715,12 +712,12 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("2 earlier sessions that answered here");
-      expect(message).toContain("Any log file they left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file they left is still on disk, at ${second}.`);
       expect(fs.existsSync(first)).toBe(false);
       expect(fs.existsSync(second)).toBe(true);
     });
 
-    it("stops pointing at the directory once the sweep has been through it", () => {
+    it("names no file once the sweep has been through it", () => {
       // A breadcrumb has no expiry and the day-old sweep does, so what was on
       // disk when the record was replaced need not be there when someone reads
       // about it. The same answer already re-checks its own file; a promise
@@ -739,7 +736,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
     });
 
     it("carries a file forward through a record that kept none of its own", () => {
@@ -760,11 +757,11 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("2 earlier sessions that answered here");
-      expect(message).toContain("Any log file they left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file they left is still on disk, at ${older}.`);
       expect(fs.existsSync(older)).toBe(true);
     });
 
-    it("keeps pointing at the directory while any one of the files is still there", () => {
+    it("keeps naming a file while any one of them is still there", () => {
       // A chain can leave more than one file behind - a widened id set leaves
       // the first, and the teardown ending the chain leaves the second - and
       // the sweep takes them one at a time. Requiring all of them, or reading
@@ -797,9 +794,44 @@ describe("the reaped-session key", () => {
           "JS-runtime debugger session"
         );
         expect(message).toContain("3 earlier sessions that answered here");
-        expect(message).toContain("Any log file they left is still in ~/.argent/tmp");
+        expect(message).toContain(
+          `Any log file they left is still on disk, at ${files[1 - swept]}.`
+        );
         expect(fs.existsSync(files[1 - swept])).toBe(true);
       }
+    });
+
+    it("names every file a chain left, not just the newest", () => {
+      // A chain can leave more than one, and each is a different session's
+      // console history: the widening write leaves the first, the teardown
+      // ending the chain leaves the second. Naming one of them sends the agent
+      // to that session's entries and silently drops the other's, which is the
+      // same dead end as naming neither.
+      const first = path.join(dir, "argent-logs-19-1.log");
+      const second = path.join(dir, "argent-logs-19-2.log");
+      for (const file of [first, second]) fs.writeFileSync(file, "x");
+      recordReapedSession("js-runtime-debugger", ["logical-abc"], "first", {
+        cause: "runtime-death",
+        keptAt: first,
+      });
+      recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], "second", {
+        cause: "runtime-death",
+        keptAt: second,
+      });
+      recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], "third", {
+        cause: "teardown",
+      });
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", UDID)!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain("2 earlier sessions that answered here");
+      expect(message).toContain("still on disk, at ");
+      expect(message).toContain(first);
+      expect(message).toContain(second);
+      expect(fs.existsSync(first)).toBe(true);
+      expect(fs.existsSync(second)).toBe(true);
     });
 
     it("keeps the file of a record a write in between had taken a key off", () => {
@@ -832,15 +864,15 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).toContain("Any log file it left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file it left is still on disk, at ${kept}.`);
     });
 
     it("orders neither file when one write replaces two records at once", () => {
       // The take falls on whichever replaced record was filed under exactly
       // these ids, and a write reaches every record its ids touch rather than
       // only the one before it - so the match can be the OLDEST of them while a
-      // newer one's file is what survives. An ordinal here sends the reader to
-      // ~/.argent/tmp for the one file that is not in it.
+      // newer one's file is what survives. An ordinal here would name the one
+      // still on disk as the one that is gone.
       const oldest = path.join(dir, "argent-logs-15-1.log");
       const newest = path.join(dir, "argent-logs-15-2.log");
       const own = path.join(dir, "argent-logs-15-3.log");
@@ -869,9 +901,7 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("2 earlier sessions that answered here");
       expect(message).toContain("The log file one of them kept went with it");
-      expect(message).toContain(
-        "Anything the others left is still in ~/.argent/tmp, named by nothing"
-      );
+      expect(message).toContain(`Anything the others left is still on disk, at ${newest}.`);
       expect(message).not.toContain("the last of them");
       expect(message).not.toContain("the earlier ones");
     });
@@ -906,7 +936,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).toContain("Any log file it left is still in ~/.argent/tmp");
+      expect(message).toContain(`Any log file it left is still on disk, at ${kept}.`);
     });
 
     it("leaves an event reachable under the id filed SECOND out of the count", () => {
@@ -974,7 +1004,7 @@ describe("the reaped-session key", () => {
           "JS-runtime debugger session"
         );
         expect(message).not.toContain("went with it");
-        expect(message).toContain("Any log file it left is still in ~/.argent/tmp");
+        expect(message).toContain(`Any log file it left is still on disk, at ${kept}.`);
       } finally {
         fs.chmodSync(locked, 0o700);
       }
@@ -982,9 +1012,8 @@ describe("the reaped-session key", () => {
 
     it("says nothing about a file when neither event ever kept one", () => {
       // Two teardowns running, the first unread: the widened connect gate
-      // reports this, and both closes deleted their own file. Sending the agent
-      // to list a directory that cannot hold either one costs it a detour and,
-      // since the listing names nothing, no way to reject what it finds there.
+      // reports this, and both closes deleted their own file. A path here would
+      // send the agent after a log file that neither of them ever wrote.
       recordReapedSession("js-runtime-debugger", [UDID], "first", { cause: "teardown" });
       recordReapedSession("js-runtime-debugger", [UDID], "second", { cause: "teardown" });
 
@@ -993,7 +1022,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain("An earlier session that answered here");
-      expect(message).not.toContain("~/.argent/tmp");
+      expect(message).not.toContain("still on disk");
       expect(message).not.toContain("went with it");
     });
 

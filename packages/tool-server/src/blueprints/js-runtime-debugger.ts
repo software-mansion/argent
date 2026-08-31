@@ -375,8 +375,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
             cause: runtimeDied ? "runtime-death" : "teardown",
             keptAt,
             // This device can hold another session on another Metro port, with
-            // its own log file; without the port that one's teardown would
-            // reclaim this file.
+            // its own log file; without the port that one's death would reclaim
+            // this file, and its teardown would replace the record naming it.
             scope: portKey,
           });
         }

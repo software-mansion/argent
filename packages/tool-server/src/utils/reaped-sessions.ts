@@ -23,8 +23,10 @@
  * "you never started a recording" blame a teardown from an hour ago.
  *
  * One entry can also own a file: this store unlinks the log a {@link
- * ReapedSession.keptAt} names when a later teardown supersedes the entry, so it
- * is a lifetime owner, not only a message board. Read that field's doc first.
+ * ReapedSession.keptAt} names when a later event under exactly the same ids
+ * supersedes the entry AND kept a file of its own — a second crash, never a
+ * teardown, which keeps none. So it is a lifetime owner, not only a message
+ * board. Read that field's doc first.
  */
 
 import * as fs from "node:fs";
@@ -58,8 +60,9 @@ interface ReapedSession {
   /** …and the log one of them kept was unlinked with it. At most one ever is. */
   supersededFileTaken?: boolean;
   /**
-   * …and the logs the rest kept, reachable only by listing `~/.argent/tmp`.
-   * Paths, not a flag: the sweep may have taken them before anything reads this.
+   * …and the logs the rest kept, which nothing but this field still names.
+   * Paths, not a flag: the read hands them out, and the sweep may have taken
+   * them first.
    */
   supersededFilesLeft?: string[];
   /** Keys this event was filed under; later writes narrow what it answers to. */
@@ -105,7 +108,7 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * `scope` tells apart two sessions of one kind on one device, and readers must
  * pass the same one. A Metro-backed debugger is per port, each with its own log
  * file, so without the port a session ending on 8082 supersedes the crash
- * breadcrumb from 8081 and reclaims the file it named. Omit it where a device
+ * breadcrumb from 8081 — and reclaims the file it named, if 8082 crashed too. Omit it where a device
  * holds at most one session of the kind (a recording, a profiler trace), and on
  * Chromium, whose port is already inside the device id.
  */
@@ -169,8 +172,8 @@ export function recordReapedSession(
   // Anything still in the store is unread — a read deletes every copy — so
   // replacing one is a second teardown arriving before the first was reported.
   let replacedUnread = 0;
-  // The replaced records' files this write neither takes nor names: a listing of
-  // ~/.argent/tmp is the only route left to them.
+  // The replaced records' files this write does not take. Nothing else records
+  // them, so this field is the only thing that can still name them.
   const filesLeftUnnamed = new Set<string>();
   for (const previous of displaced.values()) {
     // An event still holding a key this one did not take goes on answering under
@@ -183,8 +186,10 @@ export function recordReapedSession(
     // so a set this one merely covers is equally that stranger, and taking the
     // file there takes the log kept for the device that actually crashed.
     //
-    // It also needs a file of this event's own — nothing else records the
-    // replaced path — which bounds an unread crash loop to one file per device.
+    // It also needs a file of this event's own, which bounds an unread crash
+    // LOOP to one file per device. A teardown between two crashes keeps none of
+    // its own, so it replaces the record without touching the log: the reader
+    // gets the path from `supersededFilesLeft` instead.
     //
     // Never this event's own path: the unlink runs after the write above, so a
     // file recorded twice would be taken from the answer advertising it.
@@ -231,7 +236,7 @@ export function recordReapedSession(
  * Consumes every copy of the same teardown, not just the one that matched. A
  * reader knows only the id it was called with, so a per-key delete would leave
  * a twin behind to explain a later, unrelated read — and to reclaim, on the
- * next teardown, the very file this answer just named.
+ * next crash under the same ids, the very file this answer just named.
  */
 export function takeReapedSession(
   kind: ReapedSessionKind,
@@ -253,27 +258,35 @@ export function takeReapedSession(
  * teardown replaces a crash as readily as the reverse, `selectTarget`'s
  * one-device fallback can file a stranger's session under this id, and all three
  * kinds reach this clause. Only three things are certain — they held output,
- * nothing read it, and no id reaches their record now.
+ * nothing read it, and no id reaches their record now. Their log files are named
+ * anyway: the exact-id-set rule above guards the DELETION of a stranger's file,
+ * and a reader already sent to `~/.argent/tmp` could open every one of them.
  */
 function describeReplacedRecords(entry: ReapedSession): string {
   const count = entry.superseded ?? 0;
   if (count === 0) return "";
   const subject = count === 1 ? "An earlier session" : `${count} earlier sessions`;
   const they = count === 1 ? "it" : "they";
-  // Naming ~/.argent/tmp is the debugger's alone: `keptAt` comes from the two
+  // Naming a log file is the debugger's alone: `keptAt` comes from the two
   // debugger blueprints and nothing else, so a kind that starts keeping files
   // needs wording of its own here. Existence is re-checked at read time because
-  // the day-old sweep runs on a schedule of its own.
-  const anyLeft = entry.supersededFilesLeft?.some((file) => fs.existsSync(file)) ?? false;
+  // a breadcrumb nobody read outlives the day-old sweep that reclaims them.
+  const left = entry.supersededFilesLeft?.filter((file) => fs.existsSync(file)) ?? [];
+  // The paths, not the directory holding them. A log file's name carries its
+  // port and nothing else, and ~/.argent/tmp holds every device's, every port's
+  // and every tool-server's, so a reader sent at the listing has to open each
+  // one to find the session's own — and the salvage clause above already hands
+  // out an absolute path under exactly the same conditions.
+  const where = ` still on disk, at ${left.join(", ")}.`;
   const file = entry.supersededFileTaken
     ? // Which of them lost its file is not sayable past a count of one: a write
       // replaces every record its ids reach, and the take falls on whichever was
       // filed under exactly this id set — as readily the oldest as the newest.
       // An order here would send a reader after the one file that is not there.
       ` The log file ${count === 1 ? "it" : "one of them"} kept went with it.` +
-      (anyLeft ? ` Anything the others left is still in ~/.argent/tmp, named by nothing.` : ``)
-    : anyLeft
-      ? ` Any log file ${they} left is still in ~/.argent/tmp, named by nothing.`
+      (left.length > 0 ? ` Anything the others left is${where}` : ``)
+    : left.length > 0
+      ? ` Any log file ${they} left is${where}`
       : ``;
   return (
     ` ${subject} that answered here ended holding output nobody read, and this event ` +
