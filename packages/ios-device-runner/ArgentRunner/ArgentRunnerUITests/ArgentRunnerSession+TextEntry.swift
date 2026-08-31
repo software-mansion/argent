@@ -1,6 +1,31 @@
 import XCTest
 
 extension ArgentRunnerSession {
+    /// The dedicated answer for typing with no first responder.
+    private static func textInputNotFocusedEnvelope() -> Envelope {
+        .failure(
+            .textInputNotFocused,
+            "no text input has keyboard focus",
+            hint: "Tap the target input first, then retry."
+        )
+    }
+
+    /// Whether any element in the target app currently has keyboard focus.
+    /// One scoped element query answers it. nil when the probe itself failed
+    /// (a degraded tree must not block typing; the recorded-failure audit in
+    /// performOnMain still covers the attempt).
+    private func hasKeyboardFocus(in app: XCUIApplication) -> Bool? {
+        var focused: Bool?
+        let exceptionDescription = ArgentExceptionGuard.runCatching {
+            focused =
+                app.descendants(matching: .any)
+                .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+                .firstMatch.exists
+        }
+
+        return exceptionDescription == nil ? focused : nil
+    }
+
     /// Types text into whatever element currently has keyboard focus. The tool
     /// layer focuses an input with a tap before sending a type command.
     func performType(_ request: CommandRequest, on app: XCUIApplication)
@@ -13,6 +38,16 @@ extension ArgentRunnerSession {
         // Wait for the keyboard's presentation animation to finish.
         _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
 
+        // On hardware, typeText with no first responder RECORDS an XCTest
+        // failure instead of throwing, so the exception branch below never
+        // fires and the reply would demote to the generic
+        // XCTEST_RECORDED_FAILURE (audited on an iPhone 15). Probe focus
+        // first to answer the common case with the dedicated code; only a
+        // probe that positively finds no focus refuses to type.
+        if hasKeyboardFocus(in: app) == false {
+            return Self.textInputNotFocusedEnvelope()
+        }
+
         // typeText targets the first responder directly, with no element
         // resolution, so typing works on screens whose accessibility trees
         // degrade.
@@ -21,12 +56,10 @@ extension ArgentRunnerSession {
         }
 
         if let exceptionDescription {
+            // Backstop for the runtimes where a missing first responder does
+            // throw instead of recording.
             if exceptionDescription.contains("keyboard focus") {
-                return .failure(
-                    .textInputNotFocused,
-                    "no text input has keyboard focus",
-                    hint: "Tap the target input first, then retry type."
-                )
+                return Self.textInputNotFocusedEnvelope()
             }
 
             return .failure(.commandFailed, exceptionDescription)
@@ -66,8 +99,16 @@ extension ArgentRunnerSession {
             }
         }
 
-        // Fall back to typing the return character. When no input is focused
-        // this fails with a clear focus error.
+        // No visible keyboard key matched, so the return character goes
+        // through typeText, whose no-first-responder failure mode is the same
+        // recorded-not-thrown shape as performType's: without the probe it
+        // would demote to the generic XCTEST_RECORDED_FAILURE. Same dedicated
+        // answer, same only-on-positive-verdict rule.
+        if hasKeyboardFocus(in: app) == false {
+            return Self.textInputNotFocusedEnvelope()
+        }
+
+        // Fall back to typing the return character.
         let exceptionDescription = ArgentExceptionGuard.runCatching {
             app.typeText(XCUIKeyboardKey.return.rawValue)
         }

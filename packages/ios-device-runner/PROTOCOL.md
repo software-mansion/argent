@@ -81,9 +81,16 @@ launch, and launching is launch-app's job, never a command side effect):
   `numberOfTaps` taps as one on-device gesture: 2 maps to the native
   `doubleTap()`, >2 to a tight tap loop (no native N-tap API; inter-tap
   latency stays on-device, inside the OS multi-tap window).
-- `type` → `{message}`: types into the current first responder.
-  `TEXT_INPUT_NOT_FOCUSED` when nothing has keyboard focus.
-- `keyboardReturn` → `{message}`.
+- `type` → `{message}`: types into the current first responder. The runner
+  probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
+  nothing has it. The probe is what makes that code real on hardware: there,
+  typing without a first responder RECORDS an XCTest failure instead of
+  throwing, so without the probe the reply demotes to the generic
+  `XCTEST_RECORDED_FAILURE`. Only a probe that positively finds no focus
+  refuses; a probe that itself fails does not block typing.
+- `keyboardReturn` → `{message}`: taps the visible submit key when a keyboard
+  is up; otherwise it types the return character behind the same focus probe,
+  so it answers `TEXT_INPUT_NOT_FOCUSED` the same way.
 - `snapshot` → `{nodes, quality}`: one-shot accessibility tree (below).
   `APP_BACKGROUNDED` when the target is alive but backgrounded: observation
   never re-fronts (see above).

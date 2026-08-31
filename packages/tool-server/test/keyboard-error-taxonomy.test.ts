@@ -1,9 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Registry, FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { makeIosDeviceImpl } from "../src/tools/keyboard/platforms/ios-device";
+import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
+import {
+  clearCurrentIosDeviceApp,
+  setCurrentIosDeviceApp,
+} from "../src/utils/ios-device/app-session";
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-input";
 
@@ -169,4 +174,75 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
       );
     }
   );
+});
+
+describe("keyboard (ios-device): typing with nothing focused", () => {
+  // The runner probes keyboard focus before typing and answers
+  // TEXT_INPUT_NOT_FOCUSED; audited on an iPhone 15, the pre-probe behavior
+  // was the generic "XCTest recorded a failure while executing type", which
+  // named neither the cause nor the fix.
+  function notFocusedRegistry(): Registry {
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run: vi.fn().mockRejectedValue(
+        new RunnerCommandError("no text input has keyboard focus", {
+          code: "TEXT_INPUT_NOT_FOCUSED",
+        })
+      ),
+    } as never);
+    return registry;
+  }
+
+  beforeEach(() => {
+    setCurrentIosDeviceApp(iosPhysicalDevice.id, "com.example.app");
+  });
+
+  afterEach(() => {
+    clearCurrentIosDeviceApp(iosPhysicalDevice.id);
+  });
+
+  it.each([{ text: "hello" }, { key: "enter" }])(
+    "maps TEXT_INPUT_NOT_FOCUSED to the retype instruction for %j",
+    async (input) => {
+      const impl = makeIosDeviceImpl(notFocusedRegistry());
+      const err = await impl
+        .handler({}, { udid: iosPhysicalDevice.id, ...input }, iosPhysicalDevice)
+        .then(
+          () => {
+            throw new Error("expected the call to reject, but it resolved");
+          },
+          (e: unknown) => e
+        );
+
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      expect((err as Error).message).toBe(
+        "Nothing on screen has keyboard focus. Tap the text field first, then retype."
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_INPUT_NOT_FOCUSED);
+    }
+  );
+
+  it("passes other runner failures through untouched", async () => {
+    const registry = new Registry();
+    const original = new RunnerCommandError("app 'com.example.app' is not running", {
+      code: "APP_NOT_AVAILABLE",
+    });
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run: vi.fn().mockRejectedValue(original),
+    } as never);
+
+    const impl = makeIosDeviceImpl(registry);
+    const err = await impl
+      .handler({}, { udid: iosPhysicalDevice.id, text: "hello" }, iosPhysicalDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+
+    expect(err).toBe(original);
+  });
 });

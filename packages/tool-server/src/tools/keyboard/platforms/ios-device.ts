@@ -4,8 +4,37 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../../blueprints/ios-device-runner";
 import { requireCurrentIosDeviceApp } from "../../../utils/ios-device/app-session";
-import { pressKeyboardReturn, typeText } from "../../../utils/ios-device/runner-commands";
+import { RunnerCommandError } from "../../../utils/ios-device/runner-client";
+import {
+  pressKeyboardReturn,
+  typeText,
+  type MutationReply,
+} from "../../../utils/ios-device/runner-commands";
 import type { KeyboardParams, KeyboardResult } from "../types";
+
+/**
+ * The runner probes keyboard focus before typing and answers
+ * TEXT_INPUT_NOT_FOCUSED when nothing has it. Map that to a caller-mistake
+ * rejection with the action that fixes it; every other error passes through.
+ */
+async function mapNotFocused(send: Promise<MutationReply>): Promise<MutationReply> {
+  try {
+    return await send;
+  } catch (error) {
+    if (error instanceof RunnerCommandError && error.code === "TEXT_INPUT_NOT_FOCUSED") {
+      throw new InvalidToolInputError(
+        "Nothing on screen has keyboard focus. Tap the text field first, then retype.",
+        {
+          error_code: FAILURE_CODES.KEYBOARD_INPUT_NOT_FOCUSED,
+          failure_stage: "keyboard_input_not_focused_ios_device",
+          error_kind: "validation",
+        }
+      );
+    }
+
+    throw error;
+  }
+}
 
 /**
  * Type into the focused element on a physical iOS device.
@@ -50,13 +79,13 @@ export function makeIosDeviceImpl(
 
       if (params.text) {
         // Secret placeholders are already resolved by the execute wrapper.
-        const typed = await typeText(api, bundleId, params.text);
+        const typed = await mapNotFocused(typeText(api, bundleId, params.text));
         reactivated ||= typed.reactivated;
         keys += params.text.length;
       }
 
       if (key === "enter") {
-        const pressed = await pressKeyboardReturn(api, bundleId);
+        const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
         reactivated ||= pressed.reactivated;
         keys += 1;
       }
