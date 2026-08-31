@@ -938,6 +938,36 @@ describe("the reaped-session key", () => {
       expect(message).not.toContain(files[0]!);
     });
 
+    it("orders the files by number, not by the text of the event that kept them", () => {
+      // Ten events is where a text sort and a numeric one part: "9" sorts above
+      // "12", so the note would name the middle of the chain and hide the round
+      // that just died. A crash loop with a teardown between rounds reaches
+      // twelve events in six rounds, and the cap is what makes it visible.
+      __resetReapedSessionsForTesting();
+      const ids = Array.from({ length: 12 }, (_, i) => `logical-${i}`);
+      const files = ids.map((id, i) => {
+        const file = path.join(dir, `argent-logs-23-${i}.log`);
+        fs.writeFileSync(file, "x");
+        recordReapedSession("js-runtime-debugger", [id], `crash ${i}`, {
+          cause: "runtime-death",
+          keptAt: file,
+        });
+        return file;
+      });
+      // Covers all twelve and matches no filed id set, so every file is left.
+      recordReapedSession("js-runtime-debugger", ids, "widened", { cause: "runtime-death" });
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", "logical-0")!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(
+        `still on disk, at ${files[11]}, ${files[10]}, ${files[9]}, and 9 more in the same directory.`
+      );
+      // The three a text sort would have named instead.
+      for (const i of [8, 7, 6]) expect(message).not.toContain(files[i]!);
+    });
+
     it("keeps the file of a record a write in between had taken a key off", () => {
       // What the store can still see is what the record ANSWERS to, not what it
       // answered for: a session filed under both ids loses the udid to another
@@ -1068,6 +1098,68 @@ describe("the reaped-session key", () => {
       // Still answering under the id this write did not name, file and all.
       expect(fs.existsSync(kept)).toBe(true);
       expect(takeReapedSession("js-runtime-debugger", "logical-abc")?.salvage).toBe("both ids");
+    });
+
+    it("dates a refused unlink by the record it belonged to, not by nothing", (ctx) => {
+      // A file the unlink could not take is added back to the leaves, and the
+      // note orders those by the event that kept them. Give it no event and it
+      // sorts to the end, so a chain past the cap hides the newest file of all
+      // - the one this write was trying to reclaim and failed.
+      __resetReapedSessionsForTesting();
+      const locked = fs.mkdtempSync(path.join(dir, "locked2-"));
+      const probe = path.join(locked, "probe");
+      fs.writeFileSync(probe, "x");
+      // Four older crashes on their own ids, so the cap has to choose.
+      const older = [0, 1, 2, 3].map((i) => {
+        const file = path.join(dir, `argent-logs-24-${i}.log`);
+        fs.writeFileSync(file, "x");
+        recordReapedSession("js-runtime-debugger", [`logical-${i}`], `old ${i}`, {
+          cause: "runtime-death",
+          keptAt: file,
+        });
+        return file;
+      });
+      // The newest crash, whose file lands in a directory nothing can unlink
+      // from - and a write under exactly its ids, which is what tries to.
+      const newest = path.join(locked, "argent-logs-24-4.log");
+      const own = path.join(dir, "argent-logs-24-5.log");
+      for (const file of [newest, own]) fs.writeFileSync(file, "x");
+      recordReapedSession("js-runtime-debugger", ["logical-4"], "newest", {
+        cause: "runtime-death",
+        keptAt: newest,
+      });
+      fs.chmodSync(locked, 0o500);
+      try {
+        let refused = false;
+        try {
+          fs.unlinkSync(probe);
+        } catch {
+          refused = true;
+        }
+        // Root ignores the mode, and then there is nothing here to pin.
+        if (!refused) ctx.skip();
+        recordReapedSession("js-runtime-debugger", ["logical-4"], "reclaimer", {
+          cause: "runtime-death",
+          keptAt: own,
+        });
+        // Now one write over everything, so all five leaves meet the cap.
+        recordReapedSession(
+          "js-runtime-debugger",
+          ["logical-0", "logical-1", "logical-2", "logical-3", "logical-4"],
+          "widened",
+          { cause: "runtime-death" }
+        );
+
+        const message = describeReapedSession(
+          takeReapedSession("js-runtime-debugger", "logical-0")!,
+          "JS-runtime debugger session"
+        );
+        expect(fs.existsSync(newest)).toBe(true);
+        expect(message).toContain(newest);
+        expect(message).not.toContain(older[0]!);
+      } finally {
+        fs.chmodSync(locked, 0o700);
+      }
     });
 
     it("calls a file the filesystem would not let it unlink a leave, not a take", (ctx) => {

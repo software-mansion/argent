@@ -175,6 +175,10 @@ steps:
     expect(gate.status).toBe("fail");
     expect(gate.reason).toContain(NOTED.guidance);
     expect(gate.reason).toContain(NOTED.note);
+    // Once, not twice: the CLI prints the reason line and then a line per
+    // warning, so a second copy here reads as a second finding and adds a
+    // phantom entry to the run's warning count.
+    expect("warning" in gate).toBe(false);
   });
 
   it("adds nothing to the reason line for an answer that carries no note", async () => {
@@ -277,8 +281,9 @@ steps:
     expect(result.ok).toBe(true);
     expect(steps[1]!.tool).toBe("gesture-tap");
     // And a note-less success stays a plain pass - the warning glyph is what
-    // separates the two in every renderer.
-    expect(steps[1]!.warning).toBeUndefined();
+    // separates the two in every renderer. The KEY, not its value: an explicit
+    // `warning: undefined` reaches a JSON client as a field that is there.
+    expect("warning" in steps[1]!).toBe(false);
   });
 
   it("leaves a note alone on a tool that answers with one every call", async () => {
@@ -318,7 +323,7 @@ steps:
 
     const step = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
     expect(step.status).toBe("pass");
-    expect(step.warning).toBeUndefined();
+    expect("warning" in step).toBe(false);
   });
 
   it("passes the gate and runs the whole flow on a connected result", async () => {
