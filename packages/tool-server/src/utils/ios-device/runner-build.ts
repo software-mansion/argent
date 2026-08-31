@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, withFailureSignal } from "@argent/registry";
 import { withKeyedLock } from "../keyed-lock";
+import { announceDetectedSigningTeam, detectSigningTeams } from "./team-detect";
 import {
   pidIsAlive,
   pollPidsUntilGone,
@@ -41,20 +42,7 @@ function signingTeamError(message: string): Error {
   });
 }
 
-/**
- * Resolve signing from `ARGENT_IOS_TEAM_ID`.
- */
-export function resolveRunnerSigningConfig(): RunnerSigningConfig {
-  const teamId = process.env.ARGENT_IOS_TEAM_ID?.trim();
-
-  if (!teamId) {
-    throw signingTeamError(
-      "ARGENT_IOS_TEAM_ID is not set. Set it to your Apple Developer Team ID " +
-        "(a 10-character code). Xcode > Settings > Accounts > select your Apple ID " +
-        "and team, or developer.apple.com/account under Membership."
-    );
-  }
-
+function signingConfigForTeam(teamId: string): RunnerSigningConfig {
   // The leading "t" keeps the derived segment from starting with a digit.
   const appBundleId = `com.argent.runner.t${teamId.toLowerCase()}`;
 
@@ -63,6 +51,37 @@ export function resolveRunnerSigningConfig(): RunnerSigningConfig {
     appBundleId,
     testBundleId: `${appBundleId}.uitests`,
   };
+}
+
+/**
+ * Resolve signing: `ARGENT_IOS_TEAM_ID` when set, otherwise the team detected
+ * from this Mac's keychain (memoized; several teams auto-pick the newest).
+ * Throws only when neither yields a team, and that error prompts an Xcode
+ * sign-in: with no certificate in the keychain, naming a team id could not
+ * make the build signable anyway.
+ */
+export async function resolveRunnerSigningConfig(): Promise<RunnerSigningConfig> {
+  const envTeamId = process.env.ARGENT_IOS_TEAM_ID?.trim();
+
+  if (envTeamId) {
+    return signingConfigForTeam(envTeamId);
+  }
+
+  const teams = await detectSigningTeams();
+
+  if (teams.length === 0) {
+    throw signingTeamError(
+      "No Apple Development signing certificate was found in this Mac's keychain, " +
+        "so the on-device runner cannot be signed. Open Xcode > Settings > Accounts " +
+        "and sign in with your Apple ID; then, still in that pane, choose Manage " +
+        "Certificates and click + > Apple Development. Retry once the certificate " +
+        "exists; argent detects the team automatically."
+    );
+  }
+
+  announceDetectedSigningTeam(teams);
+
+  return signingConfigForTeam(teams[0]!.teamId);
 }
 
 const PROJECT_SUFFIX = "ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj";

@@ -30,6 +30,7 @@ import {
   buildScreenRecordingNote,
   getActiveScreenRecordings,
 } from "./utils/screen-recording-reminder";
+import { consumePendingSigningDetectionNote } from "./utils/ios-device/team-detect";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
@@ -887,6 +888,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const activeRecordings = getActiveScreenRecordings();
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
+        }
+        // Staged once when keychain team detection first signs the on-device
+        // runner (utils/ios-device/team-detect); drained here so the first
+        // completed tool call carries which team was picked and how to override.
+        const signingNote = consumePendingSigningDetectionNote();
+        if (signingNote) {
+          notes.push(signingNote);
         }
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {

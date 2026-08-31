@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   assertXctestrunParses,
@@ -25,6 +25,8 @@ import {
   type RunnerSigningConfig,
 } from "../src/utils/ios-device/runner-build";
 import { PS_BIN } from "../src/utils/vega-process";
+import { __setCertificateListerForTests } from "../src/utils/ios-device/team-detect";
+import { TEAM_B_PEM } from "./fixtures/signing-certs";
 
 const execFileAsync = promisify(execFile);
 
@@ -104,34 +106,57 @@ describe("runnerBuildStaticArgs", () => {
 });
 
 describe("resolveRunnerSigningConfig", () => {
+  // The keychain seam: every case pins the lister, so no test ever shells out
+  // to the developer's real `security` keychain.
+  beforeEach(() => __setCertificateListerForTests(async () => ""));
   afterEach(() => {
     delete process.env.ARGENT_IOS_TEAM_ID;
+    __setCertificateListerForTests(null);
   });
 
-  it("derives the whole config from ARGENT_IOS_TEAM_ID", () => {
+  it("derives the whole config from ARGENT_IOS_TEAM_ID without touching the keychain", async () => {
     process.env.ARGENT_IOS_TEAM_ID = " FGHIJ67890 ";
+    const lister = vi.fn(async () => "");
+    __setCertificateListerForTests(lister);
 
-    expect(resolveRunnerSigningConfig()).toEqual({
+    await expect(resolveRunnerSigningConfig()).resolves.toEqual({
+      teamId: "FGHIJ67890",
+      appBundleId: "com.argent.runner.tfghij67890",
+      testBundleId: "com.argent.runner.tfghij67890.uitests",
+    });
+    expect(lister).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the detected team when the env var is unset", async () => {
+    __setCertificateListerForTests(async (cn) => (cn === "Apple Development" ? TEAM_B_PEM : ""));
+
+    await expect(resolveRunnerSigningConfig()).resolves.toEqual({
       teamId: "FGHIJ67890",
       appBundleId: "com.argent.runner.tfghij67890",
       testBundleId: "com.argent.runner.tfghij67890.uitests",
     });
   });
 
-  it("refuses a missing team id with the where-to-find-it guide", () => {
-    delete process.env.ARGENT_IOS_TEAM_ID;
-    let caught: unknown;
-    try {
-      resolveRunnerSigningConfig();
-    } catch (error) {
-      caught = error;
-    }
+  it("answers an empty keychain with the sign-into-Xcode error, never naming the env var", async () => {
+    const caught: unknown = await resolveRunnerSigningConfig().then(
+      () => null,
+      (error: unknown) => error
+    );
 
-    const message = (caught as Error).message;
-    expect(message).toContain("ARGENT_IOS_TEAM_ID is not set");
-    expect(message).toContain("Xcode > Settings > Accounts");
-    expect(message).toContain("developer.apple.com/account");
-    expect(getFailureSignal(caught)?.error_kind).toBe("validation");
+    expect((caught as Error).message).toBe(
+      "No Apple Development signing certificate was found in this Mac's keychain, " +
+        "so the on-device runner cannot be signed. Open Xcode > Settings > Accounts " +
+        "and sign in with your Apple ID; then, still in that pane, choose Manage " +
+        "Certificates and click + > Apple Development. Retry once the certificate " +
+        "exists; argent detects the team automatically."
+    );
+    // The pre-detection message told users to set ARGENT_IOS_TEAM_ID; with no
+    // certificate a team id alone could not sign anything, so it must be gone.
+    expect((caught as Error).message).not.toContain("ARGENT_IOS_TEAM_ID");
+    const signal = getFailureSignal(caught);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+    expect(signal?.failure_stage).toBe("ios_device_signing_team");
+    expect(signal?.error_kind).toBe("validation");
   });
 });
 

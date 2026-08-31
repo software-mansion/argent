@@ -47,7 +47,7 @@ vi.mock("../../src/utils/ios-device/runner-build", async (importOriginal) => {
       derivedDataPath: "/tmp/argent-test/rebuilt-derived",
       fromCache: false,
     })),
-    resolveRunnerSigningConfig: vi.fn(() => SIGNING_CONFIG),
+    resolveRunnerSigningConfig: vi.fn(async () => SIGNING_CONFIG),
   };
 });
 

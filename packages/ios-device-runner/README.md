@@ -50,11 +50,18 @@ build-for-testing` (signed with the user's team; see the environment
 
 ## Build-time configuration
 
-One environment variable configures signing, and it is required:
+The signing team resolves in two steps, and the environment variable wins:
 
-- `ARGENT_IOS_TEAM_ID`: your Apple Developer Team ID, a 10-character code.
-  Find it in Xcode > Settings > Accounts (select your Apple ID and team) or
-  at developer.apple.com/account under Membership.
+- `ARGENT_IOS_TEAM_ID` (optional): your Apple Developer Team ID, a
+  10-character code. Find it in Xcode > Settings > Accounts (select your
+  Apple ID and team) or at developer.apple.com/account under Membership.
+- When it is not set, the tool-server detects the team from the Mac's
+  keychain: the Apple Development certificates name their team (and the
+  legacy iPhone Developer name is checked too), and with several teams the
+  one with the newest certificate wins. The detection result is memoized for
+  the tool-server process. With no certificate at all, the build fails with a
+  prompt to sign into Xcode and mint one (Manage Certificates > + > Apple
+  Development).
 
 Everything else is derived or fixed. The build always uses automatic signing
 (an Apple ID signed into Xcode is needed so it can mint the provisioning

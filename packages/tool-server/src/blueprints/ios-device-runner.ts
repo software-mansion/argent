@@ -298,7 +298,10 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
     await ensureDeviceReady(udid);
     await killStaleRunnersForDevice(udid);
 
-    const { launched, client } = await buildAndStartRunner(udid, resolveRunnerSigningConfig());
+    const { launched, client } = await buildAndStartRunner(
+      udid,
+      await resolveRunnerSigningConfig()
+    );
 
     const events = new TypedEventEmitter<ServiceEvents>();
     let disposed = false;
