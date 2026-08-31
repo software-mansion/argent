@@ -24,7 +24,7 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 { "port": 8081, "device_id": "<UDID>" }
 ```
 
-Call `debugger-log-registry`. When connected (`status: "connected"`) it returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages. When the debugger is unreachable it does not fail — it returns `{ status: "not_connected", reason, detail, guidance }` with no log file of its own; follow the `guidance` (do not retry in a loop). Check `note` on either status: it says what became of a previous session's console history, and when it names a KEPT log file, grepping that path is exactly what to do next — a connected answer counting zero after a session died is the case it exists for. A note saying there is no file at a path means exactly that: the counts are real, the path is not, and grepping it finds nothing.
+Call `debugger-log-registry`. When connected (`status: "connected"`) it returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages. When the debugger is unreachable it does not fail — it returns `{ status: "not_connected", reason, detail, guidance }` with no log file of its own; follow the `guidance` (do not retry in a loop). Check `note` on either status: when it names a KEPT log file, grepping that path is what to do next — a connected answer counting zero after a session died is the case it exists for. A note saying there is no file at a path means the counts are real and the path is not, so grepping it finds nothing.
 
 ---
 
