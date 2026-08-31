@@ -254,6 +254,25 @@ describe("which registered tools auto-target", () => {
     expect(stillRequired).toEqual([]);
   });
 
+  it("has no other param whose name the near-miss guard would catch", () => {
+    // http.ts refuses to auto-target a call carrying a key that merely looks
+    // like `udid`, so a tool introducing one would lose auto-targeting — loudly,
+    // but for a reason nobody would think to look for.
+    const collisions = registeredTools().flatMap((def) =>
+      Object.keys((def.inputSchema as { properties?: object })?.properties ?? {})
+        .filter(
+          (k) =>
+            k !== "udid" &&
+            k
+              .toLowerCase()
+              .replace(/[^a-z]/g, "")
+              .includes("udid")
+        )
+        .map((k) => `${def.id}.${k}`)
+    );
+    expect(collisions).toEqual([]);
+  });
+
   it("never touches a `device_id` tool", () => {
     // On the debugger/profiler tools that spelling is a Metro/CDP LOGICAL id,
     // which `list-devices` does not report and a UDID cannot stand in for.
