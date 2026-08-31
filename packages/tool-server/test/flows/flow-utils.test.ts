@@ -1086,11 +1086,11 @@ describe("output references", () => {
   });
 
   it("addresses a relation scope apart from the target it narrows", () => {
-    const fieldNamed = (yaml: string): string => {
+    const locatorNamed = (yaml: string): string => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /`([^`]+)` holds an output reference/.exec(
+        return /\): (.*?) holds an output reference/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1098,57 +1098,90 @@ describe("output references", () => {
     };
 
     expect(
-      fieldNamed('steps:\n  - await: { visible: { text: Ok, within: { text: "{{output:x}}" } } }\n')
-    ).toBe("await.visible.within.text");
+      locatorNamed(
+        'steps:\n  - await: { visible: { text: Ok, within: { text: "{{output:x}}" } } }\n'
+      )
+    ).toBe("`await.visible.within.text`");
     expect(
-      fieldNamed('steps:\n  - tap: { id: a, within: { id: b, after: { id: "{{output:x}}" } } }\n')
-    ).toBe("tap.within.after.id");
-  });
-
-  it("addresses a gesture target under `on:` exactly when the step spells it there", () => {
-    const fieldNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /`([^`]+)` holds an output reference/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    expect(fieldNamed('steps:\n  - tap: { id: "{{output:row}}" }\n')).toBe("tap.id");
-    expect(fieldNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
-      "tap.on.id"
-    );
-    expect(
-      fieldNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
-    ).toBe("long-press.on.id");
-    expect(fieldNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
-      "pinch.on.id"
-    );
-    expect(fieldNamed('steps:\n  - rotate: { on: { id: "{{output:map}}" }, by: 45 }\n')).toBe(
-      "rotate.on.id"
+      locatorNamed('steps:\n  - tap: { id: a, within: { id: b, after: { id: "{{output:x}}" } } }\n')
+    ).toBe(
+      "`tap.within.after.id` (spelled `tap.on.within.after.id` if the target sits under `on:`)"
     );
   });
 
-  it("names the constraint where two spellings parse the same", () => {
-    const fieldNamed = (yaml: string): string => {
+  it("addresses a gesture target under `on:` whenever the step is known to spell it there", () => {
+    const locatorNamed = (yaml: string): string => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /`([^`]+)` holds an output reference/.exec(
+        return /\): (.*?) holds an output reference/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
       throw new Error(`expected parseFlow to reject: ${yaml}`);
     };
 
-    expect(fieldNamed('steps:\n  - tap: "{{output:row}}"\n')).toBe("tap.text");
+    // An option beside the target proves the options form; `pinch` and
+    // `rotate` have no other form. Each of these names one path.
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
+      "`tap.on.id`"
+    );
     expect(
-      fieldNamed('steps:\n  - scroll-to: { target: "{{output:row}}", direction: down }\n')
-    ).toBe("scroll-to.target.text");
-    expect(fieldNamed('steps:\n  - tap: { on: { id: "{{output:row}}" } }\n')).toBe("tap.id");
+      locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
+    ).toBe("`long-press.on.id`");
+    expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
+      "`pinch.on.id`"
+    );
+    expect(locatorNamed('steps:\n  - rotate: { on: { id: "{{output:map}}" }, by: 45 }\n')).toBe(
+      "`rotate.on.id`"
+    );
+  });
+
+  it("names both gesture spellings when the parse cannot tell them apart", () => {
+    // A `tap`/`long-press` step with no option beside its target parses the
+    // same from either form, so exactly one of these two paths is in the
+    // author's file and the parse cannot say which. `times: 1` and an omitted
+    // `duration` are the shapes that reach this: both normalize away.
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) holds an output reference/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(locatorNamed('steps:\n  - tap: { id: "{{output:row}}" }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 1 }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(
+      "`long-press.id` (spelled `long-press.on.id` if the target sits under `on:`)"
+    );
+  });
+
+  it("names the constraint a bare-string target parses into", () => {
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) holds an output reference/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(locatorNamed('steps:\n  - tap: "{{output:row}}"\n')).toBe(
+      "`tap.text` (spelled `tap.on.text` if the target sits under `on:`)"
+    );
+    expect(
+      locatorNamed('steps:\n  - scroll-to: { target: "{{output:row}}", direction: down }\n')
+    ).toBe("`scroll-to.target.text`");
   });
 
   it("names the step, so a reference inside a block says which one", () => {

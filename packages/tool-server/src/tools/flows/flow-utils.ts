@@ -2627,6 +2627,12 @@ const OUTPUT_REFERENCE_MARKER = "{{output:";
 
 interface StepField {
   where: string;
+  /**
+   * A second spelling of the same field, when the parse cannot tell which one
+   * the author wrote. Set only by the gesture targets — see
+   * {@link gestureTargetPath}.
+   */
+  altWhere?: string;
   value: string;
 }
 
@@ -2690,14 +2696,24 @@ function* argFields(
   seen.delete(value);
 }
 
+/**
+ * Where a gesture step's target sits in the file: `tap.on` for the options
+ * form, `tap` for the bare one.
+ *
+ * `pinch` and `rotate` have only the options form, so those are certain. `tap`
+ * and `long-press` take both, and the parsed step keeps no record of which was
+ * written — `duration` is optional in long-press's options form and `times: 1`
+ * normalizes to `undefined`, so a step carrying neither could have been spelled
+ * either way. Naming one spelling there would name a path that is not in the
+ * author's file, so `alt` carries the other and the refusal offers both.
+ */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
-): string {
-  const wrapped =
-    step.kind === "pinch" ||
-    step.kind === "rotate" ||
-    (step.kind === "tap" ? step.times !== undefined : step.duration !== undefined);
-  return wrapped ? `${step.kind}.on` : step.kind;
+): { path: string; alt?: string } {
+  if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
+  const option = step.kind === "tap" ? step.times : step.duration;
+  if (option !== undefined) return { path: `${step.kind}.on` };
+  return { path: step.kind, alt: `${step.kind}.on` };
 }
 
 function* conditionFields(
@@ -2751,9 +2767,16 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
     case "tap":
     case "long-press":
     case "pinch":
-    case "rotate":
-      if (step.selector) yield* selectorFields(step.selector, gestureTargetPath(step));
+    case "rotate": {
+      if (!step.selector) return;
+      const { path, alt } = gestureTargetPath(step);
+      for (const field of selectorFields(step.selector, path)) {
+        // Every path this walk yields opens with `path`, so the alternative
+        // spelling is that prefix swapped for the other one.
+        yield alt ? { ...field, altWhere: `${alt}${field.where.slice(path.length)}` } : field;
+      }
       return;
+    }
     case "scroll-to":
       yield* selectorFields(step.target, "scroll-to.target");
       if (step.within) yield* selectorFields(step.within, "scroll-to.within");
@@ -2800,8 +2823,11 @@ function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void
         field.value.length > MAX_ENTRY_RENDER_CHARS
           ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
           : field.value;
+      const locator = field.altWhere
+        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+        : `\`${field.where}\``;
       throw new FailureError(
-        `Step ${at.join(".")} (\`${step.kind}\`): \`${field.where}\` holds an output reference ` +
+        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} holds an output reference ` +
           `(\`${OUTPUT_REFERENCE_MARKER}…}}\`), which arrives with a later release — this one has ` +
           `no flow output to read, so the text would be used literally and the step would pass ` +
           `having done the wrong thing. Remove it and write the value the flow needs: ` +
