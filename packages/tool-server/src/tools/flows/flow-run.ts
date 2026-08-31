@@ -2635,8 +2635,8 @@ async function execLeafStep(
         }
         // A debugger tool that succeeded carrying a `note` reports either a
         // session that ended holding console logs, whose record the read spent —
-        // so a note left in the result alone is lost — or a log file this
-        // session has no path to on disk, which no read spends. The default CLI
+        // so a note left in the result alone is lost — or this session's own log
+        // file not being on disk, which no read spends. The default CLI
         // renderer prints a step's `reason` and nothing else of it, and
         // `warning` is what puts a line under a passing one.
         const takenNote = takenDebuggerNote(step.name, result);

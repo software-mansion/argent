@@ -295,7 +295,7 @@ steps:
     // contract requires resolving every passing-step warning. The two debugger
     // tools answer with one only where something IS wrong: a reaped session's
     // record, which the read spends, or a log file that is not on disk, which
-    // returns until the reader repairs the directory.
+    // returns for the rest of the session whatever is done to the directory.
     const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
     const file = path.join(flowsDir, "profiler.yaml");
     await fs.mkdir(flowsDir, { recursive: true });

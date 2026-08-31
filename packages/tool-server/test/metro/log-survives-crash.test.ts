@@ -818,6 +818,56 @@ describe("console logs across an app crash", () => {
     }
   });
 
+  it("keeps saying so after the directory is repaired and the caller reconnects", async (ctx) => {
+    // What five prose sites and this tool's own note promise: repairing
+    // `~/.argent/tmp` does not bring the file back, and `debugger-connect` is
+    // not the way to get one, because it hands back the live session. `open()`
+    // runs once, from the constructor, and the write below is what would reopen
+    // it if anything did - which is the half no other case covers.
+    const logs = logDir();
+    fs.mkdirSync(logs, { recursive: true });
+    fs.chmodSync(logs, 0o555);
+    if (!modeBites(logs)) {
+      fs.chmodSync(logs, 0o755);
+      ctx.skip();
+    }
+    try {
+      await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "repair-device" });
+      const before = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "repair-device",
+      })) as { file: string; note?: string };
+      expect(before.note).toContain("There is no log file at");
+
+      fs.chmodSync(logs, 0o755);
+      // Logging again is what would reopen it, if anything did.
+      cdpConn!.send(
+        JSON.stringify({
+          method: "Runtime.consoleAPICalled",
+          params: {
+            type: "error",
+            args: [{ type: "string", value: "logged after the repair" }],
+            executionContextId: 1,
+            timestamp: Date.now(),
+          },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "repair-device" });
+
+      const after = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "repair-device",
+      })) as { file: string; note?: string };
+      // Same writer, so the same path it could never create.
+      expect(after.file).toBe(before.file);
+      expect(fs.existsSync(after.file)).toBe(false);
+      expect(after.note).toContain("There is no log file at");
+    } finally {
+      fs.chmodSync(logs, 0o755);
+    }
+  });
+
   it("corrects the promise when the sweep took the file before anyone read the note", async () => {
     // The breadcrumb keeps the path apart from the prose so the read can check
     // it: a breadcrumb has no expiry and a kept log is swept once it is a day
