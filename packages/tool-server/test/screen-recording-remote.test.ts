@@ -6,7 +6,7 @@ import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/regist
 
 vi.mock("../src/utils/sim-remote", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/sim-remote")>();
-  return { ...actual, streamRecordStart: vi.fn(), streamRecordStop: vi.fn() };
+  return { ...actual, screenRecordStart: vi.fn(), screenRecordStop: vi.fn() };
 });
 // The post-pass is exercised through its absence here (no ffmpeg -> the raw
 // download is handed over with a warning); the graph itself has its own tests.
@@ -27,7 +27,7 @@ import {
   startRemoteCapture,
   stopRemoteCapture,
 } from "../src/tools/screen-recording/capture-remote";
-import { streamRecordStart, streamRecordStop } from "../src/utils/sim-remote";
+import { screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
@@ -35,8 +35,8 @@ import {
 import { __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
-const mockStart = vi.mocked(streamRecordStart);
-const mockStop = vi.mocked(streamRecordStop);
+const mockStart = vi.mocked(screenRecordStart);
+const mockStop = vi.mocked(screenRecordStop);
 
 const REMOTE_UDID = "remote:6DBF83B4-0000-0000-0000-000000000000";
 
@@ -54,7 +54,7 @@ async function makeSession(): Promise<ScreenRecordingSessionApi> {
   return instance.api;
 }
 
-/** Make `streamRecordStop` produce a plausible mp4 at the path it is given. */
+/** Make `screenRecordStop` produce a plausible mp4 at the path it is given. */
 function stopWritesVideo(bytes = "mp4 bytes"): void {
   mockStop.mockImplementation(async (_udid: string, outputFile: string) => {
     await fs.writeFile(outputFile, bytes);
@@ -91,10 +91,7 @@ describe("remote screen recording", () => {
     });
 
     expect(started.status).toBe("recording");
-    expect(mockStart).toHaveBeenCalledWith(REMOTE_UDID, {
-      showTouches: true,
-      bufferMb: expect.any(Number),
-    });
+    expect(mockStart).toHaveBeenCalledWith(REMOTE_UDID, { showTouches: true });
     // The reminder has to point at the capture for its whole life, the same as
     // a local one — nothing else tells the agent a recording is still running.
     expect(getActiveScreenRecordings()).toHaveLength(1);
@@ -114,10 +111,7 @@ describe("remote screen recording", () => {
       trimStatic: false,
       showTouches: false,
     });
-    expect(mockStart).toHaveBeenCalledWith(REMOTE_UDID, {
-      showTouches: false,
-      bufferMb: expect.any(Number),
-    });
+    expect(mockStart).toHaveBeenCalledWith(REMOTE_UDID, { showTouches: false });
   });
 
   /**
