@@ -269,9 +269,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         // `ChromiumJsRuntimeDebugger` joined `DEVICE_OWNED_NAMESPACES` it is
         // routinely triggered by another agent's `stop-all-simulator-servers`.
         // Without it `debugger-log-registry` reports `totalEntries: 0` with no
-        // note — and its description promises that, absent the note, empty
-        // means the app logged nothing. That promise covers V8 as much as
-        // Hermes, so this side has to keep it too. The next resolve always
+        // note, and its description reads a bare zero as "nothing captured
+        // since this session began" — with nothing to say the session changed,
+        // the reader takes that for the one that died. The next resolve always
         // builds a fresh writer over a new path, so the count restarts at 0
         // whether or not the old file survives below.
         //

@@ -128,6 +128,44 @@ describe("guidance content", () => {
     }
   );
 
+  // Both tools, not only the conditional one. `debugger-log-registry` reads a
+  // record only from an EMPTY registry, so on the prescribed route — relaunch,
+  // then read — the relaunched app's first line makes it withhold and hand the
+  // record to `debugger-connect` instead. A pointer naming the registry alone
+  // is right up to the relaunch and wrong after it, and these strings are the
+  // whole of what `debugger-status` and a flow-run step line hand over.
+  it.each([
+    ["no_app_connected", "emulator-5554"],
+    ["no_app_connected", "chromium-cdp-9222"],
+    ["device_mismatch", "emulator-5554"],
+    ["device_mismatch", "chromium-cdp-9222"],
+    ["stale_connection", "emulator-5554"],
+    ["stale_connection", "chromium-cdp-9222"],
+    ["cdp_unreachable", "emulator-5554"],
+  ] as const)("%s guidance on %s names both tools that report the note", (reason, device_id) => {
+    const { guidance } = buildNotConnected(reason, coded(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS), {
+      port: 8081,
+      device_id,
+    });
+    expect(guidance).toContain("debugger-log-registry");
+    expect(guidance).toContain("or debugger-connect's note");
+  });
+
+  // Chromium's `cdp_unreachable` is the exception, and deliberately: its device
+  // id IS the CDP port, and `boot-device` draws a free one, so the connect after
+  // a relaunch there is asking under an id the record was never filed under.
+  // Pointing at it would name a route that cannot reach the file.
+  it("cdp_unreachable on Chromium points only at the read that can still reach the record", () => {
+    const { guidance } = buildNotConnected(
+      "cdp_unreachable",
+      coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
+      { port: 8081, device_id: "chromium-cdp-9222" }
+    );
+    expect(guidance).toContain("debugger-log-registry's note names it");
+    expect(guidance).toContain("relaunching on a port boot-device picks strands it");
+    expect(guidance).not.toContain("debugger-connect's");
+  });
+
   // And scoped to the sessions that keep one: `keepFile` is
   // `runtimeDied && captured > 0`, so an explicit teardown deletes the file
   // however much it had captured. Promising the file to every session that

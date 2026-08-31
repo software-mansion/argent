@@ -52,7 +52,7 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 ## Limits
 
 - Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
-- If the app's JS runtime dies, Argent keeps the log file of the crashed session. The `debugger-log-registry` tool reports the path of that file in its note. The agent reads it before relaunching the app. Argent removes the file after one day.
+- If the app's JS runtime dies after the app logged something, Argent keeps the log file of that session. The agent gets the path of that file in a note, and reads the file to see the logs from before the crash. Argent removes the file at the next debugger session that finds it one day old. A second crash on the same device can remove it earlier.
 - The native view tree is available on iOS only.
 - The agent connects to one app at a time.
 

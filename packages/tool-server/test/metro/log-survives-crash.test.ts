@@ -58,6 +58,14 @@ vi.mock("node:http", async (importOriginal) => {
   };
 });
 
+/**
+ * Metro's echoed id for the mock target, for the cases that need the two-id
+ * shape a real iOS/Android device has — a caller-supplied udid or serial that
+ * is not the `logicalDeviceId`. `JSON.stringify` drops it while it is
+ * undefined, so every other case sees the target it always did.
+ */
+let logicalDeviceId: string | undefined;
+
 const logDir = () => path.join(os.homedir(), ".argent", "tmp");
 
 /**
@@ -155,7 +163,7 @@ beforeAll(async () => {
               description: "[C++ connection]",
               webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=0&page=1`,
               deviceName: "MockDevice",
-              reactNative: { capabilities: { prefersFuseboxFrontend: true } },
+              reactNative: { logicalDeviceId, capabilities: { prefersFuseboxFrontend: true } },
             },
           ])
         );
@@ -379,6 +387,108 @@ describe("console logs across an app crash", () => {
       device_id: "replaced-crash",
     })) as { note?: string };
     expect(replaced.note).toContain("An earlier session that answered here");
+  });
+
+  it("reclaims the first crash's log when the app dies again before anything read it", async () => {
+    // The crash loop the disposer's two-id filing and the store's supersede
+    // rule are both written for, driven end to end. Every other case here
+    // connects to a target with no `logicalDeviceId`, so the disposer files one
+    // key and no second death can land on the first's record; a real
+    // iOS/Android device answers to two ids, and the second death has to
+    // recognise the first through both of them, the same port scope, and a
+    // `keptAt` of its own. Otherwise a crash loop leaves one orphaned log per
+    // round in ~/.argent/tmp with nothing naming any of them.
+    //
+    // No `debugger-connect` between the two deaths: connect spends the
+    // breadcrumb, which would leave the second death nothing to supersede. The
+    // relaunched session is minted the way every other debugger tool mints one.
+    __resetReapedSessionsForTesting();
+    logicalDeviceId = "logical-crashloop";
+    try {
+      await registry.invokeTool("debugger-connect", {
+        port: mockPort,
+        device_id: "crashloop-device",
+      });
+      const first = await resolveDebuggerService(registry, {
+        port: mockPort,
+        device_id: "crashloop-device",
+      });
+      // The premise: this really is the two-id shape, so the disposer files
+      // both keys rather than one.
+      expect(first.logicalDeviceId).toBe("logical-crashloop");
+      expect(first.logicalDeviceId).not.toBe("crashloop-device");
+
+      cdpConn!.send(
+        JSON.stringify({
+          method: "Runtime.consoleAPICalled",
+          params: {
+            type: "error",
+            args: [{ type: "string", value: "CRITICAL first-crash error" }],
+            executionContextId: 1,
+            timestamp: Date.now(),
+          },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      const { file: firstLog } = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "crashloop-device",
+      })) as { file: string };
+
+      cdpConn!.terminate();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(fs.existsSync(firstLog)).toBe(true);
+
+      // Round two, on the relaunched app, with the first round still unread.
+      await resolveDebuggerService(registry, { port: mockPort, device_id: "crashloop-device" });
+      cdpConn!.send(
+        JSON.stringify({
+          method: "Runtime.consoleAPICalled",
+          params: {
+            type: "error",
+            args: [{ type: "string", value: "CRITICAL second-crash error" }],
+            executionContextId: 1,
+            timestamp: Date.now(),
+          },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      const { file: secondLog } = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "crashloop-device",
+      })) as { file: string };
+      expect(secondLog).not.toBe(firstLog);
+
+      cdpConn!.terminate();
+      await new Promise((r) => setTimeout(r, 500));
+
+      // One file per device, not one per round.
+      expect(fs.existsSync(firstLog)).toBe(false);
+      expect(fs.existsSync(secondLog)).toBe(true);
+
+      // Read back under the id Metro echoed rather than the one the connect
+      // used: the supersede has to have landed on the whole of the first
+      // event, including the key this read is the only one that reaches.
+      const after = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "logical-crashloop",
+      })) as { note?: string };
+
+      // The surviving file, named and readable.
+      expect(after.note).toContain(secondLog);
+      expect(after.note).toContain("grep that file for the 1 captured console entry it holds");
+      // And the round it replaced: counted as one, and its file reported taken
+      // rather than left where only a listing of ~/.argent/tmp could reach it.
+      expect(after.note).toContain("An earlier session that answered here");
+      expect(after.note).not.toContain("2 earlier sessions");
+      expect(after.note).toContain("The log file it kept went with it");
+      expect(after.note).not.toContain("named by nothing");
+      expect(fs.readFileSync(secondLog, "utf-8")).toContain("CRITICAL second-crash error");
+
+      fs.rmSync(secondLog, { force: true });
+    } finally {
+      logicalDeviceId = undefined;
+    }
   });
 
   it("reports the kept file from debugger-connect, the step crash recovery prescribes", async () => {
@@ -835,7 +945,10 @@ describe("console logs across an app crash", () => {
       device_id: "spelled-device",
     })) as { note?: string };
 
+    // The path, and a file actually there to be read at it: the reclaimed
+    // wording names `keptAt` too, so the path alone is satisfied by a deletion.
     expect(after.note).toContain(logPath);
+    expect(fs.existsSync(logPath)).toBe(true);
 
     fs.rmSync(logPath, { force: true });
   });

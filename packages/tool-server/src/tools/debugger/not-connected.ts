@@ -53,7 +53,8 @@ const CDP_UNREACHABLE_RECOVERY =
   "(launch-app), then call debugger-connect and retry once.";
 const CDP_UNREACHABLE_NOTE_POINTER =
   " Before you relaunch anything: a session whose runtime died holding console logs keeps " +
-  "its file, and debugger-log-registry's note names it.";
+  "its file, and debugger-log-registry's note names it — or debugger-connect's note, once the relaunched " +
+  "app has logged.";
 const CHROMIUM_CDP_UNREACHABLE_RECOVERY =
   "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
   "detail). launch-app cannot start a Chromium app; make sure the app is running " +
@@ -79,7 +80,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   no_app_connected:
     "Metro is running but no app is attached. A crashed app reads as this too, and a session " +
     "whose runtime died holding console logs keeps its file: read debugger-log-registry's note " +
-    "before relaunching, since it names that file when there is one. Do not retry immediately — " +
+    "before relaunching, since it names that file when there is one — or debugger-connect's note, once the " +
+    "relaunched app has logged. Do not retry immediately — " +
     "launch or restart the RN app on the target device (launch-app / restart-app), wait a few " +
     "seconds for the bundle to load, then retry once.",
   device_mismatch:
@@ -87,7 +89,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "share the port, a target is matched by its logicalDeviceId alone, so a list-devices udid " +
     "or serial is refused every time. A dead session's console-log record is filed under every " +
     "id its device answered to, and a re-target asks under another device's — read " +
-    "debugger-log-registry's note with this same device_id first. Then re-target with a " +
+    "debugger-log-registry's note with this same device_id first, or debugger-connect's note " +
+    "once a session on that id is logging again. Then re-target with a " +
     "logicalDeviceId from the detail message, or give the device its own Metro port, which is " +
     "the only route for a legacy inspector that reports no logicalDeviceId at all.",
   cdp_unreachable: CDP_UNREACHABLE_RECOVERY + CDP_UNREACHABLE_NOTE_POINTER,
@@ -99,7 +102,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. That discard keeps " +
     "whatever console log the session had captured, and debugger-log-registry's note names the " +
-    "file when there is one. Restart the app (restart-app) if it is not running, then call " +
+    "file when there is one — or debugger-connect's note, once the app is logging again. Restart the app " +
+    "(restart-app) if it is not running, then call " +
     "debugger-connect — the next call reconnects fresh.",
   reconnecting:
     "The debugger connection is being re-established (the previous one was torn down or a " +
