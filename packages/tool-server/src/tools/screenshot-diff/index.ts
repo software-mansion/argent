@@ -47,13 +47,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live at full resolution. With a current side it is diffed straight away; with no current side (no currentPath, no captureCurrent) it is staged for this udid and the call returns without comparing. Cannot be combined with captureCurrent."
+        "Capture the baseline screenshot live. With a current side it is diffed straight away; with no current side (no currentPath, no captureCurrent) it is staged for this udid and the call returns without comparing. Cannot be combined with captureCurrent."
       ),
     captureCurrent: z.coerce
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live at full resolution before diffing. With no baseline side it is compared against the baseline staged for this udid. Cannot be combined with captureBaseline."
+        "Capture the current screenshot live before diffing. With no baseline side it is compared against the baseline staged for this udid. Cannot be combined with captureBaseline."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -107,7 +107,7 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary, or stage a live baseline for a later comparison.
-Accepts saved baseline/current PNG paths, or a live full-resolution capture from a device on either side. Always provide udid so the simulator-server dependency can be resolved.
+Accepts saved baseline/current PNG paths, or a live capture from a device on either side. Always provide udid so the simulator-server dependency can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For the visual-regression flow, call it twice: captureBaseline: true with no current side stages the baseline for this udid, then captureCurrent: true with no baseline side compares the live screen against it. Set at most one of captureBaseline or captureCurrent per call.
 Returns { summary, diffPath, contextDiffPath }; a staging call returns { summary } alone. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display. A comparison against a staged baseline opens with that baseline's udid, capture time and age.
