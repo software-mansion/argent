@@ -51,7 +51,7 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 4: Verify no regressions
 
-Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `argent-device-interact`. Use `debugger-log-registry` to check for runtime errors (read its `note` first whatever the `status` — it names the log file a dead session kept, when it kept one, so a zero count on the session that replaced it is not evidence; on `status: "not_connected"` there is no log file of its own, so follow its `guidance`) and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
+Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `argent-device-interact`. Use `debugger-log-registry` to check for runtime errors (read its `note` first whatever the `status` — it names the log file a dead session kept, when it kept one, so a zero count on the session that replaced it is not evidence, and on `status: "connected"` it also reports this session's own log file missing from disk, which leaves `file` with nothing to grep; on `status: "not_connected"` there is no log file of its own, so follow its `guidance`) and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
 
 ## App-wide optimization
 

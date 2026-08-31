@@ -267,8 +267,9 @@ export async function resolveDebuggerService(
  * or raise nowhere. Both report the record a reaped session left and spend it
  * in the reading, so no later call names that kept log again.
  * `debugger-log-registry` answers with a second kind beside it, that its own
- * log file is not on disk, which nothing spends: a live fault, recomputed per
- * call, so that one returns until the directory is writable again.
+ * log file is not on disk, which nothing spends: the writer opens its file once,
+ * so that one returns for the rest of the session whatever is done to the
+ * directory meanwhile.
  *
  * By tool id, the way {@link isDebuggerNotConnectedResult} is. `note` is a
  * generic name on an `unknown` result, and other tools answer with one on their

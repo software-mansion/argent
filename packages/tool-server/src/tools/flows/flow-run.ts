@@ -199,8 +199,10 @@ export interface StepReport {
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
    * from one that waited. Also carries the `note` of a `debugger-connect` or
-   * `debugger-log-registry` step that succeeded: those two spend the record as
-   * they read it, so what it says is reported nowhere else.
+   * `debugger-log-registry` step that succeeded. Either a reaped session's
+   * record, which the read spends, so what it says is reported nowhere else; or,
+   * from the registry alone, that this session's own log file is not on disk,
+   * which nothing spends and which returns for the rest of the session.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -2631,11 +2633,12 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        // A debugger tool that succeeded carrying a `note` settles a session
-        // that ended holding console logs, and the read that produced the note
-        // spent the record — so a note left in the result alone is lost. The
-        // default CLI renderer prints a step's `reason` and nothing else of it,
-        // and `warning` is what puts a line under a passing one.
+        // A debugger tool that succeeded carrying a `note` reports either a
+        // session that ended holding console logs, whose record the read spent —
+        // so a note left in the result alone is lost — or a log file this
+        // session has no path to on disk, which no read spends. The default CLI
+        // renderer prints a step's `reason` and nothing else of it, and
+        // `warning` is what puts a line under a passing one.
         const takenNote = takenDebuggerNote(step.name, result);
         return {
           ...base,
