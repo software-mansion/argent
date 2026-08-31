@@ -174,8 +174,14 @@ async function scriptFileProblem(canonical: string): Promise<string | null> {
  * `cancelled` is an `error`, not a `skip`: every reader of a report takes
  * `skip` to mean the step did not run (the CLI's not-executed line,
  * `FlowRunResult.skipped`), and a script killed after reaching the system it
- * talks to left that state behind. The genuine "did not run" case never
- * reaches the executor — `execSteps` skips it at its own pre-step abort gate.
+ * talks to left that state behind. A cancellation also lands on the near side
+ * of the fork — a signal already aborted when the call arrived, or one raised
+ * while the step waited for a concurrency slot — and the status does not try to
+ * separate the two: `beforeFork` does, and {@link scriptRan} is what reads it.
+ * What a runner marks `skip` is the step it never dispatched, at its own
+ * pre-step abort gate; `flow-add-script` has no such gate and hands its
+ * request's signal straight in, so an abort that arrived before the call does
+ * reach here.
  *
  * Notes ride into the reason on every outcome, pass included. They are how the
  * executor says a time limit was clamped to the host's maximum, or that the
