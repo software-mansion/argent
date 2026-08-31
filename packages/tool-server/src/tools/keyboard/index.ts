@@ -24,9 +24,7 @@ import { vegaImpl } from "./platforms/vega";
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
-    ),
+    .describe("Target device id (iOS UDID, Android serial, Vega serial, or Chromium id)."),
   text: z
     .string()
     .optional()

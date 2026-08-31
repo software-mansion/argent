@@ -23,7 +23,7 @@ const MOMENTUM_FREE_MIN_STEPS = 8;
 const MAX_DURATION_MS = 10_000;
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
+  udid: z.string().describe("Target Chromium device id (chromium-cdp-<port>)."),
   fromX: z.number().describe("Press x: normalized 0.0–1.0 (fraction of window width, not pixels)."),
   fromY: z
     .number()

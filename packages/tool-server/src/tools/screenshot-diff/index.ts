@@ -34,10 +34,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe("Path to the current PNG file. Required unless captureCurrent is true."),
-    udid: z
-      .string()
-      .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    udid: z.string().min(1).describe("Target device id (iOS UDID or Android serial)."),
     captureBaseline: z.coerce
       .boolean()
       .optional()

@@ -1,15 +1,16 @@
 /**
- * The one arg name auto-targeting fills in. `device_id` is deliberately absent:
- * on the debugger and profiler tools that spell it, it is a Metro/CDP LOGICAL
- * device id, which is neither a simulator UDID nor an adb serial and cannot be
- * read off `list-devices` at all.
+ * The one arg name auto-targeting fills in. `device_id` — the debugger and
+ * profiler spelling — is deliberately absent even though it holds the same
+ * `list-devices` id: those tools address a Metro/CDP session pinned by an
+ * earlier `debugger-connect` or `*-profiler-start`, so the device to use is the
+ * one that call named, not whichever is booted now.
  */
 export const AUTO_DEVICE_TARGET_PARAM = "udid";
 
 /** Appended to the param's own description, so the model reads the rule per tool. */
 const AUTO_DEVICE_TARGET_HINT =
-  "Optional when exactly one booted device supports this tool: omit it and the server " +
-  "resolves that device. Pass it whenever several are booted, or to name one explicitly.";
+  "Optional: omit it and the server runs against the one booted device this tool supports. " +
+  "Pass it to choose between several, or when the call is refused as ambiguous.";
 
 /**
  * Rewrite a derived JSON Schema so `udid` reads as optional and says why, or
@@ -39,12 +40,18 @@ export function relaxAutoDeviceTarget(
   const described = (udid as { description?: unknown }).description;
   const prefix = typeof described === "string" && described ? `${described} ` : "";
 
-  return {
+  const remaining = (required as string[]).filter((k) => k !== AUTO_DEVICE_TARGET_PARAM);
+  const relaxed: Record<string, unknown> = {
     ...inputSchema,
     properties: {
       ...props,
       [AUTO_DEVICE_TARGET_PARAM]: { ...udid, description: `${prefix}${AUTO_DEVICE_TARGET_HINT}` },
     },
-    required: (required as string[]).filter((k) => k !== AUTO_DEVICE_TARGET_PARAM),
+    required: remaining,
   };
+  // `udid` was the only required arg on ten of these. The generator omits
+  // `required` entirely when it would be empty, and draft-04 validators reject
+  // an empty array outright, so drop the key rather than advertise `[]`.
+  if (remaining.length === 0) delete relaxed.required;
+  return relaxed;
 }

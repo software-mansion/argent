@@ -6,7 +6,7 @@ import { sendTouchEvent } from "../../utils/gesture-utils";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().describe("Target device id (iOS UDID or Android serial)."),
   centerX: z
     .number()
     .describe(

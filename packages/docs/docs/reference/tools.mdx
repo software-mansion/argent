@@ -12,9 +12,11 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Choosing the device
 
-Every tool that acts on a device takes a `udid`: an iOS simulator UDID, an Android serial, a Vega serial, or a `chromium-cdp-<port>` id. The argument is optional. When it is left out, Argent acts on the one booted device that supports the tool, so the common case of a single simulator needs no device id at all - not in the agent's tool calls, and not on the `argent run` command line.
+The interaction tools name their target with a `udid`: an iOS simulator UDID, an Android serial, a Vega serial, or a `chromium-cdp-<port>` id. The argument is optional. When it is left out, Argent acts on the one booted device that supports the tool, so the common case of a single simulator needs no device id at all - not in the agent's tool calls, and not on the `argent run` command line.
 
-Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it supports, and only booted devices that pass that declaration are candidates: a Chromium tool still resolves with a phone booted alongside the browser, because the phone was never a candidate for it. When no candidate is booted, or when more than one is, the call fails and the error lists the devices, so the next call can name one.
+Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it supports, and only booted devices that pass that declaration are candidates: a Chromium tool still resolves with a phone booted alongside the browser, because the phone was never a candidate for it. That declaration covers platform and device kind, not form factor - an Apple TV simulator is an Apple simulator like any other - so name the device yourself when a TV and a phone are booted together. When no candidate is booted, or when more than one is, the call fails and the error lists the devices, so the next call can name one.
+
+Three groups keep an explicit target. `boot-device` treats a missing `udid` as "boot by `avdName`, `vvdImage` or `electronAppPath`" instead. The debugger and profiler tools spell it `device_id` and address the session an earlier `debugger-connect` or `*-profiler-start` pinned, so they stay bound to the device that call named. And a flow step, or a `run-sequence` step, is always replayed against the device the flow resolved, never against whatever happens to be booted.
 
 ## Devices and apps
 

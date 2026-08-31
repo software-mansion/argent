@@ -11,9 +11,7 @@ import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { stopCapture } from "./capture";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+  udid: z.string().describe("Target device id (iOS Simulator UDID or Android serial)."),
 });
 
 /**

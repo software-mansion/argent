@@ -13,13 +13,13 @@ Verify with `adb version` and `emulator -list-avds`.
 
 ## 2. Setup
 
-1. **Find a ready device** — call `list-devices`. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. Pick the first `serial` (e.g. `emulator-5554`) unless the user specified one.
+1. **Find a ready device** — with one device ready you can skip this: the interaction tools take `udid` as an optional argument and resolve it themselves. Call `list-devices` when you have to choose, or to see whether anything is up at all. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. Pick the first `serial` (e.g. `emulator-5554`) unless the user specified one.
 2. **Boot if needed** — if nothing Android is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list. The tool transparently picks hot vs cold boot: it probes the AVD's `default_boot` snapshot, restores it under a tight deadline when usable, and falls back to a full cold boot otherwise. Hot path is typically ~30s; cold path takes 2–10 min. On any stage failure the tool kills the emulator process it started so your next call starts from a clean state.
 3. **Metro (for React Native)** — once a device is up, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the device can reach Metro on your host. Repeat if the device restarts. See the `argent-metro-debugger` skill.
 
 ## 3. Using the device
 
-Pass the Android serial as `udid` to the unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. Dispatch is automatic based on the id shape. See `argent-device-interact` for platform-neutral interaction tooling and the Android-specific gotchas section at the bottom of that skill.
+The unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. — take the Android serial as `udid`, and it is optional: omit it and the server uses the one ready device that supports the tool. Pass it to pick one of several. Dispatch is automatic based on the id shape. See `argent-device-interact` for platform-neutral interaction tooling and the Android-specific gotchas section at the bottom of that skill.
 
 ## 4. Notes
 

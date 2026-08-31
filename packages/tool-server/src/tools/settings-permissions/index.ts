@@ -12,10 +12,7 @@ import { androidImpl } from "./platforms/android";
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS simulator UDID or Android serial)."),
+  udid: z.string().min(1).describe("Target device id (iOS simulator UDID or Android serial)."),
   action: z
     .enum(PERMISSION_ACTIONS)
     .describe(

@@ -8,9 +8,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z
   .object({
-    udid: z
-      .string()
-      .describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
+    udid: z.string().describe("Target Chromium device id (chromium-cdp-<port>)."),
     x: z
       .number()
       .describe(

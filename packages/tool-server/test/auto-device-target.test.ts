@@ -8,10 +8,16 @@ import { createRegistry } from "../src/utils/setup-registry";
 const IPHONE = "6DBF83B4-0000-4000-8000-00000000AAAA";
 const ANDROID = "emulator-5554";
 const CHROMIUM = "chromium-cdp-9222";
+const REMOTE = "remote:6DBF83B4-0000-4000-8000-00000000BBBB";
 
 type Listed = { platform: string; state?: string; udid?: string; serial?: string; id?: string };
 
 const iphone = (state = "Booted"): Listed => ({ platform: "ios", state, udid: IPHONE });
+const remoteIphone = (state = "Booted"): Listed => ({
+  platform: "ios-remote",
+  state,
+  udid: REMOTE,
+});
 const android = (state = "device"): Listed => ({ platform: "android", state, serial: ANDROID });
 const chromium = (): Listed => ({ platform: "chromium", state: "Running", id: CHROMIUM });
 
@@ -47,12 +53,12 @@ describe("the advertised schema relaxes `udid` while the zod schema keeps it", (
   it("drops udid from the advertised required list and says why", () => {
     const { registry } = harness([]);
     const schema = registry.getTool("poke")!.inputSchema as {
-      required: string[];
+      required?: string[];
       properties: { udid: { description: string } };
     };
-    expect(schema.required).not.toContain("udid");
+    expect(schema.required ?? []).not.toContain("udid");
     expect(schema.properties.udid.description).toContain("Target device id.");
-    expect(schema.properties.udid.description).toMatch(/exactly one booted device/);
+    expect(schema.properties.udid.description).toMatch(/the one booted device this tool supports/);
   });
 
   it("still refuses a udid-less call that does not come through HTTP", async () => {
@@ -120,7 +126,7 @@ describe("the HTTP dispatcher fills in the single booted device", () => {
     const { app, execute } = harness([iphone("Shutdown")]);
     const res = await request(app).post("/tools/poke").send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/No booted device supports `poke`/);
+    expect(res.body.error).toMatch(/No booted device runs `poke`/);
     // The listing is the point: it replaces the `list-devices` call the agent
     // would otherwise have had to make to recover.
     expect(res.body.error).toContain(IPHONE);
@@ -132,7 +138,7 @@ describe("the HTTP dispatcher fills in the single booted device", () => {
     const { app, execute } = harness([iphone(), android()]);
     const res = await request(app).post("/tools/poke").send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/2 booted devices support `poke`/);
+    expect(res.body.error).toMatch(/2 booted devices match the platforms `poke` declares/);
     expect(res.body.error).toContain(IPHONE);
     expect(res.body.error).toContain(ANDROID);
     expect(execute).not.toHaveBeenCalled();
@@ -151,7 +157,7 @@ describe("the HTTP dispatcher fills in the single booted device", () => {
     const { app } = harness([chromium()], IOS_ONLY);
     const res = await request(app).post("/tools/poke").send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/No booted device supports `poke`/);
+    expect(res.body.error).toMatch(/No booted device runs `poke`/);
   });
 
   it("does not fill in for a tool whose udid is already optional", async () => {
@@ -256,5 +262,119 @@ describe("which registered tools auto-target", () => {
     );
     expect(deviceIdTools.length).toBeGreaterThan(0);
     expect(deviceIdTools.filter((def) => def.autoDeviceTargetParam !== undefined)).toEqual([]);
+  });
+});
+
+describe("the caller keeps a device id they can act on", () => {
+  it("echoes the resolved device, so a client that scopes work by it still has one", async () => {
+    // The MCP adapter keys its artifact directory and its post-interaction
+    // screenshot/describe off the device, reading only the args it sent.
+    const { app } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(200);
+    expect(res.body.device).toBe(IPHONE);
+  });
+
+  it("echoes nothing when the caller named the device itself", async () => {
+    const { app } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({ udid: IPHONE });
+    expect(res.status).toBe(200);
+    expect(res.body.device).toBeUndefined();
+  });
+});
+
+describe("a call that named a device is never re-targeted", () => {
+  // Zod strips unknown keys, so before auto-targeting each of these was a
+  // "udid is required" 400. Resolving a different device instead would run the
+  // action somewhere the caller never mentioned and report success.
+  it.each(["UDID", "udids", "device_udid", "deviceUdid"])(
+    "refuses rather than resolving past a `%s` key",
+    async (key) => {
+      const { app, execute } = harness([iphone()]);
+      const res = await request(app)
+        .post("/tools/poke")
+        .send({ [key]: ANDROID });
+      expect(res.status).toBe(400);
+      expect(execute).not.toHaveBeenCalled();
+      expect(res.body.message).toContain(key);
+    }
+  );
+
+  it("refuses when a body was sent but no parser claimed it", async () => {
+    // What `curl -d '{"udid":"..."}'` sends: `-d` defaults to form-urlencoded,
+    // so the args never become `req.body` and the id is already gone by here.
+    const { app, execute } = harness([iphone()]);
+    const res = await request(app)
+      .post("/tools/poke")
+      .set("Content-Type", "application/x-www-form-urlencoded")
+      .send(JSON.stringify({ udid: ANDROID }));
+    expect(res.status).toBe(400);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("still resolves for a genuinely empty request", async () => {
+    const { app, execute } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke");
+    expect(res.status).toBe(200);
+    expect(execute.mock.calls[0]![1].udid).toBe(IPHONE);
+  });
+});
+
+describe("the refusal names what it passed over", () => {
+  it("prints a remote simulator's id, and says why it was not chosen", async () => {
+    // `isBooted` reports a remote sim as not-booted, so without the note the
+    // listing shows `Booted` directly under "no booted device".
+    const { app } = harness([remoteIphone()]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain(REMOTE);
+    expect(res.body.error).not.toContain("?");
+    expect(res.body.error).toMatch(/remote simulator is never resolved automatically/);
+  });
+
+  it("claims only that the candidates match the platforms the tool declares", async () => {
+    // `capability` sees platform and kind, never form factor: it cannot tell an
+    // Apple TV simulator from an iPhone, so "supports this tool" would overstate it.
+    const { app } = harness([iphone(), android()]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.body.error).toMatch(/match the platforms `poke` declares/);
+    expect(res.body.error).not.toMatch(/devices support/);
+  });
+});
+
+describe("the advertised schema stays well-formed", () => {
+  it("omits `required` entirely when udid was the only entry", () => {
+    // The generator omits an empty `required`, and draft-04 validators reject
+    // `[]`, so the relaxed copy must not introduce one.
+    const { registry } = harness([]);
+    expect(registry.getTool("poke")!.inputSchema).not.toHaveProperty("required");
+  });
+
+  it("keeps the other required args when there are some", () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "two",
+      zodSchema: z.object({ udid: z.string(), x: z.number() }),
+      services: () => ({}),
+      async execute() {
+        return {};
+      },
+    });
+    expect((registry.getTool("two")!.inputSchema as { required: string[] }).required).toEqual([
+      "x",
+    ]);
+  });
+
+  it("leaves no registered tool advertising an empty required list", () => {
+    const registry = createRegistry();
+    const empty = registry
+      .getSnapshot()
+      .tools.map((id) => registry.getTool(id)!)
+      .filter((def) => {
+        const req = (def.inputSchema as { required?: unknown })?.required;
+        return Array.isArray(req) && req.length === 0;
+      })
+      .map((def) => def.id);
+    expect(empty).toEqual([]);
   });
 });

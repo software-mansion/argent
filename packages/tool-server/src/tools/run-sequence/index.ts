@@ -32,7 +32,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id) — shared across all steps."
+      "Target device id (iOS UDID, Android serial, Vega serial, or Chromium id) — shared across all steps."
     ),
   steps: z
     .array(

@@ -31,7 +31,7 @@ const MAX_DURATION_MS = 10_000;
 
 const zodSchema = z
   .object({
-    udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    udid: z.string().describe("Target device id (iOS UDID or Android serial)."),
     fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
     fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
     toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),

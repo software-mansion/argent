@@ -191,12 +191,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     message?: string;
     issues?: unknown;
     note?: string;
+    /** Set when the server resolved the device for a call that named none. */
+    device?: string;
   }
 
   async function callTool(
     name: string,
     args: unknown
-  ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
+  ): Promise<{ result: unknown; outputHint?: string; note?: string; device?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
 
@@ -229,7 +231,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     // belong in the agent's project, e.g. recorded flow YAMLs) and rewrite
     // them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);
-    return { result: data, outputHint: meta?.outputHint, note: json.note };
+    // `device` is present only when the tool-server resolved the target itself,
+    // for a call that named none. Everything below that scopes work by device
+    // reads the args it sent, which in that case hold no id.
+    return { result: data, outputHint: meta?.outputHint, note: json.note, device: json.device };
   }
 
   const server = new Server(
@@ -271,7 +276,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note, device } = await callTool(params.name, params.arguments);
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -285,7 +290,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       const ctx: ContentContext = {
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
-        deviceId: getDeviceIdFromArgs(params.arguments),
+        deviceId: getDeviceIdFromArgs(params.arguments) ?? device,
       };
 
       let content: ContentBlock[];
@@ -303,7 +308,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }
 
-      const udid = getUdidFromArgs(params.arguments);
+      // Falls back to the server-resolved device so omitting `udid` — which the
+      // tools now invite — still gets the post-action screenshot and element tree.
+      const udid = getUdidFromArgs(params.arguments) ?? device;
       const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
       const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {

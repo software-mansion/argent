@@ -10,10 +10,7 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+  udid: z.string().min(1).describe("Target device id (iOS UDID, Android serial, or Chromium id)."),
   url: z
     .string()
     .describe(

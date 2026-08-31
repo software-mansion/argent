@@ -31,7 +31,7 @@ Capture the stable baseline before the relevant interaction or before editing wh
 
 ## 4. Parameters
 
-Provide `udid` and exactly one input for the baseline side and exactly one input for the current side:
+Provide exactly one input for the baseline side and exactly one input for the current side. `udid` is optional - omit it and the server uses the one booted device that supports the tool; pass it to pick one of several:
 
 - Common UI regression flow: saved baseline plus live current -> `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
 - Both screenshots already saved -> `baselinePath`, `currentPath`, `udid`, `outputDir`.

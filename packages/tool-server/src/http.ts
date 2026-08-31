@@ -692,23 +692,56 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         throw err;
       }
 
+      // Above the auto-target rather than at the invoke, so the device enumeration
+      // it does is cancelled too: that fans out to simctl/adb/vega under a 25s
+      // deadline, and the MCP client gives up at 30s and retries.
+      const controller = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) controller.abort();
+      });
+
       // Auto-target: the advertised schema presents `udid` as optional for tools
       // that cannot run without one, so a caller may legitimately omit it. Fill
       // it in BEFORE validation, which is what lets the zod schema keep it
       // required — non-HTTP callers (flows, run-sequence) still have to name a
       // device, and every branch below this point sees a udid that is present.
+      //
+      // Two ways a caller who DID name a device looks like one who did not, each
+      // a "udid is required" 400 before this and a silent run on some other
+      // device after it: a near-miss key, since zod strips unknown ones, and a
+      // body express never parsed — what `curl -d` sends, its default being
+      // form-urlencoded.
+      const isPlainArgs =
+        typeof bodyArgs === "object" && bodyArgs !== null && !Array.isArray(bodyArgs);
+      const misspelledTarget =
+        def.autoDeviceTargetParam !== undefined && isPlainArgs
+          ? Object.keys(bodyArgs).find(
+              (k) =>
+                k !== def.autoDeviceTargetParam &&
+                k
+                  .toLowerCase()
+                  .replace(/[^a-z]/g, "")
+                  .includes(def.autoDeviceTargetParam!)
+            )
+          : undefined;
+      // `req.body` is undefined (not `{}`) exactly when no body parser claimed the
+      // request, so a declared payload that never became args is detectable here.
+      const droppedBody =
+        req.body === undefined && Number.parseInt(req.headers["content-length"] ?? "0", 10) > 0;
+
       const wantsAutoTarget =
         def.autoDeviceTargetParam !== undefined &&
-        typeof bodyArgs === "object" &&
-        bodyArgs !== null &&
-        !Array.isArray(bodyArgs) &&
-        bodyArgs[def.autoDeviceTargetParam] === undefined;
+        isPlainArgs &&
+        bodyArgs[def.autoDeviceTargetParam] === undefined &&
+        misspelledTarget === undefined &&
+        !droppedBody;
+      // Echoed back because the MCP adapter scopes its artifact directory and its
+      // post-action screenshot/describe by device, reading only the args it sent.
+      let autoResolvedDevice: string | undefined;
       if (wantsAutoTarget) {
         try {
-          bodyArgs = {
-            ...bodyArgs,
-            [def.autoDeviceTargetParam!]: await resolveAutoDeviceTarget(registry, undefined, def),
-          };
+          autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, controller.signal);
+          bodyArgs = { ...bodyArgs, [def.autoDeviceTargetParam!]: autoResolvedDevice };
         } catch (err) {
           if (err instanceof AutoDeviceTargetError) {
             emitHttpFailure(
@@ -726,6 +759,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           throw err;
         }
       }
+
+      const callerArgs = wantsAutoTarget
+        ? omitKeys(bodyArgs, [def.autoDeviceTargetParam!])
+        : bodyArgs;
 
       let parsedData = bodyArgs;
       if (def.zodSchema) {
@@ -748,7 +785,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           // attribution, the help block, exit 2, and `--json`'s object.
           res.status(400).json({
             error: parseResult.error.message,
-            message: describeParamIssues(parseResult.error, omitKeys(bodyArgs, derivedTargets)),
+            message: describeParamIssues(parseResult.error, omitKeys(callerArgs, derivedTargets)),
             issues: parseResult.error.issues,
           });
           return;
@@ -827,11 +864,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           throw err;
         }
       }
-
-      const controller = new AbortController();
-      res.on("close", () => {
-        if (!res.writableFinished) controller.abort();
-      });
 
       // A long-running tool (e.g. await_user_selection) can hold the request open
       // for many minutes. An in-flight invocation IS activity, so keep the idle
@@ -913,11 +945,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        const devicePayload = autoResolvedDevice ? { device: autoResolvedDevice } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({ event: "result", data, ...notePayload, ...devicePayload });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...devicePayload });
         }
       } catch (err: unknown) {
         if (wantsStream) {

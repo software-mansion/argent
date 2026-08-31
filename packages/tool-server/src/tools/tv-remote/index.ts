@@ -45,9 +45,7 @@ const buttonSchema = z
   );
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target TV device id from `list-devices` (Apple TV, Android TV, or Vega)."),
+  udid: z.string().describe("Target TV device id (Apple TV, Android TV, or Vega)."),
   button: buttonSchema,
   repeat: z
     .number()

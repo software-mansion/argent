@@ -6,7 +6,7 @@ import { resolveDevice } from "../../utils/device-info";
 import type { TabInfo } from "../../chromium-server";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
+  udid: z.string().describe("Chromium device id (e.g. `chromium-cdp-9222`)."),
   action: z
     .enum(["list", "select", "new", "close"])
     .describe(

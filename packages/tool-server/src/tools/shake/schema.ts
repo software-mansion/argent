@@ -7,9 +7,7 @@ export const shakeZodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS simulator UDID or Android emulator serial)."
-    ),
+    .describe("Target device id (iOS simulator UDID or Android emulator serial)."),
   count: z
     .number()
     .int()

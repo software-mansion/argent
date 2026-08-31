@@ -2,7 +2,13 @@ import type { Registry, ToolContext } from "@argent/registry";
 import { invokeSubTool } from "./sub-invoke";
 import { LAUNCH_PLATFORMS } from "../tools/flows/flow-utils";
 
-export type ListedPlatform = (typeof LAUNCH_PLATFORMS)[number];
+/**
+ * `list-devices` reports every {@link LAUNCH_PLATFORMS} entry plus `ios-remote`,
+ * which has no launch path of its own. Spelling that out keeps the `default`
+ * arm of {@link isBooted} live rather than looking like dead code to a reader
+ * who trusts the union to be exhaustive.
+ */
+export type ListedPlatform = (typeof LAUNCH_PLATFORMS)[number] | "ios-remote";
 
 /**
  * The part of a `list-devices` entry the device-resolution paths read. Each
@@ -17,7 +23,7 @@ export interface ListedDevice {
 }
 
 export function deviceEntryId(d: ListedDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
+  if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }
@@ -31,6 +37,11 @@ export function isBooted(d: ListedDevice): boolean {
   switch (d.platform) {
     case "ios":
       return d.state === "Booted";
+    // A remote simulator is reachable only through `sim-remote`, and auto-target
+    // has never selected one. Reported as not-booted so it is listed but never
+    // picked; widening that is its own change.
+    case "ios-remote":
+      return false;
     case "android":
       return d.state === "device";
     case "vega":
@@ -48,9 +59,12 @@ export function describeDevice(d: ListedDevice): string {
 
 export async function listDevices(
   registry: Registry,
-  ctx: ToolContext | undefined
+  ctx: ToolContext | undefined,
+  signal?: AbortSignal
 ): Promise<ListedDevice[]> {
-  const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
+  const { devices } = (await (ctx
+    ? invokeSubTool(registry, ctx, "list-devices", {})
+    : registry.invokeTool("list-devices", {}, signal ? { signal } : undefined))) as {
     devices: ListedDevice[];
   };
   return devices;

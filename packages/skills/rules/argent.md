@@ -109,11 +109,11 @@ If the user did not specify a platform, do not default to iOS: with one device b
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
-When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, or simulator-server trouble.
 
 ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
-When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
+When: Beginning a task that involves the Android emulator, no emulator running yet, or about to install an APK.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`

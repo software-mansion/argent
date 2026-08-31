@@ -21,9 +21,7 @@ const POINTER_TRAIL_LENGTH = 8;
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+  udid: z.string().describe("Target device id (iOS Simulator UDID or Android serial)."),
   timeLimitSeconds: z
     .number()
     .int()

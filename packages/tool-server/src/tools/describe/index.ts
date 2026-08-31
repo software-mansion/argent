@@ -35,9 +35,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
-    ),
+    .describe("Target device id (iOS UDID, Android serial, Vega serial, or Chromium id)."),
   bundleId: z
     .string()
     .optional()

@@ -12,7 +12,7 @@ import {
 } from "../../chromium-server/storage";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
+  udid: z.string().describe("Chromium device id (e.g. `chromium-cdp-9222`)."),
   action: z
     .enum(["get", "set", "delete", "clear"])
     .describe(
