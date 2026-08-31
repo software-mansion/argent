@@ -59,6 +59,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
+On a physical iOS device, an edge gesture (e.g. a back-swipe) needs the start point at exactly the edge (fromX 0); a start a few thousandths in reports success without triggering the OS gesture.
 Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, or the emulator backend for Android.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",

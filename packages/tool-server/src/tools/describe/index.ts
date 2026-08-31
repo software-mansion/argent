@@ -174,6 +174,8 @@ gesture-tap / gesture-swipe / gesture-pinch.
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
+The tree carries no z-order or occlusion information: an element listed at a point may be covered
+by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).
