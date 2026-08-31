@@ -85,6 +85,9 @@ interface ReapedSession {
 const reaped = new Map<string, ReapedSession>();
 let nextEvent = 1;
 
+/** How many of a chain's surviving log files the note names before counting. */
+const MAX_NAMED_FILES = 3;
+
 function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string {
   return `${kind}:${scope ?? ""}:${deviceId.toLowerCase()}`;
 }
@@ -208,8 +211,8 @@ export function recordReapedSession(
     for (const carried of previous.carriedFiles) filesLeftUnnamed.add(carried);
   }
   // Before the flags below, so they answer for what is on disk rather than what
-  // was intended: an unlink the filesystem refuses leaves a file only a listing
-  // can reach, which is a leave. One already gone is a take either way.
+  // was intended: an unlink the filesystem refuses leaves the file there for the
+  // clause to name, which is a leave. One already gone is a take either way.
   let anyTaken = false;
   for (const file of orphanedFiles) {
     try {
@@ -277,7 +280,17 @@ function describeReplacedRecords(entry: ReapedSession): string {
   // and every tool-server's, so a reader sent at the listing has to open each
   // one to find the session's own — and the salvage clause above already hands
   // out an absolute path under exactly the same conditions.
-  const where = ` still on disk, at ${left.join(", ")}.`;
+  //
+  // Capped because the list grows by one path per unread supersession and this
+  // string is a tool result: a crash loop with a teardown between the rounds
+  // keeps every file, since neither event can reclaim across the one that kept
+  // none. Newest first, which is the order they accumulate in, and the rest are
+  // counted rather than named — they share a directory with the ones shown.
+  const shown = left.slice(0, MAX_NAMED_FILES);
+  const unnamed = left.length - shown.length;
+  const where =
+    ` still on disk, at ${shown.join(", ")}` +
+    (unnamed > 0 ? `, and ${unnamed} more in the same directory.` : `.`);
   const file = entry.supersededFileTaken
     ? // Which of them lost its file is not sayable past a count of one: a write
       // replaces every record its ids reach, and the take falls on whichever was

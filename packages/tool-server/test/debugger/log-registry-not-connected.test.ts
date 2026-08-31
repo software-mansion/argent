@@ -294,9 +294,8 @@ describe("debugger-log-registry not-connected results", () => {
 
   it("carries the replaced-records clause through to this tool's answer", async () => {
     // The clause rides on the same string as everything else in the note, and
-    // `debugger-connect` is the only consumer anything pins it through - but
-    // this is the tool the guidance for a crashed app sends the agent to
-    // FIRST, so it is the answer that has to carry the loss.
+    // this is the tool the guidance for a crashed app sends the agent to FIRST,
+    // so it is the answer that has to carry the loss.
     const port = await freePort();
     const setup = makeSetup(jsRuntimeDebuggerBlueprint);
     cleanups.push(async () => {

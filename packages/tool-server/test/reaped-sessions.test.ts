@@ -1,9 +1,8 @@
 /**
- * The breadcrumb store's key semantics. Three tools read it — screen-recording
- * stop, native-profiler stop, debugger-log-registry — and each was tested only
- * against its own kind and its own single spelling, so nothing pinned what the
- * key itself does: scope by kind, and fold case the way every device-id lookup
- * in the stop tools does.
+ * The breadcrumb store's key semantics. Four tools read it — screen-recording
+ * stop, native-profiler stop, debugger-log-registry and debugger-connect — so
+ * the key is what keeps one kind's record from answering for another's, and it
+ * folds case the way every device-id lookup in the stop tools does.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -832,6 +831,37 @@ describe("the reaped-session key", () => {
       expect(message).toContain(second);
       expect(fs.existsSync(first)).toBe(true);
       expect(fs.existsSync(second)).toBe(true);
+    });
+
+    it("counts the rest once a chain leaves more files than the note names", () => {
+      // The list grows by one path per unread supersession and the note is a
+      // tool result, so a long crash loop would spend an agent's context on
+      // near-identical paths. Newest first, since that is the round most likely
+      // to hold what the reader wants, and the remainder counted rather than
+      // dropped - silence about them would read as a complete account.
+      const files: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const file = path.join(dir, `argent-logs-20-${i}.log`);
+        fs.writeFileSync(file, "x");
+        files.push(file);
+        recordReapedSession("js-runtime-debugger", [UDID], `crash ${i}`, {
+          cause: "runtime-death",
+          keptAt: file,
+        });
+        // Keeps no file of its own, so it replaces the crash's record without
+        // reclaiming the log - which is what lets the list grow at all.
+        recordReapedSession("js-runtime-debugger", [UDID], `teardown ${i}`, { cause: "teardown" });
+      }
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", UDID)!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(
+        `still on disk, at ${files[5]}, ${files[4]}, ${files[3]}, and 3 more in the same directory.`
+      );
+      expect(message).not.toContain(files[2]!);
+      for (const file of files) expect(fs.existsSync(file)).toBe(true);
     });
 
     it("keeps the file of a record a write in between had taken a key off", () => {

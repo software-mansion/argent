@@ -198,7 +198,9 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited. Also carries the `note` of a tool that succeeded and
+   * answered with one, since a note is the tool saying its own result misleads
+   * read alone.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -2629,7 +2631,24 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        // A tool that succeeds and still answers with a `note` is saying its
+        // own result misleads read alone — a crashed session's kept log file
+        // here, a Universal Link that opened Safari rather than the app in
+        // `open-url`. `renderStepLine` prints `reason` and nothing else of a
+        // step, and `warning` is what puts a line under it, so a note left in
+        // the result alone names a field the CLI never shows. The debugger
+        // ones are also spent by the read that produced them, so nothing can
+        // report them a second time.
+        const note = (result as { note?: unknown } | null)?.note;
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(typeof note === "string" && note ? { warning: note } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a

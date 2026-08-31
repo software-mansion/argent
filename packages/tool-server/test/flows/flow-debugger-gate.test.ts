@@ -178,8 +178,8 @@ steps:
   });
 
   it("adds nothing to the reason line for an answer that carries no note", async () => {
-    // The `note ? … : ""` arm, so the fix above cannot smuggle an "undefined"
-    // onto every un-noted gate — which is most of them.
+    // The `note ? … : ""` arm: an un-noted gate — which is most of them — gets
+    // nothing appended, not the string "undefined".
     const flowFile = await writeFlow(GATED_FLOW);
     const registry = makeRegistry(async (id) =>
       id === "debugger-status" ? NOT_CONNECTED_RESULT : { tapped: true }
@@ -196,6 +196,63 @@ steps:
       `debugger not connected (${NOT_CONNECTED_RESULT.reason}): ` +
         `${NOT_CONNECTED_RESULT.detail} — ${NOT_CONNECTED_RESULT.guidance}`
     );
+  });
+
+  it("warns on a step that SUCCEEDED carrying a note, which is the crash-recovery shape", async () => {
+    // The other arm of the same tool. debugger-connect is the step the crash
+    // guidance prescribes, and it succeeds - so the not_connected mapping above
+    // never sees it, while the read that produced its note has already spent
+    // the record, leaving nothing able to report the log file a second time.
+    // `warning` rather than `reason` because it is the field all three CLI
+    // renderers put a line under, and the only one renderFailedSteps keeps for
+    // a passing step.
+    const CONNECTED_WITH_NOTE = {
+      port: 8081,
+      projectRoot: "/proj",
+      deviceName: "iPhone 16 Pro Max",
+      appName: "MyApp",
+      isNewDebugger: true,
+      connected: true,
+      note: "The log file is kept at /tmp/argent-logs-8081-1-2-0.log — grep that file for the 42 captured console entries it holds.",
+    };
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "connected.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-connect
+    args:
+      port: 8081
+      device_id: X
+  - tool: gesture-tap
+    args:
+      udid: X
+      x: 0.5
+      y: 0.5
+`,
+      "utf8"
+    );
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-connect" ? CONNECTED_WITH_NOTE : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "connected", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const steps = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
+    expect(steps[0]!.status).toBe("pass");
+    expect(steps[0]!.warning).toBe(CONNECTED_WITH_NOTE.note);
+    // A success is not a gate: the flow goes on, and the tap that follows runs.
+    expect(result.ok).toBe(true);
+    expect(steps[1]!.tool).toBe("gesture-tap");
+    // And a note-less success stays a plain pass - the warning glyph is what
+    // separates the two in every renderer.
+    expect(steps[1]!.warning).toBeUndefined();
   });
 
   it("passes the gate and runs the whole flow on a connected result", async () => {

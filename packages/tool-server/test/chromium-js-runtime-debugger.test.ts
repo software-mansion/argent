@@ -234,11 +234,10 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
   });
 
   it("keeps the log file and names it in the breadcrumb when the renderer died", async () => {
-    // The V8 half of the Hermes crash case: a `disconnected` means the renderer
-    // is gone, so dispose keeps the captured log instead of unlinking it — and
-    // the breadcrumb must then point at that file rather than report a
-    // deletion, which is what the caller reads after the registry restarts
-    // empty.
+    // The V8 half of the Hermes crash case: the socket is closed, so dispose
+    // keeps the captured log instead of unlinking it — and the breadcrumb must
+    // then point at that file rather than report a deletion, which is what the
+    // caller reads after the registry restarts empty.
     __resetReapedSessionsForTesting();
     const fake = makeFakeChromiumCdpApi();
     let socketOpen = true;
