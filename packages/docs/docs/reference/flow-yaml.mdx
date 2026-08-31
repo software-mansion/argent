@@ -268,11 +268,18 @@ Argent removes every other name. Argent removes its own token, its own port and 
 
 Two groups in the list give the script access to a credential. `SSH_AUTH_SOCK` gives access to your SSH agent. An `npm_config_` name can contain a registry token. Run a script only when you trust it.
 
+A script returns a document through the `output` global. Assign the value to `globalThis.output`, or set a key on the `output` object that Argent puts there. Argent ignores an `export default` value: the step passes with an empty document. The document must be a plain object of JSON-compatible data. `flow-add-script` returns the document as `outputJson`. No flow step reads it yet.
+
+```js
+// scripts/seed-order.mjs
+globalThis.output = { orderId: "A-1001" };
+```
+
 A failed step stops the flow. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Failed  | The script | A missing file, a load error, a thrown error, or a non-zero exit code                                                      |
+| Failed  | The script | A missing file, a load error, a thrown error, a non-zero exit code, or an `output` value that Argent cannot serialize      |
 | Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.

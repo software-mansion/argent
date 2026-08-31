@@ -223,7 +223,14 @@ Argent gives the script an allowlist of names from your shell, not your full env
 
 Two names in the allowlist carry a credential. `SSH_AUTH_SOCK` reaches the SSH agent. An `npm_config_` name can hold a registry token. Run a script only when you trust it.
 
-The failure verdict names the side at fault: **failed** names the script, and **errored** names the host that ran it.
+A script returns a document through the `output` global. Assign it to `globalThis.output`, or set a key on the `output` object that Argent puts there. Argent ignores an `export default` value, and the step then passes with an empty document. The document must be a plain object of JSON-compatible data. `flow-add-script` reports it as `outputJson`. No flow step reads it yet.
+
+```js
+// scripts/seed-order.mjs
+globalThis.output = { orderId: "A-1001" };
+```
+
+The failure verdict names the side at fault: **failed** names the script, and **errored** names the host that ran it. A value in `output` that Argent cannot serialize is a **failed** step.
 
 On Chromium the leading `launch:` boots before step 1, so a `script:` above it runs while the app is already running.
 
