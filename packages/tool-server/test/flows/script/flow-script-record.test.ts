@@ -198,6 +198,54 @@ describe("recording a script step", () => {
     expect(() => JSON.parse(result.outputJson!)).toThrow();
   });
 
+  it("keeps a document of exactly the render limit whole", async () => {
+    // The limit is inclusive, and nothing else in the suite sits ON it: the
+    // cases either side are 1000 bytes and ~90 KB, so `<=` could become `<`
+    // and only a document of exactly this size would notice.
+    const limit = 64 * 1024;
+    const filler = limit - Buffer.byteLength('{"blob":""}', "utf8");
+    await write("scripts/exact.mjs", `output.blob = "y".repeat(${filler});`);
+    await start("exact");
+
+    const result = await addScript("exact", "../../scripts/exact.mjs");
+
+    expect(result.status).toBe("pass");
+    expect(Buffer.byteLength(result.outputJson!, "utf8")).toBe(limit);
+    expect(result).not.toHaveProperty("outputTruncated");
+    expect(JSON.parse(result.outputJson!)).toEqual({ blob: "y".repeat(filler) });
+  });
+
+  it("cuts a document one byte past the render limit", async () => {
+    const limit = 64 * 1024;
+    const filler = limit - Buffer.byteLength('{"blob":""}', "utf8") + 1;
+    await write("scripts/over.mjs", `output.blob = "y".repeat(${filler});`);
+    await start("over");
+
+    const result = await addScript("over", "../../scripts/over.mjs");
+
+    expect(result.status).toBe("pass");
+    expect(result.outputTruncated).toBe(true);
+    expect(Buffer.byteLength(result.outputJson!, "utf8")).toBe(limit);
+  });
+
+  it("records the timeout the caller asked for, even when the run clamped it", async () => {
+    // Above the executor's absolute ceiling (Node's largest timer), so the
+    // clamp holds whatever `scripts.maxTimeoutMs` the host running this
+    // configures. The recorder writes what was asked for either way: the YAML
+    // is the request, and the clamp is the host's answer to it.
+    const asked = 2_147_483_648;
+    await write("scripts/quick.mjs", `output.ok = true;`);
+    await start("clamped");
+
+    const result = await addScript("clamped", "../../scripts/quick.mjs", { timeout: asked });
+
+    expect(result.status).toBe("pass");
+    expect(result.reason).toContain("above this host's maximum");
+    expect(await steps("clamped")).toEqual([
+      { kind: "script", path: "../../scripts/quick.mjs", timeout: asked },
+    ]);
+  });
+
   it("stops the script when the caller cancels the call", async () => {
     const started = path.join(root, "started.txt");
     await write(

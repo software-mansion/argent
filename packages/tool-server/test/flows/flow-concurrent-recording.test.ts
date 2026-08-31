@@ -1426,6 +1426,12 @@ describe("a restart that lands while a step is still running", () => {
       /ran and passed in \d+ms and nothing it did was rolled back/
     );
     expect((err as Error).message).toContain("logs and output document are lost");
+    // The append-failure message forks on whether the refusal was about a step
+    // ALREADY in the file. Only this arm is reachable without a hand edit, and
+    // both arms end "…are lost with this error", so pin the half that names
+    // which one the author is being sent to.
+    expect((err as Error).message).toContain("recording it failed");
+    expect((err as Error).message).not.toContain("a step ALREADY in the flow file");
 
     expect(await readMarkers(root, "alpha")).toEqual([]);
   });
