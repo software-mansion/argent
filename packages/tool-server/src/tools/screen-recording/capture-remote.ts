@@ -5,7 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import { streamRecordStart, streamRecordStop } from "../../utils/sim-remote";
+import { screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
 import {
   clearActiveScreenRecording,
   markScreenRecordingFinalized,
@@ -29,7 +29,7 @@ import { buildWatermarkGraph, resolveFfmpeg, resolveFfprobe, writeLogoTemp } fro
  * machine as pictures — the local path's MJPEG stream has no analogue over MoQ
  * — so the recording is done where the device is: simulator-server buffers the
  * H264 frames it is already encoding, muxes them to an mp4 on the runner, and
- * `sim-remote stream-record stop` brings that file back. The whole capture is
+ * `sim-remote screen-record stop` brings that file back. The whole capture is
  * therefore two CLI calls with a timer between them, not a live pipeline.
  *
  * What that costs, relative to `capture.ts`: the video arrives finished, so
@@ -39,13 +39,6 @@ import { buildWatermarkGraph, resolveFfmpeg, resolveFfprobe, writeLogoTemp } fro
  */
 
 const OUTPUT_FPS = 30;
-/**
- * Runner-side frame buffer. It is a cap, not an allocation: the encoded frames
- * spill to the runner's disk and the oldest are dropped once it fills, so this
- * bounds how much of a long recording survives. 2 GB comfortably covers the
- * 600s maximum at a phone's native resolution.
- */
-const BUFFER_MB = 2000;
 /** Bound the post-pass so a wedged ffmpeg cannot hold the stop open. */
 const POST_PASS_TIMEOUT_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 15_000;
@@ -97,10 +90,7 @@ export async function startRemoteCapture(
     // A dispose that ran while an earlier await suspended this start would no
     // longer be able to release a recording started after it.
     assertNotDisposed(api, "screen_recording_start");
-    await streamRecordStart(api.deviceId, {
-      showTouches: params.showTouches,
-      bufferMb: BUFFER_MB,
-    });
+    await screenRecordStart(api.deviceId, { showTouches: params.showTouches });
   } catch (err) {
     api.startPending = false;
     throw asStartFailure(err);
@@ -133,7 +123,7 @@ export async function startRemoteCapture(
   // captured is salvageable rather than discarded — the teardown breadcrumb
   // points there.
   api.remoteRelease = async () => {
-    await streamRecordStop(api.deviceId, outputFile).catch(() => {});
+    await screenRecordStop(api.deviceId, outputFile).catch(() => {});
   };
   api.startPending = false;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
@@ -154,7 +144,7 @@ export async function startRemoteCapture(
     // Fetch at the cap rather than at stop: the runner is still recording
     // until this call, so waiting would let the video keep growing past the
     // limit the caller set. Errors are held for whoever calls stop.
-    api.remoteFetch = streamRecordStop(api.deviceId, outputFile).catch((err: unknown) => {
+    api.remoteFetch = screenRecordStop(api.deviceId, outputFile).catch((err: unknown) => {
       api.remoteFetchError = err instanceof Error ? err : new Error(String(err));
     });
   }, params.timeLimitSeconds * 1_000);
@@ -201,7 +191,7 @@ export async function stopRemoteCapture(
         api.recordingActive = false;
         api.wallClockEndMs = Date.now();
       }
-      await streamRecordStop(api.deviceId, rawFile);
+      await screenRecordStop(api.deviceId, rawFile);
     }
     // The runner no longer holds anything to release.
     api.remoteRelease = null;
