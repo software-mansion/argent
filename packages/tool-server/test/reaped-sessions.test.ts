@@ -864,6 +864,36 @@ describe("the reaped-session key", () => {
       for (const file of files) expect(fs.existsSync(file)).toBe(true);
     });
 
+    it("names the newest of the files when one write replaces several events at once", () => {
+      // The cap has to drop the least useful paths, and the store's own order
+      // is not that: a record sits where its key was FIRST written, so four
+      // separate crashes reached by one widening write arrive oldest-first and
+      // the cap would name the three the reader is least likely to want while
+      // hiding the round that just died.
+      const ids = ["logical-1", "logical-2", "logical-3", "logical-4"];
+      const files = ids.map((id, i) => {
+        const file = path.join(dir, `argent-logs-21-${i}.log`);
+        fs.writeFileSync(file, "x");
+        recordReapedSession("js-runtime-debugger", [id], `crash ${i}`, {
+          cause: "runtime-death",
+          keptAt: file,
+        });
+        return file;
+      });
+      // Covers every id and matches none of their filed sets, so all four files
+      // are left and the clause has more than it can name.
+      recordReapedSession("js-runtime-debugger", ids, "widened", { cause: "runtime-death" });
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", "logical-1")!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(
+        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more in the same directory.`
+      );
+      expect(message).not.toContain(files[0]!);
+    });
+
     it("keeps the file of a record a write in between had taken a key off", () => {
       // What the store can still see is what the record ANSWERS to, not what it
       // answered for: a session filed under both ids loses the udid to another

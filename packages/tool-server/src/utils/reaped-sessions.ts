@@ -178,7 +178,13 @@ export function recordReapedSession(
   // The replaced records' files this write does not take. Nothing else records
   // them, so this field is the only thing that can still name them.
   const filesLeftUnnamed = new Set<string>();
-  for (const previous of displaced.values()) {
+  // Newest event first: `displaced` follows the store's key order, which is
+  // where each key was FIRST written, so a chain that grew a new id has its
+  // newest round sitting behind an older one. The read caps how many paths it
+  // names, and the newest round is the one most likely to hold what the reader
+  // came for.
+  const newestFirst = [...displaced.entries()].sort(([a], [b]) => b - a).map(([, e]) => e);
+  for (const previous of newestFirst) {
     // An event still holding a key this one did not take goes on answering under
     // it, so nothing of its has gone unreported.
     if ([...previous.keys].some((k) => !keys.has(k))) continue;
