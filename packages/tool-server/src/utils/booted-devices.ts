@@ -1,5 +1,5 @@
-import type { Registry, ToolContext } from "@argent/registry";
-import { invokeSubTool } from "./sub-invoke";
+import type { Registry } from "@argent/registry";
+import { invokeSubTool, type SubInvokeContext } from "./sub-invoke";
 import { LAUNCH_PLATFORMS } from "../tools/flows/flow-utils";
 
 /**
@@ -59,12 +59,9 @@ export function describeDevice(d: ListedDevice): string {
 
 export async function listDevices(
   registry: Registry,
-  ctx: ToolContext | undefined,
-  signal?: AbortSignal
+  ctx: SubInvokeContext | undefined
 ): Promise<ListedDevice[]> {
-  const { devices } = (await (ctx
-    ? invokeSubTool(registry, ctx, "list-devices", {})
-    : registry.invokeTool("list-devices", {}, signal ? { signal } : undefined))) as {
+  const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
     devices: ListedDevice[];
   };
   return devices;

@@ -44,6 +44,7 @@ import {
   AutoDeviceTargetError,
   resolveAutoDeviceTarget,
 } from "./utils/auto-device-target";
+import type { SubInvokeContext } from "./utils/sub-invoke";
 import { resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
@@ -750,14 +751,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // post-action screenshot/describe by device, reading only the args it sent.
       let autoResolvedDevice: string | undefined;
       if (wantsAutoTarget) {
-        // Judge the other arguments BEFORE enumerating devices for this one.
-        // Otherwise a malformed argument on a machine with two devices booted is
-        // answered "`udid` is ambiguous" — the real error surfacing only on the
-        // retry that names a device — and a second's worth of simctl/adb fan-out
-        // is spent to produce the wrong message. The placeholder stands in for
-        // what is about to be resolved; substituting rather than filtering the
-        // resulting issues is what lets a cross-field refinement run, since zod
-        // skips those entirely while a field is missing.
+        // Judge the other arguments BEFORE enumerating devices for this one:
+        // otherwise a malformed one is answered "`udid` is ambiguous" on any
+        // machine with two devices booted, after paying for the fan-out that
+        // produced the wrong message. Substituting a placeholder rather than
+        // filtering `udid` back out of the issues is what lets a cross-field
+        // refinement run — zod skips those while any field is missing.
         const probe = def.zodSchema?.safeParse({
           ...bodyArgs,
           [def.autoDeviceTargetParam!]: AUTO_DEVICE_TARGET_PROBE,
@@ -782,8 +781,22 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
+        // The enumeration emits its own invoke/complete pair, so it inherits
+        // this request's attribution rather than landing in telemetry anonymous.
+        // No platform: there is no device arg yet, which is the point of the call.
+        const childMeta = extractInvocationMeta(false, undefined, aiMeta);
+        const recordInvocation = options?.recordInvocation;
+        const subCtx: SubInvokeContext = {
+          signal: controller.signal,
+          ...(recordInvocation && childMeta
+            ? {
+                recordChildInvocation: (childInvocationId: string) =>
+                  recordInvocation(childInvocationId, childMeta),
+              }
+            : {}),
+        };
         try {
-          autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, controller.signal);
+          autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, subCtx);
           bodyArgs = { ...bodyArgs, [def.autoDeviceTargetParam!]: autoResolvedDevice };
         } catch (err) {
           if (err instanceof AutoDeviceTargetError) {
@@ -794,9 +807,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
                 failure_area: "http",
                 error_kind: "validation",
               },
-              bodyArgs
+              bodyArgs,
+              { invalid_params: [def.autoDeviceTargetParam!] }
             );
-            res.status(400).json({ error: err.message });
+            // The three fields a schema rejection sends: this refuses an
+            // invocation the same way, and prose in `error` alone drops
+            // `argent run` to its runtime path — exit 1, no help block, nothing
+            // on `--json` — where the required `udid` this replaced gave all three.
+            const issues = [
+              { code: "custom", path: [def.autoDeviceTargetParam!], message: err.message },
+            ];
+            res.status(400).json({
+              error: JSON.stringify(issues, null, 2),
+              message: err.message,
+              issues,
+            });
             return;
           }
           throw err;

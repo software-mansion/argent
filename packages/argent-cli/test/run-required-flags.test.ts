@@ -197,6 +197,66 @@ describe("argent run input validation", () => {
     });
   });
 
+  describe("the server could not resolve the device the caller omitted", () => {
+    // `udid` is advertised optional now, so the local required-flag check no
+    // longer catches this and the server answers instead. It is still a rejected
+    // invocation — the fix is to pass the flag — so it has to land on the same
+    // path, not on the runtime-failure one.
+    const udidOptional = {
+      ...gestureTap,
+      inputSchema: { ...gestureTap.inputSchema, required: ["x", "y"] },
+    };
+    const unresolved =
+      "No booted device runs `gesture-tap`, so `udid` could not be resolved. " +
+      "Boot one, or pass `udid` explicitly. Devices: none.";
+
+    beforeEach(() => {
+      toolsClientMock.fetchTool.mockResolvedValue(udidOptional);
+      toolsClientMock.callTool.mockRejectedValue(
+        new ToolInvocationError(unresolved, {
+          errorCode: "HTTP_AUTO_DEVICE_TARGET_UNRESOLVED",
+          errorKind: "validation",
+          issues: [{ code: "custom", path: ["udid"], message: unresolved }],
+        })
+      );
+    });
+
+    it("exits 2 and prints the tool's help, as the required udid it replaced did", async () => {
+      await expect(invoke(["gesture-tap", "--x", "0.5", "--y", "0.5"])).rejects.toThrow(
+        "process.exit:2"
+      );
+      expect(stderr()).toContain("Error: --udid No booted device runs `gesture-tap`");
+      expect(stdout()).toContain("argent run gesture-tap [flags]");
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "cli:run_fail",
+        expect.objectContaining({
+          error_code: "CLI_RUN_INPUT_VALIDATION_FAILED",
+          failure_stage: "cli_run_server_validation",
+        })
+      );
+    });
+
+    it("keeps --json a single object on stderr with nothing on stdout", async () => {
+      await expect(invoke(["gesture-tap", "--x", "0.5", "--y", "0.5", "--json"])).rejects.toThrow(
+        "process.exit:2"
+      );
+      expect(stdout()).toBe("");
+      const envelope = JSON.parse(stderr()) as { missing: string[]; issues: { path: string[] }[] };
+      expect(envelope.missing).toEqual([]);
+      expect(envelope.issues).toEqual([{ code: "custom", path: ["udid"], message: unresolved }]);
+    });
+
+    it("reads a pre-`issues` server, which carried the list in the message", async () => {
+      toolsClientMock.callTool.mockRejectedValue(
+        new Error(JSON.stringify([{ code: "custom", path: ["udid"], message: unresolved }]))
+      );
+      await expect(invoke(["gesture-tap", "--x", "0.5", "--y", "0.5"])).rejects.toThrow(
+        "process.exit:2"
+      );
+      expect(stderr()).not.toContain('"code"');
+    });
+  });
+
   it("leaves an ordinary runtime failure exactly as it was", async () => {
     toolsClientMock.callTool.mockRejectedValue(new Error("Simulator not booted"));
 

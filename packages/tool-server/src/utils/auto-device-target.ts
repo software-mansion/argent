@@ -2,13 +2,11 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "./device-info";
 import { assertSupported } from "./capability";
 import { describeDevice, deviceEntryId, isBooted, listDevices } from "./booted-devices";
+import type { SubInvokeContext } from "./sub-invoke";
 
 /**
- * Stands in for the device id while the rest of a call's arguments are judged,
- * so a malformed argument is reported as itself rather than as an ambiguous
- * device pool. Substituted rather than filtered back out, because zod skips a
- * cross-field refinement entirely while any field is missing. It never reaches
- * a tool, and a suite check pins that every device arg accepts it.
+ * Stands in for the device id while the rest of a call's arguments are judged.
+ * Never reaches a tool; a suite check pins that every device arg accepts it.
  */
 export const AUTO_DEVICE_TARGET_PROBE = "00000000-0000-4000-8000-000000000000";
 
@@ -47,11 +45,9 @@ export class AutoDeviceTargetError extends Error {
 export async function resolveAutoDeviceTarget(
   registry: Registry,
   def: ToolDefinition,
-  signal?: AbortSignal
+  ctx?: SubInvokeContext
 ): Promise<string> {
-  // No `ToolContext` yet — it carries an ArtifactStore the request builds later —
-  // so the signal is passed on its own, which is the only part cancellation needs.
-  const devices = await listDevices(registry, undefined, signal);
+  const devices = await listDevices(registry, ctx);
   const booted = devices.filter(isBooted);
 
   const candidates = booted.filter((entry) => {

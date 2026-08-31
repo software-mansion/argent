@@ -3,6 +3,13 @@ import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/re
 import type { Registry, ToolContext } from "@argent/registry";
 
 /**
+ * What dispatching a child actually needs. Narrower than {@link ToolContext} so
+ * a caller outside a tool — the HTTP layer resolving a device before it has one
+ * — can hand over attribution without inventing an artifact store.
+ */
+export type SubInvokeContext = Pick<ToolContext, "signal" | "recordChildInvocation">;
+
+/**
  * Dispatch a tool as a child of the current orchestrator invocation.
  *
  * Orchestrators (run-sequence, flow-execute, flow-add-step) call
@@ -20,7 +27,7 @@ import type { Registry, ToolContext } from "@argent/registry";
  */
 export async function invokeSubTool<T = unknown>(
   registry: Registry,
-  ctx: ToolContext | undefined,
+  ctx: SubInvokeContext | undefined,
   toolId: string,
   args: unknown
 ): Promise<T> {

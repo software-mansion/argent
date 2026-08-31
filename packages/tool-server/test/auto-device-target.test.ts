@@ -532,6 +532,66 @@ describe("an unresolvable target is reported to telemetry", () => {
   });
 });
 
+describe("the enumeration is attributed to the request that caused it", () => {
+  // It is a real `list-devices` invocation - it emits its own invoke/complete
+  // pair - so without the recorder every device-less call adds an anonymous
+  // `list-devices` to telemetry, with none of the request's AI-client context.
+  it("registers the child invocation under the caller's own metadata", async () => {
+    const recordInvocation = vi.fn((_id: string, _meta: unknown) => vi.fn());
+    const { app, execute } = harness([iphone()], undefined, { recordInvocation });
+    await request(app).post("/tools/poke").set("x-argent-ai-client", "claude_code").send({});
+    expect(execute).toHaveBeenCalledTimes(1);
+    // Two: the request's own invocation and the enumeration it made.
+    expect(recordInvocation).toHaveBeenCalledTimes(2);
+    for (const [, meta] of recordInvocation.mock.calls) {
+      expect(meta).toMatchObject({ ai_client: "claude_code" });
+    }
+  });
+
+  it("releases the child registration once the enumeration is done", async () => {
+    const release = vi.fn();
+    const recordInvocation = vi.fn(() => release);
+    const { app } = harness([iphone()], undefined, { recordInvocation });
+    await request(app).post("/tools/poke").set("x-argent-ai-client", "claude_code").send({});
+    // Both registrations: the request's own and the enumeration's.
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("records nothing extra when the request carried no attribution", async () => {
+    const recordInvocation = vi.fn(() => vi.fn());
+    const { app } = harness([iphone()], undefined, { recordInvocation });
+    await request(app).post("/tools/poke").send({});
+    expect(recordInvocation).not.toHaveBeenCalled();
+  });
+});
+
+describe("an unresolvable device is refused the way a bad param is", () => {
+  // Same three fields as a schema rejection: prose in `message`, the structured
+  // list in `issues`, that same list as JSON in `error` for a CLI released
+  // before `issues` existed. Without it `argent run` drops to a generic runtime
+  // failure and loses exit 2, the help block and the `--json` object.
+  it.each([
+    ["nothing booted", [] as Listed[]],
+    ["two booted", [iphone(), android()]],
+  ])("carries prose, issues and a parseable error for %s", async (_label, devices) => {
+    const { app } = harness(devices);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe(res.body.issues[0].message);
+    expect(res.body.issues).toEqual([
+      { code: "custom", path: ["udid"], message: expect.any(String) },
+    ]);
+    expect(JSON.parse(res.body.error)).toEqual(res.body.issues);
+  });
+
+  it("attributes the failure to the device param in telemetry", async () => {
+    const recordFailure = vi.fn();
+    const { app } = harness([], undefined, { recordFailure });
+    await request(app).post("/tools/poke").send({});
+    expect(recordFailure.mock.calls[0]![1]).toMatchObject({ invalid_params: ["udid"] });
+  });
+});
+
 describe("no registered tool advertises a run-on udid description", () => {
   it("terminates the tool's own sentence before the hint", () => {
     const registry = createRegistry();

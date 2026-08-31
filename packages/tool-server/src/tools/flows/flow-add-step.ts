@@ -6,6 +6,7 @@ import {
   FailureError,
   ToolNotFoundError,
   type Registry,
+  type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
 import {
@@ -71,7 +72,8 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments. ' +
+        "Name the device even for a tool that advertises `udid` optional: a recorded step pins its own, rather than taking whichever is booted at replay."
     ),
   delayMs: z
     .number()
@@ -474,7 +476,7 @@ function cappedReason(reason: string): string {
  */
 async function probeAgainstRunnerTree(
   registry: Registry,
-  ctx: Parameters<typeof invokeSubTool>[1],
+  ctx: ToolContext | undefined,
   args: Record<string, unknown>
 ): Promise<{ warning?: string }> {
   const selector = args.selector;
