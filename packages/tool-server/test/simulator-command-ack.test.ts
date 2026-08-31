@@ -6,7 +6,7 @@ import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 
-type Reply = "ok" | "error" | "silent";
+type Reply = "ok" | "error" | "silent" | "withhold";
 
 /**
  * Stand-in for simulator-server's `/ws` command endpoint, mirroring the real
@@ -18,6 +18,8 @@ async function startServer(): Promise<{
   api: SimulatorServerApi;
   received: Record<string, unknown>[];
   setReply: (r: Reply) => void;
+  /** Release every reply the server withheld, late and out of step. */
+  flushWithheld: () => void;
   dropConnections: () => void;
   close: () => Promise<void>;
 }> {
@@ -30,6 +32,7 @@ async function startServer(): Promise<{
       resolve(s)
     );
   });
+  const withheld: (() => void)[] = [];
   wss.on("connection", (sock) => {
     sockets.add(sock);
     sock.on("close", () => sockets.delete(sock));
@@ -39,6 +42,8 @@ async function startServer(): Promise<{
       if (reply === "ok") sock.send(JSON.stringify({ id: msg.id, status: "ok" }));
       else if (reply === "error")
         sock.send(JSON.stringify({ status: "error", message: "parse error: unknown variant" }));
+      else if (reply === "withhold")
+        withheld.push(() => sock.send(JSON.stringify({ id: msg.id, status: "ok" })));
     });
   });
 
@@ -49,6 +54,9 @@ async function startServer(): Promise<{
     received,
     setReply: (r) => {
       reply = r;
+    },
+    flushWithheld: () => {
+      for (const send of withheld.splice(0)) send();
     },
     dropConnections: () => {
       for (const s of sockets) s.terminate();
@@ -197,6 +205,38 @@ describe("gesture-swipe — an aborted run still reports the abort", () => {
     clearInterval(abortAfterFirstSend);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("AbortError");
+    await server.close();
+  });
+});
+
+describe("a late ack is never credited to a different command", () => {
+  it("drops the reply to a timed-out command instead of settling the next one", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { ...TOUCH });
+
+    // Command A is answered, but only after argent has given up on it.
+    server.setReply("withhold");
+    vi.useFakeTimers();
+    const a = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(getFailureSignal(await a)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT);
+    vi.useRealTimers();
+
+    // A's `{"id":"…","status":"ok"}` now lands. Command B must not inherit it:
+    // crediting it would be the phantom success this change exists to remove.
+    server.setReply("silent");
+    let outcome = "pending";
+    void sendCommand(server.api, { ...TOUCH, type: "Up" }).then(
+      () => (outcome = "resolved"),
+      () => (outcome = "rejected")
+    );
+    server.flushWithheld();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Rejected (the timed-out command tore the socket down) or still waiting on
+    // its own ack — anything but resolved, which would mean B reported a
+    // success that was really A's.
+    expect(outcome).not.toBe("resolved");
     await server.close();
   });
 });

@@ -141,12 +141,18 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
     }
     if (ack.status !== "ok" && ack.status !== "error") return;
 
-    // Prefer the echoed id; fall back to the oldest outstanding command, which
-    // is what an id-less error reply refers to on an in-order server.
-    const id =
-      ack.id != null && conn.pending.has(ack.id) ? ack.id : conn.pending.keys().next().value;
+    // A reply that names an id argent is no longer waiting on is stale — a late
+    // ack for a command that already timed out. Dropping it matters: falling
+    // back to positional matching here would settle whatever command is in
+    // flight *now* with an answer meant for an earlier one, reintroducing the
+    // phantom success this whole change exists to remove.
+    if (ack.id != null && !conn.pending.has(ack.id)) return;
+    // Only an id-less reply (i.e. an error) is matched positionally, against
+    // the oldest outstanding command, which is what an in-order server means by it.
+    const id = ack.id ?? conn.pending.keys().next().value;
     if (id == null) return;
-    const entry = conn.pending.get(id)!;
+    const entry = conn.pending.get(id);
+    if (entry == null) return;
     conn.pending.delete(id);
 
     if (ack.status === "ok") {
@@ -219,7 +225,7 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
     };
     const timer = setTimeout(
       () =>
-        settle(
+        settleAndDropConnection(
           new FailureError(
             `simulator-server did not acknowledge the '${cmdName}' command within ` +
               `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
@@ -238,6 +244,17 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
     );
     // `unref` so a pending ack never holds the process open on shutdown.
     timer.unref?.();
+
+    // A timeout leaves the reply stream permanently out of step with `pending`:
+    // the answer to this command is still owed, and once it lands nothing can
+    // tell it apart from the answer to a later one. Drop the socket instead of
+    // guessing — the next command reconnects, and `close` fails anything else
+    // still in flight rather than leaving it to mismatch.
+    const settleAndDropConnection = (err: FailureError) => {
+      settle(err);
+      connections.delete(api.apiUrl);
+      conn.ws.close();
+    };
 
     conn.pending.set(id, { settle, cmd: cmdName });
 
