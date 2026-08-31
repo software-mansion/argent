@@ -26,6 +26,7 @@ export interface JsonSchema {
   items?: JsonSchema;
   enum?: unknown[];
   description?: string;
+  not?: JsonSchema;
 }
 
 interface FlagParseResult {
@@ -44,6 +45,46 @@ function isScalarType(type: string | undefined): boolean {
 /** Fields that can only be passed as JSON, because a flag value cannot express their shape. */
 function isJsonField(prop: JsonSchema | undefined): boolean {
   return prop?.type === "object" || (prop?.type === "array" && !isScalarType(prop.items?.type));
+}
+
+/**
+ * A retired key: `z.never()` serializes to `{"not": {}}` with no `type`. Matched
+ * so usage can render it as a retirement notice rather than offer it as a flag.
+ * The serialized shape is pinned in
+ * packages/registry/tests/zod-to-json-schema.test.ts.
+ *
+ * Exported for `findMissingRequired`, which must read the same filter usage
+ * renders through.
+ */
+export function isRetiredField(prop: JsonSchema): boolean {
+  return prop.not !== undefined && Object.keys(prop.not).length === 0;
+}
+
+/**
+ * A retired field's guidance, minus the leading "Retired: " label — every caller
+ * already says retired. Shared by the usage notice and the parse error so the
+ * two cannot disagree.
+ */
+function retirementGuidance(prop: JsonSchema): string {
+  return (prop.description ?? "").replace(/^Retired:\s*/, "");
+}
+
+/**
+ * The retired field a flag spelling addresses, if any: the field itself, its
+ * `--no-` negation, its `--<name>-json` form, or the two combined. A retired key
+ * cannot be passed in any form, so every spelling resolves to the same refusal
+ * rather than each finding its own (wrong) branch below.
+ */
+function retiredFieldFor(flag: string, properties: Record<string, JsonSchema>): string | undefined {
+  const bare = flag.endsWith("-json") ? flag.slice(0, -"-json".length) : flag;
+  // The first candidate that is a declared property wins, and it is refused only
+  // if that property is retired. Trying the whole token first keeps a field
+  // literally named `no-x` readable as itself rather than as `x`'s negation.
+  for (const name of [flag, bare, bare.startsWith("no-") ? bare.slice(3) : bare]) {
+    const prop = properties[name];
+    if (prop !== undefined) return isRetiredField(prop) ? name : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -164,6 +205,18 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       inlineValue = tok.slice(eq + 1);
     } else {
       flag = tok.slice(2);
+    }
+
+    // A retired property carries no `type`, so it matches none of the branches
+    // below and would land in the unknown-scalar tail, where bare `--name` takes
+    // the next flag as its value. Refusing before the lookahead makes the rename
+    // guidance reachable from every spelling that used to work.
+    const retiredField = retiredFieldFor(flag, properties);
+    if (retiredField !== undefined) {
+      const guidance = retirementGuidance(properties[retiredField]!);
+      throw new FlagParseException(
+        `--${retiredField} is retired${guidance ? `: ${guidance}` : ""}`
+      );
     }
 
     // Skipped when the tool declares its own `args` field, so that field's value
@@ -287,19 +340,29 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   const lines: string[] = [];
   const entries = Object.entries(schema.properties);
   if (entries.length === 0) return "  (no parameters)";
+  const live = entries.filter(([, prop]) => !isRetiredField(prop));
 
   let maxFlagLen = 0;
-  for (const [name, prop] of entries) {
+  for (const [name, prop] of live) {
     const display = renderFlagName(name, prop);
     if (display.length > maxFlagLen) maxFlagLen = display.length;
   }
 
-  for (const [name, prop] of entries) {
+  for (const [name, prop] of live) {
     const flag = renderFlagName(name, prop).padEnd(maxFlagLen, " ");
     const typeLabel = renderType(prop);
     const req = required.has(name) ? " (required)" : "";
     const desc = prop.description ? `  ${prop.description}` : "";
     lines.push(`  ${flag}  ${typeLabel}${req}${desc}`);
+  }
+
+  // Retired keys get a notice, not a flag row, which would offer them in the
+  // same shape as the live optional flags. Like the legend below, the line must
+  // not start with `--` after the indent.
+  for (const [name, prop] of entries) {
+    if (!isRetiredField(prop)) continue;
+    const desc = retirementGuidance(prop);
+    lines.push(`  Retired: ${name}${desc ? ` - ${desc}` : ""}`);
   }
 
   // One legend rather than widening every flag row: the value syntax is the same
@@ -309,7 +372,7 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   // treats any line in the Flags: section matching /^[[:space:]]*--/ as a flag row and
   // takes its first --token as a flag name, so a legend beginning with a flag would
   // inject a phantom flag into every tool model it builds.
-  if (entries.some(([, prop]) => prop.type === "boolean")) {
+  if (live.some(([, prop]) => prop.type === "boolean")) {
     lines.push(
       "",
       "  Booleans: --flag, --flag true, or --flag 1 sets true; --flag false, --flag 0, " +

@@ -25,7 +25,7 @@ import {
 
 export type { SecretSourceOptions };
 
-/** Copied in packages/argent-mcp/src/auto-screenshot.ts, which cannot depend on this package. */
+/** Copied in packages/argent-mcp/src/auto-capture.ts, which cannot depend on this package. */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 const PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
