@@ -39,7 +39,11 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
-import { AutoDeviceTargetError, resolveAutoDeviceTarget } from "./utils/auto-device-target";
+import {
+  AUTO_DEVICE_TARGET_PROBE,
+  AutoDeviceTargetError,
+  resolveAutoDeviceTarget,
+} from "./utils/auto-device-target";
 import { resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
@@ -729,16 +733,55 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const droppedBody =
         req.body === undefined && Number.parseInt(req.headers["content-length"] ?? "0", 10) > 0;
 
-      const wantsAutoTarget =
+      // `null` and `""` name no device either, and a client with a required-shaped
+      // field is apt to send one of them for "absent". Unlike a near-miss key they
+      // carry no device to run against instead — `""` classifies as an Android
+      // serial and reaches `adb -s ''` — so resolving is strictly better.
+      const namedNoTarget =
         def.autoDeviceTargetParam !== undefined &&
         isPlainArgs &&
-        bodyArgs[def.autoDeviceTargetParam] === undefined &&
-        misspelledTarget === undefined &&
-        !droppedBody;
+        (bodyArgs[def.autoDeviceTargetParam] === undefined ||
+          bodyArgs[def.autoDeviceTargetParam] === null ||
+          (typeof bodyArgs[def.autoDeviceTargetParam] === "string" &&
+            bodyArgs[def.autoDeviceTargetParam].trim() === ""));
+
+      const wantsAutoTarget = namedNoTarget && misspelledTarget === undefined && !droppedBody;
       // Echoed back because the MCP adapter scopes its artifact directory and its
       // post-action screenshot/describe by device, reading only the args it sent.
       let autoResolvedDevice: string | undefined;
       if (wantsAutoTarget) {
+        // Judge the other arguments BEFORE enumerating devices for this one.
+        // Otherwise a malformed argument on a machine with two devices booted is
+        // answered "`udid` is ambiguous" — the real error surfacing only on the
+        // retry that names a device — and a second's worth of simctl/adb fan-out
+        // is spent to produce the wrong message. The placeholder stands in for
+        // what is about to be resolved; substituting rather than filtering the
+        // resulting issues is what lets a cross-field refinement run, since zod
+        // skips those entirely while a field is missing.
+        const probe = def.zodSchema?.safeParse({
+          ...bodyArgs,
+          [def.autoDeviceTargetParam!]: AUTO_DEVICE_TARGET_PROBE,
+        });
+        if (probe && !probe.success) {
+          const probeError = probe.error;
+          const declared = new Set(Object.keys(def.zodSchema?.shape ?? {}));
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+              failure_stage: "http_zod_validation",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            req.body,
+            { invalid_params: deriveInvalidParams(probeError, declared) }
+          );
+          res.status(400).json({
+            error: probeError.message,
+            message: describeParamIssues(probeError, omitKeys(bodyArgs, derivedTargets)),
+            issues: probeError.issues,
+          });
+          return;
+        }
         try {
           autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, controller.signal);
           bodyArgs = { ...bodyArgs, [def.autoDeviceTargetParam!]: autoResolvedDevice };

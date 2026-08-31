@@ -37,8 +37,11 @@ export function relaxAutoDeviceTarget(
   const props = properties as Record<string, unknown>;
   const udid = props[AUTO_DEVICE_TARGET_PARAM];
   if (!udid || typeof udid !== "object") return inputSchema;
+  // Eight of these descriptions end without a terminator; joined on a bare space
+  // the hint runs straight on from the last word ("...Simulator UDID Optional:").
   const described = (udid as { description?: unknown }).description;
-  const prefix = typeof described === "string" && described ? `${described} ` : "";
+  const trimmed = typeof described === "string" ? described.trim() : "";
+  const prefix = trimmed ? `${/[.!?:]$/.test(trimmed) ? trimmed : `${trimmed}.`} ` : "";
 
   const remaining = (required as string[]).filter((k) => k !== AUTO_DEVICE_TARGET_PARAM);
   const relaxed: Record<string, unknown> = {

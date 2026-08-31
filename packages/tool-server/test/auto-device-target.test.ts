@@ -4,6 +4,8 @@ import { z } from "zod";
 import { Registry, type ToolCapability } from "@argent/registry";
 import { createHttpApp } from "../src/http";
 import { createRegistry } from "../src/utils/setup-registry";
+import { deviceEntryId, isBooted } from "../src/utils/booted-devices";
+import { AUTO_DEVICE_TARGET_PROBE } from "../src/utils/auto-device-target";
 
 const IPHONE = "6DBF83B4-0000-4000-8000-00000000AAAA";
 const ANDROID = "emulator-5554";
@@ -28,16 +30,21 @@ const CHROMIUM_ONLY: ToolCapability = { chromium: { app: true } };
  * A registry holding a stub `list-devices` plus one device tool whose schema
  * requires `udid` — the shape the whole feature keys off.
  */
-function harness(devices: Listed[], capability?: ToolCapability) {
+function harness(
+  devices: Listed[],
+  capability?: ToolCapability,
+  options?: Parameters<typeof createHttpApp>[1]
+) {
   const execute = vi.fn(async (_s: unknown, params: { udid: string }) => ({ saw: params.udid }));
+  // A spy, not a literal: whether the enumeration ran at all is the invariant the
+  // explicit-udid path exists to protect.
+  const listDevices = vi.fn(async () => ({ devices }));
   const registry = new Registry();
   registry.registerTool({
     id: "list-devices",
     zodSchema: z.object({}),
     services: () => ({}),
-    async execute() {
-      return { devices };
-    },
+    execute: listDevices,
   });
   registry.registerTool({
     id: "poke",
@@ -46,7 +53,7 @@ function harness(devices: Listed[], capability?: ToolCapability) {
     services: () => ({}),
     execute,
   });
-  return { registry, execute, app: createHttpApp(registry).app };
+  return { registry, execute, listDevices, app: createHttpApp(registry, options).app };
 }
 
 describe("the advertised schema relaxes `udid` while the zod schema keeps it", () => {
@@ -58,6 +65,24 @@ describe("the advertised schema relaxes `udid` while the zod schema keeps it", (
     };
     expect(schema.required ?? []).not.toContain("udid");
     expect(schema.properties.udid.description).toContain("Target device id.");
+    // Eight real descriptions end without a terminator, so the join has to supply
+    // one rather than run the hint on from the last word.
+    const unpunctuated = new Registry();
+    unpunctuated.registerTool({
+      id: "blunt",
+      zodSchema: z.object({ udid: z.string().describe("iOS Simulator UDID") }),
+      services: () => ({}),
+      async execute() {
+        return {};
+      },
+    });
+    expect(
+      (
+        unpunctuated.getTool("blunt")!.inputSchema as {
+          properties: { udid: { description: string } };
+        }
+      ).properties.udid.description
+    ).toMatch(/^iOS Simulator UDID\. Optional/);
     expect(schema.properties.udid.description).toMatch(/the one booted device this tool supports/);
   });
 
@@ -135,12 +160,16 @@ describe("the HTTP dispatcher fills in the single booted device", () => {
   });
 
   it("refuses an ambiguous pool rather than picking one, naming the candidates", async () => {
-    const { app, execute } = harness([iphone(), android()]);
+    // The shut-down sim is in `devices` but not in `candidates`, so this also
+    // pins that the ambiguity listing enumerates the candidates rather than
+    // everything `list-devices` returned.
+    const { app, execute } = harness([iphone(), android(), iphone("Shutdown")]);
     const res = await request(app).post("/tools/poke").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/2 booted devices match the platforms `poke` declares/);
     expect(res.body.error).toContain(IPHONE);
     expect(res.body.error).toContain(ANDROID);
+    expect(res.body.error).not.toContain("Shutdown");
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -331,6 +360,19 @@ describe("a call that named a device is never re-targeted", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["null", null],
+    ["an empty string", ""],
+    ["whitespace", "   "],
+  ])("resolves for a udid of %s, which names no device", async (_label, value) => {
+    // A client with a required-shaped field spells "absent" this way; `""`
+    // otherwise classifies as an Android serial and reaches `adb -s ''`.
+    const { app, execute } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({ udid: value });
+    expect(res.status).toBe(200);
+    expect(execute.mock.calls[0]![1].udid).toBe(IPHONE);
+  });
+
   it("still resolves for a genuinely empty request", async () => {
     const { app, execute } = harness([iphone()]);
     const res = await request(app).post("/tools/poke");
@@ -395,5 +437,259 @@ describe("the advertised schema stays well-formed", () => {
       })
       .map((def) => def.id);
     expect(empty).toEqual([]);
+  });
+});
+
+describe("what counts as booted, per platform", () => {
+  // `isBooted` is the one predicate both resolvers share, and its states were
+  // reachable only indirectly. A table so a platform's vocabulary cannot drift.
+  it.each([
+    ["ios", "Booted", true],
+    ["ios", "Shutdown", false],
+    ["ios", "Booting", false],
+    ["android", "device", true],
+    ["android", "offline", false],
+    ["android", "unauthorized", false],
+    ["vega", "running", true],
+    ["vega", "device", true],
+    ["vega", "stopped", false],
+    ["chromium", "Running", true],
+    ["ios-remote", "Booted", false],
+  ])("%s in state %s", (platform, state, expected) => {
+    expect(isBooted({ platform, state } as Parameters<typeof isBooted>[0])).toBe(expected);
+  });
+
+  it("reads a platform it does not know as not-booted", () => {
+    // The fallback is what keeps an unrecognised entry from being auto-selected
+    // or bound into a flow.
+    expect(isBooted({ platform: "holo", state: "device" } as never)).toBe(false);
+  });
+
+  it("reads each platform's id off the key that platform actually uses", () => {
+    expect(deviceEntryId({ platform: "ios", udid: IPHONE })).toBe(IPHONE);
+    expect(deviceEntryId({ platform: "ios-remote", udid: REMOTE })).toBe(REMOTE);
+    expect(deviceEntryId({ platform: "chromium", id: CHROMIUM })).toBe(CHROMIUM);
+    expect(deviceEntryId({ platform: "android", serial: ANDROID })).toBe(ANDROID);
+    expect(deviceEntryId({ platform: "vega", serial: "amazon-1" })).toBe("amazon-1");
+  });
+});
+
+describe("every platform resolves, not just the two the mixed-pool cases use", () => {
+  it.each([
+    ["android", android(), ANDROID],
+    [
+      "vega",
+      { platform: "vega", state: "running", serial: "amazon-4a27df03c9" } as Listed,
+      "amazon-4a27df03c9",
+    ],
+    ["chromium", chromium(), CHROMIUM],
+  ])("resolves a lone booted %s device", async (_p, entry, id) => {
+    const { app, execute } = harness([entry]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(200);
+    expect(execute.mock.calls[0]![1].udid).toBe(id);
+  });
+
+  it("skips an entry that carries no id for its platform", async () => {
+    // A vega row with no serial renders as `?`; it must not be resolved to one.
+    const { app } = harness([{ platform: "vega", state: "running" } as Listed]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/No booted device runs `poke`/);
+  });
+});
+
+describe("naming the device keeps the call off the enumeration", () => {
+  it("does not list devices at all when udid was passed", async () => {
+    // The whole point of the guard: `list-devices` fans out to simctl/adb/vega
+    // and dominates the latency of a call that never needed it.
+    const { app, listDevices } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({ udid: IPHONE });
+    expect(res.status).toBe(200);
+    expect(listDevices).not.toHaveBeenCalled();
+  });
+
+  it("lists exactly once when it has to resolve", async () => {
+    const { app, listDevices } = harness([iphone()]);
+    await request(app).post("/tools/poke").send({});
+    expect(listDevices).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an unresolvable target is reported to telemetry", () => {
+  it("records the refusal under its own failure stage", async () => {
+    const recordFailure = vi.fn();
+    const { app } = harness([iphone("Shutdown")], undefined, { recordFailure });
+    await request(app).post("/tools/poke").send({});
+    expect(recordFailure).toHaveBeenCalledTimes(1);
+    expect(recordFailure.mock.calls[0]![0]).toBe("poke");
+    expect(recordFailure.mock.calls[0]![2]).toMatchObject({
+      error_code: "HTTP_AUTO_DEVICE_TARGET_UNRESOLVED",
+      failure_stage: "http_auto_device_target",
+      failure_area: "http",
+      error_kind: "validation",
+    });
+  });
+});
+
+describe("no registered tool advertises a run-on udid description", () => {
+  it("terminates the tool's own sentence before the hint", () => {
+    const registry = createRegistry();
+    const runOn = registry
+      .getSnapshot()
+      .tools.map((id) => registry.getTool(id)!)
+      .filter((def) => def.autoDeviceTargetParam !== undefined)
+      .filter((def) => {
+        const d = (def.inputSchema as { properties: { udid: { description: string } } }).properties
+          .udid.description;
+        const head = d.slice(0, d.indexOf("Optional:")).trimEnd();
+        return head.length > 0 && !/[.!?:]$/.test(head);
+      })
+      .map((def) => def.id);
+    expect(runOn).toEqual([]);
+  });
+});
+
+describe("a malformed argument is reported as itself, not as an ambiguous device", () => {
+  function typedHarness(devices: Listed[]) {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const listDevices = vi.fn(async () => ({ devices }));
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: listDevices,
+    });
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z.object({ udid: z.string().describe("Target device id."), x: z.number() }),
+      services: () => ({}),
+      execute,
+    });
+    return { execute, listDevices, app: createHttpApp(registry).app };
+  }
+
+  it("names the bad param when several devices are booted", async () => {
+    const { app } = typedHarness([iphone(), android()]);
+    const res = await request(app).post("/tools/poke").send({ x: "nope" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("x");
+    expect(res.body.message).not.toContain("ambiguous");
+    expect(res.body.issues).toHaveLength(1);
+    expect(res.body.issues[0].path).toEqual(["x"]);
+    // The pre-fix answer. Kept as an explicit negative because it is the whole
+    // defect: the caller retried with a udid to learn what was actually wrong.
+    expect(res.body.error).not.toContain("ambiguous");
+  });
+
+  it("skips the device enumeration entirely when another param is wrong", async () => {
+    const { app, listDevices, execute } = typedHarness([iphone(), android()]);
+    await request(app).post("/tools/poke").send({ x: "nope" });
+    expect(listDevices).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("still resolves when every other param is fine", async () => {
+    const { app, listDevices, execute } = typedHarness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({ x: 1 });
+    expect(res.status).toBe(200);
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(res.body.device).toBe(IPHONE);
+  });
+
+  it("reports the unresolvable device once the other params pass", async () => {
+    const { app } = typedHarness([]);
+    const res = await request(app).post("/tools/poke").send({ x: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("No booted device runs");
+  });
+
+  it("keeps `error` parseable as the issue array released CLIs expect", async () => {
+    const { app } = typedHarness([iphone(), android()]);
+    const res = await request(app).post("/tools/poke").send({ x: "nope" });
+    const parsed = JSON.parse(res.body.error) as { path: string[] }[];
+    expect(parsed.map((i) => i.path[0])).toEqual(["x"]);
+  });
+
+  it("reports a cross-field rule the missing device would otherwise hide", async () => {
+    // zod skips object-level refinements while any field is missing, so probing
+    // the raw args would find nothing here and answer "ambiguous" instead.
+    const listDevices = vi.fn(async () => ({ devices: [iphone(), android()] }));
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: listDevices,
+    });
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z
+        .object({
+          udid: z.string().describe("Target device id."),
+          text: z.string().optional(),
+          key: z.string().optional(),
+        })
+        .refine((d) => !!d.text !== !!d.key, {
+          message: "exactly one of text/key",
+          path: ["text"],
+        }),
+      services: () => ({}),
+      async execute() {
+        return {};
+      },
+    });
+    const { app } = createHttpApp(registry);
+    const res = await request(app).post("/tools/poke").send({ text: "hi", key: "enter" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("exactly one of text/key");
+    expect(listDevices).not.toHaveBeenCalled();
+  });
+
+  it("buckets the probe failure as a validation failure, not a device one", async () => {
+    const recordFailure = vi.fn();
+    const execute = vi.fn(async () => ({ ok: true }));
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: async () => ({ devices: [iphone(), android()] }),
+    });
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z.object({ udid: z.string().describe("Target device id."), x: z.number() }),
+      services: () => ({}),
+      execute,
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    await request(app).post("/tools/poke").send({ x: "nope" });
+    expect(recordFailure.mock.calls[0]![2]).toMatchObject({
+      error_code: "HTTP_ZOD_VALIDATION_FAILED",
+      failure_stage: "http_zod_validation",
+    });
+    expect(recordFailure.mock.calls[0]![1]).toMatchObject({ invalid_params: ["x"] });
+  });
+});
+
+describe("every auto-targeted tool accepts the probe device id", () => {
+  it("leaves the probe substitution invisible in the reported issues", () => {
+    // The probe is substituted, not filtered out of the result, so a tool that
+    // constrained its device arg beyond `z.string()` would answer every
+    // device-less call with an error about a value the caller never sent.
+    const registry = createRegistry();
+    const rejecting = registry
+      .getSnapshot()
+      .tools.map((id) => registry.getTool(id)!)
+      .filter((def) => def.autoDeviceTargetParam !== undefined && def.zodSchema !== undefined)
+      .filter((def) => {
+        const field = (def.zodSchema as unknown as { shape?: Record<string, z.ZodTypeAny> })
+          .shape?.[def.autoDeviceTargetParam!];
+        return field !== undefined && !field.safeParse(AUTO_DEVICE_TARGET_PROBE).success;
+      })
+      .map((def) => def.id);
+    expect(rejecting).toEqual([]);
   });
 });

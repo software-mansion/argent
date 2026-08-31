@@ -4,6 +4,15 @@ import { assertSupported } from "./capability";
 import { describeDevice, deviceEntryId, isBooted, listDevices } from "./booted-devices";
 
 /**
+ * Stands in for the device id while the rest of a call's arguments are judged,
+ * so a malformed argument is reported as itself rather than as an ambiguous
+ * device pool. Substituted rather than filtered back out, because zod skips a
+ * cross-field refinement entirely while any field is missing. It never reaches
+ * a tool, and a suite check pins that every device arg accepts it.
+ */
+export const AUTO_DEVICE_TARGET_PROBE = "00000000-0000-4000-8000-000000000000";
+
+/**
  * Thrown when a caller omitted `udid` and the server cannot name one device for
  * it. The message always enumerates the devices, booted or not, because that
  * listing is the whole reason the caller would otherwise have had to run
@@ -28,10 +37,12 @@ export class AutoDeviceTargetError extends Error {
  * Chromium app both up, `chromium-tabs` still resolves, because the iPhone is
  * not a candidate for it.
  *
- * It narrows by platform and kind only. A tool that accepts Apple simulators
- * accepts an Apple TV one, since a UDID does not say which it is — `tv-remote`
- * and the gesture tools sort that out at call time (see tools/tv-remote), so on
- * a machine booting both a TV and a phone the caller still has to name one.
+ * It narrows by platform and kind only. A UDID does not say whether it belongs
+ * to an iPhone or an Apple TV, and `capability` has no key to ask with, so a
+ * lone booted Apple TV simulator IS a candidate for `gesture-tap` — which,
+ * unlike `tv-remote` and `keyboard`, carries no call-time guard of its own. The
+ * `runtimeKind` that `list-devices` reports per entry is the signal that would
+ * settle it, and this resolver does not read it yet.
  */
 export async function resolveAutoDeviceTarget(
   registry: Registry,

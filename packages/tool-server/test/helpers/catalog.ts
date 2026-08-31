@@ -1,4 +1,4 @@
-import { zodObjectToJsonSchema, type Registry, type ToolDefinition } from "@argent/registry";
+import { Registry, type ToolDefinition } from "@argent/registry";
 import { createProposeVariantTool } from "../../src/tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
 
@@ -23,13 +23,21 @@ export function definitionsById(registry: Registry): Map<string, ToolDefinition<
 
 /**
  * The schema a client actually receives: the explicit one if a definition
- * carries it, else the one `Registry.registerTool` derives. Null when a
- * definition declares neither, so the caller can report that as its own
- * failure rather than dereferencing undefined.
+ * carries it, else the one `Registry.registerTool` derives — including the
+ * `udid` relaxation it applies, so a definition built by hand in a test is
+ * compared against what a client would really get. Null when a definition
+ * declares neither, so the caller can report that as its own failure rather
+ * than dereferencing undefined.
  */
 export function advertisedSchema(def: ToolDefinition<any, any>): Record<string, unknown> | null {
   if (def.inputSchema) return def.inputSchema;
-  return def.zodSchema ? zodObjectToJsonSchema(def.zodSchema) : null;
+  if (!def.zodSchema) return null;
+  // Registered rather than derived by hand, so the result carries every rewrite
+  // registration applies — the `udid` relaxation included. Deriving it directly
+  // would return a schema no client ever sees.
+  const scratch = new Registry();
+  scratch.registerTool(def);
+  return scratch.getTool(def.id)?.inputSchema ?? null;
 }
 
 /**

@@ -345,8 +345,12 @@ describe("keyboard — how the constraint reaches a client", () => {
   it("leaves both halves optional in the advertised schema", () => {
     const schema = advertisedSchema(createKeyboardTool(registry()))!;
     expect(schema.type).toBe("object");
-    const required = schema.required as string[];
-    expect(required).toEqual(["udid"]);
+    // `udid` is the tool's only zod-required arg and the server resolves it, so
+    // nothing is left required and the key is dropped entirely.
+    expect(schema.required).toBeUndefined();
+    expect(Object.keys(schema.properties as object)).toEqual(
+      expect.arrayContaining(["text", "key"])
+    );
   });
 
   it("does not try to encode the rule as a top-level combinator", () => {

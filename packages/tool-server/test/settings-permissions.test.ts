@@ -18,18 +18,14 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
 });
 
 import type { DeviceInfo } from "@argent/registry";
-import {
-  FAILURE_CODES,
-  FailureError,
-  getFailureSignal,
-  zodObjectToJsonSchema,
-} from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 import { iosImpl } from "../src/tools/settings-permissions/platforms/ios";
 import { androidImpl } from "../src/tools/settings-permissions/platforms/android";
 import type { SettingsPermissionsParams } from "../src/tools/settings-permissions/types";
 import { adbShell } from "../src/utils/adb";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { advertisedSchema } from "./helpers/catalog";
 
 const mockAdbShell = vi.mocked(adbShell);
 
@@ -193,11 +189,13 @@ describe("settings-permissions schema", () => {
     // bundleId is a plain required field now (no superRefine), so it must appear
     // in the JSON schema's `required` list — pin the derivation so a zod upgrade
     // can't silently drop it and let a bundleId-less call reach the handler.
-    const json = zodObjectToJsonSchema(schema) as {
+    const json = advertisedSchema(settingsPermissionsTool) as {
       required?: string[];
       properties?: Record<string, { pattern?: string; enum?: string[] }>;
     };
-    expect(json.required).toEqual(["udid", "action", "permission", "bundleId"]);
+    // `udid` is deliberately absent: the server resolves it when omitted. The
+    // other three must stay, which is what this pins.
+    expect(json.required).toEqual(["action", "permission", "bundleId"]);
     expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z_][A-Za-z0-9._-]*$");
     expect(json.properties?.action?.enum).toEqual(["grant", "deny", "reset"]);
     expect(json.properties?.permission?.enum).toHaveLength(11);

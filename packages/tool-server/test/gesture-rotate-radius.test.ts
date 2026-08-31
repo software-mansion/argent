@@ -7,9 +7,9 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
   sendCommand: vi.fn(),
 }));
 
-import { zodObjectToJsonSchema } from "@argent/registry";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { sendCommand } from "../src/utils/simulator-client";
+import { advertisedSchema } from "./helpers/catalog";
 
 const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const services = { simulatorServer: {} } as never;
@@ -95,12 +95,15 @@ describe("gesture-rotate radiusX/radiusY", () => {
 
 describe("gesture-rotate inputSchema", () => {
   it("keeps the radius trio optional at the top level", () => {
-    const schema = zodObjectToJsonSchema(gestureRotateTool.zodSchema!);
+    const schema = advertisedSchema(gestureRotateTool)!;
     expect(schema.type).toBe("object");
     const required = schema.required as string[];
+    // `udid` is absent by design — the server resolves it — so this pins the
+    // list a client is actually handed.
     expect(required).toEqual(
-      expect.arrayContaining(["udid", "centerX", "centerY", "startAngle", "endAngle"])
+      expect.arrayContaining(["centerX", "centerY", "startAngle", "endAngle"])
     );
+    expect(required).not.toContain("udid");
     expect(required).not.toContain("radius");
     expect(required).not.toContain("radiusX");
     expect(required).not.toContain("radiusY");
