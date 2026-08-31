@@ -16,7 +16,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (on Metro the app's own id for this device and bundle, absent on Vega; on Chromium the device id itself); you do not switch to it unless a `device_mismatch` refusal tells you to. While this session lives, forwarding it resolves back here; once the session ends the alias goes with it, so the same id then opens a SECOND debugger session for one device. The list-devices id is the one every other tool takes."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (on Metro the app's own id for this device and bundle, absent on Vega; on Chromium the device id itself); you do not switch to it unless a `device_mismatch` refusal tells you to. Forwarding it resolves back here while the alias holds; tearing down any debugger session for this device drops the alias, so the same id then opens a SECOND debugger session for one device. The list-devices id is the one every other tool takes."
     ),
 });
 
