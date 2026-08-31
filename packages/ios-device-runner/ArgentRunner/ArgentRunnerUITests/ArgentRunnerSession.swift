@@ -135,8 +135,9 @@ final class ArgentRunnerSession: XCTestCase {
         }
     }
 
-    /// The port requested through the .xctestrun environment. Returning 0 lets
-    /// the system pick one when the session runs directly from Xcode.
+    /// The port requested through the environment, forwarded by xcodebuild
+    /// from TEST_RUNNER_ARGENT_RUNNER_PORT with the prefix stripped. Returning
+    /// 0 lets the system pick one when the session runs directly from Xcode.
     static func configuredPort() -> UInt16 {
         if let raw = ProcessInfo.processInfo.environment["ARGENT_RUNNER_PORT"],
             let port = UInt16(raw)
