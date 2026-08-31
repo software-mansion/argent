@@ -22,8 +22,8 @@ interface LogRegistryResponse extends LogStats {
    * two states where something does — and both sentences when both hold. The
    * first carries a further clause of its own where that teardown's record
    * replaced an earlier one nobody read: how many went unreported, and whether
-   * one of their log files went with it, whether anything they left is still in
-   * `~/.argent/tmp` under no name, or both.
+   * one of their log files went with it, whether the rest are still on disk and
+   * where, or both.
    *
    * - This registry is a new session's, minted after the previous one for this
    *   device was torn down holding console history — by a
