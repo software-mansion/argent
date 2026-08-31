@@ -314,11 +314,11 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
 
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
-      // cannot drive the Apple TV focus engine, and `sendCommand` is
-      // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
-      // reported success. Reject at this one chokepoint every gesture / keyboard /
-      // paste / rotate tool resolves through; screenshot branches to `xcrun`
-      // before it ever resolves this service.
+      // cannot drive the Apple TV focus engine: it accepts a touch and acks it
+      // `ok` while the focus engine ignores it, so no ack check can catch this
+      // one. Reject at this one chokepoint every gesture / keyboard / paste /
+      // rotate tool resolves through; screenshot branches to `xcrun` before it
+      // ever resolves this service.
       if (await isTvOsSimulator(device.id)) {
         throw new UnsupportedOperationError(
           SIMULATOR_SERVER_NAMESPACE,
