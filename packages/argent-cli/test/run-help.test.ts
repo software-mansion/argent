@@ -29,7 +29,7 @@ vi.mock("@argent/telemetry", () => telemetryMock);
 // zodObjectToJsonSchema over the zod schema in
 // packages/tool-server/src/tools/flows/flow-add-step.ts. Recordings are keyed
 // by `name` + `project_root`, so both are required alongside `command` and only
-// `args` / `delayMs` are optional. The assertions below pin `required` in both
+// `args` / `selector` / `delayMs` are optional. The assertions below pin `required` in both
 // directions — each entry against its `(required)` marker, each non-entry
 // against a negative lookahead — so dropping or adding one here fails loudly.
 // The drift that does pass silently is the opposite one: if the real
@@ -52,6 +52,14 @@ const flowAddStepMeta = {
       project_root: { type: "string" },
       command: { type: "string" },
       args: { type: "string" },
+      selector: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          identifier: { type: "string" },
+          role: { type: "string" },
+        },
+      },
       delayMs: { type: "integer", minimum: 0, maximum: 9007199254740991 },
     },
     required: ["name", "project_root", "command"],
@@ -140,8 +148,12 @@ describe("argent run --help — whole-payload --args advertisement", () => {
     expect(help).toMatch(/--name <value>\s+string \(required\)/);
     expect(help).toMatch(/--project_root <value>\s+string \(required\)/);
     expect(help).toMatch(/--command <value>\s+string \(required\)/);
-    // ...while the two genuinely optional fields must NOT carry the marker.
+    // ...while the three genuinely optional fields must NOT carry the marker.
+    // `selector` is the schema's only object field, so it is also the one that
+    // has to render as the `--<field>-json <json>` form rather than as a plain
+    // `--<field> <value>` flag no parser branch would accept.
     expect(help).toMatch(/--args <value>\s+string(?! \(required\))/);
+    expect(help).toMatch(/--selector-json <json>\s+object(?! \(required\))/);
     expect(help).toMatch(/--delayMs <value>\s+integer(?! \(required\))/);
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
