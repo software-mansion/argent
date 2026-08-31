@@ -210,7 +210,7 @@ A `script:` step runs a local `.mjs` file and uses no device. **Add one only whe
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-Record the step live with `flow-add-script`. Do not write it by hand. See [Live authoring](live-authoring.md#recorder-contract).
+Record the step live with `flow-add-script` rather than typing it in afterward. See [Live authoring](live-authoring.md#recorder-contract). `flow-add-script` refuses when the tool server does not share your file system, because the `.mjs` file stays on your machine. Then finish the recording, write the step into the YAML by hand, and replay it locally.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
