@@ -72,6 +72,12 @@ const CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER =
  * start anything (its handler is a documented no-op) and it re-resolves the
  * very CDP service that just failed, so pointing an agent at it from a
  * cdp_unreachable result would manufacture a guaranteed second failure.
+ *
+ * Three reasons carry no note pointer. `runtime_unresponsive` describes a
+ * session that is still alive, so no record of it has been filed; `metro_not_running`
+ * and `reconnecting` are transient, and their own recovery step lands on a
+ * reason that does point — a retry once Metro is up answers `no_app_connected`
+ * or connects, and either route reaches a tool that reports the note.
  */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
