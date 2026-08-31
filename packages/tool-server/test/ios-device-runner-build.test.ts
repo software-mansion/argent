@@ -502,6 +502,32 @@ describe("resolveSigningHint", () => {
       resolveSigningHint('No profiles for "com.argent.runner.tabcde12345" were found')
     ).toContain("Xcode > Settings > Accounts");
   });
+
+  it("maps errSecInternalComponent to the exact partition-list fix, case-insensitively", () => {
+    const hint = resolveSigningHint(
+      "/usr/bin/codesign --force --sign 4E815... ArgentRunner.app\n" +
+        "errSecInternalComponent\nCommand CodeSign failed with a nonzero exit code"
+    );
+    expect(hint).toBe(
+      "The signing key's access control needs stamping. Run: " +
+        "security set-key-partition-list -S apple-tool:,apple:,codesign: " +
+        "-s ~/Library/Keychains/login.keychain-db (it asks for your login password), " +
+        "then retry."
+    );
+    expect(resolveSigningHint("ERRSECINTERNALCOMPONENT")).toBe(hint);
+  });
+
+  it("keeps the partition-list hint when the log also mentions a provisioning profile", () => {
+    // A build log lists the embedded provisioning profile during codesign;
+    // that mention must not divert an errSecInternalComponent failure to the
+    // sign-into-Xcode arm, which cannot fix a locked keychain key.
+    const hint = resolveSigningHint(
+      "Entitlements from provisioning profile argent-runner.mobileprovision\n" +
+        "errSecInternalComponent"
+    );
+    expect(hint).toContain("set-key-partition-list");
+    expect(hint).not.toContain("Xcode > Settings > Accounts");
+  });
 });
 
 /**

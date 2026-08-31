@@ -263,6 +263,20 @@ export function resolveSigningHint(output: string): string | null {
     );
   }
 
+  // Check this before the provisioning arm too: errSecInternalComponent is a
+  // codesign-stage verdict (the signing key's keychain partition list blocks
+  // non-Xcode callers), so provisioning already succeeded and any
+  // "provisioning profile" mention further up the log is context, not the
+  // failure. The two arms above never co-occur with it.
+  if (lower.includes("errsecinternalcomponent")) {
+    return (
+      "The signing key's access control needs stamping. Run: " +
+      "security set-key-partition-list -S apple-tool:,apple:,codesign: " +
+      "-s ~/Library/Keychains/login.keychain-db (it asks for your login password), " +
+      "then retry."
+    );
+  }
+
   if (lower.includes("no profiles for") || lower.includes("provisioning profile")) {
     return (
       "Provisioning failed. Check that this team's Apple ID is signed into Xcode " +
