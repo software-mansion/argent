@@ -142,10 +142,11 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
           // is a look at the path, so it cannot tell a writer that never got
           // one from a file something has since removed; the note says both.
           notes.push(
-            `There is no log file at ${stats.file}, so the entries counted here are only in ` +
-              `this summary — do not try to read that path. The writer either could not ` +
-              `create it, or something has removed it since. Check that ~/.argent/tmp is ` +
-              `writable.`
+            `There is no log file at ${stats.file}, so those entries are gone — do not try ` +
+              `to read that path. What is left of them is the counts, and clusters that are a ` +
+              `capped and truncated view rather than the lines themselves. The writer either ` +
+              `could not create it, or something has removed it since. Check that ` +
+              `~/.argent/tmp is writable.`
           );
         }
         if (notes.length > 0) response.note = notes.join(" ");
