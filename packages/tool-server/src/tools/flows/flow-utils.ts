@@ -2630,13 +2630,24 @@ interface StepField {
   value: string;
 }
 
-function* selectorFields(sel: FlowSelector, where: string): Generator<StepField> {
+/**
+ * A selector's own string leaves, addressed by their YAML spellings.
+ *
+ * `patterns` adds the regex spelling `text: { matches }`, which the walk
+ * otherwise skips — see {@link outputReferenceFields} for the one context that
+ * asks for it.
+ */
+function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
   if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
+  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
+  if (patterns && sel.textMatches !== undefined) {
+    yield { where: `${where}.text.matches`, value: sel.textMatches };
+  }
   if (sel.identifier !== undefined) yield { where: `${where}.id`, value: sel.identifier };
   if (sel.role !== undefined) yield { where: `${where}.role`, value: sel.role };
   for (const relation of SELECTOR_RELATIONS) {
     const nested = sel[relation];
-    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`);
+    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`, patterns);
   }
 }
 
@@ -2696,13 +2707,15 @@ function* conditionFields(
     selector: FlowSelector;
     expectedText?: string;
     textMatch?: TextMatchMode;
-  }
+  },
+  patterns = false
 ): Generator<StepField> {
   yield* selectorFields(
     cond.selector,
-    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`
+    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`,
+    patterns
   );
-  if (cond.expectedText !== undefined && cond.textMatch !== "matches") {
+  if (cond.expectedText !== undefined && (patterns || cond.textMatch !== "matches")) {
     yield {
       where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
       value: cond.expectedText,
@@ -2727,7 +2740,13 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       yield* conditionFields(step.kind, step);
       return;
     case "when":
-      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition);
+      // Patterns included HERE and nowhere else. `{{output:…}}` is on no
+      // resolver list, so a regex carrying one matches nothing — which a `tap`,
+      // an `await` or an `assert` reports on its first run. A `when` does not:
+      // an unmatchable guard is simply not met, the block is skipped, and the
+      // run is green. Same reasoning, and same field set, as the `{{secret:`
+      // scan in parseWhenCondition.
+      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition, true);
       return;
     case "tap":
     case "long-press":

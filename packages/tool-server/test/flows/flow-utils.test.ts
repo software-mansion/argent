@@ -1269,6 +1269,41 @@ describe("output references", () => {
     ).toMatchObject({ kind: "assert", expectedText: "{{output:.*", textMatch: "matches" });
   });
 
+  it("refuses a pattern in a `when` guard, the one context where it fails silently", () => {
+    // The exemption above holds where an unmatchable pattern is LOUD: a tap
+    // finds nothing, an assert fails. A `when` guard that matches nothing is
+    // simply not met — the block is skipped and the run is green — so the two
+    // regex spellings are scanned there, exactly as the `{{secret:` guard in
+    // parseWhenCondition scans them.
+    const fieldNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /`([^`]+)` holds an output reference/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { visible: { text: { matches: "{{output:x}}" } } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.visible.text.matches");
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { text: { in: { text: Total }, matches: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.text.matches");
+    // A pattern in a relational scope of the guard degrades it the same way.
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { visible: { text: Ok, within: { text: { matches: "{{output:x}}" } } } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.visible.within.text.matches");
+  });
+
   it("does not confuse a secret placeholder for one", () => {
     expect(
       parseFlow('steps:\n  - type: { into: { id: pw }, text: "{{secret:APP_PASSWORD}}" }\n')
