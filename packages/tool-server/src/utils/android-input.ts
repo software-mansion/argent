@@ -171,6 +171,14 @@ export async function injectAndroidClear(serial: string, signal?: AbortSignal): 
   const codes: number[] = [];
   const backspace = ANDROID_NAMED_KEYCODES.backspace!;
   for (let i = 0; i < CLEAR_KEY_PAIRS; i++) codes.push(backspace, KEYCODE_FORWARD_DEL);
+  // Read BEFORE the call, because the answer is only knowable there. Node's
+  // `execFile` with an already-aborted signal never spawns the child and rejects
+  // with `code: "ABORT_ERR"` — which is not a spawn failure and matches no adb
+  // client refusal, so `reachedTheDevice` answered `true` and the one case where
+  // the code can PROVE nothing was sent was reported as "may be PARTIALLY
+  // emptied". An abort that arrives once the child is running is a different
+  // thing and keeps that wording: the burst may well have been delivered.
+  const cancelledBeforeSend = signal?.aborted === true;
   try {
     // `signal` is the request's own abort — without it this call blocked for its
     // whole 90s budget after the caller had gone, and nothing killed the adb
@@ -205,17 +213,22 @@ export async function injectAndroidClear(serial: string, signal?: AbortSignal): 
     // exit 1), and the leading sentence is the authoritative one — an agent
     // that believes it re-reads a field that never changed, with a `describe`
     // that fails on the same dead device.
-    const delivered = reachedTheDevice(err);
+    const delivered = !cancelledBeforeSend && reachedTheDevice(err);
     throw new FailureError(
       (delivered
         ? `the clear burst did not finish on ${serial}, and the focused field may be PARTIALLY ` +
           `emptied — the ${CLEAR_KEY_PAIRS * 2} delete keys are sent as one ` +
           "`adb shell input keyevent`, which is not " +
           "atomic. Read the field back (`describe`) before clearing or typing again. "
-        : `the clear burst never reached ${serial}: adb rejected the command before delivering it, ` +
-          "so NO delete key was sent and the focused field is unchanged. This is a device " +
-          "connection problem, not a field problem — check `list-devices` and retry the clear once " +
-          "the device is back. ") +
+        : cancelledBeforeSend
+          ? `the clear burst was cancelled before it was sent to ${serial}, so NO delete key was ` +
+            "sent and the focused field is unchanged. The request had already been aborted — the " +
+            "caller disconnected, or the run was cancelled — when the burst was due, so no adb " +
+            "child was ever started. Nothing needs to be read back. "
+          : `the clear burst never reached ${serial}: adb rejected the command before delivering ` +
+            "it, so NO delete key was sent and the focused field is unchanged. This is a device " +
+            "connection problem, not a field problem — check `list-devices` and retry the clear " +
+            "once the device is back. ") +
         "Underlying failure: " +
         firstLine(err),
       {

@@ -743,6 +743,53 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(err?.message).not.toMatch(/Read the field back/);
   });
 
+  it("does not claim a partial clear for a burst the abort stopped before it was sent", async () => {
+    // The one case the code can PROVE: Node's `execFile` with an ALREADY-aborted
+    // signal never spawns the child and rejects with `code: "ABORT_ERR"`, which
+    // is not a spawn failure and matches no adb client refusal — so the helper
+    // written to prevent exactly this inversion answered "delivered". Confirmed
+    // on a real API 36 emulator through the real registry with a pre-aborted
+    // signal: "the focused field may be PARTIALLY emptied", for a command adb
+    // never started.
+    adbShell.mockClear();
+    adbShell.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("The operation was aborted"), { code: "ABORT_ERR" });
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const err = await impl
+      .handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone, {
+        signal: controller.signal,
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+    expect(err?.message).toMatch(/cancelled before it was sent/);
+    expect(err?.message).not.toMatch(/PARTIALLY emptied/);
+    expect(err?.message).not.toMatch(/Read the field back/);
+  });
+
+  it("still claims a partial clear when the abort arrives after the child started", async () => {
+    // The positive control for the branch above: an abort during the run kills a
+    // child that was already delivering, so the field may well be half empty.
+    adbShell.mockClear();
+    const controller = new AbortController();
+    adbShell.mockImplementationOnce(async () => {
+      controller.abort();
+      throw Object.assign(new Error("The operation was aborted"), { code: "ABORT_ERR" });
+    });
+    const err = await impl
+      .handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone, {
+        signal: controller.signal,
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+    expect(err?.message).toMatch(/PARTIALLY emptied/);
+  });
+
   it("still claims a partial clear for a burst that was cut short", async () => {
     // The positive control: `input` was running on the guest and stopped
     // partway, which is what the 90s cap's SIGKILL produces. Measured on an API
