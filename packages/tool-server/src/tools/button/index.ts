@@ -24,9 +24,9 @@ interface Result {
 
 /**
  * Per-platform buttons; the flat zod enum is the union of both platforms'.
- * Rejecting here is required because `sendCommand` is fire-and-forget and
- * cannot report a backend rejection — an unsupported button would be a silent
- * no-op the tool still reports as a successful `{ pressed }`.
+ * Rejecting here keeps the error specific: `sendCommand` now surfaces the
+ * server's rejection, but as a generic parse error naming the wire format
+ * rather than the platform that lacks the button.
  */
 export const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
   "ios": new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
@@ -90,13 +90,13 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
       return { pressed: params.button };
     }
     const api = services.simulatorServer as SimulatorServerApi;
-    sendCommand(api, {
+    await sendCommand(api, {
       cmd: "button",
       direction: "Down",
       button: params.button,
     });
     await sleep(50);
-    sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
+    await sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
     return { pressed: params.button };
   },
 };
