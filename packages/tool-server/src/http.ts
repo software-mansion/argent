@@ -799,8 +799,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // would keep working through a warm handle. Dropping the cached services
       // here makes the next resolve re-run the gates against the current grant.
       // Uncached and synchronous (one small local file read, like the
-      // per-request feature-flag read above) so a change bites on the next call.
-      if (deviceArg && isExternalId(deviceArg)) {
+      // per-request feature-flag read above) so a change bites on the next
+      // call. Not gated on the `ext:` spelling, a provider's device is
+      // reachable by its raw udid or serial too and that spelling caches its
+      // own service. Skipping the check there let a narrowed or withdrawn grant
+      // keep being served from a warm handle.
+      if (deviceArg) {
         const { reason, stale } = revalidateExternalDevice(deviceArg);
 
         if (stale) {

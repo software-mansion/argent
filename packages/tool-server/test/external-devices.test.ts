@@ -821,7 +821,41 @@ describe("revocation", () => {
     expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
   });
 
-  it("drops every cached service bound to the device, suffixes included", async () => {
+  /**
+   * The raw spelling is a second door to the same device and the registry keys
+   * a service by whichever id the caller named. Sweeping only the `ext:`
+   * spelling left the raw-keyed handle serving a grant that had been narrowed
+   * or withdrawn, since the capability gate runs in the factory and a warm
+   * handle never re-enters it.
+   */
+  it("reports staleness for the raw udid the provider claims", async () => {
+    const descriptorPath = await liveDescriptor();
+    useDescriptors(descriptorPath);
+    expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
+
+    const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
+    descriptor.devices[0].capabilities = ["simulator-server"];
+    fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
+  });
+
+  it("reports staleness for the raw udid when the device is withdrawn", async () => {
+    const descriptorPath = await liveDescriptor();
+    useDescriptors(descriptorPath);
+    expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
+
+    rewrite(descriptorPath, []);
+
+    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
+  });
+
+  /**
+   * Both spellings name one simulator, so both handles have to go. Derived
+   * without reading the descriptor, because a withdrawal (the case that most
+   * needs disposing) can no longer resolve the device.
+   */
+  it("drops every cached service bound to the device, both spellings and suffixes", async () => {
     const deviceId = makeExternalId("acme", IOS_UDID);
     const registry = fakeRegistry([
       `SimulatorServer:${deviceId}`,
@@ -836,10 +870,43 @@ describe("revocation", () => {
         `SimulatorServer:${deviceId}`,
         `NativeDevtools:${deviceId}#tcp`,
         `AXService:${deviceId}`,
+        `SimulatorServer:${IOS_UDID}`,
       ].sort()
     );
-    /** The identically-named local device must survive. */
-    expect(registry.disposed).not.toContain(`SimulatorServer:${IOS_UDID}`);
+    /** An unrelated device must survive. */
+    expect(registry.disposed).not.toContain(`ChromiumCdp:chromium-cdp-9222`);
+  });
+
+  it("drops both spellings when handed the raw udid", async () => {
+    useDescriptors(await liveDescriptor());
+    const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+    const registry = fakeRegistry([
+      `SimulatorServer:${deviceId}`,
+      `SimulatorServer:${IOS_UDID}`,
+      `ChromiumCdp:chromium-cdp-9222`,
+    ]);
+
+    const disposed = await disposeExternalDeviceServices(registry, IOS_UDID);
+
+    expect(disposed.sort()).toEqual(
+      [`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`].sort()
+    );
+  });
+
+  /**
+   * A withdrawal reached through the raw spelling cannot name the `ext:` one;
+   * the descriptor that mapped them is gone. The raw handle, the one that
+   * spelling could actually use, still goes. The `ext:` handle is unreachable
+   * without an `ext:`-spelled call and that call resolves both spellings from
+   * the id it was given, so it disposes before dispatching either way.
+   */
+  it("still drops the raw handle when the descriptor is already gone", async () => {
+    const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+    const registry = fakeRegistry([`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`]);
+
+    expect(await disposeExternalDeviceServices(registry, IOS_UDID)).toEqual([
+      `SimulatorServer:${IOS_UDID}`,
+    ]);
   });
 });
 

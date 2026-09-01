@@ -32,6 +32,7 @@ import {
   discoverProviders,
   type ExternalCapability,
   type ExternalDevice,
+  externalNativeId,
   externalProviderId,
   isExternalId,
   isProcessAlive,
@@ -113,7 +114,23 @@ export async function disposeExternalDeviceServices(
   },
   deviceId: string
 ): Promise<string[]> {
-  if (!isExternalId(deviceId)) return [];
+  /**
+   * Both spellings, because the registry keys a service by whichever id the
+   * caller named. A device driven by its raw udid caches as
+   * `SimulatorServer:<udid>`, which a sweep for the `ext:` id alone never
+   * matches (the grant would be revoked while the warm handle kept serving it,
+   * since the capability gate only runs in the factory).
+   *
+   * Derived without the descriptor so a withdrawal, the case that most needs
+   * disposing, is not the one case that cannot resolve its own spellings.
+   */
+  const spellings = new Set<string>([deviceId, externalNativeId(deviceId)]);
+  const claim = externalClaimForAnyId(deviceId);
+
+  if (claim) {
+    spellings.add(claim.id);
+    spellings.add(claim.nativeId);
+  }
 
   const disposed: string[] = [];
 
@@ -121,10 +138,11 @@ export async function disposeExternalDeviceServices(
     const separator = urn.indexOf(":");
     if (separator < 0) continue;
 
+    const named = urn.slice(separator + 1);
     /**
      * Suffix-tolerant: some namespaces append a transport tag after the id.
      */
-    if (!urn.slice(separator + 1).startsWith(deviceId)) continue;
+    if (![...spellings].some((spelling) => named.startsWith(spelling))) continue;
     await registry.disposeService(urn);
     disposed.push(urn);
   }
@@ -435,10 +453,15 @@ function capabilityKey(capabilities: ReadonlySet<string>): string {
  * within a cache window.
  */
 export function revalidateExternalDevice(id: string): { reason?: string; stale: boolean } {
-  if (!isExternalId(id)) return { stale: false };
-
+  /**
+   * Keyed on the spelling the caller used, not on the canonical id. A withdrawn
+   * device cannot be resolved to its canonical form and that is precisely when
+   * the previous reading has to be found. Each spelling then tracks the grant
+   * it was last dispatched under, which is the reading its own cached service
+   * was built from.
+   */
   const previous = lastSeenCapabilities.get(id);
-  const device = findExternalDevice(id);
+  const device = externalClaimForAnyId(id);
 
   if (!device) {
     lastSeenCapabilities.delete(id);
