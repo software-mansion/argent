@@ -864,19 +864,16 @@ async function verifyAgainstDevtools(
   text: string,
   signal?: AbortSignal
 ): Promise<KeyboardVerification> {
-  let before: FocusedField | null;
-  let beforeFocusedClass: string | null;
-  let beforeTruncated: boolean;
-  try {
-    ({
-      field: before,
-      focusedClass: beforeFocusedClass,
-      truncated: beforeTruncated,
-    } = await readFocusedField(devtools));
-  } catch {
+  const baseline = await readFocusedField(devtools).catch(() => null);
+  // A whole hierarchy dump stands between the check above and the first
+  // keystroke, so the caller can give up inside it. Past this point the text is
+  // typed on every path, including the one that gives up on reading the field.
+  signal?.throwIfAborted();
+  if (!baseline) {
     await injectAndroidText(serial, text);
     return { note: blockedNote(READ_FAILED_REASON, null) };
   }
+  const { field: before, focusedClass: beforeFocusedClass, truncated: beforeTruncated } = baseline;
   if (!before) {
     await injectAndroidText(serial, text);
     if (beforeTruncated) return { note: TRUNCATED_READ_NOTE };

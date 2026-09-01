@@ -39,10 +39,10 @@ The agent taps, swipes, pinches, rotates content, and sends custom touch sequenc
 
 On an Android phone or tablet, Argent reads the field back after it types. Android injects
 the text as one burst of key events. A field that redraws on each keystroke drops part of
-that burst, and the device still reports success. Argent finds this, retries once in small
-pieces where it can prove which characters are its own, and reports whether the text
-landed. The report gives counts, not the contents of the field. See the [tools
-reference](/docs/reference/tools#typed-text-on-android).
+that burst. The device still reports success. Argent finds the loss. Argent then retries in
+small pieces, but only where it can prove which characters are its own. Argent reports
+whether the text landed. The report gives counts, not the contents of the field. See the
+[tools reference](/docs/reference/tools#typed-text-on-android).
 
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
 

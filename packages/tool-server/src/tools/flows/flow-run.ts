@@ -1248,7 +1248,7 @@ A \`type\` step presses Enter after the text unless \`submit: false\`; on an And
 \`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
 (\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
 \`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
-that could not conclude before anything was retyped — passes.
+that could not conclude, before or after the retry — passes.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved

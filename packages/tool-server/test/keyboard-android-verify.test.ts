@@ -1422,6 +1422,48 @@ describe("android keyboard read-back — cancellation", () => {
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
   });
 
+  it("types nothing when the caller gives up during the baseline read", async () => {
+    // The baseline read is a whole hierarchy dump, and it is the last stretch
+    // before the burst, so the caller can give up inside it — after the check
+    // that follows the helper resolve has already passed. Both ways out of that
+    // read type: the one that measures a field, and the one that gives up on
+    // reading it.
+    for (const readEnds of [
+      async () => ({
+        xml: REPAIR_SCRIPT[0]!,
+        captureMode: "active-window",
+        windowCount: 1,
+        nodeCount: 2,
+        elapsedMs: 1,
+      }),
+      async () => {
+        throw new Error("helper closed the socket");
+      },
+    ]) {
+      adbShell.mockClear();
+      const controller = new AbortController();
+      const registry = {
+        resolveService: vi.fn(async () => ({
+          getHierarchy: vi.fn(async () => {
+            controller.abort();
+            return await readEnds();
+          }),
+          ping: vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" })),
+        })),
+      } as unknown as Registry;
+
+      await expect(
+        makeAndroidImpl(registry).handler(
+          {},
+          { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+          PHONE,
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(cmds()).toEqual([]);
+    }
+  });
+
   it("keeps the helper socket alive across a repair longer than its read timeout", async () => {
     // The helper closes a socket left idle for 60 s and the host turns that into
     // a full service teardown, so a repair that sends it nothing for that long
