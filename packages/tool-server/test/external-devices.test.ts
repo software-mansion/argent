@@ -929,6 +929,44 @@ describe("revocation", () => {
     expect(registry.disposed).not.toContain(`ChromiumCdp:chromium-cdp-9222`);
   });
 
+  /**
+   * The three namespaces that key a Metro session on a `(port, device)` pair
+   * put the port first, so the device id is not at the front of the payload.
+   * They are also the three that speak CDP to the app, gated only in the
+   * factory, so leaving them warm is what lets a withdrawn `js-debugger` grant
+   * keep serving for the life of the process.
+   */
+  it.each(["JsRuntimeDebugger", "NetworkInspector", "ReactProfilerSession"])(
+    "drops %s, whose payload puts the Metro port before the device",
+    async (namespace) => {
+      const deviceId = makeExternalId("acme", IOS_UDID);
+      const registry = fakeRegistry([
+        `${namespace}:8081:${deviceId}`,
+        `${namespace}:8081:${IOS_UDID}`,
+      ]);
+
+      expect((await disposeExternalDeviceServices(registry, deviceId)).sort()).toEqual(
+        [`${namespace}:8081:${deviceId}`, `${namespace}:8081:${IOS_UDID}`].sort()
+      );
+    }
+  );
+
+  /**
+   * A serial is a prefix of every longer serial, so a prefix match would take
+   * a second emulator's handles down with the first's.
+   */
+  it("leaves a device whose id merely starts with this one's alone", async () => {
+    const registry = fakeRegistry([
+      `SimulatorServer:${ANDROID_SERIAL}`,
+      `SimulatorServer:${ANDROID_SERIAL}5`,
+      `JsRuntimeDebugger:8081:${ANDROID_SERIAL}5`,
+    ]);
+
+    expect(await disposeExternalDeviceServices(registry, ANDROID_SERIAL)).toEqual([
+      `SimulatorServer:${ANDROID_SERIAL}`,
+    ]);
+  });
+
   it("drops both spellings when handed the raw udid", async () => {
     useDescriptors(await liveDescriptor());
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
@@ -946,19 +984,19 @@ describe("revocation", () => {
   });
 
   /**
-   * A withdrawal reached through the raw spelling cannot name the `ext:` one;
-   * the descriptor that mapped them is gone. The raw handle, the one that
-   * spelling could actually use, still goes. The `ext:` handle is unreachable
-   * without an `ext:`-spelled call and that call resolves both spellings from
-   * the id it was given, so it disposes before dispatching either way.
+   * A withdrawal reached through the raw spelling cannot look the `ext:` one
+   * up, because the descriptor that mapped them is gone. It does not have to,
+   * an `ext:` id ends with the native id it was made from, so the segment match
+   * finds that handle anyway. The case the descriptor was needed for is the
+   * reverse one, an `ext:` id that has to reach a raw-keyed handle.
    */
-  it("still drops the raw handle when the descriptor is already gone", async () => {
+  it("still drops both handles when the descriptor is already gone", async () => {
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
     const registry = fakeRegistry([`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`]);
 
-    expect(await disposeExternalDeviceServices(registry, IOS_UDID)).toEqual([
-      `SimulatorServer:${IOS_UDID}`,
-    ]);
+    expect((await disposeExternalDeviceServices(registry, IOS_UDID)).sort()).toEqual(
+      [`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`].sort()
+    );
   });
 });
 

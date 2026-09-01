@@ -127,6 +127,44 @@ function deviceSpellings(deviceId: string, claim: ExternalDevice | undefined): S
 }
 
 /**
+ * Does a URN payload name this device?
+ *
+ * `parseURN` splits on the first colon only, so the payload is whatever the
+ * blueprint chose. Most namespaces make it the device id alone. The three that
+ * key a Metro session on a `(port, device)` pair put the port first:
+ * `JsRuntimeDebugger` and `NetworkInspector` and `ReactProfilerSession` built
+ * on it. Those three are also the CDP-speaking services, gated only in the
+ * factory, so a sweep anchored at the start of the payload misses exactly the
+ * handles that most need dropping.
+ *
+ * Hence a segment match rather than a prefix. The id has to sit between
+ * delimiters and splitting on colons would not do it, because an `ext:` id
+ * carries two of its own. So this scans for the whole spelling and reads what
+ * borders it. A trailing `#` counts, for a namespace that appends a transport
+ * tag.
+ *
+ * A segment match also stops `emulator-5554` from claiming the services of
+ * `emulator-55545`.
+ */
+function payloadNamesDevice(payload: string, spelling: string): boolean {
+  let from = 0;
+
+  while (from <= payload.length) {
+    const at = payload.indexOf(spelling, from);
+    if (at < 0) return false;
+
+    const before = at === 0 ? ":" : payload[at - 1];
+    const after = payload[at + spelling.length] ?? "";
+
+    if (before === ":" && (after === "" || after === ":" || after === "#")) return true;
+
+    from = at + 1;
+  }
+
+  return false;
+}
+
+/**
  * Drop every cached service handle bound to `deviceId`.
  *
  * Used when a provider withdraws a device or narrows its capabilities, since
@@ -148,11 +186,9 @@ export async function disposeExternalDeviceServices(
     const separator = urn.indexOf(":");
     if (separator < 0) continue;
 
-    const named = urn.slice(separator + 1);
-    /**
-     * Suffix-tolerant: some namespaces append a transport tag after the id.
-     */
-    if (![...spellings].some((spelling) => named.startsWith(spelling))) continue;
+    const payload = urn.slice(separator + 1);
+
+    if (![...spellings].some((spelling) => payloadNamesDevice(payload, spelling))) continue;
     await registry.disposeService(urn);
     disposed.push(urn);
   }
