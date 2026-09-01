@@ -297,6 +297,22 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
           }
         );
       }
+      // Resolved inside `execute`: after every logging boundary (agent
+      // transcript, mcp-calls.log, the event log and recorded flow YAMLs all see
+      // only the placeholder) and before the dispatch, so run-sequence and flow
+      // `type` steps are covered for free.
+      //
+      // ABOVE the queue, with the two request-shape guards. An unknown
+      // `{{secret:NAME}}` is a request error like theirs — it reaches no device
+      // and its repair is to define the secret — so it must come back at once
+      // rather than after another session's 90s burst.
+      // `placeholder` is the request's own text, kept beside the resolved one so
+      // the echo below never has to reach back for it.
+      const requested = params.text;
+      const resolved =
+        requested === undefined
+          ? undefined
+          : { ...resolveSecretPlaceholders(requested), placeholder: requested };
       // Serialized per device, on the same queue `paste` uses and for the same
       // reason it gives: both tools write to whatever holds keyboard focus over
       // several unserialized steps, so two concurrent calls at one device
@@ -305,25 +321,18 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
       // simulator against a 250-character field, `{ clear: true }` with
       // `{ text: "HELLO" }` 200ms behind it left `…aaaaaaaaaaLO`, with "HEL"
       // eaten by backspaces still in flight.
-      //
-      // Below the two request-shape guards above, which are pure validation and
-      // must fail immediately rather than behind another session's burst.
       return serializedPerDevice(params.udid, async () => {
-        // Resolve inside `execute`: after every logging boundary (agent
-        // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
-        // see only the placeholder) and before the dispatch, so run-sequence and
-        // flow `type` steps are covered for free.
-        if (params.text === undefined) return dispatch(services, params, options);
-        const { text, secrets } = resolveSecretPlaceholders(params.text);
-        if (secrets.length === 0) return dispatch(services, params, options);
+        if (resolved === undefined || resolved.secrets.length === 0) {
+          return dispatch(services, params, options);
+        }
         try {
-          const result = await dispatch(services, { ...params, text }, options);
+          const result = await dispatch(services, { ...params, text: resolved.text }, options);
           // Echo the placeholder form, never the resolved value.
-          return { ...result, typed: params.text };
+          return { ...result, typed: resolved.placeholder };
         } catch (err) {
           // A backend error can quote its input (e.g. the Android `input text`
           // command line) — scrub the resolved values before it propagates.
-          throw redactSecretsFromError(err, secrets);
+          throw redactSecretsFromError(err, resolved.secrets);
         }
       });
     },

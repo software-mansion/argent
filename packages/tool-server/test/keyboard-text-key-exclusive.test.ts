@@ -469,6 +469,35 @@ describe("keyboard — one device is driven by one call at a time", () => {
     release();
     await blocking;
   });
+
+  it("rejects an unknown secret immediately, not behind the queue", async () => {
+    // Same rule, third guard: a `{{secret:NAME}}` no source defines reaches no
+    // device and its repair is to define the secret, so it is a request error
+    // like the two shape guards — and it was the one left inside the queue,
+    // waiting out another session's burst before saying so. `paste` has always
+    // resolved outside it.
+    const tool = createKeyboardTool(registry());
+    let release = () => {};
+    adbShell.mockImplementation(
+      async () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve("");
+        })
+    );
+    const blocking = tool.execute({}, { udid, clear: true } as never);
+    await new Promise((r) => setTimeout(r, 5));
+
+    const err = await tool
+      .execute({}, { udid, text: "{{secret:NO_SUCH_SECRET_FOR_TESTS}}" } as never)
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SECRET_PLACEHOLDER_UNKNOWN);
+
+    release();
+    await blocking;
+  });
 });
 
 describe("keyboard — the MCP adapter must not re-send a slow call", () => {
