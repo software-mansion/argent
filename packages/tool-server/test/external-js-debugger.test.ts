@@ -92,12 +92,16 @@ const ANDROID_SERIAL = "emulator-5554";
 /** A serial no descriptor claims, the device argent booted for itself. */
 const UNCLAIMED_SERIAL = "emulator-5556";
 const METRO_PORT = 54321;
+/** A second bundler, not the one the provider published. */
+const OTHER_METRO_PORT = 8082;
+/** `selectTarget` rewrites the host and port onto the session's own bundler. */
+const OTHER_METRO_DIALLED_URL = `ws://localhost:${OTHER_METRO_PORT}/inspector/debug?device=1&page=-1`;
 const PROVIDER_ID = "acme-3f2a9c";
 const DEVICE_ID = makeExternalId(PROVIDER_ID, ANDROID_SERIAL);
 
 let temporaryDirectory: string;
 
-function publishDescriptor(options: { jsDebugger?: boolean } = {}): void {
+function publishDescriptor(options: { jsDebugger?: boolean; metroPort?: false } = {}): void {
   const descriptorPath = path.join(temporaryDirectory, "acme.json");
 
   fs.writeFileSync(
@@ -108,7 +112,7 @@ function publishDescriptor(options: { jsDebugger?: boolean } = {}): void {
           capabilities: ["adb", "js-debugger"],
           ...(options.jsDebugger ? { jsDebugger: { webSocketUrl: PROVIDER_SOCKET_URL } } : {}),
           kind: "emulator",
-          metroPort: METRO_PORT,
+          ...(options.metroPort === false ? {} : { metroPort: METRO_PORT }),
           name: "Pixel 9",
           nativeId: ANDROID_SERIAL,
           platform: "android",
@@ -221,6 +225,51 @@ describe("a provider that re-serves its own debugger connection", () => {
     );
 
     expect(dialled.urls).toEqual([METRO_DIALLED_URL]);
+
+    await instance.dispose();
+  });
+
+  /**
+   * The socket re-serves the runtime on the bundler the provider published. A
+   * caller naming another bundler is debugging a different runtime, so taking
+   * the socket there would send CDP to one app while reporting the metadata of
+   * another. The existing "omit the 'port' parameter" hint cannot help, since
+   * it only fires when discovery fails.
+   */
+  it("leaves an explicitly named second bundler on Metro's target", async () => {
+    publishDescriptor({ jsDebugger: true });
+
+    const instance = await jsRuntimeDebuggerBlueprint.factory(
+      {},
+      `${OTHER_METRO_PORT}:${DEVICE_ID}`
+    );
+
+    expect(dialled.urls).toEqual([OTHER_METRO_DIALLED_URL]);
+
+    await instance.dispose();
+  });
+
+  /** Naming the published port explicitly is still the provider's bundler. */
+  it("still attaches when the caller names the published port itself", async () => {
+    publishDescriptor({ jsDebugger: true });
+
+    const instance = await jsRuntimeDebuggerBlueprint.factory({}, `${METRO_PORT}:${DEVICE_ID}`);
+
+    expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL]);
+
+    await instance.dispose();
+  });
+
+  /** With no published port there is no bundler for the caller to contradict. */
+  it("keeps the socket when the provider published no metro port", async () => {
+    publishDescriptor({ jsDebugger: true, metroPort: false });
+
+    const instance = await jsRuntimeDebuggerBlueprint.factory(
+      {},
+      `${OTHER_METRO_PORT}:${DEVICE_ID}`
+    );
+
+    expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL]);
 
     await instance.dispose();
   });

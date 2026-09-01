@@ -233,8 +233,20 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * Only the socket comes from the provider. `selected` still supplies the
      * session's identity below, so names, alias and source-map roots are the
      * same either way.
+     *
+     * Taken only while this session is on the bundler the provider published.
+     * `publishedMetroPort` answers with that port exactly when it is not the
+     * one in use, which is the caller having named another bundler. Its runtime
+     * is not the one the provider re-serves, so the socket belongs to a
+     * different app than the target metadata above. Sending CDP down it would
+     * drive one runtime while reporting another, silently, across the debugger,
+     * the network inspector and the profiler alike.
+     *
+     * A provider that published a socket but no `metroPort` names no bundler to
+     * disagree with, so its socket still stands.
      */
-    const proxied = externalJsDebuggerUrl(deviceId);
+    const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
+    const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
