@@ -160,6 +160,8 @@ extension ArgentRunnerSession {
             return performType(request, on: app)
         case .keyboardReturn:
             return performKeyboardReturn(on: app)
+        case .keyboardDelete:
+            return performKeyboardDelete(on: app)
         case .snapshot:
             return captureSnapshot(of: app)
         default:

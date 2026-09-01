@@ -225,6 +225,16 @@ export async function pressKeyboardReturn(
   return { reactivated: repliedReactivated(data) };
 }
 
+/** Press the software keyboard Delete key. One call deletes one character. */
+export async function pressKeyboardDelete(
+  api: IosDeviceRunnerApi,
+  bundleId: string
+): Promise<MutationReply> {
+  const data = await api.run({ command: "keyboardDelete", appBundleId: bundleId });
+
+  return { reactivated: repliedReactivated(data) };
+}
+
 /**
  * Capture a device-wide PNG screenshot through the runner.
  *

@@ -19,7 +19,7 @@ ArgentRunner/
                                          recorded-failure detection,
                                          button / shutdown
     ArgentRunnerSession+Gestures.swift   tap / longPress / drag / viewport
-    ArgentRunnerSession+TextEntry.swift  type / keyboardReturn
+    ArgentRunnerSession+TextEntry.swift  type / keyboardReturn / keyboardDelete
     ArgentRunnerSession+Snapshot.swift   one-shot AX tree capture + flattening
     ArgentRunnerSession+Screenshot.swift inline base64 PNG
     RunnerProtocol.swift                 wire models (see PROTOCOL.md)

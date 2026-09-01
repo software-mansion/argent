@@ -91,6 +91,9 @@ launch, and launching is launch-app's job, never a command side effect):
 - `keyboardReturn` → `{message}`: taps the visible submit key when a keyboard
   is up; otherwise it types the return character behind the same focus probe,
   so it answers `TEXT_INPUT_NOT_FOCUSED` the same way.
+- `keyboardDelete` → `{message}`: types the delete character behind the same
+  focus probe, so it answers `TEXT_INPUT_NOT_FOCUSED` the same way. There is
+  no labeled key to prefer, and one command deletes one character.
 - `snapshot` → `{nodes, quality}`: one-shot accessibility tree (below).
   `APP_BACKGROUNDED` when the target is alive but backgrounded: observation
   never re-fronts (see above).

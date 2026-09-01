@@ -167,6 +167,54 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
   });
+
+  it("iOS device: unknown key -> 400 rejection naming both supported keys", async () => {
+    const impl = makeIosDeviceImpl(new Registry());
+    const err = await impl
+      .handler({}, { udid: iosPhysicalDevice.id, key: "pageup" }, iosPhysicalDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
+    // The message is the caller's whole named-key contract on hardware, so it
+    // must list both keys the backend accepts.
+    expect((err as Error).message).toContain("only 'enter' and 'backspace'");
+  });
+});
+
+describe("keyboard (ios-device): named-key routing", () => {
+  beforeEach(() => {
+    setCurrentIosDeviceApp(iosPhysicalDevice.id, "com.example.app");
+  });
+
+  afterEach(() => {
+    clearCurrentIosDeviceApp(iosPhysicalDevice.id);
+  });
+
+  // Positive control for the rejection above, pinned at the api.run seam: the
+  // key that was asked for is the runner command that goes over the wire.
+  it.each([
+    { key: "enter", command: "keyboardReturn" },
+    { key: "backspace", command: "keyboardDelete" },
+  ])("routes key '$key' to the runner's $command command", async ({ key, command }) => {
+    const run = vi.fn().mockResolvedValue({ message: "ok" });
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run,
+    } as never);
+
+    const impl = makeIosDeviceImpl(registry);
+    const result = await impl.handler({}, { udid: iosPhysicalDevice.id, key }, iosPhysicalDevice);
+
+    expect(result).toEqual({ typed: key, keys: 1 });
+    expect(run).toHaveBeenCalledWith({ command, appBundleId: "com.example.app" });
+  });
 });
 
 describe("keyboard (ios-device): typing with nothing focused", () => {
@@ -195,7 +243,7 @@ describe("keyboard (ios-device): typing with nothing focused", () => {
     clearCurrentIosDeviceApp(iosPhysicalDevice.id);
   });
 
-  it.each([{ text: "hello" }, { key: "enter" }])(
+  it.each([{ text: "hello" }, { key: "enter" }, { key: "backspace" }])(
     "maps TEXT_INPUT_NOT_FOCUSED to the retype instruction for %j",
     async (input) => {
       const impl = makeIosDeviceImpl(notFocusedRegistry());

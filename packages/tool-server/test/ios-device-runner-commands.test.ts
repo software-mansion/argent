@@ -6,6 +6,7 @@ import {
   dragBetween,
   getViewport,
   pressButton,
+  pressKeyboardDelete,
   pressKeyboardReturn,
   tapAt,
   toPoints,
@@ -123,7 +124,7 @@ describe("mutating replies surface the runner's reactivated stamp", () => {
   });
   const point = { x: 100, y: 200 };
 
-  it("tapAt, dragBetween, typeText and pressKeyboardReturn read it off the reply", async () => {
+  it("tapAt, dragBetween, typeText, pressKeyboardReturn and pressKeyboardDelete read it off the reply", async () => {
     const stamped = { message: "ok", reactivated: true };
     expect(await tapAt(api(stamped), "com.example.app", point)).toEqual({ reactivated: true });
     expect(await dragBetween(api(stamped), "com.example.app", point, { x: 1, y: 2 })).toEqual({
@@ -131,6 +132,9 @@ describe("mutating replies surface the runner's reactivated stamp", () => {
     });
     expect(await typeText(api(stamped), "com.example.app", "hi")).toEqual({ reactivated: true });
     expect(await pressKeyboardReturn(api(stamped), "com.example.app")).toEqual({
+      reactivated: true,
+    });
+    expect(await pressKeyboardDelete(api(stamped), "com.example.app")).toEqual({
       reactivated: true,
     });
   });

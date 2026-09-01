@@ -123,4 +123,33 @@ extension ArgentRunnerSession {
 
         return .success(MessagePayload(message: "typed return"))
     }
+
+    /// Presses the keyboard's delete key once. Unlike return there is no
+    /// labeled key to prefer, so the delete character always goes through
+    /// typeText.
+    func performKeyboardDelete(on app: XCUIApplication) -> Envelope {
+        // Wait for the keyboard's presentation animation to finish.
+        _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
+
+        // typeText's no-first-responder failure mode is the same
+        // recorded-not-thrown shape performType documents. Same dedicated
+        // answer, same only-on-positive-verdict rule.
+        if hasKeyboardFocus(in: app) == false {
+            return Self.textInputNotFocusedEnvelope()
+        }
+
+        let exceptionDescription = ArgentExceptionGuard.runCatching {
+            app.typeText(XCUIKeyboardKey.delete.rawValue)
+        }
+
+        if let exceptionDescription {
+            return .failure(
+                .unsupportedOperation,
+                "unable to press the keyboard delete key: \(exceptionDescription)",
+                hint: "Focus a text input first (tap it), then retry."
+            )
+        }
+
+        return .success(MessagePayload(message: "typed delete"))
+    }
 }

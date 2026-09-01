@@ -44,7 +44,7 @@ Everything else fails with `not supported on ios device`. Reach for the alternat
 ## Typing
 
 - Tap the text field first. Typing with no focused field returns "Nothing on screen has keyboard focus. Tap the text field first, then retype."
-- `keyboard` carries `text`, and `enter` as the only named key. Any other named key is rejected; tap on-screen keys with `gesture-tap` instead.
+- `keyboard` carries `text`, and `enter` and `backspace` as the only named keys. Any other named key is rejected; tap on-screen keys with `gesture-tap` instead. `backspace` deletes one character per call.
 - XCTest types whole strings; `delayMs` is ignored.
 
 ## Backgrounded targets

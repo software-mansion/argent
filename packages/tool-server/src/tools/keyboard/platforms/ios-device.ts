@@ -6,6 +6,7 @@ import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../../blueprints
 import { requireCurrentIosDeviceApp } from "../../../utils/ios-device/app-session";
 import { RunnerCommandError } from "../../../utils/ios-device/runner-client";
 import {
+  pressKeyboardDelete,
   pressKeyboardReturn,
   typeText,
   type MutationReply,
@@ -38,7 +39,7 @@ async function mapNotFocused(send: Promise<MutationReply>): Promise<MutationRepl
 
 /**
  * Type into the focused element on a physical iOS device.
- * Only `enter` is available as a named key.
+ * The named keys are `enter` and `backspace`.
  */
 export function makeIosDeviceImpl(
   registry: Registry
@@ -49,9 +50,9 @@ export function makeIosDeviceImpl(
       const key = params.key?.trim().toLowerCase();
 
       // Gate on the raw key. A whitespace-only name would otherwise succeed as a no-op.
-      if (params.key && key !== "enter") {
+      if (params.key && key !== "enter" && key !== "backspace") {
         throw new InvalidToolInputError(
-          `Named key '${params.key}' is not supported on physical iOS devices: only 'enter'. ` +
+          `Named key '${params.key}' is not supported on physical iOS devices: only 'enter' and 'backspace'. ` +
             "Type text into the focused field, or use gesture-tap to press on-screen keys.",
           {
             error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
@@ -86,6 +87,12 @@ export function makeIosDeviceImpl(
 
       if (key === "enter") {
         const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
+        reactivated ||= pressed.reactivated;
+        keys += 1;
+      }
+
+      if (key === "backspace") {
+        const pressed = await mapNotFocused(pressKeyboardDelete(api, bundleId));
         reactivated ||= pressed.reactivated;
         keys += 1;
       }
