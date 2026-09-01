@@ -1,8 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
 import { hasScriptExtension, scriptInterpreter, type FlowStep } from "./flow-utils";
-import { resolveFlowRelativeFile } from "./flow-file-refs";
+import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
   type FlowScriptFailureKind,
@@ -110,11 +111,98 @@ export async function runFlowScriptStep(
     ...(request.signal ? { signal: request.signal } : {}),
   });
 
+  const verdict = scriptVerdict(result);
+  const frames = result.ok
+    ? ""
+    : scriptFrames(result.failure?.stack, [
+        request.projectRoot,
+        await canonicalFlowPath(request.projectRoot),
+      ]);
   return {
-    outcome: scriptVerdict(result),
+    outcome: {
+      ...verdict,
+      ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
+    },
     result,
     ran: scriptRan(result),
   };
+}
+
+/**
+ * How many of the script's own frames ride into the reason. A thrown message
+ * alone names no file and no line, and a throw writes nothing to stderr, so
+ * without these the step's whole diagnostic is one sentence and there is
+ * nothing in CI to re-run against. Six is what a rethrow needs to show where it
+ * came from without turning the step line into the whole stack; the executor's
+ * `SCRIPT_MAX_FAILURE_STACK_CHARS` still holds what it captured.
+ */
+const SCRIPT_REASON_MAX_FRAMES = 6;
+
+/** A frame in the host's own machinery, not in anything the author wrote. */
+function isHostFrame(frame: string): boolean {
+  return (
+    frame.includes("node:internal") ||
+    frame.includes("flow-script-runner.mjs") ||
+    frame.includes("flow-script-watchdog")
+  );
+}
+
+/**
+ * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
+ * go on ONE step line, so the anchor is the run's own `project_root` — the
+ * directory the script also ran in. A script outside it keeps its absolute
+ * path, because a `..` chain says less than the path does.
+ *
+ * `roots` is that directory both as given and canonicalized, because only one
+ * of the two ever matches: Node resolves a module to its REAL path, so every
+ * frame is canonical, while `project_root` arrives as the caller spelled it. On
+ * macOS a project under `/var` (or any symlinked parent) is the ordinary case
+ * of the two differing.
+ */
+function readableFrame(frame: string, roots: readonly string[]): string {
+  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+    const split = /^(.*?)(:\d+:\d+)$/.exec(match);
+    const url = split ? split[1]! : match;
+    const position = split ? split[2]! : "";
+    let file: string;
+    try {
+      file = fileURLToPath(url);
+    } catch {
+      return match;
+    }
+    for (const root of roots) {
+      const relative = path.relative(root, file);
+      if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return `${relative}${position}`;
+      }
+    }
+    return `${file}${position}`;
+  });
+}
+
+/**
+ * The frames of a failed script, as a block appended to its message. Newline
+ * separated on purpose: `oneLineReason` escapes them, so the block reads as
+ * `\n    at …` on the step's own line and a reader can still tell one frame
+ * from the next. The stack's first line is dropped — it only repeats the
+ * message the reason already opens with.
+ */
+function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
+  if (!stack) return "";
+  const frames: string[] = [];
+  let dropped = 0;
+  for (const line of stack.split("\n")) {
+    const frame = line.trim();
+    if (!frame.startsWith("at ") || isHostFrame(frame)) continue;
+    if (frames.length >= SCRIPT_REASON_MAX_FRAMES) {
+      dropped++;
+      continue;
+    }
+    frames.push(`    ${readableFrame(frame, roots)}`);
+  }
+  if (frames.length === 0) return "";
+  if (dropped > 0) frames.push(`    … ${dropped} more frame${dropped === 1 ? "" : "s"}`);
+  return `\n${frames.join("\n")}`;
 }
 
 export type ScriptRan = "yes" | "no" | "unknown";
@@ -178,8 +266,14 @@ async function scriptFileProblem(canonical: string): Promise<string | null> {
  * `cancelled` is an `error`, not a `skip`: every reader of a report takes
  * `skip` to mean the step did not run (the CLI's not-executed line,
  * `FlowRunResult.skipped`), and a script killed after reaching the system it
- * talks to left that state behind. The genuine "did not run" case never
- * reaches the executor — `execSteps` skips it at its own pre-step abort gate.
+ * talks to left that state behind. A cancellation also lands on the near side
+ * of the fork — a signal already aborted when the call arrived, or one raised
+ * while the step waited for a concurrency slot — and the status does not try to
+ * separate the two: `beforeFork` does, and {@link scriptRan} is what reads it.
+ * What a runner marks `skip` is the step it never dispatched, at its own
+ * pre-step abort gate; `flow-add-script` has no such gate and hands its
+ * request's signal straight in, so an abort that arrived before the call does
+ * reach here.
  *
  * Notes ride into the reason on every outcome, pass included. They are how the
  * executor says a time limit was clamped to the host's maximum, or that the

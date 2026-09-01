@@ -21,7 +21,7 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
-`flow-add-script` runs a local `.mjs` or `.sh` file and records it as a `script:` step. **Call it only when the user asks for a script in the prompt.** Its `path` resolves against the flow file being recorded, not against `project_root`. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) for the rest of the syntax. The file runs the way replay runs it.
+`flow-add-script` runs a local `.mjs` or `.sh` file and records it as a `script:` step. **Call it only when the user asks for a script in the prompt.** Its `path` resolves against the flow file being recorded, not against `project_root`. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) for the rest of the syntax. The file runs the way a replay of this flow runs it. A flow under another project root that composes this one with `run:` gives the script that root as its working directory.
 
 **Argent does not undo what a failed script did.** Read `message`: it says whether anything ran, or that the runner cannot tell. A transport error returns no `message`, and the call can have run the script more than one time. Check the state that the script touches before you retry.
 
@@ -130,7 +130,8 @@ If characters are lost, restore the field with direct calls. Do not record a dup
 Record the required live gesture. During polish:
 
 - Convert element-seeking movement to selector-based `scroll-to`.
-- Retain a raw swipe only when the gesture itself is under test.
+- Convert a swipe that is a gesture in its own right - swipe-to-dismiss, paging a carousel, revealing a row action - to `swipe:`, anchoring `from` on the gesture's **subject** (the card being dismissed, the row being revealed), not on whatever content happened to be under the finger.
+- Retain a raw gesture tool only for what `swipe` deliberately doesn't express - an edge swipe (system back), a multi-touch `gesture-custom`, or exotic velocity control.
 
 For every retained raw gesture, add an echo and a recorded result check.
 
@@ -166,16 +167,17 @@ Stop immediately. Restore the last valid screen with direct MCP calls, not `flow
 
 Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-preserving conversions:
 
-| Recorded form                             | Finished form                                                      |
-| ----------------------------------------- | ------------------------------------------------------------------ |
-| focus tap + `tool: keyboard`              | `type:`                                                            |
-| text `keyboard` + `key: enter` `keyboard` | submitted `type:` without Enter in its text                        |
-| `tool: await-ui-element`                  | `await:` or `assert:`                                              |
-| element-seeking movement                  | `scroll-to:`                                                       |
-| coordinate tap or long-press              | strict selector after the fallback gate                            |
-| `tool: gesture-pinch`                     | selector-based `pinch:` with `scale = endDistance / startDistance` |
-| `tool: gesture-rotate`                    | selector-based `rotate:` with `by = endAngle - startAngle`         |
-| sibling `tool: flow-execute`              | recorder-captured `run:`                                           |
+| Recorded form                              | Finished form                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| focus tap + `tool: keyboard`               | `type:`                                                            |
+| text `keyboard` + `key: enter` `keyboard`  | submitted `type:` without Enter in its text                        |
+| `tool: await-ui-element`                   | `await:` or `assert:`                                              |
+| element-seeking movement                   | `scroll-to:`                                                       |
+| `tool: gesture-swipe` as the action itself | `swipe:` with `from` on the gesture's subject                      |
+| coordinate tap or long-press               | strict selector after the fallback gate                            |
+| `tool: gesture-pinch`                      | selector-based `pinch:` with `scale = endDistance / startDistance` |
+| `tool: gesture-rotate`                     | selector-based `rotate:` with `by = endAngle - startAngle`         |
+| sibling `tool: flow-execute`               | recorder-captured `run:`                                           |
 
 Copy the recorded `selector:` map when you convert a wait. Do not use the loose bare-string form. Flow YAML accepts `identifier`; rename it to `id` only for style. Convert `textMatch: equals` to `equals:` and other text checks to `contains:`.
 
@@ -185,7 +187,7 @@ Only these unrecorded insertions are allowed, at states observed live:
 - `await: { idle: true }` after a navigation identity check.
 - The Chromium launch that packages the live boot.
 
-Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, velocity-sensitive swipe, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
+Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, an edge swipe or one with exotic velocity control, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
 
 If polish reveals a missing action or structural check, restore its preceding state and record it. Do not add remembered behavior directly to YAML.
 

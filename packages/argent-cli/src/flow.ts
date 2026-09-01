@@ -287,6 +287,14 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * A PASSING step carrying a warning needs attention too: renderSummary counts
  * every warning whatever its status, so skipping those printed "1 warning" with
  * the text nowhere on screen.
+ *
+ * A PASSING script step's note is the same case: it reports that the host
+ * lowered the time limit the flow declared, or ran the script somewhere other
+ * than the project_root it was handed. Nothing else on the line reports that,
+ * so without this the flow ran under bounds it never asked for and the batch
+ * said only PASS. Restricted to `script`, because a passing `when` guard,
+ * snapshot or chromium launch also sets `reason`, and those narrate a result
+ * the summary already counts.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -294,7 +302,8 @@ export function renderFailedSteps(report: FlowReport): string[] {
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
+    const scriptNote = s.kind === "script" && Boolean(s.reason);
+    if (s.status !== "fail" && s.status !== "error" && !s.warning && !scriptNote) continue;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
     if (s.artifacts && typeof s.artifacts === "object") {

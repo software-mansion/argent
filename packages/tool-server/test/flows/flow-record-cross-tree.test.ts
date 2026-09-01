@@ -2093,6 +2093,18 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(await recordedSteps("hints")).toEqual([]);
   });
 
+  it("sends `script` to flow-add-script, not to a hand-written step", async () => {
+    // The other half of the same contract as the nested-recorder refusal above:
+    // one of the two names is the call to make, the other refuses the nesting.
+    const result = await hint("script");
+    expect(result.message).toContain("is a flow directive, not a tool");
+    expect(result.message).toContain("Call `flow-add-script` DIRECTLY");
+    expect(result.message).toContain("runs it a second time on every replay");
+    expect(result.message).not.toContain("Add the `script:` step by hand");
+    expect(result.stepCount).toBe(0);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
   it("names gesture-pinch for `pinch`, stored raw", async () => {
     const result = await hint("pinch");
     expect(result.message).toContain("gesture-pinch");
@@ -2120,6 +2132,7 @@ describe("a flow-directive name points at the tool that records it", () => {
     const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
     for (const command of [
       "flow-add-echo",
+      "flow-add-script",
       "flow-add-step",
       "flow-start-recording",
       "flow-finish-recording",
@@ -2140,6 +2153,11 @@ describe("a flow-directive name points at the tool that records it", () => {
       [
         "flow-add-echo",
         ["must be called DIRECTLY", "fails on every replay"],
+        ["truncates", "ends the recording"],
+      ],
+      [
+        "flow-add-script",
+        ["must be called DIRECTLY", "run the script AND write", "re-runs it on every replay"],
         ["truncates", "ends the recording"],
       ],
       ["flow-add-step", ["cannot record itself"], ["truncates", "ends the recording"]],

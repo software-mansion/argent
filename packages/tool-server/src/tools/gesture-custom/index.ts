@@ -96,7 +96,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
 
     for (const event of events) {
       await sleep(event.delayMs ?? 16);
-      sendCommand(api, {
+      await sendCommand(api, {
         cmd: "touch",
         type: event.type,
         x: event.x,

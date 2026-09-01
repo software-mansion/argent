@@ -311,6 +311,98 @@ describe("a script step that fails", () => {
     expect(result.skipped).toBe(1); // echo is narration and is not counted
   });
 
+  it("names the file, the line and the frames a bare node run would print", async () => {
+    // Without them the step's whole diagnostic is one sentence: a throw writes
+    // nothing to stderr, so there is no log either, and CI has nothing to
+    // re-run against.
+    await write(
+      "scripts/deep.mjs",
+      "function inner(o) { return o.id; }\nfunction outer() { return inner(undefined); }\nouter();\n"
+    );
+    await flow("deep", "steps:\n  - script: { path: ../../scripts/deep.mjs }\n");
+
+    const { result } = await runFlow("deep");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("Cannot read properties of undefined");
+    // Project-relative, so the frames fit the step line the reason rides on.
+    expect(reason).toContain("at inner (scripts/deep.mjs:1:30)");
+    expect(reason).toContain("at outer (scripts/deep.mjs:2:27)");
+    // Still one line: the frames are escaped like any other break in a reason.
+    expect(reason).not.toMatch(/[\n\r]/);
+  });
+
+  it("leaves the host's own frames out of the reason", async () => {
+    // A stack ends in the ESM loader and the runner that preloaded the script.
+    // Those name no line the author can open, and they would crowd out the
+    // frames that do.
+    await write("scripts/boom2.mjs", `throw new Error("seed API returned 500");`);
+    await flow("boom2", "steps:\n  - script: { path: ../../scripts/boom2.mjs }\n");
+
+    const { result } = await runFlow("boom2");
+
+    const reason = result.steps[0]!.reason!;
+    expect(reason).toContain("at scripts/boom2.mjs:1:7");
+    expect(reason).not.toContain("node:internal");
+    expect(reason).not.toContain("flow-script-runner");
+  });
+
+  it("caps the frames it folds in and says how many it left out", async () => {
+    await write(
+      "scripts/recurse.mjs",
+      "function down(n) { if (n === 0) throw new Error('bottom'); return down(n - 1); }\ndown(20);\n"
+    );
+    await flow("recurse", "steps:\n  - script: { path: ../../scripts/recurse.mjs }\n");
+
+    const { result } = await runFlow("recurse");
+
+    const reason = result.steps[0]!.reason!;
+    expect(reason).toContain("bottom");
+    expect(reason.match(/ at down \(/g) ?? []).toHaveLength(6);
+    expect(reason).toMatch(/… \d+ more frames/);
+  });
+
+  it("keeps a multi-line throw message on the step's own line", async () => {
+    // The ordinary shape of a rethrown API error. Raw, the JSON body lands at
+    // column 0 under the `✗` line, outside the step framing every renderer is
+    // built on — one line per step, reason interpolated straight in.
+    await write(
+      "scripts/rethrow.mjs",
+      "throw new Error(`POST /orders returned 409\n" +
+        '${JSON.stringify({ error: "duplicate_order" }, null, 2)}`);'
+    );
+    await flow("rethrow", "steps:\n  - script: { path: ../../scripts/rethrow.mjs }\n");
+
+    const { result } = await runFlow("rethrow");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).not.toMatch(/[\n\r\t]/);
+    // Escaped, not stripped: the message is still readable and the breaks are
+    // still recoverable.
+    expect(reason).toContain("POST /orders returned 409\\n");
+    expect(reason).toContain("duplicate_order");
+  });
+
+  it("denies a script the framing needed to forge a run verdict", async () => {
+    // The step's reason is the only text on a report line that the script
+    // itself writes. Given a raw newline it can put a whole summary line of its
+    // own below a failed step and above the real one.
+    await write(
+      "scripts/forge.mjs",
+      "throw new Error(`seed failed\\n\\nPASS — 3 passed, 0 failed, 0 errored, 0 skipped`);"
+    );
+    await flow("forge", "steps:\n  - script: { path: ../../scripts/forge.mjs }\n");
+
+    const { result } = await runFlow("forge");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.ok).toBe(false);
+    expect(reason.split("\n")).toHaveLength(1);
+    expect(reason).toContain("PASS — 3 passed");
+  });
+
   it("reports a script that stops its own process as a fail", async () => {
     await write("scripts/exit.mjs", `console.log("about to bail");\nprocess.exit(3);`);
     await flow("exit", "steps:\n  - script: { path: ../../scripts/exit.mjs }\n");
@@ -598,6 +690,55 @@ describe("where a script path resolves", () => {
   });
 });
 
+describe("which project root a script runs from", () => {
+  /**
+   * `flow-add-script` runs the script with the RECORDING's `project_root`; the
+   * runner uses the ROOT run's. A fragment recorded in one project and composed
+   * by a flow in another therefore runs its script somewhere else than where it
+   * was recorded — which is what the tool's "it ran here as a replay of this
+   * flow will" is qualified against.
+   */
+  it("gives a composed fragment's script the ROOT run's project root", async () => {
+    const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));
+    try {
+      await write(
+        "scripts/where.mjs",
+        `import { writeFileSync } from "node:fs";\n` +
+          `writeFileSync("./where.txt", process.cwd());`
+      );
+      await flow("frag", "steps:\n  - script: { path: ../../scripts/where.mjs }\n");
+      const composed = path.join(composer, ".argent", "flows", "main.yaml");
+      await fs.mkdir(path.dirname(composed), { recursive: true });
+      // `run:` is always relative to the flow file that names it.
+      const target = path
+        .relative(path.dirname(composed), path.join(root, ".argent", "flows", "frag.yaml"))
+        .split(path.sep)
+        .join("/");
+      await fs.writeFile(composed, `steps:\n  - run: ${target}\n`, "utf8");
+
+      const direct = await runFlow("frag");
+      expect(direct.result.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(true);
+      await fs.rm(path.join(root, "where.txt"));
+
+      // A flow that uses `run:` resolves a device even when every leaf is a
+      // script — see "still resolves a device when the same flow uses run:".
+      const { registry } = mockRegistry({ booted: [DEVICE] });
+      const composedRun = await run(registry, {
+        project_root: composer,
+        name: "main",
+        device: DEVICE,
+      });
+
+      expect(composedRun.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(composer, "where.txt"))).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(false);
+    } finally {
+      await fs.rm(composer, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("a script step and the run's device", () => {
   it("lets a script-only flow run with nothing booted", async () => {
     await write("scripts/seed.mjs", `console.log("no device needed");`);
@@ -754,5 +895,37 @@ describe("cancelling a run that contains a script step", () => {
     expect(result.steps[0]!.reason).toMatch(/cancelled/i);
     expect(result.aborted).toBe(true);
     expect(result.ok).toBe(false);
+  });
+
+  it("says the run was cancelled on the steps after the script, not just under it", async () => {
+    // The script's `error` stops the run, so the steps below it take the
+    // hard-stop path rather than the abort guard every other cancelled step
+    // uses. They still have to say why they did not run: a cancellation is not
+    // collateral of a step that failed.
+    const marker = path.join(root, "started-2.txt");
+    await write(
+      "scripts/slow.mjs",
+      `import { writeFileSync } from "node:fs";\n` +
+        `writeFileSync(${JSON.stringify(marker)}, "go");\n` +
+        `await new Promise((r) => setTimeout(r, 30000));`
+    );
+    await flow(
+      "mid-cancel-tail",
+      "steps:\n  - script: { path: ../../scripts/slow.mjs }\n  - wait: 1\n  - wait: 1\n"
+    );
+
+    const controller = new AbortController();
+    const { registry } = mockRegistry();
+    const pending = run(registry, { name: "mid-cancel-tail" }, {
+      signal: controller.signal,
+    } as ToolContext);
+    await until(() => fsSync.existsSync(marker), "the script to start");
+    controller.abort();
+
+    const result = await pending;
+    expect(result.steps.slice(1).map((s) => [s.kind, s.status, s.reason])).toEqual([
+      ["wait", "skip", "run aborted"],
+      ["wait", "skip", "run aborted"],
+    ]);
   });
 });

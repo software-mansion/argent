@@ -12,6 +12,7 @@ import {
   countStepsOnDisk,
   parseScriptPath,
   parseScriptTimeout,
+  recordingSessionState,
   requireRecordingSession,
   type FlowSavedTo,
   type FlowStep,
@@ -98,22 +99,29 @@ async function recordedStepCount(
  * script could not be run answers "is there state to check?" with a no that the
  * rest of the same message then takes back.
  */
-const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string }> = {
+const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehind: string }> = {
   yes: {
     lead: "failed",
     nextMove:
       `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
       `either make the re-run safe to repeat or clean up first, then call this again.`,
+    leftBehind:
+      `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
+      `clean up or make a re-run safe first.`,
   },
   no: {
     lead: "could not be run",
     nextMove: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
+    leftBehind: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
   },
   unknown: {
     lead: "did not report a result",
     nextMove:
       `The runner failed around the script rather than inside it, so the script may never have ` +
       `started — check the state it touches before you call this again.`,
+    leftBehind:
+      `The runner failed around the script rather than inside it, so the script may never have ` +
+      `started — check the state it touches.`,
   },
 };
 
@@ -139,10 +147,11 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local script file — a \`.mjs\` in a fresh Node process, or a \`.sh\` under bash — and record it as a \`script:\` step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). It runs the file exactly as a replay will.
+  description: `Run a local script file — a \`.mjs\` in a fresh Node process, or a \`.sh\` under bash — and record it as a \`script:\` step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). It runs the file the way a replay of THIS flow will. One divergence: the working directory is the ROOT run's \`project_root\`, so a flow in another project that composes this one with \`run:\` runs the script from that project's root, and a relative path the script reads or writes lands there instead.
 Use for work no device step can do: seed a database, write a fixture file, call an API, clean up after a run. Record it where it belongs in the walkthrough — a setup script goes BEFORE the restart-app it prepares for, because that is where it runs at replay.
 UNLIKE flow-add-step, a failure records NOTHING: the step is appended only when the script passes, because a failed script did not establish the state the rest of the recording would be walked against. Nothing the script did before it stopped is rolled back, and \`message\` says whether anything ran — clean up, or make the re-run safe, before calling again. A call that ends in a TRANSPORT error returns no \`message\` at all and may have run the script more than once.
 \`outputJson\` is the document the script returned; no flow step can reference it yet.
+Returns { message, status, stepCount, reason?, durationMs?, outputJson?, outputTruncated?, recorded?, savedTo? } — \`reason\` says what stopped a call that did not pass, \`outputTruncated\` says the 64 KiB render limit cut \`outputJson\`, which leaves a prefix that NO LONGER PARSES as JSON, and \`recorded\` and \`savedTo\` come back only on a pass.
 Refused when the recording's project root is not on this tool server's filesystem: the script file stays on the client, so there is nothing here to run.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
@@ -211,7 +220,38 @@ Refused when the recording's project root is not on this tool server's filesyste
     };
 
     if (outcome.status !== "pass") {
-      const { lead, nextMove } = FAILED_CALL[ran];
+      const { lead, nextMove, leftBehind } = FAILED_CALL[ran];
+      // The script ran outside the flow-file lock, so the recording this call
+      // resolved up front may have been finished or restarted in that window —
+      // the same race `appendStepToFlow` catches for a script that PASSED. This
+      // exit writes nothing and so never reaches that guard, and both claims it
+      // would otherwise make are then about a file another take owns: that the
+      // flow is as it was, and the count read back off it. Say what is true
+      // instead, and do not send the author back to a key that is no longer
+      // theirs — the retry `nextMove` invites appends into the take that
+      // replaced it. Split the two losses the way the guard does: a restart put
+      // a live take on the key, a finish left it free with a finished flow on
+      // disk, and only the first makes the file another take's.
+      const state = recordingSessionState(session);
+      if (state !== "live") {
+        const lost =
+          state === "restarted"
+            ? `it was restarted while the script was running, so ${session.filePath} belongs to ` +
+              `another take now and this call cannot say what is in it`
+            : `it was finished (or dropped by the concurrent-recording cap) while the script was ` +
+              `running, so ${session.filePath} holds that finished take`;
+        return {
+          ...common,
+          message:
+            `The script "${step.path}" ${lead}, and nothing was recorded — but recording ` +
+            `"${params.name}" in ${params.project_root} is no longer active either: ${lost}. ` +
+            `\`stepCount\` is this take's own last count, not a fresh read of the file. ` +
+            `${leftBehind} Re-record under a fresh name rather than restarting this one — ` +
+            `flow-start-recording truncates unconditionally, and on this key there is now ` +
+            `something to lose.`,
+          stepCount: session.flow.steps.length,
+        };
+      }
       const { stepCount, note } = await recordedStepCount(session);
       return {
         ...common,
@@ -256,12 +296,21 @@ Refused when the recording's project root is not on this tool server's filesyste
       );
     }
 
+    const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
       message:
-        `Script step added to "${params.name}" flow — it ran here exactly as it will at replay. ` +
-        `\`outputJson\` is what the script returned; no flow step can reference it yet.`,
-      ...(result?.output ? renderOutput(result.output) : {}),
+        `Script step added to "${params.name}" flow — it ran here as a replay of this flow will; ` +
+        `composed into a flow under another project root with \`run:\`, it runs from that root. ` +
+        // A cut document is not merely short: it stops being JSON. Say so here
+        // rather than leave `outputTruncated` to contradict a sentence that
+        // otherwise reads as a whole-document guarantee.
+        (rendered?.outputTruncated
+          ? `\`outputJson\` is the first ${OUTPUT_RENDER_LIMIT_BYTES / 1024} KiB of what the ` +
+            `script returned — the rest was cut, so it no longer parses as JSON; `
+          : `\`outputJson\` is what the script returned; `) +
+        `no flow step can reference it yet.`,
+      ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),
       savedTo,
