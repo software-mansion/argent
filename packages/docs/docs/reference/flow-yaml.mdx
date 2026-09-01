@@ -143,7 +143,11 @@ step. Argent makes one repair when the read-back does not find the text. The rep
 the characters that Argent can prove are its own. It deletes those characters. It then
 types the text again in small pieces. A step passes when the repair works, with the field
 changed by more than the typed text. A step also fails when the repair ran and Argent could
-not read the field again to confirm it.
+not read the field again to confirm it. A step fails as well when the repair failed partway,
+because the repair deletes before it types.
+
+A raw `tool: keyboard` step fails on the same verdict. The flow recorder writes a typed
+step in that form, so a recorded flow carries the same gate.
 
 The step passes when the read-back cannot conclude, and on every other platform. A step
 that passes is therefore not a proof that the text arrived. See the [tools
