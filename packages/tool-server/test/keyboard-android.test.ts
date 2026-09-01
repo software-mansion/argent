@@ -627,9 +627,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it.each([
-    ["clear", { clear: true }],
-    ["key", { key: "backspace" }],
-  ])("refuses %s when the form factor could not be determined", async (_label, extra) => {
+    ["clear", { clear: true }, /burst 200 delete keys/],
+    ["key", { key: "backspace" }, /a named key is navigation on a TV/],
+  ])("refuses %s when the form factor could not be determined", async (_label, extra, reason) => {
     // `readRuntimeKind` answers undefined when `pm list features` misses its 5s
     // budget and `ro.build.characteristics` carries no `tv` token — which is
     // what the Google ATV emulator reports (`emulator`). Collapsed to `false` by
@@ -643,6 +643,10 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       (e: unknown) => e as Error
     );
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+    // The justification is templated with the field name, not only the name: a
+    // refused `{ key: "backspace" }` used to be told the request would have
+    // burst 200 delete keys, which is the other request's reason.
+    expect(err?.message).toMatch(reason);
     // Nothing reached the device.
     expect(adbShell).not.toHaveBeenCalled();
     // It re-probes once first: an indeterminate verdict is not cached, so a
