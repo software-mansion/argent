@@ -31,9 +31,11 @@ import {
   isBlockStep,
   parseFlow,
   runTargetName,
+  swipeByLabel,
   type BlockStep,
   type FlowFile,
   type FlowSelector,
+  type GestureTarget,
   type FlowStep,
   type Launch,
   type WhenCondition,
@@ -193,10 +195,10 @@ export interface StepReport {
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
    * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
    * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
-   * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
-   * regardless, and the warning is the only thing separating it from one that
-   * waited.
+   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * it is dispatched regardless, and the warning is the only thing separating it
+   * from one that waited.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -979,13 +981,150 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
  * {@link blockSteps}: this is the sole feeder of
  * {@link assertUploadSelfContained}, so a block absent from the recursion would
  * carry an uploaded flow's nested `run:`/`snapshot` past the preflight.
+ *
+ * Each step arrives with its AUTHORED position - its place in the file as
+ * written, every entry counted, `echo` included. A pre-run refusal has no report
+ * line to point at, so the file is the one thing its reader can count against;
+ * the CLI and MCP renderers number differently again, and already disagree with
+ * each other. {@link retiredArgReason} says which counting its number uses.
+ *
+ * A `run:` target is deliberately not followed: the fragment resolves at run
+ * time, so reading it here would duplicate that lookup.
+ * {@link execRunStep} repeats the pass where the fragment loads.
  */
-function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
-  for (const step of steps) {
-    yield step;
+function* walkSteps(steps: FlowStep[], within = ""): Generator<{ step: FlowStep; where: string }> {
+  for (const [i, step] of steps.entries()) {
+    const where = `step ${i + 1}${within}`;
+    yield { step, where };
     const inner = blockSteps(step);
-    if (inner) yield* walkSteps(inner);
+    if (inner) yield* walkSteps(inner, ` of the ${step.kind}: block at ${where}`);
   }
+}
+
+/** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
+interface RetiredArgUse {
+  where: string;
+  tool: string;
+  key: string;
+  guidance: string;
+}
+
+/**
+ * The guidance a schema property carries if - and only if - it is a RETIRED
+ * field, else undefined (an empty string is retired with no guidance).
+ *
+ * A retired field is declared `z.never().optional()`, which serializes to a
+ * `not: {}` with no `type`. Matched by SHAPE and never by field name, so a key
+ * retired on any tool later is refused with no edit here - the same test
+ * `isRetiredField` applies on the CLI's flag paths.
+ */
+function retiredKeyGuidance(prop: unknown): string | undefined {
+  const schema = prop as { not?: Record<string, unknown>; description?: string } | undefined;
+  if (!schema?.not || Object.keys(schema.not).length > 0) return undefined;
+  // Minus the "Retired: " label - every caller already says retired.
+  return (schema.description ?? "").replace(/^Retired:\s*/, "");
+}
+
+/** The schema properties a registered tool declares, or undefined for a tool this registry lacks. */
+function toolArgProps(registry: Registry, tool: string): Record<string, unknown> | undefined {
+  return (
+    registry.getTool(tool)?.inputSchema as { properties?: Record<string, unknown> } | undefined
+  )?.properties;
+}
+
+/** The first retired key in one invocation's args, against the properties its tool declares. */
+function retiredArgIn(
+  props: Record<string, unknown>,
+  tool: string,
+  args: Record<string, unknown>,
+  where: string
+): RetiredArgUse | undefined {
+  for (const key of Object.keys(args)) {
+    const guidance = retiredKeyGuidance(props[key]);
+    if (guidance !== undefined) return { where, tool, key, guidance };
+  }
+  return undefined;
+}
+
+/**
+ * The tool invocations a `tool:` step's args carry inline, each with the
+ * position naming it. Matched by SHAPE - a `{ tool, args }` entry, in an arg's
+ * array (run-sequence's `steps`) or as an arg itself - never by the carrying
+ * tool's name.
+ *
+ * Only under a key the carrying tool DECLARES: a non-strict schema strips an
+ * undeclared key before execute, so the invocation it looks like is never made
+ * and refusing the flow over it would refuse a call that never happens.
+ *
+ * One level only: those args are forwarded verbatim to the named tool, and no
+ * tool that batches others allows a batching tool among them.
+ */
+function* nestedInvocations(
+  props: Record<string, unknown>,
+  args: Record<string, unknown>
+): Generator<{ tool: string; args: Record<string, unknown>; at: string }> {
+  for (const [key, value] of Object.entries(args)) {
+    if (!Object.hasOwn(props, key)) continue;
+    const entries = Array.isArray(value) ? value : [value];
+    for (const [i, entry] of entries.entries()) {
+      const call = entry as { tool?: unknown; args?: unknown } | null | undefined;
+      if (typeof call?.tool !== "string") continue;
+      if (typeof call.args !== "object" || call.args === null || Array.isArray(call.args)) continue;
+      yield {
+        tool: call.tool,
+        args: call.args as Record<string, unknown>,
+        at: Array.isArray(value) ? `step ${i + 1}` : `\`${key}\``,
+      };
+    }
+  }
+}
+
+/**
+ * The first retired key a raw `tool:` step in these steps passes - in its own
+ * args, or in an invocation those args carry inline (a recorded run-sequence
+ * batch).
+ *
+ * The typed directives refuse a retired spelling at parse time (`swipe.settle`),
+ * but a recorded `tool:` step carries its args opaquely - the parser knows no
+ * tool schemas - so the same key reached `registry.invokeTool` and failed only
+ * there, with every earlier step already run against the device. Callers use
+ * this to move that refusal to load time.
+ *
+ * An unknown tool is skipped: that step already fails on its own, with a better
+ * message than a missing schema could produce here.
+ */
+function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUse | undefined {
+  for (const { step, where } of walkSteps(steps)) {
+    if (step.kind !== "tool") continue;
+    const props = toolArgProps(registry, step.name);
+    if (!props) continue;
+    const direct = retiredArgIn(props, step.name, step.args, where);
+    if (direct) return direct;
+    for (const call of nestedInvocations(props, step.args)) {
+      const nestedProps = toolArgProps(registry, call.tool);
+      if (!nestedProps) continue;
+      // Spelled like walkSteps' block position, so both nestings read alike:
+      // "step 1 of the run-sequence step at step 2".
+      const hit = retiredArgIn(
+        nestedProps,
+        call.tool,
+        call.args,
+        `${call.at} of the ${step.name} step at ${where}`
+      );
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The refusal text for {@link findRetiredToolArg}'s hit, shared by both callers.
+ * The position carries its counting rule, since "step 2" alone is ambiguous: the
+ * CLI renderers would call that same step step 1 (see {@link walkSteps}).
+ * Qualified once at the end of `use.where`, not once per nesting level.
+ */
+function retiredArgReason(use: RetiredArgUse): string {
+  return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
 }
 
 /**
@@ -998,7 +1137,7 @@ function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
  * updateBaselines writes PNGs no later run can find.
  */
 function assertUploadSelfContained(flow: FlowFile): void {
-  for (const step of walkSteps(flow.steps)) {
+  for (const { step } of walkSteps(flow.steps)) {
     if (step.kind === "run") {
       throw new FailureError(
         `This flow uses run: composition ("run: ${step.flow}"), which requires a co-located ` +
@@ -1042,6 +1181,9 @@ export function createRunFlowTool(
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
+Use when a scenario is already authored as YAML and the whole of it should replay in one call with a
+per-step verdict; reach for the individual gesture tools when nothing is authored yet, and for
+run-sequence when the steps are an ad-hoc list rather than a stored flow.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready (on iOS it also pins later element lookups to that app rather than auto-detecting the frontmost
 one); \`tool\` calls dispatch through the registry (a raw \`tool\` step ends that iOS pin, so lookups
@@ -1056,6 +1198,11 @@ order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unl
 non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
 never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
 reads "inside card inside list", each container's frame inside the next);
+\`swipe\` performs one finger flick (\`swipe: left\`, or \`swipe: { from?, direction|to|by, momentum?, duration? }\` —
+direction is the FINGER's travel, the opposite sense of scroll-to's content direction; \`by: { x?, y? }\` — signed
+0–1 screen fractions, combined length at least 0.03 (a diagonal clears it where neither axis does); duration in ms,
+default 300, minimum 150, maximum 10000; each bound is a parse error that rejects the file before any step runs;
+\`momentum: false\` lands exactly where the finger lifts instead of flinging);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
@@ -1072,7 +1219,7 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only).
-A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
+A selector-less gesture — a coordinate \`tap\`/\`long-press\`/\`swipe\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
 no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
 settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
 own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually
@@ -1125,6 +1272,18 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
+      // Refused before the prerequisite handshake and before any step touches
+      // the device: a mid-run refusal would land after earlier steps had already
+      // driven it (see findRetiredToolArg).
+      const retiredArg = findRetiredToolArg(registry, flow.steps);
+      if (retiredArg) {
+        throw new FailureError(`Flow "${flowName}" ${retiredArgReason(retiredArg)}`, {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_run_validate",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses.
@@ -1679,6 +1838,11 @@ function conditionLabel(
   return `${cond.condition} ${sel}`;
 }
 
+/** Human-readable selector/point spelling shared by gesture reports. */
+function gestureTargetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
+}
+
 /** Display-only "what this step acts on" for {@link StepReport.target}. */
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
@@ -1687,6 +1851,19 @@ function stepTarget(step: FlowStep): string | undefined {
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
+    case "swipe": {
+      let travel: string;
+      if (step.direction !== undefined) {
+        travel = step.direction;
+      } else if (step.by !== undefined) {
+        travel = `by ${swipeByLabel(step.by)}`;
+      } else if (step.to !== undefined) {
+        travel = `to ${gestureTargetLabel(step.to)}`;
+      } else {
+        return undefined;
+      }
+      return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from)}` : ""}`;
+    }
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
@@ -2206,6 +2383,12 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
+  // The root flow's load-time gate, applied to the fragment at the only moment
+  // its steps exist. Charged to the run: step, so the fragment is refused whole
+  // rather than part-executed up to the offending step.
+  const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
+  if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
+
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
@@ -2254,6 +2437,7 @@ async function execLeafStep(
 
     case "tap":
     case "long-press":
+    case "swipe":
     case "type":
     case "await":
     case "assert":
@@ -2441,6 +2625,12 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
+        // A gesture tool that consults the signal rejects when the run is
+        // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
+        // step failure carrying the tool's own "aborted after N frames".
+        if (signal?.aborted) {
+          return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
+        }
         const reframed = describeNestedParamError(registry, err, step.name, args, step.args ?? {});
         return { ...base, status: "error", tool: step.name, reason: reframed ?? errMsg(err) };
       }

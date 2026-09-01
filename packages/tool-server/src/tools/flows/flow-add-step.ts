@@ -60,8 +60,8 @@ const zodSchema = z.object({
     .describe(
       'MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app") — a TOOL, not a flow directive. ' +
         'A flow-file directive name ("tap", "launch", "run", "type", "await", "assert", "pinch", ' +
-        '"echo", "wait", "long-press", "scroll-to", "snapshot", "when") is answered with guidance, ' +
-        "and nothing runs or is recorded: most name the tool that records the directive, while " +
+        '"swipe", "echo", "wait", "long-press", "scroll-to", "snapshot", "when") is answered with ' +
+        "guidance, and nothing runs or is recorded: most name the tool that records the directive, while " +
         '"wait", "long-press", "scroll-to", "snapshot" and "when" have no recording tool at all and ' +
         "are answered with what to do instead. A recording tool (flow-add-step, flow-add-echo, " +
         "flow-start-recording, flow-finish-recording) is refused the same way, each for its own " +
@@ -749,6 +749,14 @@ export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
 ];
 
 export function directiveCommandHint(command: string): string | undefined {
+  if (command === "swipe") {
+    return (
+      `"swipe" is a flow directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
+      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through flow-add-step. ` +
+      `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
+      `\`swipe:\` is part of the polish pass.`
+    );
+  }
   if (command === "echo") {
     return (
       `"echo" is a flow directive, not a tool. Call \`flow-add-echo\` DIRECTLY — not through ` +
