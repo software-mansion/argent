@@ -107,7 +107,7 @@ const zodSchema = z
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
       ),
     flow_file: z
       .string()
@@ -1104,10 +1104,12 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only); \`script\` runs a local .mjs file in a fresh Node process for setup, cleanup, or any work a device step cannot do
-(\`script: { path: scripts/seed.mjs, timeout?: <ms> }\` — always a map, never a bare path; the path is
-resolved against the flow file that names the step, exactly as a \`run\` target is, and the step needs no
-device, so a script-only flow runs with nothing booted — though a \`run\` step beside it still resolves
-one. Its stdout and stderr come back on the step report. Co-located runs only.).
+(\`script: { path: ../../scripts/seed.mjs, timeout?: <ms> }\` — always a map, never a bare path; the path
+is resolved against the flow file that names the step, exactly as a \`run\` target is, so a saved flow
+climbs out of .argent/flows/ to reach the project's own scripts/ directory. The step needs no device, so
+a script-only flow runs with nothing booted — but a \`run\` or a \`when\` step beside it still resolves
+one, \`when\` even when the only thing it guards is another script, so a platform-gated seed needs a
+device of that platform. Its stdout and stderr come back on the step report. Co-located runs only.).
 A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
 no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
 settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
@@ -1125,7 +1127,8 @@ device's current state. Device id is injected by the runner (flows store none) �
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
 than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
 unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
-starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
+starts there — following a leading \`run:\`, \`echo:\` or \`script:\`, so a fragment that composes a chromium
+e2e flow boots too, and so does a flow that seeds a backend before it launches;
 otherwise the first launch attaches to an already-running instance and never kills it. Every later
 launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto;
 an instance the run already owns for that same app is killed first (its exit awaited) so the
