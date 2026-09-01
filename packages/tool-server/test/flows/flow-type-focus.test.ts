@@ -322,4 +322,35 @@ describe("type directive — a run cancelled inside the keyboard call", () => {
     expect(result.steps[0].reason).toBe("run aborted");
     expect(result.ok).toBe(false);
   });
+
+  it("still reports a keyboard error on a run nobody cancelled", async () => {
+    // The other arm of that catch: with no abort in flight the error belongs to
+    // the app and must reach the step, or every `adb` failure on a healthy run
+    // would be filed as a cancellation and the run would read as skipped.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: emailXml(true) }),
+      (args) => {
+        if (args.text === undefined) return { typed: "enter", keys: 1 };
+        throw new Error("adb: device offline");
+      }
+    );
+
+    await writeFlow("broken-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "broken-type", project_root: tmpDir, device: ANDROID_DEVICE },
+        { signal: new AbortController().signal } as never
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:error"]);
+    expect(result.steps[0].reason).toContain("device offline");
+  });
 });

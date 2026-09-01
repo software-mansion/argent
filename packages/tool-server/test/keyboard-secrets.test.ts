@@ -295,6 +295,24 @@ describe("redactSecretsFromError", () => {
     expect(err.stack ?? "").not.toContain("hunter2");
   });
 
+  it("scrubs a stack that was already built with the value in it", () => {
+    // V8 formats `stack` lazily, so a stack first read AFTER the message scrub is
+    // clean whether or not this function touches it. Anything that read it
+    // earlier — a log line, a wrapper that inspected the error — has frozen the
+    // plaintext into the string, and only the stack scrub removes it then.
+    const err = new Error("adb input text hunter2 failed");
+    void err.stack;
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+    expect(err.stack ?? "").not.toContain("hunter2");
+    expect(err.stack ?? "").toContain("{{secret:APP_PASSWORD}}");
+  });
+
+  it("scrubs a thrown string, which carries no message to scrub", () => {
+    expect(
+      redactSecretsFromError("adb input text hunter2", [{ name: "APP_PASSWORD", value: "hunter2" }])
+    ).toBe("adb input text {{secret:APP_PASSWORD}}");
+  });
+
   it("skips empty values instead of corrupting the message", () => {
     const err = new Error("boom");
     redactSecretsFromError(err, [{ name: "EMPTY", value: "" }]);

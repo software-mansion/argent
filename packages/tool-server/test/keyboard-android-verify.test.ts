@@ -246,6 +246,15 @@ describe("classifyTypedText", () => {
     expect(classifyTypedText("def", "abcdef", "abcdef")).toBe("indeterminate");
   });
 
+  it("rejects a doubled injection into a field whose own text overlaps it", () => {
+    // The field holds more than it held plus everything typed, which no replaced
+    // selection can produce — `input text` overwrites the selection, it does not
+    // add to it. Without that length bound these read as a selection replacement
+    // and come back as a bare note, which every step gate passes.
+    expect(classifyTypedText("aaa", "aaaaa", "a")).toBe("not-landed");
+    expect(classifyTypedText("a", "aba", "b")).toBe("not-landed");
+  });
+
   it("still decides `landed` when the field is empty and the text arrived whole", () => {
     // The empty-and-no-hint baseline: the field grew by exactly `text`, which the
     // insertion branch takes on its own — `beforeSurvived` is true of an empty
@@ -410,6 +419,14 @@ describe("plannedUndoDeletions", () => {
     // An input mask or autocorrect rewrote the field. The prior content is not
     // recoverable by backspacing, so the field is left exactly as it is.
     expect(plannedUndoDeletions("12345", "1-2-3-45xyz", "xyz")).toBeNull();
+  });
+
+  it("refuses a reading whose landed run would be a negative length", () => {
+    // The common prefix and suffix overlap on a field that SHRANK, so the
+    // arithmetic offers runs of length -1. Nothing downstream filters a negative:
+    // it reaches `deleteTrailing` and is reported as "-1 characters were deleted".
+    expect(plannedUndoDeletions("aa", "a", "b")).toBeNull();
+    expect(plannedUndoDeletions("aaa", "aa", "b")).toBeNull();
   });
 
   it("refuses to delete more characters than the call asked to type", () => {
@@ -740,6 +757,21 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text '1234'"]);
     expect(res.verified).toBeUndefined();
     expect(res.note).toMatch(/no longer the one the text was typed into/);
+  });
+
+  it("treats a field whose class changed between the reads as a different field", () => {
+    // A different widget class is a different field even behind one id and one
+    // position: a screen that swaps its search box for an autocomplete one has
+    // replaced the view the text was typed into, not moved it.
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: "XYabcdefgh", cls: "android.widget.AutoCompleteTextView" }),
+    ]);
+    return type(registry, "abcdefghijkl").then((res) => {
+      expect(res.verified).toBeUndefined();
+      expect(res.note).toMatch(/no longer the one the text was typed into/);
+      expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+    });
   });
 
   it("does not mistake the SAME field for another when typing resizes it", async () => {
