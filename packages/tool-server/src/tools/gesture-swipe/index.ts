@@ -137,21 +137,28 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
       // driving the device for the rest of the duration, its samples interleaving
       // into whatever gesture is sent to that device next.
       if (ctx?.signal?.aborted) {
-        // Down has already landed, so lift the finger before unwinding.
-        if (i > 0) {
-          sendCommand(api, {
-            cmd: "touch",
-            type: "Up",
-            x: lastX,
-            y: lastY,
-            second_x: null,
-            second_y: null,
-          });
-        }
         const err = new Error(
           `gesture-swipe aborted - cancelled mid-gesture after ${i} of ${steps + 1} frames`
         );
         err.name = "AbortError";
+        // Down has already landed, so lift the finger before unwinding. Best
+        // effort - a cancel is often the device going away - so a lift that is
+        // refused rides along as the AbortError's `cause` rather than replacing
+        // it, which callers key on by name.
+        if (i > 0) {
+          try {
+            await sendCommand(api, {
+              cmd: "touch",
+              type: "Up",
+              x: lastX,
+              y: lastY,
+              second_x: null,
+              second_y: null,
+            });
+          } catch (liftErr) {
+            err.cause = liftErr;
+          }
+        }
         throw err;
       }
 
@@ -166,7 +173,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       // In the Up's own frame, with no added sleep, so the cadence is unchanged.
       if (type === "Up") {
-        sendCommand(api, {
+        await sendCommand(api, {
           cmd: "touch",
           type: "Move",
           x,
@@ -175,7 +182,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
           second_y: null,
         });
       }
-      sendCommand(api, {
+      await sendCommand(api, {
         cmd: "touch",
         type,
         x,

@@ -21,15 +21,15 @@ export async function typeSimulatorServer(
 
   const pressKeyCode = async (keyCode: number, withShift = false) => {
     if (withShift) {
-      api.pressKey("Down", SHIFT_KEYCODE);
+      await api.pressKey("Down", SHIFT_KEYCODE);
       await sleep(10);
     }
-    api.pressKey("Down", keyCode);
+    await api.pressKey("Down", keyCode);
     await sleep(delay);
-    api.pressKey("Up", keyCode);
+    await api.pressKey("Up", keyCode);
     if (withShift) {
       await sleep(10);
-      api.pressKey("Up", SHIFT_KEYCODE);
+      await api.pressKey("Up", SHIFT_KEYCODE);
     }
     keysPressed++;
   };

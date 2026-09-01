@@ -11,7 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
+import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
@@ -50,8 +50,8 @@ export function simulatorServerRef(device: DeviceInfo): {
 
 const getPaths = () => {
   const BINARY_PATH = simulatorServerBinaryPath();
-  const BINARY_DIR = simulatorServerBinaryDir();
-  return { BINARY_PATH, BINARY_DIR };
+  const RUN_DIR = simulatorServerRunDir();
+  return { BINARY_PATH, RUN_DIR };
 };
 
 const READY_TIMEOUT_MS = 30_000;
@@ -59,8 +59,17 @@ const READY_TIMEOUT_MS = 30_000;
 export interface SimulatorServerApi {
   apiUrl: string;
   streamUrl: string;
-  /** Send a key Down or Up event by USB HID keycode. */
-  pressKey(direction: "Down" | "Up", keyCode: number): void;
+  /**
+   * Send a key Down or Up event by USB HID keycode.
+   *
+   * Awaitable because the transports differ in what they can promise. On a
+   * provider's server the key rides the WebSocket, which acknowledges it, so
+   * the returned promise rejects on a lost or refused press. The spawned and
+   * MoQ paths have no ack to wait for and resolve as soon as the write is
+   * handed off. The callers await uniformly and each transport reports what it
+   * actually knows.
+   */
+  pressKey(direction: "Down" | "Up", keyCode: number): Promise<void>;
   /**
    * Set for ios-remote so the shared `sendCommand` / `httpScreenshot` helpers in
    * `simulator-client.ts` route through MoQ instead of WebSocket + HTTP.
@@ -109,9 +118,8 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
-    pressKey: (direction, keyCode) => {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
-    },
+    pressKey: (direction, keyCode) =>
+      moq.sendControl(encodeKey({ action: direction, code: keyCode })),
     transport,
   };
 
@@ -162,9 +170,7 @@ async function buildAttachedInstance(
   const api: SimulatorServerApi = {
     apiUrl: externalDevice.simulatorServer.apiUrl,
     external: true,
-    pressKey: (direction, code) => {
-      sendCommand(api, { cmd: "key", code, direction });
-    },
+    pressKey: (direction, code) => sendCommand(api, { cmd: "key", code, direction }),
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
   };
@@ -207,13 +213,13 @@ async function spawnSimulatorServerProcess(
   // the binary is told which set to attach through; default-set devices keep the
   // bare argv.
   const deviceSet = subcommand === "ios" ? await deviceSetForUdid(udid) : null;
-  const { BINARY_PATH, BINARY_DIR } = getPaths();
+  const { BINARY_PATH, RUN_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = [subcommand, "--id", udid];
     if (deviceSet) args.push("--device-set", deviceSet);
 
     const proc = spawn(BINARY_PATH, args, {
-      cwd: BINARY_DIR,
+      cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -386,11 +392,11 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
 
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
-      // cannot drive the Apple TV focus engine, and `sendCommand` is
-      // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
-      // reported success. Reject at this one chokepoint every gesture / keyboard /
-      // paste / rotate tool resolves through; screenshot branches to `xcrun`
-      // before it ever resolves this service.
+      // cannot drive the Apple TV focus engine: it accepts a touch and acks it
+      // `ok` while the focus engine ignores it, so no ack check can catch this
+      // one. Reject at this one chokepoint every gesture / keyboard / paste /
+      // rotate tool resolves through; screenshot branches to `xcrun` before it
+      // ever resolves this service.
       if (await isTvOsSimulator(device.id)) {
         throw new UnsupportedOperationError(
           SIMULATOR_SERVER_NAMESPACE,
@@ -441,7 +447,12 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         apiUrl,
         streamUrl,
         pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          /**
+           * simulator-server never replies on stdin, so there is nothing to
+           * await here. The press is reported delivered once it is written.
+           */
           proc.stdin?.write(`key ${direction} ${keyCode}\n`);
+          return Promise.resolve();
         },
       },
       dispose: async () => {

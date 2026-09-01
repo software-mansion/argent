@@ -7,7 +7,10 @@ import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
-const ALLOWED_TOOLS = new Set([
+// No tool here returns an image or an artifact handle — that is what keeps a
+// sequence to the single capture the MCP layer appends after the last step.
+// Gated by test/run-sequence-observation-gate.test.ts.
+export const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
   "gesture-scroll",

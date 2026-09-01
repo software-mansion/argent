@@ -111,7 +111,10 @@ async function createFakeSimulatorServer({
 
   webSocketServer.on("connection", (socket) => {
     socket.on("message", (data) => {
-      wsCommands.push(JSON.parse(String(data)));
+      const command = JSON.parse(String(data)) as { id?: string };
+      wsCommands.push(command);
+      /** The real server echoes the id back, `sendCommand` waits for it. */
+      socket.send(JSON.stringify({ id: command.id, status: "ok" }));
     });
   });
 
@@ -259,8 +262,8 @@ describe("attaching to a provider's simulator-server", () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    instance.api.pressKey("Down", 0x04);
-    instance.api.pressKey("Up", 0x04);
+    await instance.api.pressKey("Down", 0x04);
+    await instance.api.pressKey("Up", 0x04);
     await vi.waitFor(() => expect(simulatorServer.wsCommands).toHaveLength(2));
     expect(simulatorServer.wsCommands).toEqual([
       expect.objectContaining({ cmd: "key", direction: "Down", code: 0x04 }),
@@ -272,7 +275,7 @@ describe("attaching to a provider's simulator-server", () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    sendCommand(instance.api, { cmd: "touch", type: "Down", x: 10, y: 20 });
+    await sendCommand(instance.api, { cmd: "touch", type: "Down", x: 10, y: 20 });
     await vi.waitFor(() => expect(simulatorServer.wsCommands).toHaveLength(1));
     expect(simulatorServer.wsCommands[0]).toMatchObject({
       cmd: "touch",

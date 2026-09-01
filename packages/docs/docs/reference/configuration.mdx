@@ -36,11 +36,14 @@ argent config get ios.additionalDeviceSets
 | Key                        | Scopes          | Merge            | Description                                                                                                                             |
 | -------------------------- | --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file) |
+| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                    |
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                          |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths   |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                       |
 
 A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
+
+`allowlist.enabled` only affects `argent update`. When it is `false`, an update leaves editor auto-approve allowlists entirely alone — rules already written stay, and `argent init` still asks its auto-approve question as before. When the key is unset (the default), nothing changes: update keeps refreshing the rules for editors that already have Argent configured. `false` in either scope wins, so a committed project file opts out a whole team.
 
 Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
 

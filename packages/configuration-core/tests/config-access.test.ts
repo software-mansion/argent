@@ -182,6 +182,27 @@ describe("setConfigValue — return value", () => {
   });
 });
 
+describe("getConfigValue — allowlist.enabled (prioritize-restrictive, no default)", () => {
+  it("reads as unset when never decided", () => {
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBeUndefined();
+  });
+
+  it("false in either scope wins over true in the other", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    setConfigValue("allowlist.enabled", false, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+
+    setConfigValue("allowlist.enabled", false, "global", opts());
+    setConfigValue("allowlist.enabled", true, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+  });
+
+  it("a lone true opts in", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(true);
+  });
+});
+
 describe("listConfig", () => {
   it("reports every schema entry with per-scope and effective values", () => {
     setConfigValue("lens.agent", "claude", "global", opts());
