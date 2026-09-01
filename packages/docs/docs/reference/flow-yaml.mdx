@@ -283,7 +283,9 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
-On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app. On Chromium, Argent boots the app before step 1, so the same script runs while the app is up.
+On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
+
+On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
 
 ## The `argent flow` command
 
