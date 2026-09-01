@@ -252,9 +252,34 @@ describe("keyboard `clear` — refusal taxonomy", () => {
       );
     expect(err.message).toMatch(/<button>/);
     expect(err.message).toMatch(/gesture-tap/);
-    // The iframe blind spot is named in the same message, because `iframe` is
-    // the one `focus` value whose repair is NOT "tap harder".
-    expect(err.message).toMatch(/iframe/);
+  });
+
+  it("chromium: a field inside an iframe is told the clear cannot reach it", async () => {
+    // `iframe` is the one focus value whose repair is NOT "tap harder": the
+    // field really is focused, one document down, and no tap in the top document
+    // moves focus onto it. The advice used to live in the NO_EDITABLE_FOCUS
+    // message, which a focused iframe never reaches — it has no light children,
+    // so it was classified as an opaque host and told to tap the field inside
+    // it. Confirmed live on Chrome 152 with focus on an <input> in the frame.
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      evaluate: vi.fn(async () => ({ cleared: false, focus: "iframe", reason: "iframe" })),
+    } as never);
+    const err = await makeChromiumImpl(registry)
+      .handler({}, { udid: chromiumDevice.id, clear: true }, chromiumDevice)
+      .then(
+        () => {
+          throw new Error("expected the clear to reject");
+        },
+        (e: unknown) => e as Error
+      );
+    const signal = getFailureSignal(err);
+    expect(signal?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_FIELD);
+    expect(signal?.failure_stage).toBe("keyboard_clear_chromium_iframe");
+    expect(err.message).toMatch(/does not reach/);
+    expect(err.message).toMatch(/gesture-drag/);
+    // Not the opaque-host repair, which is the loop this replaces.
+    expect(err.message).not.toMatch(/Tap the field inside it/);
   });
 
   it("chromium: a null focus reads as no focus at all, not as an element", async () => {

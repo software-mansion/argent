@@ -141,6 +141,14 @@ export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
     // (\`<div>\` + \`attachShadow({mode:"closed"})\`): a closed root leaves the
     // light subtree empty, and "tap the field first" is a loop for an element
     // that already has focus.
+    //
+    // An <iframe> takes the same two tests (no shadow root, no light children)
+    // and is NOT the same shape: the field really is focused, one document down,
+    // and no tap in this document can move focus onto it — so "tap the field
+    // inside it" is a loop. It gets its own reason and its own repair.
+    if (tag === "iframe") {
+      return { cleared: false, focus: focus, reason: "iframe" };
+    }
     const opaque =
       !!el && !el.shadowRoot && tag !== null && (tag.indexOf("-") !== -1 || el.childNodes.length === 0);
     return { cleared: false, focus: focus, reason: opaque ? "host-opaque" : "not-editable" };
@@ -366,6 +374,12 @@ const UNCLEARABLE_FIELD_MESSAGES: Record<string, string> = {
     "holds no text to clear — nothing was cleared. It already has keyboard focus, so tapping it again " +
     "will not help; set it through the app's own control (`gesture-tap` an option, `gesture-drag` a " +
     "slider), or clear a different field.",
+  "iframe":
+    "is a frame, and the field with focus is inside it — one document down, where this clear does " +
+    "not reach: it reads `document.activeElement` of the PAGE, which names the frame itself and " +
+    "never the element inside. Nothing was cleared, and nothing was selected. Tapping it again does " +
+    "not help, because the field it holds already has focus. Select the text with `gesture-drag` and " +
+    "type over the selection instead.",
   "host-opaque":
     "is not editable itself and exposes no open shadow root, so this clear can see neither whether it " +
     "holds a field nor what that field contains — and it will not delete blind: `execCommand` acts on " +
@@ -544,10 +558,7 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
         // form control and THIS is the message that has to carry it.
         "If the same error comes back after that tap, check whether the field is `disabled`: " +
         "`describe` marks it, a disabled control cannot take keyboard focus at all, and no number " +
-        "of taps will move focus onto one — change it through the app's own control instead. " +
-        "A field inside an <iframe> reports as `iframe` here: the page's active element is " +
-        "the frame, and this clear does not reach into it — for that one, select the text " +
-        "with `gesture-drag` and type over the selection instead.",
+        "of taps will move focus onto one — change it through the app's own control instead.",
       {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_NO_EDITABLE_FOCUS,
         failure_stage: "keyboard_clear_chromium",

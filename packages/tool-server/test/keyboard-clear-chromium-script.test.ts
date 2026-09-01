@@ -241,7 +241,12 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — what it agrees to clear", () => {
     ["a plain button", () => el("BUTTON", {}), "button", "not-editable"],
     ["a plain div", () => el("DIV", { isContentEditable: false }), "div", "not-editable"],
     ["the body (nothing focused)", () => el("BODY", {}), "body", "not-editable"],
-    ["an iframe", () => el("IFRAME", {}), "iframe", "not-editable"],
+    // An <iframe> is decided by TAG, before the opaque-host tests: a real one
+    // has no light children (`childNodes.length === 0`, measured on Chrome 152)
+    // and would otherwise be classified `host-opaque` and told to "tap the field
+    // inside it" — which is what the caller already did, one document down.
+    ["an iframe", () => el("IFRAME", { childNodes: [] }), "iframe", "iframe"],
+    ["an iframe with light children", () => el("IFRAME", {}), "iframe", "iframe"],
   ])("refuses %s, naming what holds focus, and deletes nothing", (_label, make, focus, reason) => {
     const { outcome, commands } = run(make());
     expect(outcome).toEqual({ cleared: false, focus, reason });
