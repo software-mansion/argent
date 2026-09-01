@@ -300,6 +300,26 @@ describe("redactSecretsFromError", () => {
     redactSecretsFromError(err, [{ name: "EMPTY", value: "" }]);
     expect(err.message).toBe("boom");
   });
+
+  it("scrubs an error whose message is a getter-only accessor", () => {
+    // The abort a cancelled `keyboard` call raises is a DOMException, whose
+    // `message` and `stack` are prototype getters: assigning to one throws a
+    // TypeError out of this function, losing both the redaction and the abort.
+    const controller = new AbortController();
+    controller.abort(new DOMException("adb input text hunter2 was aborted", "AbortError"));
+    let err: unknown;
+    try {
+      controller.signal.throwIfAborted();
+    } catch (thrown) {
+      err = thrown;
+    }
+
+    const out = redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+
+    expect(out).toBe(err);
+    expect((out as Error).name).toBe("AbortError");
+    expect((out as Error).message).toBe("adb input text {{secret:APP_PASSWORD}} was aborted");
+  });
 });
 
 describe("keyboard tool with secret placeholders", () => {

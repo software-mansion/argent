@@ -239,13 +239,13 @@ describe("classifyTypedText", () => {
 });
 
 describe("plannedUndoDeletions", () => {
-  it("counts the observed growth when the prior content survived (plan A)", () => {
+  it("counts the observed growth when the prior content survived", () => {
     // 8 of 12 characters landed after "XY": deleting 8 restores "XY" exactly.
     expect(plannedUndoDeletions("XY", "XYabcdefgh", "abcdefghijkl")).toBe(8);
   });
 
   it("refuses to delete when the baseline is equally a prior character and a hint", () => {
-    // Both proofs apply and they disagree: if "a" was really in the field, 8
+    // Two readings, and they disagree: if "a" was really in the field, 8
     // characters are ours; if "a" was the hint of an empty field, 9 are. Acting
     // on either reading is a coin flip with the user's content, and taking the
     // smaller count is the worse half — it leaves the hint text behind as real
@@ -292,10 +292,27 @@ describe("plannedUndoDeletions", () => {
     expect(plannedUndoDeletions("aa bb", "aa bb", "aaa")).toBeNull();
   });
 
+  it("refuses a selection whose swallowed run is not the head of the typed text", () => {
+    // "Smith" double-tap selected in "John Smith", `text: "John Smithe"`, the
+    // final "e" dropped: `input text` replaces the selection, so the field reads
+    // "John John Smith". That is equally "John " inserted at the cursor by a
+    // burst that dropped the rest, and the two readings disagree — 5 characters
+    // are ours under one, 10 under the other. Deleting 5 takes the "Smith" the
+    // user selected, and the retype leaves the name three times over, shaped to
+    // satisfy the `inserted` branch and reported as landed.
+    expect(plannedUndoDeletions("John Smith", "John John Smith", "John Smithe")).toBeNull();
+    // The same shape on an unchanged field: "john" wholly selected, `text:
+    // "xjohn"`, the leading "x" dropped, so "john" replaced "john". Retyping
+    // there leaves "johnxjohn" where the field should hold "xjohn".
+    expect(plannedUndoDeletions("john", "john", "xjohn")).toBeNull();
+    expect(plannedUndoDeletions("dog", "dog", "hotdog")).toBeNull();
+  });
+
   it("still repairs an unchanged field no selection can explain", () => {
     // The counterpart, and the reason the refusal above is not a blanket one on
-    // unchanged fields: nothing in "hello" starts "abc", so the reading has only
-    // one explanation — the burst landed nothing — and retyping cannot double it.
+    // unchanged fields: no character of "hello" is one this call typed, so no
+    // selection could have been replaced by what landed, the reading has one
+    // explanation — the burst landed nothing — and retyping cannot double it.
     expect(plannedUndoDeletions("hello", "hello", "abc")).toBe(0);
     // An empty baseline cannot host a selection at all, which is what keeps the
     // reported shape (typed into an empty hint-less box, nothing landed)
@@ -303,13 +320,16 @@ describe("plannedUndoDeletions", () => {
     expect(plannedUndoDeletions("", "", "abc")).toBe(0);
   });
 
-  it("gives up the retry on an unchanged field that could have held the first character", () => {
-    // The price of the refusal above, pinned so it is a decision rather than a
-    // surprise: on an unchanged field every position is a possible insertion
-    // point, so one shared character is enough to make a replaced selection as
-    // good an explanation as a burst that landed nothing. "hello" holds the "h"
-    // of "hat", so the call reports the failure instead of retyping.
+  it("gives up the retry on an unchanged field that could have held what landed", () => {
+    // The price of the model, pinned so it is a decision rather than a surprise:
+    // on an unchanged field every position is a possible selection, so one
+    // character the call could have typed is enough to make "a selection was
+    // replaced by exactly what it held" as good an explanation as "the burst
+    // landed nothing". "hello" holds the "h" of "hat", so the call reports the
+    // failure instead of retyping. A hint usually shares a character with the
+    // text, so this is most of the total-drop cases — all of them fail loudly.
     expect(plannedUndoDeletions("hello", "hello", "hat")).toBeNull();
+    expect(plannedUndoDeletions("Search settings", "Search settings", "sound")).toBeNull();
   });
 
   it("does not veto a zero-deletion repair over a non-ASCII baseline", () => {
@@ -321,37 +341,35 @@ describe("plannedUndoDeletions", () => {
 
   it("still counts the growth when the field cannot have been empty", () => {
     // "XY" is not a subsequence of the typed text, so the hint reading is ruled
-    // out and plan A is the only live one. This is what keeps the overlap guard
-    // from disabling the undo wherever the prior content is real.
+    // out and one reading is left. This is what keeps the refusal above from
+    // disabling the undo wherever the prior content is real.
     expect(plannedUndoDeletions("XY", "XYabcdefgh", "abcdefghijkl")).toBe(8);
   });
 
-  it("empties the field when everything in it came from this injection (plan B)", () => {
+  it("empties the field when everything in it came from this injection", () => {
     // Baseline was the hint, so it shares no prefix or suffix with the typed
-    // text and plan A cannot apply; the field holds only a subsequence of what
-    // we typed, which proves it was empty before.
+    // text: the only reading that survives replaces the whole of it with what
+    // landed, which is what an empty field under a hint looks like.
     expect(plannedUndoDeletions("Search settings", "abcdefgh", "abcdefghijkl")).toBe(8);
   });
 
-  it("deletes when both proofs apply but AGREE — a hint-less empty baseline", () => {
-    // before="" makes plan A's count (after.length - 0) equal plan B's
-    // (after.length), so there is no disagreement to distrust. This is the
-    // hint-less empty `TextInput` — uiautomator reports text="" for it, and
-    // without this the repair never runs for exactly the reported repro shape.
+  it("deletes the whole of a hint-less empty baseline, which has one reading", () => {
+    // An empty `before` hosts no selection and shares no edge, so the only
+    // reading is "everything present is ours". This is the hint-less empty
+    // `TextInput` — uiautomator reports text="" for it — and without it the
+    // repair never runs for exactly the reported repro shape.
     expect(plannedUndoDeletions("", "abcdefgh", "abcdefghijkl")).toBe(8);
     const sentence = "The quick brown fox jumps over the lazy dog. The quick brown fox";
     const dropped = "The quick brown fox jumps over the lazy dog. ";
     expect(plannedUndoDeletions("", dropped, sentence)).toBe(dropped.length);
-    // An empty baseline where the proofs still disagree stays declined.
-    expect(plannedUndoDeletions("", "abcdefghijklm", "abc")).toBeNull();
   });
 
   it("refuses the hint overlaps that make the undo double the value", () => {
     // Each pair is an empty field whose hint shares an edge with the typed text,
-    // and a first burst that dropped characters. Plan A reads the hint as prior
-    // content and under-deletes by exactly its length, so the retype lands on
-    // top of it. These are the real-world shapes: a URL bar, a phone field, a
-    // quantity box.
+    // and a first burst that dropped characters. Reading the hint as prior
+    // content under-deletes by exactly its length, so the retype would land on
+    // top of it — and the reading that empties the field is just as live. These
+    // are the real-world shapes: a URL bar, a phone field, a quantity box.
     expect(plannedUndoDeletions("https://", "https://exam", "https://example.com")).toBeNull();
     expect(plannedUndoDeletions("+48", "+48501", "+48501234567")).toBeNull();
     expect(plannedUndoDeletions("0", "10", "100")).toBeNull();
@@ -471,16 +489,16 @@ describe("android keyboard read-back — fault injection", () => {
     const { registry } = registryServing([
       hierarchy({ text: "ab" }), // before
       hierarchy({ text: "aXb" }), // after: 1 of 3 chars landed, mid-field
-      hierarchy({ text: "aabcb" }), // after the retype: "a" + "abc" + "b"
+      hierarchy({ text: "aXYZb" }), // after the retype: "a" + "XYZ" + "b"
     ]);
-    const res = await type(registry, "abc");
-    expect(res).toMatchObject({ typed: "abc", keys: 3, verified: true });
+    const res = await type(registry, "XYZ");
+    expect(res).toMatchObject({ typed: "XYZ", keys: 3, verified: true });
     // Singular, and the ONE character it actually deleted.
     expect(res.note).toContain("so 1 character was deleted");
     expect(cmds()).toEqual([
-      "input text 'abc'",
+      "input text 'XYZ'",
       "input keyevent 67", // exactly the ONE character that landed
-      "input text 'abc'",
+      "input text 'XYZ'",
     ]);
   });
 
@@ -792,18 +810,20 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   });
 
   it("retypes without deleting when the field received nothing at all", async () => {
-    // The reported shape: a digits-only field rejects every letter, so the read
+    // The reported shape: a field at its maxLength accepts nothing, so the read
     // back is byte-identical to the baseline and holds none of the typed text.
     // There is nothing of ours to remove, so the retry must retype with zero
-    // backspaces — deleting here would eat the field's own content.
+    // backspaces — deleting here would eat the field's own content. No character
+    // of the hint is one this call typed, so no selection explains the reading
+    // and the count is proven (see the test below for the price of that rule).
     const unchanged = hierarchy({ text: "Enter number" });
     const { registry } = registryServing([unchanged, unchanged, unchanged]);
 
-    const res = await type(registry, "abcdefghijkl");
+    const res = await type(registry, "9876543210");
 
     expect(res.verified).toBe(false);
     expect(cmds().some((c) => c.includes("keyevent"))).toBe(false);
-    // One first burst plus the chunked retry (12 chars / 8 per chunk = 2).
+    // One first burst plus the chunked retry (10 chars / 8 per chunk = 2).
     expect(cmds().filter((c) => c.includes("input text"))).toHaveLength(3);
   });
 
@@ -850,24 +870,38 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // field with the most evidence against it.
     expect(res.verified).toBe(false);
     expect(res.note).toMatch(/did NOT land/);
+    // The repair's backspaces and retype went wherever focus was at the time, so
+    // the note has to name the field it may have edited instead.
+    expect(res.note).toMatch(/reached the field that holds focus now/);
   });
 
   it("fails the call on every way the confirming read can be blocked", async () => {
-    // One case per blocked cause, all after a repair: a read that throws, a lost
-    // focus, and a field that has started masking. Each leaves the pre-repair
-    // failure as the last measurement, so none of them may report "not checked".
-    const landed = hierarchy({ text: "XY" });
-    const partial = hierarchy({ text: "XYabcdefgh" });
-    const blocked = [
-      { label: "focus lost", xml: hierarchy({ focused: false }) },
-      { label: "masks now", xml: hierarchy({ text: "••••", password: true }) },
+    // One case per blocked cause, all after a repair: a read that throws (the
+    // stub throws once its queue runs out), one truncated before it reached the
+    // field, a lost focus, focus on another field, and a field that has started
+    // masking. Each leaves the pre-repair failure as the last measurement, so
+    // none of them may report "not checked".
+    const baseline = { xml: hierarchy({ text: "XY" }) };
+    const partial = { xml: hierarchy({ text: "XYabcdefgh" }) };
+    const blocked: Array<{ label: string; reads: Array<{ xml: string; truncated?: boolean }> }> = [
+      { label: "read throws", reads: [baseline, partial] },
+      {
+        label: "truncated",
+        reads: [baseline, partial, { xml: hierarchy({ focused: false }), truncated: true }],
+      },
+      { label: "focus lost", reads: [baseline, partial, { xml: hierarchy({ focused: false }) }] },
+      {
+        label: "focus moved",
+        reads: [baseline, partial, { xml: hierarchy({ rid: "com.example:id/other" }) }],
+      },
+      {
+        label: "masks now",
+        reads: [baseline, partial, { xml: hierarchy({ text: "••••", password: true }) }],
+      },
     ];
-    for (const { label, xml } of blocked) {
+    for (const { label, reads } of blocked) {
       adbShell.mockClear();
-      const res = await type(
-        registryServingReads([{ xml: landed }, { xml: partial }, { xml }]),
-        "abcdefghijkl"
-      );
+      const res = await type(registryServingReads(reads), "abcdefghijkl");
       expect(res.verified, label).toBe(false);
       expect(res.note, label).toMatch(/modified beyond the original typing/);
     }
@@ -885,8 +919,8 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   });
 
   it("does not fail the call when the FIRST read throws — the text is still typed", async () => {
-    // The mirror of the after-read case: nothing pinned the before-read branch, so
-    // dropping its injection left the one path where "The text was typed" is a lie.
+    // The mirror of the after-read case, and the one path where dropping the
+    // injection would make "The text was typed" a lie.
     const getHierarchy = vi.fn(async () => {
       throw new Error("AndroidDevtools RPC getHierarchy timed out after 15000ms");
     });
@@ -921,6 +955,43 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
   });
 
+  it("says what a repair with nothing to delete did, on every outcome", async () => {
+    // The module's headline shape: a field that took none of the burst has
+    // nothing of ours to remove, so the retype runs with zero backspaces. Every
+    // note that follows one must say that rather than assert deletions — the
+    // hint shares no character with the text, which is what proves the count.
+    const unchanged = hierarchy({ text: "Digits" });
+
+    const worked = await type(
+      registryServing([unchanged, unchanged, hierarchy({ text: "97531" })]).registry,
+      "97531"
+    );
+    expect(worked.verified).toBe(true);
+    expect(worked.note).toMatch(/Nothing had to be deleted first, but the app saw both rounds/);
+
+    adbShell.mockClear();
+    const blocked = await type(
+      registryServing([unchanged, unchanged, hierarchy({ focused: false })]).registry,
+      "97531"
+    );
+    expect(blocked.verified).toBe(false);
+    expect(blocked.note).toMatch(/Nothing had to be deleted first, but the text had already been/);
+    expect(blocked.note).not.toMatch(/deleted and retyped/);
+
+    adbShell.mockClear();
+    let bursts = 0;
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd.includes("input text") && ++bursts === 2) throw new Error("adb: device offline");
+      return "";
+    });
+    const failed = await type(registryServing([unchanged, unchanged]).registry, "97531");
+    expect(failed.verified).toBe(false);
+    expect(failed.note).toMatch(/nothing had to be deleted first, and the retype did not finish/);
+    // No backspace was issued, so the field cannot hold less than it did.
+    expect(failed.note).not.toMatch(/less than it did before/);
+    expect(cmds().some((c) => c.includes("keyevent"))).toBe(false);
+  });
+
   it("takes the FIRST focused editable node in document order", async () => {
     // A multi-window dump can carry a stale `focused="true"` in a background
     // window; the frontmost window's node comes first. Walking children in reverse
@@ -932,9 +1003,9 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   });
 
   it("splits a long undo across calls instead of one unbounded keyevent line", async () => {
-    // 70 characters landed, so the undo exceeds the 64-keycodes-per-call cap.
-    // Nothing else needs more than 8 backspaces, so the chunking loop was dead.
-    const long = "x".repeat(70);
+    // 70 characters landed, so the undo exceeds the 64-keycodes-per-call cap —
+    // the only case in this file that needs more than one keyevent call.
+    const long = "y".repeat(70);
     const { registry } = registryServing([
       hierarchy({ text: "" }),
       hierarchy({ text: long }), // 70 of 80 chars landed
@@ -974,11 +1045,23 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     const onScreen = "PLAINTEXT-FROM-THE-SCREEN";
     const cases: Array<[string, string[]]> = [
       [
-        "mismatch, repair attempted",
+        // 8 of 12 characters landed, so the repair runs and the note that
+        // follows it is built from a third read holding the plaintext.
+        "mismatch, repair ran",
         [
           hierarchy({ text: "XY" }),
+          hierarchy({ text: "XYabcdefgh" }),
           hierarchy({ text: `XY${onScreen}` }),
-          hierarchy({ text: `XY${onScreen}` }),
+        ],
+      ],
+      [
+        // The repair ran and the read that would have confirmed it landed on
+        // another field, so the note is the blocked one rather than a count.
+        "repair ran, confirming read blocked",
+        [
+          hierarchy({ text: "XY" }),
+          hierarchy({ text: "XYabcdefgh" }),
+          hierarchy({ text: onScreen, rid: "com.example:id/other" }),
         ],
       ],
       [
@@ -1135,6 +1218,24 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     expect(res.verified).toBe(false);
   });
 
+  it("leaves a selection whose swallowed run sits inside the typed text alone", async () => {
+    // "Smith" double-tap selected, `text: "John Smithe"`, the final character
+    // dropped. `input text` replaced the selection with "John Smith", so the
+    // field reads "John John Smith" — indistinguishable from "John " inserted by
+    // a burst that dropped the rest. Deleting that growth takes the user's own
+    // "Smith" and retyping leaves the name three times over.
+    const field = new FieldModel("John Smith", 5, 10);
+    driveFromAdb(field, (s) => s.slice(0, -1));
+    const res = await type(
+      registryServingLive(() => field.render()),
+      "John Smithe"
+    );
+
+    expect(field.text).toBe("John John Smith");
+    expect(cmds()).toEqual(["input text 'John Smithe'"]);
+    expect(res.verified).toBe(false);
+  });
+
   it("declines a replaced selection instead of deleting the growth and doubling the value", async () => {
     // Measured on a Pixel-class API 35 emulator: field "aa bb", the word "aa"
     // double-tap selected, `keyboard { text: "aaa" }`. `input text` REPLACES the
@@ -1235,20 +1336,20 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
 
 describe("android keyboard read-back — the repair's own outcomes", () => {
   it("does not report a repair that WORKED as a failure", async () => {
-    // Empty box hinted "https://", text "https://example.com", the burst dropping
-    // the ":". The undo empties the field (plan B) and the chunked retype puts the
-    // text back exactly — and the re-classification then lands on `after === text
-    // && beforeSurvived`, which is `indeterminate`. Collapsing that into
-    // `verified: false` would tell the caller to send a value the field accepts,
-    // over a field holding precisely what was asked for.
-    const field = new FieldModel("", 0, 0, "https://");
-    driveFromAdb(field, (s) => s.replace(":", ""));
-    const res = await type(
-      registryServingLive(() => field.render()),
-      "https://example.com"
-    );
+    // An empty phone box, text "5551234567", the burst landing only "555". The
+    // undo removes those three, the chunked retype lands the whole number, and
+    // the field reformats it — so the re-classification is the `reformats`
+    // shape, which is `indeterminate`. Collapsing that into `verified: false`
+    // would tell the caller to send a value the field accepts, over a field
+    // holding precisely what was asked for.
+    const { registry } = registryServing([
+      hierarchy({ text: "" }),
+      hierarchy({ text: "555" }),
+      hierarchy({ text: "(555) 123-4567" }),
+    ]);
+    const res = await type(registry, "5551234567");
 
-    expect(field.text).toBe("https://example.com");
+    expect(cmds()).toContain("input keyevent 67 67 67");
     expect(res.verified).toBeUndefined();
     expect(res.note).not.toContain("did NOT land");
     // ...and it still says the field was modified, like every other post-repair note.

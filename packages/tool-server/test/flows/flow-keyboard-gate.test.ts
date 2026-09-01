@@ -77,8 +77,12 @@ async function runGated(
 
 describe("a raw tool: keyboard step the read-back failed", () => {
   it("fails the step and stops the run", async () => {
+    // Shaped like a real note: `mismatchNote` reports what was typed and what
+    // the field holds, never an expected total (which would read as a loss
+    // count) and never the field's contents.
     const note =
-      "The typed text did NOT land in the focused field: it holds 3 characters where 11 were expected.";
+      "The typed text did NOT land in the focused field: 11 characters were typed and the field " +
+      "now holds 3 in total.";
     const { run, registry } = await runGated("unlanded", {
       typed: "hello world",
       keys: 11,
@@ -92,7 +96,7 @@ describe("a raw tool: keyboard step the read-back failed", () => {
     expect(gate.tool).toBe("keyboard");
     expect(gate.status).toBe("fail");
     expect(gate.reason).toContain("did not land");
-    expect(gate.reason).toContain("holds 3 characters where 11 were expected");
+    expect(gate.reason).toContain("11 characters were typed and the field now holds 3 in total");
     expect(run.steps[1].status).toBe("skip");
     expect(run.ok).toBe(false);
     // The fail branch echoes what a passing raw step echoes — the result, the
