@@ -582,6 +582,25 @@ describe("keyboard `clear` — the refusals reach a caller through the tool", ()
     expect(result.clearVerified).toBeUndefined();
   });
 
+  it("does not claim verification for a live target that reads back nothing", async () => {
+    // The third way the read-back declines to answer, and the only one where the
+    // target is still on screen: an editor that reconciles from its own model
+    // and locks the view on edit (the "save, then go read-only" re-render) keeps
+    // its node — so `same: true` — and stops being editable, so there is nothing
+    // with a value to read and `remaining` comes back `null`. Folding that null
+    // into a 0 satisfied "survived === 0" and reported `clearVerified: true`
+    // over the text still on screen: reproduced on Chrome 152 against a
+    // contenteditable that restores its own text from its `input` listener, the
+    // field still holding "LOCKED DRAFT".
+    const tool = toolWithChromiumEvaluate([
+      { cleared: true, focus: "div" },
+      { focus: "div", same: true, changed: true, remaining: null, embeds: 0 },
+    ]);
+    const result = await tool.execute({}, { udid: chromiumDevice.id, clear: true }, undefined);
+    expect(result).toEqual({ typed: "", keys: 0, cleared: true });
+    expect(result.clearVerified).toBeUndefined();
+  });
+
   it("reads EVERY accepted clear back — there is no delete's-word-alone path", async () => {
     // `delete` answers true whether or not it removed anything (measured on
     // Chrome 151), so its return value is never the evidence `cleared` reports.

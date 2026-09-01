@@ -569,7 +569,13 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
   // anything.
   const remaining = readback?.remaining;
   const embeds = readback?.embeds ?? 0;
-  const survived = (typeof remaining === "number" ? remaining : 0) + embeds;
+  // `remaining: null` is the read-back's third answer and it is not a zero: the
+  // element is still there and exposes nothing with a value to read. Kept as its
+  // own flag rather than folded into the count, because the two are opposite
+  // evidence — a `0` says the field was SEEN empty, a `null` says nothing was
+  // seen at all.
+  const read = typeof remaining === "number";
+  const survived = (read ? remaining : 0) + embeds;
   if (survived > 0 && readback?.same === true) {
     // What survived, in the caller's own terms: an inline image or attachment
     // has no characters to count, and "0 characters" would read as an empty
@@ -626,12 +632,17 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
   // had only `keys` (0 vs 200) to tell them apart — which is not what `keys` is
   // documented to mean.
   //
-  // Conditional, because the read-back can decline to answer: a page that
-  // REPLACED the field leaves the target detached, and a page that sealed
-  // `window` leaves no target at all. The delete was still accepted, so
-  // `cleared` stands — but nothing saw the field empty, and saying otherwise
-  // would make the flag the one thing it must never be, a guess.
-  const verified = readback?.same === true && survived === 0;
+  // Conditional, because the read-back can decline to answer in three ways: a
+  // page that REPLACED the field leaves the target detached, a page that sealed
+  // `window` leaves no target at all, and a target that stopped being editable
+  // (the "save, then go read-only" re-render an editor does from its own `input`
+  // listener) is still there with nothing readable on it — `remaining: null`.
+  // The delete was still accepted, so `cleared` stands — but nothing saw the
+  // field empty, and saying otherwise would make the flag the one thing it must
+  // never be, a guess. Measured on Chrome 152 against that third shape: the node
+  // kept its identity (`same: true`) and its whole value, and the fold of `null`
+  // into `0` reported `clearVerified: true` over the text still on screen.
+  const verified = readback?.same === true && read && survived === 0;
   return verified
     ? { typed: "", keys: 0, cleared: true, clearVerified: true }
     : { typed: "", keys: 0, cleared: true };

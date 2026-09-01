@@ -71,7 +71,8 @@ const zodSchema = z.object({
         "Chromium instead selects the focused editable, deletes the selection (no length limit) and then reads the " +
         "field back: `clearVerified: true` is added when that read found it empty, and it is the one structural way to " +
         "tell the two meanings of `cleared` apart. It is absent in the rare case the field could not be read back at all " +
-        "(a page that replaced it, or sealed `window`), where `cleared` reports the accepted delete alone. `keys` is 0, " +
+        "(a page that replaced it, sealed `window`, or stopped exposing a value to read), where `cleared` reports the " +
+        "accepted delete alone. `keys` is 0, " +
         "because it dispatches no key events. It " +
         "fails when nothing editable has focus (tap the field first), on a field no select-and-delete can empty (a " +
         'date/time input — press `key: "backspace"` on one of those instead — or a readonly, disabled or non-text one), ' +

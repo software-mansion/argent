@@ -33,7 +33,8 @@ export interface KeyboardResult {
    * The structural discriminator for the two meanings of `cleared`: present only
    * where the backend read the field back and found it empty, which today is
    * Chromium alone — and not even there when the read could not be taken (a page
-   * that replaced the field, or sealed `window`). Absent means "not verified":
+   * that replaced the field, sealed `window`, or left the field on screen with
+   * nothing readable on it). Absent means "not verified":
    * assert the field or its consequence if you need proof.
    */
   clearVerified?: true;
