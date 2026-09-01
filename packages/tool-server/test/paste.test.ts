@@ -225,6 +225,21 @@ describe("paste tool", () => {
     });
   });
 
+  describe("the MCP adapter must not re-send a queued paste", () => {
+    it("is declared longRunning, so a paste waiting behind a keyboard call is not retried", () => {
+      // `paste` shares one per-device queue with `keyboard`
+      // (utils/device-serial.ts), so it waits out whatever that tool is doing —
+      // up to the 90s adb budget of an Android clear. Without this flag the MCP
+      // adapter caps the fetch at 30s and `fetchWithReconnect` retries on ANY
+      // error, its own AbortError included; the abort cancels nothing
+      // server-side, so the queued paste ran once per attempt. Measured through
+      // the real stdio adapter behind a 40s `keyboard` call: two invocations, a
+      // field holding "OTP-1234 OTP-1234", and `{ pasted: true }` reported as a
+      // success.
+      expect(toolFor({}).longRunning).toBe(true);
+    });
+  });
+
   describe("schema", () => {
     it("requires non-empty text", () => {
       const tool = toolFor({});

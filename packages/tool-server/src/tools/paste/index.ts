@@ -44,6 +44,18 @@ Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and
 Tap the field first so it has focus. Paste INSERTS at the caret, exactly as typing does — so on a field that already holds a value it splices the new text into the old one. Where the field is not known to be empty, send \`keyboard\` \`{ clear: true }\` first, in the same \`run-sequence\`. Returns { pasted: true }. Fails on a TV target, when the device clipboard cannot be set, or when the simulator-server build lacks clipboard support.
 Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back.`,
     searchHint: "paste clipboard pasteboard otp 2fa code fill field",
+    // A paste is quick, but it now WAITS: it shares one per-device queue with
+    // `keyboard` (see utils/device-serial.ts), whose clear carries a 90s adb
+    // budget on Android and whose `text` is unbounded by `delayMs`. The MCP
+    // adapter arms a 30s fetch timeout for every tool that does not declare
+    // this, and `fetchWithReconnect` retries on ANY error including its own
+    // AbortError — the abort cancels nothing here, so the queued paste ran
+    // once per attempt. Measured through the real stdio adapter behind a 40s
+    // `keyboard` call: two invocations, a field left holding
+    // "OTP-1234 OTP-1234", and `{ pasted: true }` returned as a success. The
+    // text is a credential often enough (an OTP, a token) that a silent double
+    // delivery is the worst shape this could take.
+    longRunning: true,
     zodSchema: pasteZodSchema,
     capability,
     services: () => ({}),
