@@ -510,6 +510,28 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(events.length).toBeGreaterThan(0);
     });
 
+    it("hands the request's abort down to the clear burst", async () => {
+      // The handler's fourth argument is the only route from the HTTP layer's
+      // cancel to the burst, and no test used to pass one — so deleting
+      // `options?.signal` from both iOS impls, making every iOS clear
+      // un-abortable, left the suite green. Android is pinned in
+      // keyboard-android.test.ts, which is what made this an oversight rather
+      // than a decision.
+      const controller = new AbortController();
+      controller.abort();
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_SIM.id, clear: true },
+        IOS_SIM,
+        { signal: controller.signal }
+      );
+      // An abandoned burst reports what it sent and drops `cleared`; a signal
+      // that never arrives sends all 200 keys and claims it.
+      expect(result).toEqual({ typed: "", keys: 0 });
+      expect(events).toEqual([]);
+    });
+
     it("still types on a non-TV simulator", async () => {
       // The positive control: a probe that answered `true` for everything would
       // satisfy the two refusals above on its own.
@@ -594,6 +616,23 @@ describe("keyboard backends — emit exactly the action they were given", () => 
           (e: unknown) => e as Error
         );
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      expect(events).toEqual([]);
+    });
+
+    it("hands the request's abort down to a REMOTE clear burst too", async () => {
+      // Same wiring on the remote impl, reached by no test either: both share
+      // `runSimulatorServer`, and both used to be able to lose the signal
+      // independently.
+      const controller = new AbortController();
+      controller.abort();
+      const { events, api } = hidRecorder();
+      const result = await makeIosRemoteImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_REMOTE.id, clear: true },
+        IOS_REMOTE,
+        { signal: controller.signal }
+      );
+      expect(result).toEqual({ typed: "", keys: 0 });
       expect(events).toEqual([]);
     });
 
