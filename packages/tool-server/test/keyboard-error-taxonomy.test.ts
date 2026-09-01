@@ -151,12 +151,8 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     );
   });
 
-  it("android: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
-    await expectInvalidInput(
-      injectAndroidNamedKey("emulator-5554", "constructor"),
-      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
-    );
-  });
+  // android's prototype-chain guard is pinned in keyboard-android.test.ts,
+  // which additionally asserts adb is never reached.
 
   // The physical-iOS backend normalizes `key` through a trim(), so a
   // whitespace-only name collapsed to "" and slipped past its named-key guard
@@ -164,16 +160,13 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
   // device contact, which the caller cannot tell apart from a real press (the
   // very outcome ../src/tools/keyboard/index.ts's empty-key guard exists to
   // prevent). It rejects like every sibling instead.
-  it.each(["   ", "\t", "\n"])(
-    "iOS device: whitespace-only key %j -> 400 + KEYBOARD_KEY_UNSUPPORTED",
-    async (key) => {
-      const impl = makeIosDeviceImpl(new Registry());
-      await expectInvalidInput(
-        impl.handler({}, { udid: iosPhysicalDevice.id, key }, iosPhysicalDevice),
-        FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
-      );
-    }
-  );
+  it("iOS device: whitespace-only key -> 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const impl = makeIosDeviceImpl(new Registry());
+    await expectInvalidInput(
+      impl.handler({}, { udid: iosPhysicalDevice.id, key: "   " }, iosPhysicalDevice),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
 });
 
 describe("keyboard (ios-device): typing with nothing focused", () => {

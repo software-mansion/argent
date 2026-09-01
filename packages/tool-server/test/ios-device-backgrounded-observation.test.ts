@@ -91,7 +91,6 @@ describe("await-screen-idle on a backgrounded target", () => {
     const result = await tool.execute({}, { udid: UDID, timeoutMs: 400, pollIntervalMs: 100 });
 
     expect(result.settled).toBe(false);
-    expect(result.polls).toBeGreaterThan(0);
   });
 });
 

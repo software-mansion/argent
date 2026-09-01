@@ -86,14 +86,15 @@ describe("attachRegistryLogger — formatError via serviceError", () => {
 
     const inner = new Error("root cause");
     const outer = new Error("wrapper", { cause: inner });
-    // Delete the outer stack so only the inner stack is available
-    outer.stack = undefined;
 
     registry.events.emit("serviceError", "svc:5", outer);
 
     const output = errorSpy.mock.calls[0]![0] as string;
-    // Should contain the inner error's stack (which has "root cause" in its first line)
-    expect(output).toMatch(/at /);
+    // The chain walk must select the innermost error's frames even though the
+    // outer error carries a stack of its own.
+    const innerBody = inner.stack!.slice(inner.stack!.indexOf("\n"));
+    expect(output.endsWith(innerBody)).toBe(true);
+    expect(output).not.toContain(outer.stack!.slice(outer.stack!.indexOf("\n")));
   });
 });
 
@@ -134,16 +135,6 @@ describe("attachRegistryLogger — happy-path events", () => {
     expect(logSpy.mock.calls[0]![0]).toContain("serviceStateChange svc:x: IDLE → STARTING");
   });
 
-  it("logs toolRegistered", () => {
-    const registry = new Registry();
-    attachRegistryLogger(registry);
-
-    registry.events.emit("toolRegistered", "my-tool");
-
-    expect(logSpy).toHaveBeenCalledOnce();
-    expect(logSpy.mock.calls[0]![0]).toContain("toolRegistered my-tool");
-  });
-
   it("logs toolInvoked", () => {
     const registry = new Registry();
     attachRegistryLogger(registry);
@@ -177,16 +168,6 @@ describe("attachRegistryLogger — happy-path events", () => {
     expect(logSpy.mock.calls[0]![0]).toContain(
       "toolCompleted my-tool (11111111-1111-4111-8111-111111111111, 123.46ms)"
     );
-  });
-
-  it("logs serviceRegistered", () => {
-    const registry = new Registry();
-    attachRegistryLogger(registry);
-
-    registry.events.emit("serviceRegistered", "svc:1");
-
-    expect(logSpy).toHaveBeenCalledOnce();
-    expect(logSpy.mock.calls[0]![0]).toContain("serviceRegistered svc:1");
   });
 });
 

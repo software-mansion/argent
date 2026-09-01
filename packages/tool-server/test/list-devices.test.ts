@@ -416,9 +416,11 @@ describe("list-devices", () => {
   });
 
   it("does not filter an emulator when no VVD process is running (e.g. mid-boot)", async () => {
-    // Vega SDK present but no `vega-virtual-device` process → no running VVD. A
-    // standalone emulator must NOT be mistaken for a shadow.
+    // Vega SDK present, an image INSTALLED, but no `vega-virtual-device` process:
+    // the shadow filter must key on a RUNNING VVD, not on any vega row existing,
+    // so a standalone emulator is never mistaken for a shadow.
     __resetVegaBinaryCacheForTests();
+    vi.mocked(listVvdImages).mockResolvedValueOnce([{ name: "tv", path: "/sdk/vvd/images/tv" }]);
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "/bin/sh" && args[0] === "-c" && args[1]?.includes("command -v vega")) {
         return { stdout: "/usr/bin/vega\n", stderr: "" };
@@ -442,7 +444,9 @@ describe("list-devices", () => {
     const android = result.devices.filter((d) => d.platform === "android");
     const vega = result.devices.filter((d) => d.platform === "vega");
 
-    expect(vega).toHaveLength(0);
+    // The installed image lists as stopped; the emulator survives untouched.
+    expect(vega).toHaveLength(1);
+    expect((vega[0] as { state: string }).state).toBe("stopped");
     expect(android).toHaveLength(1);
     expect((android[0] as { serial: string }).serial).toBe("emulator-5554");
   });

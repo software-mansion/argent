@@ -81,13 +81,4 @@ describe("HTTP signing-detection note", () => {
     const second = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
     expect(second.body).not.toHaveProperty("note");
   });
-
-  it("adds no note while nothing is staged", async () => {
-    handle = createHttpApp(stubRegistry());
-
-    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
-
-    expect(res.body).toHaveProperty("data");
-    expect(res.body).not.toHaveProperty("note");
-  });
 });

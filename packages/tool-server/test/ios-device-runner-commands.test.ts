@@ -135,8 +135,13 @@ describe("mutating replies surface the runner's reactivated stamp", () => {
     });
   });
 
-  it("reports false for a reply without the stamp", async () => {
+  it("reports false unless the stamp is literally true", async () => {
     expect(await tapAt(api({ message: "ok" }), "com.example.app", point)).toEqual({
+      reactivated: false,
+    });
+    // A truthy non-boolean from a drifting runner build must not count: the
+    // unwrap is a strict === true, not a truthiness check.
+    expect(await tapAt(api({ message: "ok", reactivated: 1 }), "com.example.app", point)).toEqual({
       reactivated: false,
     });
   });

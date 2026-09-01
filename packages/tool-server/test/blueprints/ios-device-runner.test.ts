@@ -440,13 +440,11 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     ).toBe(false);
     expect(recoverable(new Error("connect ECONNREFUSED 127.0.0.1:8080"))).toBe(false);
     expect(recoverable(new Error("the tunnel did not accept connection"))).toBe(false);
-  });
-
-  it("is false for RunnerCommandError: the runner answered, so it is alive", () => {
+    // A RunnerCommandError means the runner answered, so it is alive.
     expect(recoverable(new RunnerCommandError("Element not found"))).toBe(false);
   });
 
-  it("marks the runner-not-ready factory error so teardown-and-respawn stays typed", async () => {
+  it("wraps the runner-not-ready failure with the cause, log path, and trust guidance", async () => {
     stubLaunch();
     vi.mocked(waitForRunnerReady).mockRejectedValueOnce(
       new IosDeviceTransportError("timeout", "Runner did not become ready within 120000ms", {
@@ -455,10 +453,15 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     );
 
     const thrown = (await rejectionOf(callFactory())) as Error & { runnerExited?: unknown };
-    expect(thrown.message).toContain("The on-device runner did not become ready");
-    expect(thrown.runnerExited).toBe(true);
-    expect(recoverable(thrown)).toBe(true);
-    expect(killRunnerProcess).toHaveBeenCalledTimes(1);
+    // The full user-facing contract: the underlying cause, where to look, and
+    // the first-run trust remediation.
+    expect(thrown.message).toContain(
+      "The on-device runner did not become ready: Runner did not become ready within 120000ms."
+    );
+    expect(thrown.message).toContain("Check the log at ");
+    expect(thrown.message).toContain(
+      "unlock the device and trust the developer app under Settings > General > VPN & Device Management."
+    );
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
   });
 });

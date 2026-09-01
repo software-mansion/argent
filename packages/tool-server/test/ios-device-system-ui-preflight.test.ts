@@ -61,6 +61,9 @@ describe("isSessionOnlySystemUi", () => {
     expect(isSessionOnlySystemUi(SPOTLIGHT)).toBe(true);
     expect(isSessionOnlySystemUi("com.example.app")).toBe(false);
     expect(isSessionOnlySystemUi("com.apple.Preferences")).toBe(false);
+    // Case variants stay OUT: a normalizing lookup would silently widen the set.
+    expect(isSessionOnlySystemUi("com.apple.SpringBoard")).toBe(false);
+    expect(isSessionOnlySystemUi("com.apple.spotlight")).toBe(false);
   });
 });
 
