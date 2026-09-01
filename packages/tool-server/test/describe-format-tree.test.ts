@@ -445,6 +445,8 @@ describe("formatDescribeTree", () => {
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses
   // an iterative DFS specifically to avoid a recursive stack overflow there.
+  // The depth stays under the rendering budget (500 lines) so this case tests
+  // stack safety and nothing else.
   it("handles deeply nested trees without recursing the JS stack", () => {
     let inner: DescribeNode = leaf({
       role: "Button",
@@ -452,7 +454,7 @@ describe("formatDescribeTree", () => {
       frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
       clickable: true,
     });
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 300; i++) {
       inner = {
         role: "FrameLayout",
         frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -466,7 +468,7 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toContain('"deep"');
-    expect(out.split("\n").length).toBeGreaterThan(500);
+    expect(out.split("\n").length).toBeGreaterThan(300);
   });
 
   // The trim rule must only strip "value === label" — value strings that
@@ -533,5 +535,44 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "android-devtools" });
     expect(out).toContain("Mode: nested");
     expect(out).toMatch(/Button\s+"Like"/);
+  });
+});
+
+describe("formatDescribeTree — rendering budget", () => {
+  const rows = (n: number): DescribeNode => ({
+    role: "Screen",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: Array.from({ length: n }, (_, i) => ({
+      role: "StaticText",
+      label: `row ${i}`,
+      frame: { x: 0, y: i / n, width: 1, height: 1 / n },
+      children: [],
+    })),
+  });
+
+  it("renders a screen inside the budget whole", () => {
+    const out = formatDescribeTree(rows(400), { source: "android-devtools" });
+    expect(out).toContain('StaticText "row 399"');
+    expect(out).not.toContain("NOT shown");
+  });
+
+  it("stops a runaway page at the budget and says what is missing", () => {
+    // A web page inside a WebView has no bound of its own, and `main` appends a
+    // rendering after every interaction tool — so an uncapped tree is charged
+    // again on each tap.
+    const out = formatDescribeTree(rows(1200), { source: "android-devtools" });
+    const body = out.split("\n").filter((l) => l.includes("StaticText"));
+    expect(body).toHaveLength(500);
+    expect(out).toContain('StaticText "row 499"');
+    expect(out).not.toContain('StaticText "row 500"');
+    expect(out).toContain("700 more elements are NOT shown");
+  });
+
+  it("caps the flat renderers too", () => {
+    const out = formatDescribeTree(rows(1200), { source: "ax-service" });
+    expect(
+      out.split("\n").filter((l) => l.includes("AXStaticText") || l.includes("StaticText"))
+    ).toHaveLength(500);
+    expect(out).toContain("700 more elements are NOT shown");
   });
 });

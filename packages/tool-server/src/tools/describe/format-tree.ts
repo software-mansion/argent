@@ -143,6 +143,29 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
   return lines;
 }
 
+// A rendered tree is the whole payload of a describe result, and `main`'s
+// auto-capture appends one after every interaction tool — so an unbounded
+// rendering is charged again on each tap, swipe and keystroke. Most screens are
+// well inside this: the busiest live Android capture measured 59 lines, a Chrome
+// tab 21. A web page is what can run away — an Android WebView over a 12-column,
+// 40-row table renders 392 lines, and the shape grows with the page.
+const MAX_BODY_LINES = 500;
+
+// Cut the rendering at the budget and say what is missing, rather than hand
+// back a tree that reads complete. The lines that go are the tail of the walk —
+// the bottom of the screen in flat mode, the last subtrees in nested mode.
+function capBody(body: string[]): string[] {
+  if (body.length <= MAX_BODY_LINES) return body;
+  const dropped = body.length - MAX_BODY_LINES;
+  return [
+    ...body.slice(0, MAX_BODY_LINES),
+    "",
+    `... ${dropped} more elements are NOT shown: the rendering stops at ${MAX_BODY_LINES} lines. ` +
+      "Scope the inspection to a smaller region (scroll to or collapse the relevant view) and " +
+      "describe again.",
+  ];
+}
+
 export interface FormatDescribeOptions {
   source: DescribeSource;
 }
@@ -187,6 +210,8 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
 
   // Vega's lowercase toolkit roles count as content only for its own source.
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
-  const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
+  const body = capBody(
+    mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles)
+  );
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }
