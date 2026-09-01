@@ -27,11 +27,14 @@ const ANDROID_TV_HINT =
 // The android-devtools helper walks a screen under two limits — a node count
 // and a tree depth — and raises the same `truncated` flag for either. A
 // truncated capture looks exactly like a complete one once it is a tree of
-// text, and a WebView's web DOM can now spend the whole node budget on one
-// page, so the agent must be told the tree is partial. The flag does not say
-// which limit stopped the walk, so the hint must not promise that a smaller
-// region helps: a screen that is too deep returns the same tree on a retry.
-// Mirrors what the Chromium describe path does with its own walker budget.
+// text, so the agent must be told the tree is partial. The helper has always
+// walked a WebView's web DOM, and a page can spend the whole node budget on
+// its own; what changed is that the trim keeps that DOM rather than dropping
+// it, so a walk that stops early now costs the agent content it can otherwise
+// read. The flag does not say which limit stopped the walk, so the hint must
+// not promise that a smaller region helps: a screen that is too deep returns
+// the same tree on a retry. Mirrors what the Chromium describe path does with
+// its own walker budget.
 export const ANDROID_TRUNCATED_HINT =
   "describe stopped at a capture limit and returned a PARTIAL tree — some on-screen content " +
   "is missing, and web content inside a WebView can consume the whole node budget. The helper " +
