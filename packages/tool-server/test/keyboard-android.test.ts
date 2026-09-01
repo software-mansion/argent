@@ -755,6 +755,13 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     ["a device adb cannot reach", "adb: device 'emulator-5554' not found"],
     ["a device that went offline", "adb: device offline"],
     ["an unauthorized device", "adb: device unauthorized"],
+    // The other half of the alternation, unexercised until now: each of these is
+    // a separate adb client refusal, and a pattern that lost one would report a
+    // field nothing touched as half-emptied.
+    ["an empty device list", "adb: no devices/emulators found"],
+    ["an ambiguous serial", "adb: more than one device/emulator"],
+    ["a device still connecting", "adb: device still connecting"],
+    ["a device still authorizing", "adb: device still authorizing"],
   ])("does not claim a partial clear for %s", async (_label, adbMessage) => {
     // The adb CLIENT prints these before it delivers anything, so no event
     // reached the guest and the field is untouched. "may be PARTIALLY emptied"
@@ -820,6 +827,32 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
         (e: unknown) => e as Error
       );
     expect(err?.message).toMatch(/PARTIALLY emptied/);
+  });
+
+  it("does not claim a partial clear when the adb BINARY never ran", async () => {
+    // A spawn failure means no process started, so nothing could have been
+    // injected — and it is decided by the signal's `failure_spawn_code` rather
+    // than by the message, which carries no adb refusal to match. No tool-server
+    // test exercised that branch at all.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(
+      new FailureError("spawn adb ENOENT", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "adb",
+        failure_spawn_code: "ENOENT",
+      })
+    );
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toMatch(/NO delete key was sent/);
+    expect(err?.message).not.toMatch(/PARTIALLY emptied/);
+    // And the spawn code survives into the re-stated signal.
+    expect(getFailureSignal(err)?.failure_spawn_code).toBe("ENOENT");
   });
 
   it("still claims a partial clear for a burst that was cut short", async () => {
