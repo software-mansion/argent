@@ -321,7 +321,11 @@ export function deriveUiAutomatorRoleInContext(
   // `hasChildren` is the RAW published child count, never the count that
   // survives a trim: the two trees prune differently, so a role derived from
   // each tree's own survivors would drift apart on exactly the nodes this
-  // function exists to keep in step.
+  // function exists to keep in step. The two do read separate captures, taken
+  // under different node budgets (describe 5,000, the flow tree 12,000), and
+  // the helper publishes a node at the boundary childless in the narrower one
+  // — so on a screen past 5,000 nodes the counts can differ. describe reports
+  // that capture as PARTIAL.
   ctx: { inWebView: boolean; label: string; hasChildren: boolean }
 ): string {
   if (
