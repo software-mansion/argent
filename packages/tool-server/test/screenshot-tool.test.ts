@@ -49,4 +49,16 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("includeImageInContext");
     expect(result).not.toHaveProperty("url");
   });
+
+  it("advertises `out` and passes it through as an input-only path the client writes", () => {
+    const registry = { resolveService: vi.fn() } as unknown as import("@argent/registry").Registry;
+    const screenshotTool = createScreenshotTool(registry);
+
+    // An undeclared key would be silently stripped here (and absent from the
+    // schema the agent reads), leaving `out` a no-op nobody could call.
+    expect(screenshotTool.zodSchema!.parse({ udid: "ABC", out: "shots/base.png" })).toMatchObject({
+      out: "shots/base.png",
+    });
+    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "" })).toThrow();
+  });
 });
