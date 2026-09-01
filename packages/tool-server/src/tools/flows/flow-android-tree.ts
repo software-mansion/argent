@@ -132,9 +132,10 @@ function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
   screenH: number,
-  inWebView: boolean
+  ctx: AndroidTreeContext
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
+  const inWebView = ctx.inWebView.has(node);
   // System chrome yields false matches (a system "Back"); SVG implementation
   // nodes add dozens of meaningless leaves per icon. Both go with their
   // subtrees, as the shared parser does.
@@ -148,17 +149,17 @@ function projectAndroidNode(
   // `role: WebView` an author copies out of describe matches twice and a `text`
   // assert against the page counts double.
   //
-  // Drop the outer half and let the inner one stand for the pair. It is the
-  // half that carries the page title and, when the page scrolls, the
-  // `scrollable` flag — measured across four live API 35 captures, the app's
-  // view carries neither. Its bounds run a few px past the screen on some
-  // builds and clip back to the same rect, so the surviving leaf's frame is the
-  // one describe reports. Only an only-child pair merges, exactly as the trim
-  // requires, so a control an app adds beside the web content keeps both nodes.
-  const isOuterWebViewHalf =
-    isUiAutomatorWebView(attrs.class ?? "") &&
-    kids.length === 1 &&
-    isUiAutomatorWebView(kids[0]!.attrs.class ?? "");
+  // The merge keeps the app's view — the OUTER half — and folds the inner one
+  // into it, exactly as the trim does. Which half carries what varies by
+  // WebView build: the page title and the `scrollable` flag ride on Chromium's
+  // node, an app's own `android:id` on the app's view, so the surviving leaf
+  // takes the union of the two and the outer half's frame. Taking the inner
+  // half's frame instead only matched describe when its box happened to
+  // overhang the SCREEN and clip back; on a build where it overhangs the OUTER
+  // the two trees reported frames a few pixels apart.
+  const absorbedHalf = ctx.absorbedWebViewHalf.has(node);
+  const innerHalf = ctx.webViewPair.get(node);
+  const innerAttrs = innerHalf?.attrs;
 
   const identifier = (attrs["resource-id"] ?? "").trim();
   const isPassword = attrs.password === "true";
@@ -192,7 +193,7 @@ function projectAndroidNode(
   // concrete role — plus the focused view, which the type directive's focus
   // wait needs even for an anonymous EditText. Scaffolding is dropped but still
   // walked, so a testID nested under it survives.
-  if (!skip && !isOuterWebViewHalf && (identifier || label || hasSemanticRole || isFocused)) {
+  if (!skip && !absorbedHalf && (identifier || label || hasSemanticRole || isFocused)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     // A box the node HAS but cannot use falls back to the region its
     // descendants cover, exactly as the describe trim does. A node with no
@@ -203,18 +204,21 @@ function projectAndroidNode(
       frame = over ? normalizeRect(over, screenW, screenH) : null;
     }
     if (frame) {
+      const flag = (key: string): boolean => attrs[key] === "true" || innerAttrs?.[key] === "true";
       leaf = { role, frame, children: [] };
-      if (label) leaf.label = label;
-      if (identifier) leaf.identifier = identifier;
+      const mergedLabel = label || (innerAttrs ? labelOf(innerAttrs) : "");
+      const mergedId = identifier || (innerAttrs?.["resource-id"] ?? "").trim();
+      if (mergedLabel) leaf.label = mergedLabel;
+      if (mergedId) leaf.identifier = mergedId;
       if (hasValue) leaf.value = rawText;
-      if (attrs.clickable === "true") leaf.clickable = true;
-      if (attrs["long-clickable"] === "true") leaf.longClickable = true;
-      if (attrs.scrollable === "true") leaf.scrollable = true;
-      if (attrs.checkable === "true") leaf.checkable = true;
-      if (attrs.checked === "true") leaf.checked = true;
-      if (attrs.enabled === "false") leaf.disabled = true;
+      if (flag("clickable")) leaf.clickable = true;
+      if (flag("long-clickable")) leaf.longClickable = true;
+      if (flag("scrollable")) leaf.scrollable = true;
+      if (flag("checkable")) leaf.checkable = true;
+      if (flag("checked")) leaf.checked = true;
+      if (attrs.enabled === "false" || innerAttrs?.enabled === "false") leaf.disabled = true;
       if (isPassword) leaf.password = true;
-      if (isFocused) leaf.focused = true;
+      if (isFocused || innerAttrs?.focused === "true") leaf.focused = true;
     }
   }
 
@@ -224,11 +228,14 @@ function projectAndroidNode(
     // Off-screen text must not hoist, or an ancestor text assert would pass on
     // content the screen doesn't show. Any node with text is leaf-eligible (its
     // label is non-empty), so `frame` was computed for it.
-    ownText: frame ? ownText : "",
+    // The absorbed half contributes nothing of its own: its label is already on
+    // the surviving leaf, and shielding there would keep the page's text from
+    // reaching it.
+    ownText: frame && !absorbedHalf ? ownText : "",
     leaf,
     // A password field shields even when it carries no id, so nothing from it
     // bubbles into an ancestor's hoisted text.
-    shield: Boolean(identifier) || isPassword,
+    shield: !absorbedHalf && (Boolean(identifier) || isPassword),
     // Scroll-clip inputs (see `flattenHoisting`): a scroller's raw bounds clip
     // its subtree, so a row scrolled out of view — but still on the device
     // screen — is dropped, matching the describe path's prune.
@@ -244,22 +251,74 @@ function projectAndroidNode(
   };
 }
 
+/** What the projection needs about a node's place in the tree around it. */
+interface AndroidTreeContext {
+  /** Nodes below an `android.webkit.WebView`: web DOM, not native widgets. */
+  inWebView: Set<ParsedXmlNode>;
+  /** The outer half of a doubled WebView host -> the inner half it absorbs. */
+  webViewPair: Map<ParsedXmlNode, ParsedXmlNode>;
+  /** The inner halves, which emit no leaf of their own. */
+  absorbedWebViewHalf: Set<ParsedXmlNode>;
+}
+
 /**
- * Every node below an `android.webkit.WebView` is web DOM, not a native widget.
- * The shared flatten hands the projection one node at a time with no parent
- * context, so mark the descendants up front in one walk. The describe trim
- * carries the same flag down its own traversal frame.
+ * Whether a subtree adds anything to this tree — any node in it a selector
+ * could address. A bare layout wrapper with nothing under it adds nothing, and
+ * the describe trim discards it too.
  */
-function collectWebViewDescendants(root: ParsedXmlNode): Set<ParsedXmlNode> {
-  const inWebView = new Set<ParsedXmlNode>();
+function yieldsLeaf(node: ParsedXmlNode): boolean {
+  const stack: ParsedXmlNode[] = [node];
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    const attrs = n.attrs;
+    if (isSystemChrome(attrs) || isNoisyUiAutomatorClass(attrs.class ?? "")) continue;
+    if (
+      (attrs["resource-id"] ?? "").trim() ||
+      labelOf(attrs) ||
+      !isUiAutomatorLayoutContainer(attrs.class ?? "") ||
+      attrs.focused === "true"
+    ) {
+      return true;
+    }
+    for (const c of childNodes(n)) stack.push(c);
+  }
+  return false;
+}
+
+/**
+ * Read the tree's shape once, up front: the shared flatten hands the projection
+ * one node at a time with no parent context. The describe trim carries the same
+ * two facts down its own traversal frame.
+ *
+ * A WebView host is doubled when exactly one WebView sits under it and no other
+ * child of it adds anything to the tree. The trim's own test is on the children
+ * that survive it, which is not a number this tree can compute — it keeps the
+ * testID-only containers the trim drops. A child that yields no leaf at all is
+ * the case the two agree on.
+ */
+function readAndroidTree(root: ParsedXmlNode): AndroidTreeContext {
+  const ctx: AndroidTreeContext = {
+    inWebView: new Set<ParsedXmlNode>(),
+    webViewPair: new Map<ParsedXmlNode, ParsedXmlNode>(),
+    absorbedWebViewHalf: new Set<ParsedXmlNode>(),
+  };
   const stack: Array<{ node: ParsedXmlNode; under: boolean }> = [{ node: root, under: false }];
   while (stack.length > 0) {
     const { node, under } = stack.pop()!;
-    if (under) inWebView.add(node);
+    if (under) ctx.inWebView.add(node);
+    const kids = childNodes(node);
+    if (isUiAutomatorWebView(node.attrs.class ?? "")) {
+      const webKids = kids.filter((c) => isUiAutomatorWebView(c.attrs.class ?? ""));
+      const inner = webKids.length === 1 ? webKids[0]! : undefined;
+      if (inner && kids.every((c) => c === inner || !yieldsLeaf(c))) {
+        ctx.webViewPair.set(node, inner);
+        ctx.absorbedWebViewHalf.add(inner);
+      }
+    }
     const childUnder = under || isUiAutomatorWebView(node.attrs.class ?? "");
-    for (const c of childNodes(node)) stack.push({ node: c, under: childUnder });
+    for (const c of kids) stack.push({ node: c, under: childUnder });
   }
-  return inWebView;
+  return ctx;
 }
 
 /**
@@ -277,9 +336,9 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
-      const webDom = collectWebViewDescendants(root);
+      const ctx = readAndroidTree(root);
       for (const c of childNodes(root)) {
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, webDom.has(n)), children);
+        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, ctx), children);
       }
     }
   }

@@ -528,7 +528,7 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
-    <node index="0" class="android.webkit.WebView" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.webkit.WebView" resource-id="com.acme:id/host" package="com.acme.app" bounds="[0,0][1080,1920]">
       <node index="0" class="android.webkit.WebView" package="com.acme.app" text="Login Page" scrollable="true" bounds="[0,0][1084,1922]">
         <node index="0" class="android.widget.TextView" package="com.acme.app" text="Username" bounds="[20,100][400,160]" />
       </node>
@@ -538,13 +538,66 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     const flow = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
     const leaves = findAll(flow, { role: "WebView" });
     expect(leaves).toHaveLength(1);
-    // The half that carries the page title and the scroll flag is the one kept,
-    // and its bounds clip back to the frame describe reports for the landmark.
+    // The surviving leaf carries what either half had: the page title and the
+    // scroll flag from Chromium's node, the app's own id from the app's view.
     expect(leaves[0]!.label).toBe("Login Page");
     expect(leaves[0]!.scrollable).toBe(true);
+    expect(leaves[0]!.identifier).toBe("com.acme:id/host");
     const landmark = findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), { role: "WebView" });
     expect(landmark).toHaveLength(1);
     expect(leaves[0]!.frame).toEqual(landmark[0]!.frame);
+  });
+
+  // The frame has to come from the half describe reports it from. The inner
+  // half's box overhangs the OUTER on some builds, not the screen, so it does
+  // not clip back to the same rect and the two trees drifted a few pixels
+  // apart on exactly the node an author selects the page by.
+  it("reports the frame describe reports when the halves differ", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,2400]">
+    <node index="0" class="android.webkit.WebView" package="com.acme.app" clickable="true" bounds="[0,326][1080,2337]">
+      <node index="0" class="android.webkit.WebView" package="com.acme.app" text="Login Page" scrollable="true" bounds="[0,326][1080,2340]">
+        <node index="0" class="android.widget.TextView" package="com.acme.app" text="Username" bounds="[20,400][400,460]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const leaves = findAll(adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, 2400), {
+      role: "WebView",
+    });
+    const landmark = findAll(parseUiAutomatorDump(xml, SCREEN_W, 2400), { role: "WebView" });
+    expect(leaves).toHaveLength(1);
+    expect(landmark).toHaveLength(1);
+    expect(leaves[0]!.frame).toEqual(landmark[0]!.frame);
+    // Every flag either half sets reaches the survivor, as it does in describe.
+    expect(leaves[0]!.clickable).toBe(true);
+    expect(leaves[0]!.scrollable).toBe(true);
+  });
+
+  // The merge fires on the shape the trim merges, not only on an only child:
+  // a sibling that adds nothing to either tree must not split the pair in one
+  // of them.
+  it("merges the pair past a sibling that adds nothing", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.webkit.WebView" package="com.acme.app" bounds="[0,0][1080,1920]">
+      <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]" />
+      <node index="1" class="android.webkit.WebView" package="com.acme.app" text="Login Page" bounds="[0,0][1080,1920]">
+        <node index="0" class="android.widget.TextView" package="com.acme.app" text="Username" bounds="[20,100][400,160]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    expect(
+      findAll(adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H), {
+        role: "WebView",
+      })
+    ).toHaveLength(1);
+    expect(
+      findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), { role: "WebView" })
+    ).toHaveLength(1);
   });
 
   it("keeps a control an app adds beside the web content", () => {
