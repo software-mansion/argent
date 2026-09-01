@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { findExternalDevice, isExternalId } from "../external-devices";
+import { externalClaimForAnyId } from "../external-devices";
 import { canonicalDeviceId } from "./device-alias";
 
 /**
@@ -52,8 +52,8 @@ export function metroPort(params: { device_id?: string; port?: number }): number
 
   const deviceId = canonicalDeviceId(params.device_id);
 
-  if (deviceId && isExternalId(deviceId)) {
-    const published = findExternalDevice(deviceId)?.metroPort;
+  if (deviceId) {
+    const published = externalClaimForAnyId(deviceId)?.metroPort;
     if (published !== undefined) return published;
   }
 
@@ -65,11 +65,14 @@ export function metroPort(params: { device_id?: string; port?: number }): number
  * Metro advertises. Only the socket comes from the provider: Metro still
  * supplies the session's metadata, so this composes with
  * {@linkcode metroPort}.
+ *
+ * Answers for the raw serial / udid as well as the `ext:` id. Missing that, a
+ * caller naming a claimed device the way `adb devices` does would open its own
+ * CDP connection to Metro's target. Inspector-proxy admits one debugger per
+ * device, so that evicts the provider's and the two reconnect in a loop.
  */
 export function externalJsDebuggerUrl(deviceId: string): string | undefined {
-  if (!isExternalId(deviceId)) return undefined;
-
-  return findExternalDevice(deviceId)?.jsDebugger?.webSocketUrl;
+  return externalClaimForAnyId(deviceId)?.jsDebugger?.webSocketUrl;
 }
 
 /**
@@ -79,9 +82,7 @@ export function externalJsDebuggerUrl(deviceId: string): string | undefined {
  * hint.
  */
 export function publishedMetroPort(deviceId: string, used: number): number | undefined {
-  if (!isExternalId(deviceId)) return undefined;
-
-  const published = findExternalDevice(deviceId)?.metroPort;
+  const published = externalClaimForAnyId(deviceId)?.metroPort;
 
   return published !== undefined && published !== used ? published : undefined;
 }

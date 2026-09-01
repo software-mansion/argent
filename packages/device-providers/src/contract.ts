@@ -156,12 +156,15 @@ export function isExternalDeviceUrn(urn: string): boolean {
  *
  * - `adb`              — drive `nativeId` as a live adb serial.
  * - `ax-service`       — `simctl spawn` Argent's accessibility daemon inside
+ *                        the simulator.
  * - `js-debugger`      — attach a CDP client to the JS runtime at `metroPort`.
- * - `native-devtools`  — inject Argent's dylib / JVMTI agent.
+ * - `native-devtools`  — inject Argent's dylib. iOS only, the blueprint refuses
+ *                        every other platform, so an Android device declaring
+ *                        it is an error `argent providers check` reports rather
+ *                        than a capability Argent will use.
  * - `native-profiler`  — Instruments / Perfetto against the app process.
  * - `simctl`           — run `xcrun simctl` verbs against the device
  *                        (scoped to `deviceSet` when one is declared).
- *                        the simulator.
  * - `simulator-server` — attach to the device's `apiUrl` / `streamUrl` for
  *                        input, screenshots and the MJPEG stream.
  *
@@ -400,9 +403,9 @@ export type ProviderRecord = z.infer<typeof providerEnvelopeSchema> & {
  * This is what the rest of the tool-server sees.
  */
 export interface ExternalDevice {
-  /** Canonical Argent device id: `ext:<providerId>:<nativeId>`. */
   capabilities: ReadonlySet<string>;
   deviceSet?: string;
+  /** Canonical Argent device id: `ext:<providerId>:<nativeId>`. */
   id: string;
   jsDebugger?: { webSocketUrl: string };
   kind: "device" | "emulator" | "simulator";

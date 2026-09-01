@@ -1077,6 +1077,28 @@ describe("adb argv for a provider device", () => {
       "ls",
     ]);
   });
+
+  /**
+   * `adb devices` reports a provider's emulator under its own serial, so the
+   * raw spelling is the one a caller is most likely to reach for. Gating only
+   * the `ext:` form would leave the withheld mechanism a rename away.
+   */
+  it("refuses the raw serial the provider claims when it withheld adb", async () => {
+    useDescriptors(await androidDescriptor({ capabilities: ["simulator-server"] }));
+
+    expect(() => adbArgv(["-s", ANDROID_SERIAL, "shell", "ls"])).toThrow(/'adb' capability/);
+  });
+
+  it("passes the raw serial through when the provider granted adb", async () => {
+    useDescriptors(await androidDescriptor());
+
+    expect(adbArgv(["-s", ANDROID_SERIAL, "shell", "ls"])).toEqual([
+      "-s",
+      ANDROID_SERIAL,
+      "shell",
+      "ls",
+    ]);
+  });
 });
 
 describe("externalSupportHint", () => {

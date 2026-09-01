@@ -275,6 +275,24 @@ export function externalClaimForNativeId(nativeId: string): ExternalDevice | und
 }
 
 /**
+ * The provider claiming `id` under either of its spellings, the `ext:` id or
+ * the raw udid / serial the platform's own tooling uses.
+ *
+ * {@linkcode assertExternalCapabilitySync} already accepts both, because a
+ * grant binds to the device and not to one of its names. Everything that then
+ * resolves what to drive has to agree with it (a lent devtools socket, a
+ * published Metro port or CDP socket, a simulator-server already running). When
+ * only the gate resolves both, a raw id passes the check and is then driven as
+ * if Argent owned the device (a second simulator-server spawned beside the
+ * provider's, our injection dylib armed over theirs, our CDP client evicting
+ * their debugger). Reach for this rather than `isExternalId` wherever the
+ * answer decides how a device is driven.
+ */
+export function externalClaimForAnyId(id: string): ExternalDevice | undefined {
+  return isExternalId(id) ? findExternalDevice(id) : externalClaimForNativeId(id);
+}
+
+/**
  * Provider attribution is deliberately not added here. The HTTP dispatch edge
  * appends it to every `ext:` failure, so spelling out the provider's name and
  * support URL would print them twice.

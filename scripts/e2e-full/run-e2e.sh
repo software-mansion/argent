@@ -59,7 +59,7 @@ done
 
 # A misspelled phase would otherwise select nothing, and a run that executes no
 # phase records no failure: "pass:0 fail:0" and exit 0 for an untested release.
-ALL_PHASES="install introspection validation android chromium rn"
+ALL_PHASES="install introspection validation android chromium rn device-provider"
 for _p in ${PHASES//,/ }; do
   case " $ALL_PHASES " in
     *" $_p "*) ;;

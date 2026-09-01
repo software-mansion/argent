@@ -9,11 +9,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import {
-  assertExternalCapability,
-  isExternalId,
-  lookupExternalDevice,
-} from "../utils/external-devices";
+import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -601,11 +597,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      * `DYLD_INSERT_LIBRARIES` and endpoint it set, so attaching is the only
      * supported shape on a device we did not boot.
      */
-    const lentSocketPath = isExternalId(device.id)
-      ? (await lookupExternalDevice(device.id)).nativeDevtools?.socketPath
-      : undefined;
+    const claim = externalClaimForAnyId(device.id);
+    const lentSocketPath = claim?.nativeDevtools?.socketPath;
 
-    if (isExternalId(device.id) && !lentSocketPath) {
+    if (claim && !lentSocketPath) {
       throw new FailureError(
         `${NATIVE_DEVTOOLS_NAMESPACE} needs a socket to attach to on a provider-supplied device, ` +
           `and this one published none. Argent will not inject its own agent here: that would ` +

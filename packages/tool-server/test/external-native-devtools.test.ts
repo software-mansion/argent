@@ -120,6 +120,12 @@ async function waitForConnectedBundle(api: {
     if (api.listConnectedBundleIds().length > 0) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+
+  /**
+   * Without this the tests that assert an absence (no injection armed, no
+   * termination) would pass on an attach that never happened.
+   */
+  throw new Error("the lent agent never reported a connected bundle");
 }
 
 beforeEach(() => {
@@ -298,5 +304,36 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: path.join(temporaryDirectory, "absent.sock") });
 
     await expect(instantiate()).rejects.toThrow(/could not attach/);
+  });
+
+  /**
+   * The simulator watcher polls `simctl` and resolves this blueprint by raw
+   * UDID, with no tool call and no `ext:` id anywhere. A lookup keyed on the
+   * `ext:` spelling leaves `lentSocketPath` undefined there and the factory
+   * falls through to arming argent's own injection, overwriting the one the
+   * provider already has in the app, which is the exact clobber the lent-agent
+   * path exists to avoid.
+   */
+  describe("addressed by the raw udid, as the simulator watcher does", () => {
+    it("attaches to the published socket", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const instance = await instantiate(IOS_UDID);
+      await waitForConnectedBundle(instance.api);
+
+      expect(instance.api.socketPath).toBe(agent.socketPath);
+      expect(instance.api.isEnvSetup()).toBe(true);
+      expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("refuses to inject when the provider lent no socket", async () => {
+      publishDescriptor();
+
+      await expect(instantiate(IOS_UDID)).rejects.toThrow(/published none/);
+    });
   });
 });

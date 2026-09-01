@@ -58,12 +58,10 @@ run_phase() {
   # simulator-server and its descriptor. Argent deliberately never deletes
   # another process's descriptor, so the harness — which IS that process here —
   # has to.
-  for pid in "${E2E_PROVIDER_SIM_PID:-}"; do
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      info "killed provider pid $pid"
-    fi
-  done
+  if [ -n "${E2E_PROVIDER_SIM_PID:-}" ] && kill -0 "$E2E_PROVIDER_SIM_PID" 2>/dev/null; then
+    kill "$E2E_PROVIDER_SIM_PID" 2>/dev/null || true
+    info "killed provider pid $E2E_PROVIDER_SIM_PID"
+  fi
   if [ -n "${E2E_PROVIDER_DESCRIPTOR:-}" ] && [ -f "$E2E_PROVIDER_DESCRIPTOR" ]; then
     rm -f "$E2E_PROVIDER_DESCRIPTOR"
   fi

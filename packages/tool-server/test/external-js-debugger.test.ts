@@ -89,6 +89,8 @@ vi.mock("../src/utils/debugger/discovery", () => ({
 }));
 
 const ANDROID_SERIAL = "emulator-5554";
+/** A serial no descriptor claims, the device argent booted for itself. */
+const UNCLAIMED_SERIAL = "emulator-5556";
 const METRO_PORT = 54321;
 const PROVIDER_ID = "acme-3f2a9c";
 const DEVICE_ID = makeExternalId(PROVIDER_ID, ANDROID_SERIAL);
@@ -215,10 +217,30 @@ describe("a provider that re-serves its own debugger connection", () => {
 
     const instance = await jsRuntimeDebuggerBlueprint.factory(
       {},
-      `${METRO_PORT}:${ANDROID_SERIAL}`
+      `${METRO_PORT}:${UNCLAIMED_SERIAL}`
     );
 
     expect(dialled.urls).toEqual([METRO_DIALLED_URL]);
+
+    await instance.dispose();
+  });
+
+  /**
+   * The eviction this whole path avoids does not care which name the caller
+   * used. `adb devices` reports the provider's emulator under its raw serial,
+   * so a caller reaching for that spelling must land on the published socket
+   * too. Otherwise argent opens the second connection and inspector-proxy
+   * closes the provider's.
+   */
+  it("is attached to under the raw serial the provider claims", async () => {
+    publishDescriptor({ jsDebugger: true });
+
+    const instance = await jsRuntimeDebuggerBlueprint.factory(
+      {},
+      `${METRO_PORT}:${ANDROID_SERIAL}`
+    );
+
+    expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL]);
 
     await instance.dispose();
   });

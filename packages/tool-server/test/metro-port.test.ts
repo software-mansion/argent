@@ -31,6 +31,8 @@ import {
  */
 
 const ANDROID_SERIAL = "emulator-5554";
+/** A serial no descriptor claims, the device argent booted for itself. */
+const UNCLAIMED_SERIAL = "emulator-5556";
 const PROVIDER_ID = "acme-3f2a9c";
 const PROVIDER_METRO_PORT = 54321;
 const DEVICE_ID = makeExternalId(PROVIDER_ID, ANDROID_SERIAL);
@@ -94,7 +96,17 @@ describe("metroPort", () => {
   });
 
   it("falls back to 8081 for a device argent booted itself", () => {
-    expect(metroPort({ device_id: ANDROID_SERIAL })).toBe(8081);
+    expect(metroPort({ device_id: UNCLAIMED_SERIAL })).toBe(8081);
+  });
+
+  /**
+   * The grant and the published port bind to the device, not to one of its
+   * names. A caller naming the provider's emulator the way `adb devices` does
+   * has to reach the same Metro as one naming it `ext:...` or the debugger
+   * dials 8081 while the app is served from the provider's port.
+   */
+  it("takes the provider's port for the raw serial it claims", () => {
+    expect(metroPort({ device_id: ANDROID_SERIAL })).toBe(PROVIDER_METRO_PORT);
   });
 
   it("tolerates a missing device id", () => {
@@ -127,7 +139,11 @@ describe("publishedMetroPort", () => {
   });
 
   it("says nothing about a device with no provider", () => {
-    expect(publishedMetroPort(ANDROID_SERIAL, 8081)).toBeUndefined();
+    expect(publishedMetroPort(UNCLAIMED_SERIAL, 8081)).toBeUndefined();
+  });
+
+  it("reports the provider's port for the raw serial it claims", () => {
+    expect(publishedMetroPort(ANDROID_SERIAL, 8081)).toBe(PROVIDER_METRO_PORT);
   });
 });
 

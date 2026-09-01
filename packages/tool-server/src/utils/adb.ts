@@ -11,7 +11,7 @@ import {
 } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { formatSubprocessFailure } from "./subprocess-error";
-import { assertExternalCapabilitySync, externalNativeId, isExternalId } from "./external-devices";
+import { assertExternalCapabilitySync, externalNativeId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -170,9 +170,13 @@ function describeAdbFailure(args: string[], err: unknown): Error {
  */
 export function adbArgv(args: string[]): string[] {
   return args.map((argument) => {
-    if (isExternalId(argument)) {
-      assertExternalCapabilitySync("adb", argument, "adb");
-    }
+    /**
+     * Unconditional, because a provider's emulator is reachable under the raw
+     * serial `adb devices` reports as well as under our `ext:` id and the grant
+     * covers the device either way. The check costs one failed `readdir` when
+     * no provider is registered, which is every install that has none.
+     */
+    assertExternalCapabilitySync("adb", argument, "adb");
 
     return externalNativeId(argument);
   });

@@ -21,8 +21,8 @@ import { openMoqClient } from "../utils/moq-client";
 import { createMoqTransport, sendCommand } from "../utils/simulator-client";
 import {
   assertExternalCapability,
-  isExternalId,
-  lookupExternalDevice,
+  externalClaimForAnyId,
+  type ExternalDevice,
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { encodeKey } from "../utils/datachannel-proto";
@@ -147,16 +147,15 @@ async function buildRemoteInstance(
  *    `sendCommand`. Without this, `keyboard` would silently no-op.
  */
 async function buildAttachedInstance(
-  device: DeviceInfo
-): Promise<ServiceInstance<SimulatorServerApi>> {
+  device: DeviceInfo,
   /**
-   * Every lookup re-reads the provider's file, which is the whole reconnection
-   * story: a restarted simulator-server rebinds an ephemeral port, the next
-   * call gets `ECONNREFUSED`, `recoverable()` disposes, the registry re-runs
-   * this factory, and this read picks up the new port.
+   * Read by the caller in this same factory run, which is the whole
+   * reconnection story. A restarted simulator-server rebinds an ephemeral port,
+   * the next call gets `ECONNREFUSED`, `recoverable()` disposes, the registry
+   * re-runs this factory and that fresh read picks up the new port.
    */
-  const externalDevice = await lookupExternalDevice(device.id);
-
+  externalDevice: ExternalDevice
+): Promise<ServiceInstance<SimulatorServerApi>> {
   await assertExternalCapability(SIMULATOR_SERVER_NAMESPACE, device, "simulator-server");
 
   if (!externalDevice.simulatorServer) {
@@ -381,9 +380,16 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     /**
      * Ahead of every platform branch. An external device needs no tvOS probe,
      * `adb` check or `simctl` bootstrap — its provider already did that setup.
+     *
+     * Resolved under either spelling. Both `ios.additionalDeviceSets` and
+     * `adb devices` make a provider's device reachable by its raw id and
+     * reaching `spawnSimulatorServerProcess` with one is precisely the second
+     * server on an in-use device this whole path exists to prevent.
      */
-    if (isExternalId(device.id)) {
-      return buildAttachedInstance(device);
+    const claim = externalClaimForAnyId(device.id);
+
+    if (claim) {
+      return buildAttachedInstance(device, claim);
     }
 
     if (device.platform === "ios-remote") {

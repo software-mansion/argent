@@ -25,15 +25,21 @@ const PROVIDER_VOCABULARY = [
  */
 const UNRELATED = [
   /** screenshot-diff naming its OCR engine. */
-  /provider=\w+/,
-  /text_analysis/,
+  /provider=\w+/g,
+  /text_analysis/g,
 ];
 
+/**
+ * Only the allowed token is removed, not the line carrying it. Dropping the
+ * whole line would exempt everything beside it; `provider=text_analysis; use
+ * the external provider` would sweep past the check on the strength of its
+ * first half.
+ */
 function offendingLines(text: string): string[] {
-  return text
-    .split("\n")
-    .filter((line) => !UNRELATED.some((allowed) => allowed.test(line)))
-    .filter((line) => PROVIDER_VOCABULARY.some((pattern) => pattern.test(line)));
+  return text.split("\n").filter((line) => {
+    const remaining = UNRELATED.reduce((rest, allowed) => rest.replace(allowed, ""), line);
+    return PROVIDER_VOCABULARY.some((pattern) => pattern.test(remaining));
+  });
 }
 
 /** Every description a client receives, the tool's, plus each parameter's. */

@@ -338,6 +338,36 @@ describe("attaching to a provider's simulator-server", () => {
       /'simulator-server' capability/
     );
   });
+
+  /**
+   * `ios.additionalDeviceSets` lists a provider's simulators by their real udid
+   * and `adb devices` always reports its emulators by serial, so the raw
+   * spelling is reachable however carefully `list-devices` dedupes. Reaching
+   * the spawn path with one starts a second simulator-server against a device
+   * already being driven; the conflict this blueprint exists to prevent.
+   */
+  describe("addressed by the raw udid rather than the ext: id", () => {
+    it("attaches to the provider's server instead of spawning a second one", async () => {
+      const simulatorServer = await startSimulatorServer();
+      attachTo(simulatorServer);
+      const device = resolveDevice(IOS_UDID);
+
+      const instance = await simulatorServerBlueprint.factory({}, device, { device });
+
+      expect(instance.api.apiUrl).toBe(simulatorServer.apiUrl);
+      expect(instance.api.external).toBe(true);
+    });
+
+    it("still refuses when the provider withheld the capability", async () => {
+      const simulatorServer = await startSimulatorServer();
+      attachTo(simulatorServer, ["simctl"]);
+      const device = resolveDevice(IOS_UDID);
+
+      await expect(simulatorServerBlueprint.factory({}, device, { device })).rejects.toThrow(
+        /'simulator-server' capability/
+      );
+    });
+  });
 });
 
 /**
