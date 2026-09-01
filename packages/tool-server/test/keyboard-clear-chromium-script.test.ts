@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CLEAR_FOCUSED_EDITABLE_SCRIPT } from "../src/tools/keyboard/platforms/chromium";
+import {
+  CLEAR_FOCUSED_EDITABLE_SCRIPT,
+  CONTENT_SIGNATURE_JS,
+} from "../src/tools/keyboard/platforms/chromium";
 
 /**
  * `CLEAR_FOCUSED_EDITABLE_SCRIPT` is an IIFE injected via Runtime.evaluate. It
@@ -93,6 +96,8 @@ function run(
   selectionsDropped: number;
   /** What the page's selection holds when the script returns. */
   selection: () => unknown[];
+  /** What the script parked on the page for the read-back to compare against. */
+  parked: { el?: unknown; before?: unknown } | undefined;
 } {
   const commands: string[] = [];
   commandLog = commands;
@@ -105,6 +110,14 @@ function run(
   const g = globalThis as Record<string, unknown>;
   const had = Object.hasOwn(g, "document");
   const saved = g.document;
+  // The page's `window`, which the script parks its record on. Left undefined,
+  // that assignment threw and the script's own try swallowed it — so `contentOf`
+  // ran in every test here and was observed by none, and the record the
+  // read-back is built to consume existed in no test at all.
+  const hadWindow = Object.hasOwn(g, "window");
+  const savedWindow = g.window;
+  const win: Record<string, unknown> = {};
+  g.window = win;
   // The element the script is about to act on, found by the same shadow descent
   // it does — so a per-element answer follows focus into a shadow root.
   const focusedElement = (): Record<string, unknown> | undefined => {
@@ -149,12 +162,28 @@ function run(
   };
   try {
     const outcome = (0, eval)(CLEAR_FOCUSED_EDITABLE_SCRIPT) as Outcome;
-    return { outcome, commands, selectionsDropped: dropped.count, selection: () => ranges };
+    return {
+      outcome,
+      commands,
+      selectionsDropped: dropped.count,
+      selection: () => ranges,
+      parked: win.__argentClearTarget as { el?: unknown; before?: unknown } | undefined,
+    };
   } finally {
     if (had) g.document = saved;
     else delete g.document;
+    if (hadWindow) g.window = savedWindow;
+    else delete g.window;
   }
 }
+
+/**
+ * The signature the script parks, from the SAME source the script interpolates —
+ * so this file cannot drift from it the way a hand-copied helper would.
+ */
+const signatureOf = (0, eval)(`(node) => { ${CONTENT_SIGNATURE_JS} return contentOf(node); }`) as (
+  node: unknown
+) => string | null;
 
 describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — what it agrees to clear", () => {
   // Select-all then `delete`, in that order: `delete` on its own removes one
@@ -652,6 +681,53 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
     // The delete consumed it; putting the old ranges back would resurrect a
     // highlight over content that is gone.
     expect(run(textInput()).selectionsDropped).toBe(0);
+  });
+});
+
+describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — the record it leaves for the read-back", () => {
+  it("parks the cleared element and a signature of what it held", () => {
+    // The read-back reads this record and nothing else: the element by IDENTITY
+    // (two fields of one kind share a label, so an auto-advancing OTP form had
+    // the next field's contents attributed to the one just cleared) and the
+    // signature it compares against to tell a value that SURVIVED from one the
+    // page REPLACED.
+    const field = el("INPUT", { type: "text", value: "hello world" });
+    const { parked } = run(field);
+    expect(parked?.el).toBe(field);
+    expect(parked?.before).toBe(signatureOf(field));
+  });
+
+  it("parks a digest, never the value itself", () => {
+    // It sits on the PAGE's own `window`, in its main world, and the read-back
+    // that deletes it is exactly the call `evaluateClearStep` exists to handle
+    // failing — so a raw value stays resident for the life of the document. A
+    // cleared field is often a credential.
+    const password = el("INPUT", { type: "password", value: "hunter2-SUPERSECRET" });
+    const { parked } = run(password);
+    expect(String(parked?.before)).not.toContain("hunter2");
+    // And it is still a signature of THAT value: a constant would compare equal
+    // for every field.
+    expect(parked?.before).not.toBe(signatureOf(el("INPUT", { type: "password", value: "other" })));
+  });
+
+  it("parks nothing when the clear was refused", () => {
+    // A record left behind by a refused clear would be inherited by the NEXT
+    // clear's read-back, which drops it on read.
+    expect(run(el("INPUT", { type: "text", readOnly: true })).parked).toBeUndefined();
+  });
+
+  it("survives a page that sealed `window`", () => {
+    // The stash is best-effort: a page can make the assignment throw, and the
+    // clear still has to succeed — the read-back then simply has no identity.
+    const sealed = Object.freeze({});
+    const g = globalThis as Record<string, unknown>;
+    const saved = g.window;
+    g.window = sealed;
+    try {
+      expect(run(textInput()).outcome).toEqual({ cleared: true, focus: "input type=text" });
+    } finally {
+      g.window = saved;
+    }
   });
 });
 
