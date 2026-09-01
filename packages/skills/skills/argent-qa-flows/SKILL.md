@@ -16,7 +16,19 @@ Load `argent-create-flow` as the authoring engine. Follow its required reference
 A QA flow is complete only when:
 
 1. The first non-echo step is `launch:`. In-flow setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
-   - **Every field the flow types into is emptied first.** `type:` has no clear form — it focuses and types — so a field the app remembered, or one an earlier pass of this same flow filled, receives the new characters SPLICED into the old value. A regression flow replays that on every run, and pass 2 of the completion gate is exactly where it bites. Where a field can arrive non-empty, replace the `type:` with `tap:` → `wait: 500` → `tool: keyboard { clear: true }` → `tool: keyboard { text }`. The wait is load-bearing: raw `tool:` steps take no settle, and a clear that lands before focus empties the previously focused element and still reports success. Not available on Vega, Apple TV or Android TV — there, empty the field with the app's own on-screen keyboard, driven by `tool: tv-remote`.
+   - **Every field the flow types into is emptied first.** `type:` has no clear form — it focuses and types — so a field the app remembered, or one an earlier pass of this same flow filled, receives the new characters SPLICED into the old value. A regression flow replays that on every run, and pass 2 of the completion gate is exactly where it bites. Where a field can arrive non-empty, replace the `type:` with these steps:
+
+     ```yaml
+     - tap: { id: email }
+     - wait: 500
+     - tool: keyboard
+       args: { clear: true }
+     - tool: keyboard
+       args: { text: "new@example.com" }
+     ```
+
+     Write them as YAML, not as the compact `tool: keyboard { clear: true }` form: a `tool:` step carries its arguments on an `args:` line of its own, and `parseFlow` rejects the compact one outright ("Nested mappings are not allowed in compact mappings"). The wait is load-bearing: raw `tool:` steps take no settle, and on iOS and Android a clear that lands before focus empties the previously focused element and still reports success. Not available on Vega, Apple TV or Android TV — there, empty the field with the app's own on-screen keyboard, driven by `tool: tv-remote`.
+
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
