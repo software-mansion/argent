@@ -57,6 +57,12 @@ export interface GetHierarchyOptions {
    * platform — its coherent capture costs more than API 30's per-node refresh()
    * at every size from 315 nodes up. A cached capture is the cheaper read, never
    * the more accurate one.
+   *
+   * Below API 34 a coherent capture can also come back SMALLER: the walk
+   * refreshes each node in turn and drops the subtree of any that has gone away
+   * by the time it is reached, so a screen still animating under a slow walk
+   * loses the parts that moved. They are views that no longer exist; serving
+   * their cached copies instead is the staleness above.
    */
   clearCache?: boolean;
 }

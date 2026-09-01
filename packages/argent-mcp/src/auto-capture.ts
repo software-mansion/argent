@@ -30,8 +30,10 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
  * returns well under it wherever a tree read is cheap; an Android read is not —
  * it bypasses the helper's node cache at roughly 0.3-0.8 ms per node — so on a
  * screen of a few thousand nodes the smaller caps here buy a screenshot taken
- * before the wait could confirm anything. That is the intended trade at this
- * layer: the cap bounds the delay, and the capture is a best effort either way.
+ * before the wait could confirm anything. The cap bounds only this wait: the
+ * read it abandons keeps the helper's single request slot until it finishes, so
+ * whatever reads the tree next waits that out first. Raising a cap past the
+ * walk would trade the same time for a wait that actually answers.
  * Doubles as a blind sleep when the tool-server offers no `await-screen-idle`.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {

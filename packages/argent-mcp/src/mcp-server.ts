@@ -324,9 +324,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         ];
       } else if (udid && (wantScreenshot || wantTree)) {
         // Let the screen settle before capturing, bounded by the per-tool
-        // budget: `await-screen-idle` polls the tree server-side and usually
-        // returns well under the cap. If the call fails (e.g. a tool-server
-        // without that tool), fall back to sleeping the full budget.
+        // budget: `await-screen-idle` polls the tree server-side and returns
+        // well under the cap wherever a tree read is cheap. An Android read is
+        // not — it walks every node uncached — so on a large screen the wait
+        // hits the cap instead, and the `describe` below waits out the read it
+        // abandoned before starting its own. If the call fails (e.g. a
+        // tool-server without that tool), fall back to sleeping the full budget.
         const maxWaitMs = getAutoScreenshotDelayMs(params.name);
         if (maxWaitMs > 0) {
           try {
