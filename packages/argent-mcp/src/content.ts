@@ -215,6 +215,8 @@ export type FlowStepResult = {
    * wire data: a non-handle value renders as text or is skipped.
    */
   artifacts?: Record<string, unknown>;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -266,7 +268,8 @@ function stepLabel(step: FlowStepResult): string {
 /**
  * Unpack flow-execute's structured step report into MCP content blocks. Only
  * steps that carry a tool result surface their (image-bearing) content inline;
- * directive steps render as a status line.
+ * every other kind renders as a status line, with a `script` step's captured
+ * output following it as a block of its own.
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -296,6 +299,15 @@ export async function flowRunToMcpContent(
       type: "text",
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
     });
+
+    const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
+    const scriptLogTruncated = step.scriptLogTruncated === true;
+    if (scriptLog || scriptLogTruncated) {
+      const parts = [`${stepIndent(step.depth)}script output:`];
+      if (scriptLog) parts.push(scriptLog.endsWith("\n") ? scriptLog.slice(0, -1) : scriptLog);
+      if (scriptLogTruncated) parts.push("… output truncated");
+      blocks.push({ type: "text", text: parts.join("\n") });
+    }
 
     if (step.result !== undefined) {
       blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));

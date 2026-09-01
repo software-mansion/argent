@@ -261,6 +261,7 @@ describe("stepRequiresDevice", () => {
       "pinch": true,
       "rotate": true,
       "snapshot": true,
+      "script": false,
     };
     const samples: Record<FlowStep["kind"], FlowStep> = {
       "echo": { kind: "echo", message: "x" },
@@ -280,6 +281,7 @@ describe("stepRequiresDevice", () => {
       "pinch": { kind: "pinch", scale: 2 },
       "rotate": { kind: "rotate", by: 90 },
       "snapshot": { kind: "snapshot", name: "s" },
+      "script": { kind: "script", path: "seed.mjs" },
     };
 
     const { registry } = mockRegistry();

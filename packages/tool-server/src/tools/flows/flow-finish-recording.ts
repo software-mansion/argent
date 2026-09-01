@@ -280,9 +280,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
  * Interpolated rather than returning `JSON.stringify(args)` directly, because
  * `JSON.stringify(undefined)` is the VALUE `undefined`, not a string, and
  * TypeScript does not flag it (the overload is declared to return `string`). No
- * reachable input is undefined today on either path into {@link summarizeStep};
- * what this guards is the switch's `default:` arm, where a step kind added
- * without its own `case` is rendered as a `tool:` step with no `args` field.
+ * reachable input is undefined today.
  */
 function renderToolArgs(args: unknown): string {
   try {
@@ -424,8 +422,14 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. snapshot: ${step.name}`;
     case "idle":
       return `${n}. await: screen idle`;
+    case "script":
+      return `${n}. script: ${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`;
     case "tool":
-    default:
       return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`;
+    default: {
+      const unsummarized: never = step;
+      void unsummarized;
+      return `${n}. ${(unsummarized as FlowStep).kind}`;
+    }
   }
 }

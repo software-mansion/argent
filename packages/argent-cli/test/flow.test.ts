@@ -46,6 +46,9 @@ interface StepFixture {
   flow?: string;
   message?: string;
   snapshotKey?: string;
+  target?: string;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   artifacts?: Record<string, unknown>;
   /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
   result?: unknown;
@@ -365,6 +368,36 @@ describe("argent flow run", () => {
       { onProgress: expect.any(Function) }
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
+  });
+
+  it("prints a script step's log live, under the step line the event produced", async () => {
+    const steps: StepFixture[] = [
+      { index: 0, kind: "echo", status: "pass", message: "seeding" },
+      {
+        index: 1,
+        kind: "script",
+        status: "pass",
+        target: "scripts/seed.mjs",
+        scriptLog: "creating order\norder 4711 created\n",
+        scriptLogTruncated: true,
+      },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: report({ steps, passed: 1 }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    const out = logs.join("\n");
+    expect(out).toContain("✓  1 script scripts/seed.mjs");
+    expect(out).toContain("       │ creating order");
+    expect(out).toContain("       │ order 4711 created");
+    expect(out).toContain("       │ … output truncated");
+    expect(out.match(/script scripts\/seed\.mjs/g)).toHaveLength(1);
+    expect(out).toContain("PASS (started on SIM-1) — 1 passed");
   });
 
   it("exits 2 without calling the tool when --device is missing its value", async () => {
@@ -1628,6 +1661,32 @@ describe("argent flow run <dir>", () => {
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("prints a passing script's output, the only record a green batch run leaves", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        steps: [
+          {
+            index: 0,
+            kind: "script",
+            status: "pass",
+            target: "scripts/seed.mjs",
+            scriptLog: "seeded order 4711\n",
+          },
+          { index: 1, kind: "tap", status: "pass" },
+        ],
+        passed: 2,
+      }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    const out = logs.join("\n");
+    expect(out).toContain("✓  1 script scripts/seed.mjs");
+    expect(out).toContain("│ seeded order 4711");
+    // The widened gate still admits only the script step, not its neighbour.
+    expect(out).not.toMatch(/✓ {2}2 tap/);
   });
 
   it("rejects directory runs with --json-stream", async () => {

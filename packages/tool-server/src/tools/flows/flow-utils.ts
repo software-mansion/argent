@@ -1,12 +1,14 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
   type ClientFileDirective,
 } from "@argent/registry";
 import {
@@ -181,22 +183,22 @@ const keyResolutions = new Map<string, Promise<string>>();
  * whether the on-disk spelling is one the flow layer's own ladders accept, so a
  * caller can be pointed at it instead of at a rename.
  */
-type OnDiskSpelling =
+export type OnDiskSpelling =
   | { state: "listed" }
   | { state: "case_folded"; actual: string; addressable: boolean }
   | { state: "absent" };
 
 /**
  * Classify the supplied basename against `dir`'s listing. One classifier serves
- * every route that turns a caller's spelling into a flow identity — replay's
- * `flow_path` and `name` (flow-run.ts) and the recorder's two nested
- * flow-execute targets (flow-add-step.ts) — so they can never drift apart in
+ * every route that turns a caller's spelling into a file it will open — a flow,
+ * or since the `script:` step a plain `.mjs` — so they can never drift apart in
  * which spellings they accept.
  *
  * readdir, not realpath: realpath rewrites a symlinked flow to its target's
  * name, and a flow deliberately runs — and composes — under the link's own
- * name. Every call site hands a pure-ASCII basename (flow-name charset +
- * ".yaml"), so Unicode-normalizing filesystems cannot make the comparison lie.
+ * name. Every call site hands a pure-ASCII basename (the flow-name charset,
+ * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
+ * comparison lie.
  *
  * What an `absent` verdict means is the caller's to decide, and they differ:
  * `flow_path` arrives with the boundary's stat already vouching for the file,
@@ -204,12 +206,16 @@ type OnDiskSpelling =
  * may simply not name a saved flow — an ordinary missing-flow error the later
  * read reports far better than a casing complaint could.
  */
-export async function classifyOnDiskSpelling(dir: string, base: string): Promise<OnDiskSpelling> {
+export async function classifyOnDiskSpelling(
+  dir: string,
+  base: string,
+  addressable: RegExp = FLOW_FILE_NAME_PATTERN
+): Promise<OnDiskSpelling> {
   const entries = await fs.readdir(dir).catch(() => null);
   if (entries === null || entries.includes(base)) return { state: "listed" };
   const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
   if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
+  return { state: "case_folded", actual, addressable: addressable.test(actual) };
 }
 
 /**
@@ -717,7 +723,8 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
-  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
+  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
+  | { kind: "script"; path: string; timeout?: number };
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -733,7 +740,7 @@ export type FlowFile = {
  * line per authored step no matter where the run ended: `execSteps`' hard-stop,
  * device-free and cancellation gates, plus `reportBlockSkipped` recursing into a
  * nested block. The fifth is the upload preflight's walk, where a block it
- * cannot see hides a nested `run:`/`snapshot` from validation. The last two,
+ * cannot see hides a nested `run:`, `script:` or `snapshot` from validation. The last two,
  * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children to
  * resolve the flow's device decisions from a block's body — dead while `when`
  * is the only block kind, and the guard against a later one.
@@ -760,14 +767,44 @@ export function isBlockStep(step: FlowStep): step is BlockStep {
   return isBlockDirectiveKey(step.kind);
 }
 
+export function precedesLeadingLaunch(step: FlowStep): boolean {
+  switch (step.kind) {
+    case "echo":
+    case "script":
+      return true;
+    case "launch":
+    case "run":
+    case "when":
+    case "tool":
+    case "tap":
+    case "long-press":
+    case "swipe":
+    case "type":
+    case "await":
+    case "assert":
+    case "idle":
+    case "wait":
+    case "scroll-to":
+    case "pinch":
+    case "rotate":
+    case "snapshot":
+      return false;
+    default: {
+      const unclassified: never = step;
+      void unclassified;
+      return false;
+    }
+  }
+}
+
 /**
- * A flow is end-to-end iff it BEGINS by launching an app — its first step
- * (ignoring `echo` narration) is a `launch`. Such a flow controls its own start
- * state, so it must not declare an `executionPrerequisite`. Everything else is a
- * fragment.
+ * A flow is end-to-end iff it BEGINS by launching an app — the first step a
+ * launch cannot sit behind ({@link precedesLeadingLaunch}) is a `launch`. Such
+ * a flow controls its own start state, so it must not declare an
+ * `executionPrerequisite`. Everything else is a fragment.
  */
 function isE2eFlow(flow: FlowFile): boolean {
-  const first = flow.steps.find((s) => s.kind !== "echo");
+  const first = flow.steps.find((s) => !precedesLeadingLaunch(s));
   return first?.kind === "launch";
 }
 
@@ -941,7 +978,8 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
-  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } };
+  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
+  | { script: { path: string; timeout?: number } };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -1524,14 +1562,25 @@ function toYamlStep(step: FlowStep): YamlStep {
       if (step.cropOn !== undefined) body.cropOn = selectorToYaml(step.cropOn);
       return { snapshot: body };
     }
-    case "tool":
-    default: {
+    case "script": {
+      const body: { path: string; timeout?: number } = { path: step.path };
+      if (step.timeout !== undefined) body.timeout = step.timeout;
+      return { script: body };
+    }
+    case "tool": {
       const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
         tool: step.name,
       };
       if (Object.keys(step.args).length > 0) y.args = step.args;
       if (step.delayMs !== undefined) y.delayMs = step.delayMs;
       return y;
+    }
+    default: {
+      const unserialized: never = step;
+      void unserialized;
+      throw new Error(
+        `internal: no YAML spelling for step kind "${(unserialized as FlowStep).kind}"`
+      );
     }
   }
 }
@@ -2210,6 +2259,7 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "pinch",
   "rotate",
   "snapshot",
+  "script",
 ];
 
 /**
@@ -2750,6 +2800,102 @@ function completeRunExtension(value: string): string {
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
+function parseScriptStep(raw: unknown, body: unknown): FlowStep {
+  if (typeof body === "string") {
+    badEntry(
+      raw,
+      "a `script` step takes a map, not a bare path — write `script: { path: scripts/seed.mjs }`"
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(raw, "script needs { path, timeout? }, e.g. `script: { path: scripts/seed.mjs }`");
+  }
+  const b = body as Record<string, unknown>;
+  rejectUnknownKeys(raw, b, ["path", "timeout"], "script");
+  const step: Extract<FlowStep, { kind: "script" }> = {
+    kind: "script",
+    path: parseScriptPath(raw, b.path),
+  };
+  if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
+  return step;
+}
+
+function parseScriptPath(raw: unknown, value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    badEntry(
+      raw,
+      "a `script` step needs a `path` — a .mjs file path relative to this flow's file, e.g. `script: { path: scripts/seed.mjs }`"
+    );
+  }
+  if (value.includes("\\")) {
+    badEntry(raw, "a `script` path uses forward slashes, e.g. `path: scripts/seed.mjs`");
+  }
+  // posix.isAbsolute catches `/...`; the drive-letter test catches the win32
+  // forms it does not — absolute ("C:/") and drive-RELATIVE ("C:foo", which
+  // resolves against that drive's own current directory).
+  if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
+    badEntry(raw, "a `script` path must be relative to the flow file that references it");
+  }
+  if (!value.endsWith(".mjs")) {
+    if (value.toLowerCase().endsWith(".mjs")) {
+      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+    }
+    badEntry(
+      raw,
+      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+    );
+  }
+  if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
+    badEntry(
+      raw,
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+    );
+  }
+  return value;
+}
+
+/**
+ * The `timeout` a `script` step may carry, in milliseconds. The finiteness
+ * check is not redundant: YAML `.inf` is typeof number and greater than 0. The
+ * executor clamps whatever survives to the host's configured maximum and says
+ * so in the step's report.
+ *
+ * The floor is {@link MIN_SCRIPT_TIMEOUT_MS} — the same constant the executor
+ * floors the host's `scripts.maxTimeoutMs` to, read from one place rather than
+ * spelled twice: a parse floor above the run-time one would refuse a limit the
+ * host would have honoured, and one below it would accept a limit the host
+ * silently raises. Its value is sized from the fixed cost of the step rather
+ * than from the script — a fork, a Node boot, the runner preload and the
+ * script's own import all run before the first line the limit is meant to
+ * bound.
+ *
+ * No other millisecond option shares that floor. Each draws its bound from the
+ * work it measures: `await`'s `timeout` takes 1
+ * and `wait` takes 0, `idle`'s `timeout` carries a 600ms floor derived from the
+ * settle reads it has to fit, and `idle.stableFor` a bounded integer range.
+ * What this one measures starts a PROCESS first, so a limit under the floor
+ * buys no short step — it buys one that ends at its time limit, or one whose
+ * verdict tracks how busy the host was, and either way an errored script step
+ * stops the flow. `timeout: 0.5` is the extreme of it:
+ * Node holds no timer under 1ms, so the report quotes back a limit that never
+ * ran. Refused here, deviceless and naming the key, rather than after the run
+ * has started.
+ */
+function parseScriptTimeout(raw: unknown, value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    badEntry(raw, "script.timeout needs a positive number of milliseconds (e.g. `timeout: 30000`)");
+  }
+  if (value < MIN_SCRIPT_TIMEOUT_MS) {
+    badEntry(
+      raw,
+      `script.timeout is in milliseconds and needs at least ${MIN_SCRIPT_TIMEOUT_MS} — the step ` +
+        `spends its first tens of milliseconds starting the Node process, so ${value} leaves the ` +
+        `script too little to run in and errors the step (30 seconds is \`timeout: 30000\`)`
+    );
+  }
+  return value as number;
+}
+
 const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
 
 const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "momentum", "duration"] as const;
@@ -3109,6 +3255,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     return step;
   }
 
+  if ("script" in raw) return parseScriptStep(raw, (raw as { script: unknown }).script);
+
   if ("tool" in raw) {
     const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
     const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
@@ -3138,7 +3286,7 @@ export function serializeFlow(flow: FlowFile): string {
 export function validateFlow(flow: FlowFile): void {
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
+      "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",

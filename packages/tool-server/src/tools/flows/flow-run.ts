@@ -1,10 +1,13 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   FAILURE_CODES,
   FailureError,
+  FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
   getFailureSignal,
   isLiveServiceState,
   wrapFailure,
@@ -30,6 +33,7 @@ import {
   getFlowPath,
   isBlockStep,
   parseFlow,
+  precedesLeadingLaunch,
   runTargetName,
   swipeByLabel,
   type BlockStep,
@@ -38,10 +42,18 @@ import {
   type GestureTarget,
   type FlowStep,
   type Launch,
+  type OnDiskSpelling,
   type WhenCondition,
   LAUNCH_PLATFORMS,
   SELECTOR_RELATIONS,
 } from "./flow-utils";
+import {
+  createScriptLogBudget,
+  flowScriptExecutor,
+  type FlowScriptFailureKind,
+  type FlowScriptLogBudget,
+  type FlowScriptResult,
+} from "./script/flow-script-executor";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -98,7 +110,7 @@ const zodSchema = z
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
       ),
     flow_file: z
       .string()
@@ -186,7 +198,8 @@ export interface StepReport {
   /**
    * Machine-readable explanation of the outcome. Always set when the step did
    * not pass; also set on some passing reports whose result is self-narrating —
-   * the `when:` guard marker, snapshot passes, and a chromium `launch` whose
+   * the `when:` guard marker, snapshot passes, a `script` step carrying an
+   * executor note ({@link scriptVerdict}), and a chromium `launch` whose
    * instance the runner booted and owns. An attach to an instance the runner
    * does not own reports no reason.
    */
@@ -234,6 +247,8 @@ export interface StepReport {
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   /**
    * Nesting depth for display: omitted at top level, +1 inside each nesting
    * step's expanded steps. The report is a flat list with no block-end marker,
@@ -935,6 +950,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * `attached:` identity, having never been told what the instance runs.
    */
   attachedAppPath?: string;
+  projectRoot: string;
+  scriptLogBudget: FlowScriptLogBudget;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -980,7 +997,8 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
  * Yield every parsed step, recursing into a block directive's children through
  * {@link blockSteps}: this is the sole feeder of
  * {@link assertUploadSelfContained}, so a block absent from the recursion would
- * carry an uploaded flow's nested `run:`/`snapshot` past the preflight.
+ * carry an uploaded flow's nested `run:`, `script:` or `snapshot` past the
+ * preflight.
  *
  * Each step arrives with its AUTHORED position - its place in the file as
  * written, every entry counted, `echo` included. A pre-run refusal has no report
@@ -1128,11 +1146,12 @@ function retiredArgReason(use: RetiredArgUse): string {
 }
 
 /**
- * Reject an uploaded root flow that is not self-contained — one with a `run:`
- * or `snapshot` step at any depth — before anything executes, so a mid-run or
- * guard-gated error cannot execute half the flow first. Both step kinds anchor
- * at the flow file's real directory, which an uploaded flow does not have: a
- * run: step's referenced files stayed on the client, and against a per-call temp
+ * Reject an uploaded root flow that is not self-contained — one with a `run:`,
+ * `script:` or `snapshot` step at any depth — before anything executes, so a
+ * mid-run or guard-gated error cannot execute half the flow first. All three
+ * anchor at the flow file's real directory, which an uploaded flow does not
+ * have: a run: step's referenced files stayed on the client, a script step's
+ * `.mjs` (and whatever it imports) stayed there too, and against a per-call temp
  * materialization a plain snapshot can only fail (no baseline) while
  * updateBaselines writes PNGs no later run can find.
  */
@@ -1146,6 +1165,20 @@ function assertUploadSelfContained(flow: FlowFile): void {
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_upload_run_composition",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    if (step.kind === "script") {
+      throw new FailureError(
+        `This flow uses a script step ("script: { path: ${step.path} }"), whose .mjs file lives ` +
+          `beside the flow's file on the CLIENT — an uploaded flow carries only its own YAML, so ` +
+          `the script is not on this host and never could be. Use name + project_root with a ` +
+          `co-located client and tool server for flows that run scripts.`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_upload_script_step",
           failure_area: "tool_server",
           error_kind: "validation",
         }
@@ -1218,7 +1251,13 @@ diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped re
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
-runs only).
+runs only); \`script\` runs a local .mjs file in a fresh Node process for setup, cleanup, or any work a device step cannot do
+(\`script: { path: ../../scripts/seed.mjs, timeout?: <ms> }\` — always a map, never a bare path; the path
+is resolved against the flow file that names the step, exactly as a \`run\` target is, so a saved flow
+climbs out of .argent/flows/ to reach the project's own scripts/ directory. The step needs no device, so
+a script-only flow runs with nothing booted — but a \`run\` or a \`when\` step beside it still resolves
+one, \`when\` even when the only thing it guards is another script, so a platform-gated seed needs a
+device of that platform. Its stdout and stderr come back on the step report. Co-located runs only.).
 A selector-less gesture — a coordinate \`tap\`/\`long-press\`/\`swipe\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
 no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
 settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
@@ -1236,7 +1275,8 @@ device's current state. Device id is injected by the runner (flows store none) �
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
 than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
 unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
-starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
+starts there — following a leading \`run:\`, \`echo:\` or \`script:\`, so a fragment that composes a chromium
+e2e flow boots too, and so does a flow that seeds a backend before it launches;
 otherwise the first launch attaches to an already-running instance and never kills it. Every later
 launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto;
 an instance the run already owns for that same app is killed first (its exit awaited) so the
@@ -1393,6 +1433,8 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         owned: resolved.booted ? [resolved.booted] : [],
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        projectRoot: params.project_root,
+        scriptLogBudget: createScriptLogBudget(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1587,13 +1629,12 @@ async function leadingLaunch(
  * would skip and the prerequisite guard would wave through a run that destroys
  * the state it just asked the caller to establish.
  *
- * The walk below IS the executor's, run ahead of time: the same `runStack`, each
- * hop resolved exactly as {@link execRunStep} resolves it — anchored at the
- * containing file's canonical directory, by concatenation so a `..` reaches the
- * kernel uncollapsed — under the same cycle, depth, and on-disk-casing guards. A
- * chain the executor refuses never reaches its launch, so any hop it would error
- * on stays `null` (give up) here, never transparent. Anything unreadable is
- * `null` too.
+ * The walk below IS the executor's, run ahead of time: it takes the same
+ * `runStack` (seeded with the root flow) and resolves each hop through the same
+ * {@link resolveFlowRelativeFile} {@link execRunStep} uses, then applies the
+ * same cycle, depth, and on-disk-casing guards. A chain the executor refuses
+ * never reaches its launch, so any hop it would error on stays `null` (give up)
+ * here, never transparent. Anything unreadable is `null` too.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
@@ -1601,19 +1642,21 @@ async function scanLeadingLaunch(
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
   for (const step of flow.steps) {
-    if (step.kind === "echo") continue;
+    if (precedesLeadingLaunch(step)) continue;
     if (step.kind === "launch") return { app: step.app, flow: top.display };
     if (step.kind !== "run") return null;
-    const spelled = path.dirname(top.canonical) + path.sep + step.flow;
     let nested: FlowFile;
     let canonical: string;
     try {
-      canonical = await canonicalFlowPath(spelled);
+      const hop = await resolveFlowRelativeFile(
+        path.dirname(top.canonical),
+        step.flow,
+        FLOW_FILE_NAME_PATTERN
+      );
+      canonical = hop.canonical;
       if (stack.some((entry) => entry.canonical === canonical)) return null;
       if (stack.length >= MAX_RUN_DEPTH) return null;
-      const supplied = path.posix.basename(step.flow);
-      const spelling = await classifyOnDiskSpelling(path.dirname(spelled), supplied);
-      if (spelling.state === "case_folded") return null;
+      if (hop.spelling.state === "case_folded") return null;
       nested = parseFlow(await fs.readFile(canonical, "utf8"));
     } catch {
       return null;
@@ -1895,6 +1938,8 @@ function stepTarget(step: FlowStep): string | undefined {
       // The as-written path, so a report line shows exactly what the flow
       // references (`run ../shared/login.yaml`), not just the attribution stem.
       return step.flow;
+    case "script":
+      return step.path;
     case "echo":
     case "tool":
       // Each carries its subject in a report field of its own (`message`,
@@ -1984,8 +2029,9 @@ function stepFlow(step: FlowStep, scope: StepScope): string {
 }
 
 /**
- * The directory `run:` paths resolve against — the canonical containing
- * file's, so a symlinked flow anchors where its real file and siblings live.
+ * The directory a step's file reference resolves against — a `run:` target and
+ * a `script:` path alike. The canonical containing file's, so a symlinked flow
+ * anchors where its real file, its sibling fragments and its scripts live.
  */
 function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
@@ -2013,6 +2059,16 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     const index = state.reports.length;
 
     if (state.stopped) {
+      // A hard stop needs no reason of its own: the step above it carries the
+      // failure that explains every line below. A CANCELLED run does — and it
+      // reaches this branch rather than the abort guard below, because a
+      // `script` step cancelled after its process started reports `error`
+      // (what it already did to the backend is done) and an error stops the
+      // run. Without this the steps after a cancelled script read as collateral
+      // of a failure, with nothing on the line saying the run was cancelled,
+      // while the same cancellation during any other step reports "run
+      // aborted" on each of them.
+      const stopReason = state.signal?.aborted ? "run aborted" : undefined;
       pushReport(state, {
         index,
         kind: step.kind,
@@ -2020,6 +2076,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         flow: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
+        ...(stopReason ? { reason: stopReason } : {}),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2027,7 +2084,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
       const inner = blockSteps(step);
-      if (inner) reportBlockSkipped(state, inner, childScope(scope));
+      if (inner) reportBlockSkipped(state, inner, childScope(scope), stopReason);
       continue;
     }
     // The flow was resolved as needing no device, yet a step that acts on one
@@ -2246,6 +2303,64 @@ async function canonicalFlowPath(p: string): Promise<string> {
   }
 }
 
+interface ResolvedFlowRelativeFile {
+  canonical: string;
+  spelling: OnDiskSpelling;
+}
+
+/**
+ * One hop from a flow file to a file it NAMES — a `run:` target's YAML, a
+ * `script:` step's `.mjs`.
+ *
+ * - The anchor is the CONTAINING file's canonical directory, never the root
+ *   flow's: a root anchor would make a fragment resolve a different file
+ *   depending on which flow composed it, so a shared fragment would stop being
+ *   self-contained — the one property `run:` composition exists to have.
+ * - Joined by concatenation, NOT `path.resolve`/`path.join`: those collapse a
+ *   `..` lexically before the kernel ever sees the spelling, and after a
+ *   symlinked directory component the collapse names a different file than the
+ *   one on disk (see {@link canonicalFlowPath}). Both name kinds deliberately
+ *   admit `..` — shared fragments and shared scripts may live outside the
+ *   referencing file's directory. The anchor is absolute and the target
+ *   relative (parse rejects an absolute or drive-prefixed target), so the
+ *   concatenation is well-formed.
+ * - The casing check lists the directory the target is SPELLED in, NOT
+ *   `path.dirname(canonical)`. The basename compared is always the SUPPLIED
+ *   one, and only the spelled directory is guaranteed to hold an entry under
+ *   that name: for a symlink whose target lives elsewhere, the canonical
+ *   directory holds the target's name instead, so a mis-cased spelling of the
+ *   link's own name would go unjudged. `path.dirname` removes a segment without
+ *   collapsing `..`, so a `..` still reaches readdir intact.
+ *
+ * There is deliberately NO path fence here. A target is reachable exactly when
+ * the tool-server user can read it, the same reach the front door already
+ * grants: an operator can point `flow_path` at any YAML on the host.
+ *
+ * An uploaded flow — the one route that carries untrusted content — cannot name
+ * a target of its OWN: {@link assertUploadSelfContained} rejects every `run:`
+ * and `script:` step it declares. It does still ARRIVE here, through a nested
+ * `tool: flow-execute` naming a flow already on this host — `invokeSubTool`
+ * forwards no `fileInputs`, so the inner run is an ordinary `name` run with
+ * `viaUpload` false and that flow's own targets resolve through this function.
+ * The decision above does not rest on uploads being absent: it rests on the
+ * reach being unchanged, since a caller who can send the wrapping upload can
+ * call `flow-execute` with that same `name` directly and get the same result.
+ */
+async function resolveFlowRelativeFile(
+  anchorDir: string,
+  target: string,
+  addressable: RegExp
+): Promise<ResolvedFlowRelativeFile> {
+  const spelled = anchorDir + path.sep + target;
+  const canonical = await canonicalFlowPath(spelled);
+  const spelling = await classifyOnDiskSpelling(
+    path.dirname(spelled),
+    path.posix.basename(target),
+    addressable
+  );
+  return { canonical, spelling };
+}
+
 /**
  * The `__baselines__/<segment>` a run's snapshots key their baseline store
  * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
@@ -2309,14 +2424,11 @@ async function execRunStep(
   // nesting instead of the repeated reference — and would drop the chain, the
   // one piece of output that identifies the offending edge. The depth guard
   // immediately below still stops the recursion.
-  //
-  // Joined by concatenation, NOT path.resolve/path.join: those collapse a `..`
-  // lexically before the kernel ever sees the spelling, and parseRunTarget
-  // deliberately admits `..` (shared fragments may live outside the flows
-  // dir) — after a symlinked directory component the collapse names a
-  // different file than the one on disk (see canonicalFlowPath). The anchor
-  // is absolute and the target relative, so the concatenation is well-formed.
-  const canonical = await canonicalFlowPath(scopeFlowDir(scope) + path.sep + target);
+  const { canonical, spelling } = await resolveFlowRelativeFile(
+    scopeFlowDir(scope),
+    target,
+    FLOW_FILE_NAME_PATTERN
+  );
   if (scope.runStack.some((entry) => entry.canonical === canonical)) {
     return fail(
       `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
@@ -2327,29 +2439,15 @@ async function execRunStep(
     return fail("max run depth exceeded");
   }
 
-  // Nothing above consulted the directory: canonicalFlowPath resolves the
-  // spelling by the FILESYSTEM's rules, and a case-insensitive one (APFS, NTFS)
-  // opens a file really named "frag.yaml" for `run: Frag.yaml`. Every expanded
-  // step is then attributed to a fragment no directory entry carries, and the
-  // identical tree fails with ENOENT on a case-sensitive volume (Linux CI).
-  // parseRunTarget already holds this line for the ".yaml" extension of this
-  // same string, and resolveFlowSource for the root flow's own basename. Only a
-  // case-folded verdict refuses: a basename matching nothing at all is an
-  // ordinary missing fragment, which the read's own ENOENT reports far better,
-  // and an unreadable listing vouches for nothing so it must refuse nothing.
-  //
-  // Listed against the directory the target is SPELLED in — NOT
-  // path.dirname(canonical): realpath rewrites a symlinked fragment to its
-  // target's name, so `run: alias.yaml` (alias.yaml → a.yaml) — a legitimate
-  // layout the cycle guard already relies on — would be refused for not being
-  // named "a.yaml". path.dirname removes a segment without collapsing `..`, so a
-  // `..` in the target still reaches readdir intact for the kernel to resolve.
-  // Only the basename is checked, matching the two root-flow routes' scope.
+  // The canonical path above resolves the spelling by the FILESYSTEM's rules,
+  // and a case-insensitive one (APFS, NTFS) opens a file really named
+  // "frag.yaml" for `run: Frag.yaml`. Every expanded step is then attributed to
+  // a fragment no directory entry carries, and the identical tree fails with
+  // ENOENT on a case-sensitive volume (Linux CI). Only a case-folded verdict
+  // refuses: a basename matching nothing at all is an ordinary missing fragment,
+  // which the read's own ENOENT reports far better, and an unreadable listing
+  // vouches for nothing so it must refuse nothing.
   const suppliedBase = path.posix.basename(target);
-  const spelling = await classifyOnDiskSpelling(
-    path.dirname(scopeFlowDir(scope) + path.sep + target),
-    suppliedBase
-  );
   if (spelling.state === "case_folded") {
     // Quote a replacement target only when parseRunTarget would accept one —
     // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies —
@@ -2408,9 +2506,236 @@ async function execRunStep(
   );
 }
 
+type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
+
+/**
+ * A `script` step is the one step whose `reason` is written by something other
+ * than this server: the child's own `throw` message crosses into it verbatim,
+ * and a multi-line message is the ordinary shape of a rethrown API error. Every
+ * surface that renders a step is one line per step and interpolates the reason
+ * raw — the CLI's step line, `flowRunToMcpContent`, and the lift in
+ * `flow-nested-outcome.ts` — so a newline in it puts script-controlled text at
+ * column 0, below a `✗` line and above the real summary. A forged
+ * "PASS — 3 passed, 0 failed" reads there as the run's own verdict.
+ *
+ * Escaped rather than stripped, and here rather than in each renderer: the
+ * original characters stay recoverable, and the one step whose reason is not
+ * server-composed is the one that pays for it. `describe`'s tree renderer takes
+ * the same measure for the same reason (`format-tree.ts`), on labels read off a
+ * device — a less hostile source than a local process's uncaught throw.
+ *
+ * Length is left to the executor's own `SCRIPT_MAX_FAILURE_MESSAGE_CHARS`: it
+ * is the budget that decides what a failed script may say about itself, and a
+ * second ceiling here would cut the step's only diagnostic without moving that
+ * decision anywhere a reader can find it.
+ */
+function oneLineReason(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+}
+
+async function runScriptStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "script" }>,
+  scope: StepScope
+): Promise<ScriptStepOutcome> {
+  const outcome = await execScriptStep(state, step, scope);
+  return outcome.reason === undefined
+    ? outcome
+    : { ...outcome, reason: oneLineReason(outcome.reason) };
+}
+
+/**
+ * How many of the script's own frames ride into the reason. A thrown message
+ * alone names no file and no line, and a throw writes nothing to stderr, so
+ * without these the step's whole diagnostic is one sentence and there is
+ * nothing in CI to re-run against. Six is what a rethrow needs to show where it
+ * came from without turning the step line into the whole stack; the executor's
+ * `SCRIPT_MAX_FAILURE_STACK_CHARS` still holds what it captured.
+ */
+const SCRIPT_REASON_MAX_FRAMES = 6;
+
+/** A frame in the host's own machinery, not in anything the author wrote. */
+function isHostFrame(frame: string): boolean {
+  return (
+    frame.includes("node:internal") ||
+    frame.includes("flow-script-runner.mjs") ||
+    frame.includes("flow-script-watchdog")
+  );
+}
+
+/**
+ * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
+ * go on ONE step line, so the anchor is the run's own `project_root` — the
+ * directory the script also ran in. A script outside it keeps its absolute
+ * path, because a `..` chain says less than the path does.
+ *
+ * `roots` is that directory both as given and canonicalized, because only one
+ * of the two ever matches: Node resolves a module to its REAL path, so every
+ * frame is canonical, while `project_root` arrives as the caller spelled it. On
+ * macOS a project under `/var` (or any symlinked parent) is the ordinary case
+ * of the two differing.
+ */
+function readableFrame(frame: string, roots: readonly string[]): string {
+  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+    const split = /^(.*?)(:\d+:\d+)$/.exec(match);
+    const url = split ? split[1]! : match;
+    const position = split ? split[2]! : "";
+    let file: string;
+    try {
+      file = fileURLToPath(url);
+    } catch {
+      return match;
+    }
+    for (const root of roots) {
+      const relative = path.relative(root, file);
+      if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return `${relative}${position}`;
+      }
+    }
+    return `${file}${position}`;
+  });
+}
+
+/**
+ * The frames of a failed script, as a block appended to its message. Newline
+ * separated on purpose: {@link oneLineReason} escapes them, so the block reads
+ * as `\n    at …` on the step's own line and a reader can still tell one frame
+ * from the next. The stack's first line is dropped — it only repeats the
+ * message the reason already opens with.
+ */
+function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
+  if (!stack) return "";
+  const frames: string[] = [];
+  let dropped = 0;
+  for (const line of stack.split("\n")) {
+    const frame = line.trim();
+    if (!frame.startsWith("at ") || isHostFrame(frame)) continue;
+    if (frames.length >= SCRIPT_REASON_MAX_FRAMES) {
+      dropped++;
+      continue;
+    }
+    frames.push(`    ${readableFrame(frame, roots)}`);
+  }
+  if (frames.length === 0) return "";
+  if (dropped > 0) frames.push(`    … ${dropped} more frame${dropped === 1 ? "" : "s"}`);
+  return `\n${frames.join("\n")}`;
+}
+
+async function execScriptStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "script" }>,
+  scope: StepScope
+): Promise<ScriptStepOutcome> {
+  const target = step.path;
+  const { canonical, spelling } = await resolveFlowRelativeFile(
+    scopeFlowDir(scope),
+    target,
+    SCRIPT_FILE_NAME_PATTERN
+  );
+  const suppliedBase = path.posix.basename(target);
+
+  if (spelling.state === "case_folded") {
+    const recovery = spelling.addressable
+      ? `write it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      : `rename "${spelling.actual}" to "${suppliedBase}" to run it — a script filename must ` +
+        `match ${SCRIPT_FILE_NAME_PATTERN}`;
+    return {
+      status: "error",
+      reason:
+        `mis-cased script path "${target}": the directory holds "${spelling.actual}", not ` +
+        `"${suppliedBase}" — a case-sensitive checkout (Linux CI) fails this step with ENOENT — ${recovery}`,
+    };
+  }
+
+  const missing = await scriptFileProblem(canonical);
+  if (missing) {
+    return {
+      status: "fail",
+      reason: `script "${target}" ${missing} (resolved to ${canonical})`,
+    };
+  }
+
+  const result = await flowScriptExecutor().execute({
+    scriptPath: canonical,
+    output: {},
+    ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
+    projectRoot: state.projectRoot,
+    flowDir: scopeFlowDir(scope),
+    logBudget: state.scriptLogBudget,
+    ...(state.signal ? { signal: state.signal } : {}),
+  });
+
+  const verdict = scriptVerdict(result);
+  const frames = result.ok
+    ? ""
+    : scriptFrames(result.failure?.stack, [
+        state.projectRoot,
+        await canonicalFlowPath(state.projectRoot),
+      ]);
+  return {
+    ...verdict,
+    ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
+    ...(result.log ? { scriptLog: result.log } : {}),
+    ...(result.logTruncated ? { scriptLogTruncated: true } : {}),
+  };
+}
+
+async function scriptFileProblem(canonical: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(canonical);
+    return stat.isFile() ? null : "is not a file";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? "does not exist"
+      : `cannot be read: ${errMsg(err)}`;
+  }
+}
+
+function scriptVerdict(result: FlowScriptResult): Pick<StepReport, "status" | "reason"> {
+  const notes = result.notes.join(" ");
+  if (result.ok) return { status: "pass", ...(notes ? { reason: notes } : {}) };
+  const failure = result.failure;
+  const message = failure?.message ?? "The script produced no verdict.";
+  return {
+    status: failure ? scriptFailureStatus(failure.kind) : "error",
+    reason: notes ? `${message} ${notes}` : message,
+  };
+}
+
+function scriptFailureStatus(kind: FlowScriptFailureKind): "fail" | "error" {
+  switch (kind) {
+    case "load":
+    case "runtime":
+    case "output":
+    case "exit":
+      return "fail";
+    case "protocol":
+    case "timeout":
+    case "cancelled":
+    case "signal":
+    case "heap":
+    case "spawn":
+    case "queue":
+    case "invalid":
+      return "error";
+    default: {
+      const unclassified: never = kind;
+      void unclassified;
+      return "error";
+    }
+  }
+}
+
+type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
+
 async function execLeafStep(
   state: ExecState,
-  step: FlowStep,
+  step: LeafStep,
   index: number,
   scope: StepScope
 ): Promise<StepReport> {
@@ -2636,8 +2961,16 @@ async function execLeafStep(
       }
     }
 
-    default:
+    case "script": {
+      const outcome = await runScriptStep(state, step, scope);
+      return { ...base, ...outcome };
+    }
+
+    default: {
+      const unexecuted: never = step;
+      void unexecuted;
       return { ...base, status: "error", reason: `unsupported step kind` };
+    }
   }
 }
 
@@ -2703,9 +3036,11 @@ export async function resolveFlowSource(
   // Before either branch, so both are covered. `getFlowPath` validates the root
   // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
   // here, unconditionally, and whose body is today's assertValidProjectRoot —
-  // removed the check on the `flow_path` branch entirely. Nothing reads
-  // project_root on that branch today, so this restores a guardrail rather than
-  // fixing a live exploit.
+  // removed the check on the `flow_path` branch entirely, letting relative and
+  // ".."-bearing roots through. That branch is no longer free of reads either:
+  // ExecState.projectRoot carries it to a script: step as the child's
+  // working directory, so this guard is what keeps a relative or
+  // ".."-bearing root from becoming a script's cwd.
   assertValidProjectRoot(params.project_root);
 
   if (params.flow_path !== undefined) {
@@ -2716,8 +3051,8 @@ export async function resolveFlowSource(
           `an upload — sibling run: files, baselines, and baseline write-back all resolve beside ` +
           `the copy this server materialized, alone in a temp directory. Pass name + ` +
           `project_root to run a self-contained flow from a remote client; name uploads the same ` +
-          `way, so a flow with run: or snapshot: steps needs the client and tool server on one ` +
-          `filesystem.`,
+          `way, so a flow with run:, script: or snapshot: steps needs the client and tool server ` +
+          `on one filesystem.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_path_shared_filesystem",

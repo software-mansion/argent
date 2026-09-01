@@ -33,12 +33,12 @@ The file has two top-level keys:
 
 A flow has one of two shapes:
 
-| Shape           | First non-echo step | Start state                                         |
-| --------------- | ------------------- | --------------------------------------------------- |
-| End-to-end flow | `launch:`           | Argent starts the app from scratch                  |
-| Fragment        | Any other step      | The app is already in the state that the flow needs |
+| Shape           | First step that is not `echo:` or `script:` | Start state                                         |
+| --------------- | ------------------------------------------- | --------------------------------------------------- |
+| End-to-end flow | `launch:`                                   | Argent starts the app from scratch                  |
+| Fragment        | Any other step                              | The app is already in the state that the flow needs |
 
-Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
+Argent skips leading `echo` and `script` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. A flow that opens with a `script` step and then a `launch:` step is also end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
@@ -124,6 +124,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
 | `run`        | `<path>`                                                           | Run another flow file inline. See [Composition](#composition)                                     |
+| `script`     | `{ path, timeout }`                                                | Run a local `.mjs` file in a new Node process. See [Local scripts](#local-scripts)                |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
@@ -263,6 +264,62 @@ Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline 
 
 Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
 
+## Local scripts
+
+```yaml
+- script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+```
+
+A `script` step runs a local `.mjs` file in a new Node process. Use a script for work that no device step does: a call to an API, a database seed, or a cleanup after the run.
+
+A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+
+The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
+
+| Key       | Required | Description                                                                                                                |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | A file with a lowercase `.mjs` suffix. The path resolves as a `run` path does. The letter case must match the file on disk |
+| `timeout` | no       | The limit of the step in milliseconds. The minimum is 100, and the default is 30000                                        |
+
+Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
+
+- `PATH`, `HOME` and the equivalent Windows names
+- The identity, shell, locale, terminal, temporary-directory and cache names of the host
+- The Windows platform names
+- The proxy names and the TLS certificate names
+- The Node, npm, Android, Java and Apple toolchain names
+- `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
+
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
+
+Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
+
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
+
+Argent prints the standard output and the standard error below the step line, on a pass and on a failure. The limit is 64 KiB for one step and 256 KiB for the run. **Argent does not redact this log.** Do not print a credential from a script.
+
+A failed step stops the flow. The verdict names the side that caused the failure.
+
+| Verdict | Cause      | Examples                                                                                                                   |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Failed  | The script | An error, a load failure, a non-zero exit code, or a value in the `output` global that Argent cannot serialize             |
+| Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
+
+A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.
+
+The split holds only when the `timeout` is generous. Argent needs about a second to tell a script that never settles from a script the host stopped. Below that, the same defect of the script becomes a time limit, and the step is errored. Give a script a second or more before you read `errored` as a fact about the machine.
+
+Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
+
+`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+
+`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
+
+On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
+
+On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
+
 ## The `argent flow` command
 
 `argent flow run` replays a flow without an agent and exits non-zero on failure. The command always uses a local tool-server.
@@ -297,7 +354,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:`, `script:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment, script or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
 
 ## YAML safety
 

@@ -46,6 +46,8 @@ export interface StepReport {
    * server-side hostPath/filename — or null when a download failed.
    */
   artifacts?: Record<string, unknown>;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
 }
 
 export interface FlowReport {
@@ -107,7 +109,8 @@ chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
-A directory run prints only failing steps plus a final flow summary;
+A directory run prints only the steps that need attention (each failure, each
+warning, and each script step's output) plus a final flow summary;
 --recursive walks subdirectories too (dot-directories and node_modules are
 skipped). An invalid flow file fails alone and the batch continues; an infra
 error stops the batch and counts the remaining flows skipped.
@@ -241,6 +244,19 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
+export function renderScriptLogLines(s: StepReport, n: number): string[] {
+  const log = typeof s.scriptLog === "string" ? s.scriptLog : "";
+  const lines: string[] = [];
+  if (log) {
+    const body = log.endsWith("\n") ? log.slice(0, -1) : log;
+    for (const line of body.split("\n")) lines.push(renderUnderStepLine(s, n, `│ ${line}`));
+  }
+  if (s.scriptLogTruncated === true) {
+    lines.push(renderUnderStepLine(s, n, "│ … output truncated"));
+  }
+  return lines;
+}
+
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
@@ -286,6 +302,18 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * A PASSING step carrying a warning needs attention too: renderSummary counts
  * every warning whatever its status, so skipping those printed "1 warning" with
  * the text nowhere on screen.
+ *
+ * A PASSING script step's log is the same case: it is the step's only output,
+ * every other report surface prints it whatever the status, and a seed script
+ * that ran here is what explains a later step that failed.
+ *
+ * So is the note such a step carries in `reason` — the host lowered the time
+ * limit the flow declared, or ran the script somewhere other than the
+ * project_root it was handed. Nothing else on the line reports that, and a
+ * script that writes nothing has no log to carry it in either: the flow ran
+ * under bounds it never asked for and the batch said only PASS. Restricted to
+ * `script`, because a passing `when` guard, snapshot or chromium launch also
+ * sets `reason`, and those narrate a result the summary already counts.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -293,9 +321,20 @@ export function renderFailedSteps(report: FlowReport): string[] {
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
+    const scriptLog = renderScriptLogLines(s, n);
+    const scriptNote = s.kind === "script" && Boolean(s.reason);
+    if (
+      s.status !== "fail" &&
+      s.status !== "error" &&
+      !s.warning &&
+      !scriptNote &&
+      scriptLog.length === 0
+    ) {
+      continue;
+    }
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...scriptLog);
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
@@ -699,6 +738,7 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
@@ -1365,6 +1405,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
+    for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
   };
 
   let report: FlowReport;
