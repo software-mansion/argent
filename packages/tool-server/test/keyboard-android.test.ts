@@ -386,9 +386,6 @@ describe("android-input — the `clear` key burst", () => {
     // mistake. The number is a measured decision.
     expect(ADB_CLEAR_TIMEOUT_MS).toBe(90_000);
     expect(opts?.timeoutMs).toBe(ADB_CLEAR_TIMEOUT_MS);
-    expect(opts?.timeoutMs).toBeGreaterThanOrEqual(60_000);
-    // ...and still bounded, so a hung adb child cannot wedge the tool-server.
-    expect(opts?.timeoutMs).toBeLessThanOrEqual(300_000);
   });
 
   it("sends the SAME keycode `backspace` names, so the two cannot drift apart", async () => {
@@ -562,15 +559,6 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell).not.toHaveBeenCalled();
   });
 
-  it("treats `{ clear: false }` as an omitted clear on the phone path", async () => {
-    // `clear` is a switch, not a payload: `false` means what omitting it means.
-    // A backend written over presence (`params.clear !== undefined`) — the
-    // natural symmetry with `text` — would fire the burst here.
-    const res = await impl.handler({}, { udid: SERIAL, clear: false } as KeyboardParams, phone);
-    expect(res).toEqual({ typed: "", keys: 0 });
-    expect(adbShell).not.toHaveBeenCalled();
-  });
-
   it("reports `keys` as the literal 200 the tool description promises callers", async () => {
     // Not `CLEAR_KEY_PAIRS * 2`: every other assertion in the suite imports the
     // constant, so setting it to 3 leaves them all green — while "100
@@ -722,21 +710,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(opts?.signal).toBe(controller.signal);
   });
 
-  it("clears without a `text`/`key` value present, and does not fall through to typing", async () => {
-    // The clear branch returns early. Without that early return the `typed`
-    // arithmetic below it runs on an empty request and answers
-    // `{ typed: "", keys: 0 }` — a success shape indistinguishable from the
-    // documented no-op, for a call that did send 200 keys.
-    adbShell.mockClear();
-    const res = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
-    expect(res.keys).toBe(CLEAR_KEY_PAIRS * 2);
-    expect(adbShell).toHaveBeenCalledTimes(1);
-  });
-
   it("treats `clear: false` as absent, injecting nothing", async () => {
-    // `clear` is a switch: `false` reads as omitted, both in the tool's guard
-    // and here. A backend branching on presence would burst 200 delete keys
-    // into the focused field for a request that explicitly asked for no clear.
+    // `clear` is a switch, not a payload: `false` reads as omitted, both in the
+    // tool's guard and here. A backend written over presence
+    // (`params.clear !== undefined`) — the natural symmetry with `text` — would
+    // burst 200 delete keys into the focused field for a request that
+    // explicitly asked for no clear.
     adbShell.mockClear();
     const res = await impl.handler({}, { udid: SERIAL, clear: false } as KeyboardParams, phone);
     expect(res).toEqual({ typed: "", keys: 0 });

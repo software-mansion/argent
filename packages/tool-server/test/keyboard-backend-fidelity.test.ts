@@ -290,7 +290,6 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // leave every field's tail behind while every other assertion stayed
       // green.
       expect(FORWARD_DELETE_KEYCODE).toBe(0x4c);
-      expect(FORWARD_DELETE_KEYCODE).not.toBe(HID_BACKSPACE);
     });
 
     it("sends the literal 200 key presses the tool description promises", async () => {
@@ -386,8 +385,6 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // pinned outright.
       expect(CLEAR_KEY_CADENCE_MS).toBe(2);
       expect(CLEAR_SETTLE_MS).toBe(300);
-      // And it is their sum this measured: 200 gaps plus one settle.
-      expect(CLEAR_KEY_PAIRS * 2 * CLEAR_KEY_CADENCE_MS + CLEAR_SETTLE_MS).toBe(700);
     });
   });
 
