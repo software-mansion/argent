@@ -19,6 +19,7 @@ import {
   AI_CLIENTS,
   type AiTelemetryProps,
   type Platform as TelemetryPlatform,
+  type ZodIssueCode,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -42,7 +43,7 @@ import {
 import { resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
-import { deriveInvalidParams } from "./utils/invalid-params";
+import { deriveInvalidParams, deriveInvalidParamIssues } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -161,10 +162,12 @@ function extractDeviceArg(data: unknown): string | null {
 type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
 // Coarse context only: the raw device id (UDID / serial) infers a platform and is
 // never stored or forwarded; invalid_params carries schema-declared parameter
-// NAMES only (see deriveInvalidParams), never values or user-typed keys.
+// NAMES only (see deriveInvalidParams), never values or user-typed keys, and
+// invalid_param_issues carries zod's own issue codes.
 type HttpFailureMeta = {
   platform?: TelemetryPlatform;
   invalid_params?: string[];
+  invalid_param_issues?: ZodIssueCode[];
 } & AiTelemetryProps;
 
 function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
@@ -627,7 +630,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const emitHttpFailure = (
         signal: FailureSignal,
         parsedDataForMeta: unknown = req.body,
-        extraMeta?: Pick<HttpFailureMeta, "invalid_params">
+        extraMeta?: Pick<HttpFailureMeta, "invalid_params" | "invalid_param_issues">
       ): void => {
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
@@ -638,6 +641,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             ...(platform ? { platform } : {}),
             ...(extraMeta?.invalid_params?.length
               ? { invalid_params: extraMeta.invalid_params }
+              : {}),
+            ...(extraMeta?.invalid_param_issues?.length
+              ? { invalid_param_issues: extraMeta.invalid_param_issues }
               : {}),
             ...aiMeta,
           },
@@ -704,7 +710,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
               error_kind: "validation",
             },
             req.body,
-            { invalid_params: deriveInvalidParams(parseResult.error, declared) }
+            {
+              invalid_params: deriveInvalidParams(parseResult.error, declared),
+              invalid_param_issues: deriveInvalidParamIssues(parseResult.error),
+            }
           );
           // `error` keeps the raw issue JSON. Every CLI released before
           // `issues` existed reads this field and `JSON.parse`s it; prose here
