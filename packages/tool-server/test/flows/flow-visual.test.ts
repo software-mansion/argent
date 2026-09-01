@@ -699,80 +699,36 @@ describe("runSnapshot cropOn", () => {
 });
 
 describe("runSnapshot capture scale", () => {
-  // These tests queue one-shot rejections. Reset the queue per test so an
+  const REFUSED = "Screenshot failed: wrong data size, expected 7853760 got 17627328.";
+
+  // These tests queue one-shot behaviours. Reset the queue per test so an
   // unconsumed one cannot leak into the next and fail it for the wrong reason.
   beforeEach(() => {
     vi.mocked(invokeOnDevice).mockReset();
     vi.mocked(invokeOnDevice).mockImplementation(async () => ({ image: { hostPath: h.shotPath } }));
   });
 
-  it("retries at a lower scale when a full-res frame cannot be streamed", async () => {
-    // Some Android emulator configurations reject a full-res frame with a
-    // framebuffer size mismatch. Without a fallback every snapshot step errors
-    // on those devices — including under --update-baselines, where there is
-    // nothing to compare against yet.
-    const scaled = path.join(tmpDir, "scaled.png");
-    await writeFakePng(scaled, 324, 727);
-    vi.mocked(invokeOnDevice).mockClear();
-    vi.mocked(invokeOnDevice).mockRejectedValueOnce(
-      new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.")
-    );
-    vi.mocked(invokeOnDevice).mockResolvedValueOnce({ image: { hostPath: scaled } });
+  it("re-requests the refused frame and adopts it as an ordinary baseline", async () => {
+    // Some Android emulators refuse the unscaled capture. Without the retry
+    // every snapshot step errors there — including under --update-baselines,
+    // where there is nothing to compare against yet.
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error(REFUSED));
 
     const r = await runSnapshot(env, opts({ updateBaselines: true }));
 
     expect(r.status).toBe("pass");
-    // The retry names its own scale rather than leaving it to the screenshot
-    // tool's env-overridable default, so the key below stays a function of the
-    // device alone.
     expect(vi.mocked(invokeOnDevice).mock.calls).toEqual([
       [env, "screenshot", { scale: 1.0, includeImageInContext: false }],
-      [env, "screenshot", { scale: 0.3, includeImageInContext: false }],
+      [env, "screenshot", { scale: 1 - 1e-6, includeImageInContext: false }],
     ]);
-    // The key follows the dimensions actually captured, so a fallback capture
-    // keys its own baseline instead of diffing against a full-res one.
-    expect(r.snapshotKey).toBe("home__ios-324x727");
-    // The reviewer deciding whether to commit this baseline is told what it
-    // gates on — the filename's dimensions alone do not say the screen is
-    // bigger than they are.
-    expect(r.reason).toBe(
-      "baseline written (home__ios-324x727.png) at reduced scale — this device cannot stream a full-res frame"
-    );
+    // The retry comes back at the device's own resolution, so the baseline it
+    // writes is the file every other host writes, under the key they key it by
+    // — and the reason says nothing a caveat-free capture would not say.
+    expect(r.snapshotKey).toBe("home__ios-390x844");
+    expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
   });
 
-  it("surfaces the retry's error when the device is genuinely unreachable", async () => {
-    vi.mocked(invokeOnDevice).mockClear();
-    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error("wrong data size"));
-    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error("device not booted"));
-
-    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
-      "device not booted"
-    );
-    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry a capture failure that asking for less cannot fix", async () => {
-    // A cold frame stream answers a smaller request the same way, so retrying
-    // buys nothing — and a transient that happened to clear on the retry would
-    // key the step off a resolution the device does not otherwise produce,
-    // reporting a device class whose baseline is right there as having none.
-    const scaled = path.join(tmpDir, "scaled.png");
-    await writeFakePng(scaled, 324, 727);
-    vi.mocked(invokeOnDevice).mockClear();
-    vi.mocked(invokeOnDevice).mockRejectedValueOnce(
-      new Error("Screenshot failed: no image to export.")
-    );
-    vi.mocked(invokeOnDevice).mockResolvedValueOnce({ image: { hostPath: scaled } });
-
-    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
-      "no image to export"
-    );
-    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(1);
-  });
-
-  it("captures at full resolution when the device can stream one", async () => {
-    vi.mocked(invokeOnDevice).mockClear();
-
+  it("captures once when the device serves an unscaled frame", async () => {
     const r = await runSnapshot(env, opts({ updateBaselines: true }));
 
     expect(r.status).toBe("pass");
@@ -781,8 +737,48 @@ describe("runSnapshot capture scale", () => {
       scale: 1.0,
       includeImageInContext: false,
     });
-    // And no reduced-scale note: it qualifies the baselines that carry the
-    // caveat, so a run that never fell back must not be labelled as one.
     expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
+  });
+
+  it("does not retry a capture failure that re-requesting cannot fix", async () => {
+    // The retry asks for the frame the first call already failed to get, so a
+    // cold frame stream or a dead backend answers it the same way. Retrying
+    // buys nothing and doubles the wait before the run is told.
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(
+      new Error("Screenshot failed: no image to export.")
+    );
+
+    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
+      "no image to export"
+    );
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the retry's own error when it fails for a different reason", async () => {
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error(REFUSED));
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error("device not booted"));
+
+    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
+      "device not booted"
+    );
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips, rather than erroring, when the run is cancelled before the retry", async () => {
+    // Every other cancelled step reports `skip`; a snapshot that threw here
+    // would be the one that reports `error`.
+    const controller = new AbortController();
+    vi.mocked(invokeOnDevice).mockImplementationOnce(async () => {
+      controller.abort();
+      throw new Error(REFUSED);
+    });
+
+    const r = await runSnapshot(
+      { ...env, signal: controller.signal } as ActionEnv,
+      opts({ updateBaselines: true })
+    );
+
+    expect(r).toEqual({ status: "skip", reason: "run aborted during snapshot capture" });
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(1);
   });
 });

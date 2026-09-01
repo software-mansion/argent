@@ -15,7 +15,7 @@ import type {
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { httpScreenshot } from "../../utils/simulator-client";
+import { httpScreenshot, REFUSED_CAPTURE_RETRY_SCALE } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import type { RotationPeek } from "../../utils/device-orientation";
@@ -332,11 +332,10 @@ async function captureLiveInput(params: {
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
 }): Promise<string> {
-  // Full-res gives the best diff fidelity, but some Android emulators reject a
-  // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
-  // baselinePath + captureCurrent flow there. The server's default scale captures
-  // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
-  // comparable to a baseline saved at any scale.
+  // Some Android emulators refuse the unscaled capture outright, which broke the
+  // whole baselinePath + captureCurrent flow there. Re-requesting the same frame
+  // at a scale routes around the refusal without giving up any of it, so a diff
+  // on those devices still compares the pixels a diff is for.
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(
@@ -354,7 +353,7 @@ async function captureLiveInput(params: {
       params.device,
       params.rotation,
       params.signal,
-      undefined,
+      REFUSED_CAPTURE_RETRY_SCALE,
       params.captureScreenshot,
       params.peekFor?.(params.device)
     );

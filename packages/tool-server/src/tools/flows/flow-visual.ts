@@ -14,21 +14,13 @@ import {
 import { describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
-import { isFramebufferSizeMismatch } from "../../utils/simulator-client";
+import {
+  isPixelBufferSizeMismatch,
+  REFUSED_CAPTURE_RETRY_SCALE,
+} from "../../utils/simulator-client";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
 export const DEFAULT_MAX_MISMATCH = 0.5;
-
-/**
- * Scale a snapshot retries at when the device cannot stream a full-res frame.
- *
- * Stated here rather than left to the screenshot tool's default, which
- * `ARGENT_SCREENSHOT_SCALE` overrides: the baseline key carries the dimensions
- * the capture came back at, so an unscaled retry keys every committed baseline
- * on that env var, and a host that set it differently is told it has no
- * baseline for a device class it does have one for.
- */
-const FALLBACK_CAPTURE_SCALE = 0.3;
 
 /**
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
@@ -213,36 +205,34 @@ export async function runSnapshot(
   // screenshot tool already registers it, so `shot.image` is a ready-made
   // handle for the `current` artifact.
   //
-  // Full-res is preferred: it is the strictest comparison available. But some
-  // Android emulator configurations cannot stream a full-res frame — the
-  // simulator-server rejects it with a "wrong data size" framebuffer mismatch —
-  // so demanding one makes `snapshot` unusable on those devices, including
-  // under --update-baselines, where there is nothing to compare yet. Retry at a
-  // reduced scale, which captures reliably; `screenshot-diff` falls back for
-  // the same limitation. The baseline key is built from the dimensions that
-  // came back, so a fallback capture keys its own baseline instead of being
-  // compared against a full-res one.
+  // Some Android emulators refuse the unscaled capture outright, which made
+  // `snapshot` unusable on them — including under --update-baselines, where
+  // there is nothing to compare yet. The retry asks the same device for the
+  // same pixels down the one code path that does not trip on it, so a device
+  // that needs it still gates at its own resolution, against the baseline every
+  // other host writes. `screenshot-diff` retries the same way.
   //
-  // Only that mismatch is retried. Any other capture failure — an unreachable
-  // server, a frame stream that has not warmed up — answers a smaller request
-  // the same way, so a retry buys nothing and costs the baseline's identity: a
-  // transient that happened to clear would key the step off a resolution the
-  // device does not otherwise produce, and the miss would surface as the device
-  // class having no baseline. Those propagate instead.
+  // Only that refusal is retried: the retry re-requests the frame at the
+  // resolution that just failed, so anything else — an unreachable server, a
+  // frame stream that has not warmed up — fails identically a second time.
   let shot: { image: ArtifactHandle };
-  let reducedScale = false;
   try {
     shot = (await invokeOnDevice(env, "screenshot", {
       scale: 1.0,
       includeImageInContext: false,
     })) as { image: ArtifactHandle };
   } catch (err) {
-    if (!isFramebufferSizeMismatch(err)) throw err;
+    if (!isPixelBufferSizeMismatch(err)) throw err;
+    // Same guard the settles above use: without it a run cancelled in this
+    // window dispatches a capture that aborts mid-fetch, and a throwing
+    // snapshot is an `error` step where every other cancelled step is a `skip`.
+    if (env.signal?.aborted) {
+      return { status: "skip", reason: "run aborted during snapshot capture" };
+    }
     shot = (await invokeOnDevice(env, "screenshot", {
-      scale: FALLBACK_CAPTURE_SCALE,
+      scale: REFUSED_CAPTURE_RETRY_SCALE,
       includeImageInContext: false,
     })) as { image: ArtifactHandle };
-    reducedScale = true;
   }
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
@@ -334,12 +324,7 @@ export async function runSnapshot(
       });
       return {
         status: "pass",
-        // Said where the baseline is adopted — what the gate checks is what the
-        // reviewer is deciding to commit — rather than on every later
-        // comparison, which on an affected device is every run.
-        reason:
-          (exists ? `baseline updated (${key})` : `baseline written (${key})`) +
-          (reducedScale ? ` at reduced scale — this device cannot stream a full-res frame` : ""),
+        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };

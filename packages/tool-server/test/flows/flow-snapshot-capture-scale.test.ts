@@ -7,22 +7,33 @@ import { Registry, TypedEventEmitter } from "@argent/registry";
 import type { ServiceEvents } from "@argent/registry";
 import { createScreenshotTool } from "../../src/tools/screenshot";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../src/blueprints/simulator-server";
+import { isPixelBufferSizeMismatch } from "../../src/utils/simulator-client";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 
 // Everything from `runSnapshot` down to the request body is the real thing —
 // the real `invokeOnDevice`, the real `screenshot` tool, the real
 // `httpScreenshot` — so the scale each capture lands at is resolved exactly as
-// it is in production, and the baseline key is the one a run would write. Only
-// the settle above the capture and the simulator-server below it are stood in
-// for; the stand-in replies at `fetch`, which needs no socket to bind.
+// it is in production, and the baseline key is the one a run would write. Stood
+// in for: the settle above the capture, the rotation probe beside it (an adb
+// round trip that would otherwise read whatever emulator this host has attached
+// at the serial below), and the simulator-server underneath. The server
+// stand-in replies at `fetch`, which needs no socket to bind, and sizes what it
+// returns the way the server does — `round(dimension × scale)`.
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-actions")>();
   return { ...actual, settleTree: vi.fn(async () => ({})) };
 });
+vi.mock("../../src/utils/device-orientation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/device-orientation")>();
+  return { ...actual, readAndroidSurfaceRotation: vi.fn(async () => null) };
+});
 
 const SCREEN_W = 1080;
 const SCREEN_H = 2424;
+
+/** Verbatim from the Pixel_9a emulator this was first seen on. */
+const REFUSAL = "wrong data size, expected 7853760 got 17627328";
 
 const API_URL = "http://127.0.0.1:65500";
 
@@ -32,8 +43,8 @@ let registry: Registry;
 let env: ActionEnv;
 /** Scales the fake server was asked for, in call order. */
 let requested: (number | undefined)[];
-/** How the fake server answers a full-resolution request; null serves one. */
-let fullResFailure: { status: number; error: string } | null;
+/** How the fake server answers an unscaled request; null serves one. */
+let unscaledFailure: { status: number; error: string } | null;
 
 async function writePng(file: string, w: number, h: number): Promise<void> {
   const png = new PNG({ width: w, height: h });
@@ -46,19 +57,19 @@ beforeEach(async () => {
   shotDir = path.join(tmpDir, "shots");
   await fs.mkdir(shotDir);
   requested = [];
-  fullResFailure = { status: 200, error: "wrong data size, expected 7853760 got 17627328" };
+  unscaledFailure = { status: 200, error: REFUSAL };
 
-  // Fake simulator-server: an Android emulator that cannot stream a full-res
-  // frame. `httpScreenshot` omits `scale` from the body only when it resolves
-  // to 1.0, so "no scale" IS the full-res request — answer it the way the
-  // emulator does, with a body carrying a framebuffer size mismatch.
+  // Fake simulator-server: an Android emulator that refuses the unscaled
+  // capture. `httpScreenshot` omits `scale` from the body only when it resolves
+  // to 1.0, so "no scale" IS the unscaled request — answer it the way the
+  // emulator does, with a body carrying the encoder's buffer-length complaint.
   vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
     expect(url).toBe(`${API_URL}/api/screenshot`);
     const body = JSON.parse(init.body) as { scale?: number };
     requested.push(body.scale);
-    if (body.scale === undefined && fullResFailure !== null) {
-      return new Response(JSON.stringify({ error: fullResFailure.error }), {
-        status: fullResFailure.status,
+    if (body.scale === undefined && unscaledFailure !== null) {
+      return new Response(JSON.stringify({ error: unscaledFailure.error }), {
+        status: unscaledFailure.status,
       });
     }
     const file = path.join(shotDir, `shot-${requested.length}.png`);
@@ -106,58 +117,68 @@ function opts(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof runSnapshot>[1];
 }
 
-describe("snapshot fallback capture scale", () => {
-  it("keys a fallback baseline on the device, not on ARGENT_SCREENSHOT_SCALE", async () => {
-    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "0.3");
+describe("snapshot capture on a device that refuses an unscaled frame", () => {
+  it("gates against the baseline a host serving unscaled frames writes", async () => {
+    // A host that serves the frame directly seeds the baseline...
+    unscaledFailure = null;
     const seeded = await runSnapshot(env, opts({ updateBaselines: true }));
-    expect(seeded.status).toBe("pass");
+    expect(seeded.snapshotKey).toBe(`home__android-${SCREEN_W}x${SCREEN_H}`);
 
-    // Same emulator, same flow, a tool-server started with a different value of
-    // an unrelated agent-detail knob.
-    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "0.5");
-    const rerun = await runSnapshot(env, opts());
-
-    // A clean comparison names the key it compared against in its reason.
-    expect(rerun.status).toBe("pass");
-    expect(rerun.reason).toContain(`(${seeded.snapshotKey}.png)`);
-  });
-
-  it("asks for full resolution first, then for a scale of its own", async () => {
-    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "0.5");
-
-    await runSnapshot(env, opts({ updateBaselines: true }));
-
-    // `httpScreenshot` omits `scale` only for a full-res request, so the first
-    // entry is the full-res attempt; the second is the retry's own scale, not
-    // the env var's.
-    expect(requested).toEqual([undefined, 0.3]);
-  });
-
-  it("keys a reduced-scale capture apart from a full-res baseline", async () => {
-    // A host that streams full-res seeds the strict baseline...
-    fullResFailure = null;
-    const seeded = await runSnapshot(env, opts({ updateBaselines: true }));
-    expect(seeded.snapshotKey).toBe("home__android-1080x2424");
-
-    // ...and a host that cannot seeds its own rather than passing a downscaled
-    // capture off against it. Same message any new device class gets.
-    fullResFailure = { status: 200, error: "wrong data size, expected 7853760 got 17627328" };
+    // ...and a host that refuses it compares against that very file, rather
+    // than reporting the device class it shares as having no baseline. The key
+    // is capture geometry, so this holds only because the retry comes back at
+    // the screen's own dimensions.
+    unscaledFailure = { status: 200, error: REFUSAL };
     const constrained = await runSnapshot(env, opts());
 
-    expect(constrained.snapshotKey).toBe("home__android-324x727");
-    expect(constrained.status).toBe("fail");
-    expect(constrained.reason).toContain('no baseline for "home" on this device class');
+    // A clean comparison names the baseline it compared against, and carries no
+    // snapshotKey of its own.
+    expect(constrained.status).toBe("pass");
+    expect(constrained.reason).toContain(`(${seeded.snapshotKey}.png)`);
   });
 
-  it("leaves a capture failure that is not the framebuffer limit alone", async () => {
-    // Asking for less answers a dead backend the same way, and a transient that
-    // did clear on the retry would key the step off a resolution the device
-    // does not otherwise produce — a committed baseline reported missing.
-    fullResFailure = { status: 500, error: "emulator gRPC bridge closed" };
+  it("retries at a scale of its own, not at ARGENT_SCREENSHOT_SCALE", async () => {
+    // An unrelated knob, documented as controlling how much detail the *agent*
+    // sees. Inheriting it would key every committed baseline on the value the
+    // host that seeded it happened to run with.
+    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "0.5");
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    // `httpScreenshot` omits `scale` only for an unscaled request, so the first
+    // entry is that attempt and the second is the retry's own scale.
+    expect(requested).toEqual([undefined, 1 - 1e-6]);
+    expect(r.snapshotKey).toBe(`home__android-${SCREEN_W}x${SCREEN_H}`);
+  });
+
+  it("leaves a capture failure that re-requesting cannot fix alone", async () => {
+    // The retry asks for the frame that just failed, so a dead backend answers
+    // it the same way — and waiting for a second refusal delays the report
+    // without changing it.
+    unscaledFailure = { status: 500, error: "emulator gRPC bridge closed" };
 
     await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
       "emulator gRPC bridge closed"
     );
     expect(requested).toEqual([undefined]);
+  });
+});
+
+describe("isPixelBufferSizeMismatch", () => {
+  it("matches the encoder's complaint as the server words it", () => {
+    expect(isPixelBufferSizeMismatch(new Error(`Screenshot failed: ${REFUSAL}.`))).toBe(true);
+    expect(isPixelBufferSizeMismatch(new Error("Screenshot failed: Wrong Data Size."))).toBe(true);
+  });
+
+  it("matches nothing else a failed capture can arrive as", () => {
+    expect(isPixelBufferSizeMismatch(new Error("Screenshot failed: no image to export."))).toBe(
+      false
+    );
+    // The callers hand it whatever they caught, which need not be an Error —
+    // and a rejection that merely carries the wording is not the server saying
+    // it, so the type is part of the condition.
+    expect(isPixelBufferSizeMismatch({ message: REFUSAL })).toBe(false);
+    expect(isPixelBufferSizeMismatch(REFUSAL)).toBe(false);
+    expect(isPixelBufferSizeMismatch(undefined)).toBe(false);
   });
 });

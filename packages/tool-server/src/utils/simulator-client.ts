@@ -34,24 +34,38 @@ const NO_IMAGE_ERROR = /no image to export/i;
 export const FIRST_FRAME_WAIT_MS = 6_000;
 const FIRST_FRAME_POLL_MS = 250;
 
-// Some Android emulator configurations answer a full-resolution request with a
-// framebuffer size mismatch: the frame they stream is not the size the server
-// computed for the device, so it refuses to export it. The same device serves
-// every scale below full, which is what makes this the one capture failure a
-// caller can answer by asking for less.
-const FRAMEBUFFER_SIZE_MISMATCH = /wrong data size/i;
+// An unscaled capture hands the PNG encoder the frame buffer whole, and the
+// Android emulator sizes that buffer for a square of the screen's longer side
+// so a rotated frame fits it too: `max(w, h)² · 3` bytes carrying a `w × h`
+// frame at their head. The encoder wants exactly `w · h · 3` and reports the
+// two numbers. Every scale below 1 goes through the resizer instead, which
+// reads only as far as the frame.
+const PIXEL_BUFFER_SIZE_MISMATCH = /wrong data size/i;
 
 /**
- * Whether a screenshot failure is the emulator refusing to export a full-res
- * frame — the only one worth retrying at a lower scale.
+ * Whether a screenshot failure is the encoder rejecting the frame buffer's
+ * length — the one capture failure a caller can answer by naming a scale.
  *
- * Matched on the server's message, not on the failure code: the code the
- * mismatch carries (`SIMULATOR_SCREENSHOT_FAILED`) is shared with every other
- * in-band capture error, the first-frame timeout included.
+ * Matched on the server's message, not on the failure code: the code it arrives
+ * with (`SIMULATOR_SCREENSHOT_FAILED`) is shared with every other in-band
+ * capture error, the first-frame timeout included.
  */
-export function isFramebufferSizeMismatch(err: unknown): boolean {
-  return err instanceof Error && FRAMEBUFFER_SIZE_MISMATCH.test(err.message);
+export function isPixelBufferSizeMismatch(err: unknown): boolean {
+  return err instanceof Error && PIXEL_BUFFER_SIZE_MISMATCH.test(err.message);
 }
+
+/**
+ * Scale to re-request a refused unscaled capture at.
+ *
+ * Not a reduced capture: it only has to be *below* 1 to reach the resizer, and
+ * one part in a million clears the server's own `1.0 - scale > f32::EPSILON`
+ * test for that while staying inside half a pixel of the screen's own
+ * dimensions — so `round(dimension × scale)` is the dimension itself, and
+ * Lanczos3 between equal sizes is an identity. The frame that comes back is
+ * byte-for-byte the one the unscaled request would have returned, which keeps a
+ * baseline keyed on capture geometry on the key every other host writes.
+ */
+export const REFUSED_CAPTURE_RETRY_SCALE = 1 - 1e-6;
 
 export interface SimulatorServerTransport {
   touch(opts: {

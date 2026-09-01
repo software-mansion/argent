@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
+import { REFUSED_CAPTURE_RETRY_SCALE } from "../src/utils/simulator-client";
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -145,14 +146,14 @@ describe("screenshotDiffTool", () => {
     });
   });
 
-  it("falls back to the default scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
+  it("re-requests the frame at a scale when the unscaled capture is refused", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fallback-"));
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
     await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
-    // Full-res (scale 1.0) fails the way the Android simulator-server does;
-    // the default-scale retry (no scale arg) succeeds.
+    // The unscaled capture (scale 1.0) fails the way the Android
+    // simulator-server does; naming any scale below 1 succeeds.
     const captureScreenshot = vi.fn(
       async (_api: unknown, _rotation: unknown, _signal: unknown, scale?: number) => {
         if (scale === 1.0) {
@@ -169,10 +170,12 @@ describe("screenshotDiffTool", () => {
       captureScreenshot as never
     );
 
-    // Full-res attempted first, then a default-scale retry without an explicit scale.
+    // Unscaled attempted first, then a retry at a scale of the tool's own —
+    // leaving it undefined would inherit ARGENT_SCREENSHOT_SCALE and diff a
+    // quarter-size capture, which is the resolution a diff exists to inspect.
     expect(captureScreenshot).toHaveBeenCalledTimes(2);
     expect(captureScreenshot.mock.calls[0]![3]).toBe(1.0);
-    expect(captureScreenshot.mock.calls[1]![3]).toBeUndefined();
+    expect(captureScreenshot.mock.calls[1]![3]).toBe(REFUSED_CAPTURE_RETRY_SCALE);
     const liveCaptures = (await fs.readdir(dir)).filter((name) =>
       /^current-[a-f0-9]{8}\.live\.png$/.test(name)
     );
