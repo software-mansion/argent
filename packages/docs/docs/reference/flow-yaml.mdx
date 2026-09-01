@@ -255,7 +255,7 @@ The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 | `path`    | yes      | A file with a lowercase `.mjs` suffix. The path resolves as a `run` path does. The letter case must match the file on disk |
 | `timeout` | no       | The limit of the step in milliseconds. The minimum is 100, and the default is 30000                                        |
 
-Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names, not your full environment. The allowlist holds these groups:
+Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
 - `PATH`, `HOME` and the equivalent Windows names
 - The identity, shell, locale, terminal, temporary-directory and cache names of the host
@@ -266,7 +266,9 @@ Argent runs the script with the project root as the working directory. Argent gi
 
 Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
 
-Two groups in the list carry access to a credential. `SSH_AUTH_SOCK` reaches your SSH agent. An `npm_config_` name can hold a registry token. Run a script only when you trust it.
+Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
+
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
 Argent prints the standard output and the standard error below the step line, on a pass and on a failure. The limit is 64 KiB for one step and 256 KiB for the run. **Argent does not redact this log.** Do not print a credential from a script.
 
@@ -279,7 +281,7 @@ A failed step stops the flow. The verdict names the side that caused the failure
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file only. See [Available keys](/docs/reference/configuration#available-keys).
+`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
 On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app. On Chromium, Argent boots the app before step 1, so the same script runs while the app is up.
 
