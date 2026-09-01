@@ -1507,7 +1507,17 @@ async function runType(
   // signal too, but only on the Android phone path and only around its
   // read-back; this covers every backend.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  const typed = await invokeOnDevice(env, "keyboard", { text: step.text });
+  let typed: unknown;
+  try {
+    typed = await invokeOnDevice(env, "keyboard", { text: step.text });
+  } catch (err) {
+    // The Android read-back rejects when cancelled mid-call, and a repair can
+    // hold the call for tens of seconds; per ABORTED_OUTCOME that reads as an
+    // aborted skip, as it does for the gesture directives, never a step failure
+    // blaming the app for the cancellation.
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    throw err;
+  }
   // On Android phones/tablets the keyboard tool reads the field back and reports
   // `verified: false` when the text demonstrably did not land (see
   // keyboard/platforms/android-verify.ts). The step fails on that, because

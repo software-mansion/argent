@@ -283,3 +283,41 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
   });
 });
+
+describe("type directive — a run cancelled inside the keyboard call", () => {
+  // The Android read-back consults the signal and REJECTS when the run was
+  // cancelled mid-call. `runSwipe` and `runLongPress` already turn that
+  // rejection into the uniform aborted skip; without the same catch here the
+  // DOMException reaches `execLeafStep`, whose catch has no abort check, and the
+  // cancellation is reported as a step error against the app.
+  it("reports the step as the aborted skip, not an error", async () => {
+    const controller = new AbortController();
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: emailXml(true) }),
+      (args) => {
+        if (args.text === undefined) return { typed: "enter", keys: 1 };
+        controller.abort();
+        throw new DOMException("This operation was aborted", "AbortError");
+      }
+    );
+
+    await writeFlow("cancelled-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "cancelled-type", project_root: tmpDir, device: ANDROID_DEVICE },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+  });
+});
