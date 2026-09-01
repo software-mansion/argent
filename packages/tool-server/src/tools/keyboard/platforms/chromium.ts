@@ -31,6 +31,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Exported for test/keyboard-clear-chromium-script.test.ts, which evals it
 // against a mock document to lock in the editable/refusal classification.
 export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
+  // Declared OUTSIDE the try, because the catch below calls it and a \`const\`
+  // inside the try block is not in scope there: the call threw a ReferenceError
+  // on every entry, the inner try swallowed it, and the page-wide highlight this
+  // exists to undo was left on screen. Being sloppy-mode script, the unresolved
+  // name also resolved to a page's OWN \`window.restoreSelection\` where one is
+  // defined — measured on Chrome 152, the page's function was the one called.
+  let restoreSelection = () => {};
   try {
   // What the two stages compare, and the ONLY thing carried across them. A
   // signature, never the content: a cleared field may have held a credential,
@@ -150,7 +157,7 @@ export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
   if (selection) {
     for (let i = 0; i < selection.rangeCount; i++) savedRanges.push(selection.getRangeAt(i).cloneRange());
   }
-  const restoreSelection = () => {
+  restoreSelection = () => {
     if (!selection) return;
     selection.removeAllRanges();
     for (let i = 0; i < savedRanges.length; i++) {
@@ -225,8 +232,9 @@ export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
     //
     // A throw between the select-all and the delete leaves a page-wide highlight
     // on screen, exactly as the refusal above would — so this branch undoes it
-    // too. Its own try, because the restore is defined further down than the
-    // first thing that can throw.
+    // too. Its own try, because a throw BEFORE the selection was cloned leaves
+    // the no-op the declaration starts as, and the restore itself can throw on a
+    // page that broke \`getSelection\`.
     try {
       restoreSelection();
     } catch (e) {

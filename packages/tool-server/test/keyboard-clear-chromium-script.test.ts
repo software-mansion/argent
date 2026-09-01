@@ -120,6 +120,11 @@ function run(
     activeElement: active,
     execCommand(name: string) {
       commands.push(name);
+      // Chrome's `selectAll` REPLACES the page's own selection — on a field it
+      // then refuses, with a range covering the whole document. The mock has to
+      // do the same, or "the page's selection was put back" is an assertion on
+      // ranges nothing ever disturbed, and it passes with the restore deleted.
+      if (name === "selectAll") ranges = [{ id: "select-all" }];
       const perElement = focusedElement()?.[`${name}Answer`];
       if (typeof perElement === "boolean") return perElement;
       return answers[name] ?? true;
@@ -607,7 +612,14 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
   it("restores it when the page throws BETWEEN the select-all and the delete", () => {
     // The sibling hazard: `selectAll` succeeded, `delete` threw, and this branch
     // returned without undoing the page-wide highlight the first half left.
-    const { outcome, selection } = run(
+    //
+    // The restore is declared outside the `try` for exactly this call. As a
+    // `const` inside it, the name was not in scope in the `catch` — the call
+    // threw a ReferenceError that the inner try swallowed, and on Chrome 152 it
+    // resolved to the PAGE's own `window.restoreSelection` where one is defined.
+    // `selectionsDropped` is what sees that: it counts `removeAllRanges`, which
+    // only the restore calls.
+    const { outcome, selection, selectionsDropped } = run(
       el("DIV", { isContentEditable: true }),
       {},
       {
@@ -619,6 +631,7 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
       }
     );
     expect(outcome.reason).toBe("script-error");
+    expect(selectionsDropped).toBe(1);
     expect(selection()).toEqual([{ id: "page-selection" }]);
   });
 
