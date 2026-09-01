@@ -58,8 +58,8 @@ describe("tvScreenshot's downscale", () => {
       "utf8"
     );
     // Its `screenshot` line covers three platforms, and Apple TV is the one
-    // whose downscale can silently not happen. An unconditional "all three
-    // downscale" is the sentence this replaced.
+    // whose downscale can silently not happen — the condition an unconditional
+    // "all three downscale" would lose.
     expect(skill).toContain(
       "Apple TV downscales with `sips`, and when `sips` fails it returns the capture `xcrun simctl io` took, with nothing in the result saying the scale was dropped"
     );

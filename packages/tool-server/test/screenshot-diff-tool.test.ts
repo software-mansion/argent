@@ -33,8 +33,8 @@ describe("screenshotDiffTool", () => {
     // promises: a range mention, the percentage form that asserts the opposite,
     // the three tokens that merely contain "scale", the recording surfaces that
     // take h264 frames at the device's native resolution, and the spellings that
-    // carry no subject of their own — this sweep runs over all 77 tools, so
-    // "opens the full-size dialog" failing a screenshot check would point the
+    // carry no subject of their own — this sweep runs over the whole catalogue,
+    // so "opens the full-size dialog" failing a screenshot check would point the
     // next author at the wrong problem.
     const claims: Array<[string, boolean]> = [
       ["The capture is at full resolution.", true],
@@ -471,9 +471,8 @@ describe("screenshotDiffTool", () => {
   });
 
   it("keeps the user-facing copy of that scale, and of who reads it, in step", async () => {
-    // The one written copy of the default outside the tool surfaces: `readAgentDocs`
-    // walks packages/skills, so nothing swept this row and a stale value sat in
-    // it from #878 until it was found by hand.
+    // The one written copy of the default outside the tool surfaces, and the one
+    // no other sweep here reaches: `readAgentDocs` walks packages/skills.
     vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "");
     const row = (
       await fs.readFile(path.join(__dirname, "../../docs/docs/reference/configuration.mdx"), "utf8")

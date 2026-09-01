@@ -13,8 +13,8 @@ import { advertisedSchema } from "./catalog";
  * A vocabulary, not a paraphrase detector: a claim that shares no token here
  * ("the diff keeps the capture's own dimensions") goes unseen.
  *
- * A range mention ("`scale` accepts values from 0.01 to 1.0") is not
- * a claim about a capture and does not match; the boundary before `scale` keeps
+ * A range mention ("`scale` accepts values from 0.01 to 1.0") is not a claim
+ * about a capture and does not match; the boundary before `scale` keeps
  * `grayscale = 1`, `upscale: 1` and `ARGENT_SCREENSHOT_SCALE` out. `original
  * resolution` is a claim only under `at`, because these docs also use it as the
  * denominator of a fraction — "30% of original resolution" asserts the opposite.
@@ -31,9 +31,9 @@ const CLAIMS_SIZE_PLAIN =
  * `full-size` and a prose `scale` beside a `1` all read as claims about an
  * image only when the sentence is about one: "a 1:1 mapping of remote presses to
  * key events", "opens the full-size dialog" and "rate it on a scale of 1 to 5"
- * assert nothing about a capture, and this sweep runs over all 77 tools, where
- * an unrelated tool's prose failing a screenshot check points the next author at
- * the wrong problem.
+ * assert nothing about a capture, and this sweep runs over the whole catalogue,
+ * where an unrelated tool's prose failing a screenshot check points the next
+ * author at the wrong problem.
  */
 const CLAIMS_SIZE_IN_CONTEXT =
   /full[- ]size|\b1:1\b|\b1(?:\.0+)?\s*x\b|\b1(?:\.0+)?\s+scale\b|\b(?:re)?scaled?\s+(?:of\s+|to\s+|at\s+)?1(?:\.0+)?\b/i;

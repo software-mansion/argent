@@ -304,10 +304,9 @@ describe("diffPngFiles", () => {
       expect(text, name).toMatch(names(statusIn(normalized)));
     }
 
-    // The user-facing page is the fourth surface, and the one no sweep here
-    // reaches: `readAgentDocs` walks packages/skills, so a rename lands in
-    // packages/docs by no route at all. It gave the overall status as
-    // "Unchanged or changed" and named neither of these until this was written.
+    // The user-facing page is the fourth surface, and the one no other sweep
+    // here reaches: `readAgentDocs` walks packages/skills, so a rename lands in
+    // packages/docs by no route at all.
     const feature = await fs.readFile(
       path.join(__dirname, "../../docs/docs/features/visual-regression.mdx"),
       "utf8"
