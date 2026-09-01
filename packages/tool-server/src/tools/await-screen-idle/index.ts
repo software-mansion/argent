@@ -69,6 +69,7 @@ interface IdleResult {
   /** Screen rendered content and went still before the timeout. */
   settled: boolean;
   waitedMs: number;
+  /** Tree fetches attempted. A `note` counts only those that came back. */
   polls: number;
   /**
    * Present whenever `settled: false` does not stand for "the screen kept
