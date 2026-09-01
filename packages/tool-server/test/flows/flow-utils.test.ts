@@ -635,6 +635,45 @@ describe("parseFlow", () => {
     }
   });
 
+  it("serializes an await timeout and round-trips it", () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "await",
+          condition: "visible",
+          selector: { text: "Account", loose: true },
+          timeout: 10000,
+        },
+      ],
+    };
+    const yaml = serializeFlow(flow);
+    expect(yaml).toContain("timeout: 10000");
+    expect(parseFlow(yaml).steps).toEqual(flow.steps);
+  });
+
+  it.each([
+    ["zero", 0],
+    ["infinite", Number.POSITIVE_INFINITY],
+  ])("rejects a programmatic await timeout that is %s", (_description, timeout) => {
+    // A FlowStep built in code bypasses the YAML parser, so the serializer must
+    // apply the same positive-milliseconds guard the parser enforces — letting
+    // Infinity through would round-trip to `.inf`, an unbounded await.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "await",
+            condition: "visible",
+            selector: { text: "Account", loose: true },
+            timeout,
+          },
+        ],
+      })
+    ).toThrow("Cannot serialize flow await.timeout: needs a positive number of milliseconds");
+  });
+
   it("rejects a timeout on an assert step (an assert is an immediate check)", async () => {
     // The internal assert step has no timeout field, so a YAML `timeout` used
     // to be silently dropped; reject it loudly instead — a check that needs

@@ -1,7 +1,7 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as readline from "node:readline";
 import { ChildProcess } from "node:child_process";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   FAILURE_CODES,
   FailureError,
@@ -274,38 +274,34 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       }
       daemonSocket = socket;
 
-      const rl = readline.createInterface({ input: socket });
-      rl.on("line", (raw) => {
-        let msg: { id?: number; result?: unknown; error?: unknown };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        if (typeof msg.id !== "number") return;
-        const pending = pendingRpc.get(msg.id);
-        if (!pending) return;
-        pendingRpc.delete(msg.id);
-        clearTimeout(pending.timer);
-        if (msg.error !== undefined && msg.error !== null) {
-          pending.reject(
-            new FailureError(
-              typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
-              {
-                error_code: FAILURE_CODES.AX_QUERY_FAILED,
-                failure_stage: "ax_service_query_rpc",
-                failure_area: "tool_server",
-                error_kind: "unknown",
-              }
-            )
-          );
-        } else {
-          pending.resolve(msg.result);
-        }
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr(`ax-service ${udid.slice(0, 8)}`),
+        onMessage: (parsed) => {
+          const msg = parsed as { id?: number; result?: unknown; error?: unknown };
+          if (typeof msg.id !== "number") return;
+          const pending = pendingRpc.get(msg.id);
+          if (!pending) return;
+          pendingRpc.delete(msg.id);
+          clearTimeout(pending.timer);
+          if (msg.error !== undefined && msg.error !== null) {
+            pending.reject(
+              new FailureError(
+                typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
+                {
+                  error_code: FAILURE_CODES.AX_QUERY_FAILED,
+                  failure_stage: "ax_service_query_rpc",
+                  failure_area: "tool_server",
+                  error_kind: "unknown",
+                }
+              )
+            );
+          } else {
+            pending.resolve(msg.result);
+          }
+        },
       });
 
       socket.on("close", () => {
-        rl.close();
         if (daemonSocket === socket) {
           daemonSocket = null;
           if (!disposed) {

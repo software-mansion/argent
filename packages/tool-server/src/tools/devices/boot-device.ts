@@ -136,23 +136,31 @@ function bootTarget(params: BootDeviceParams): string {
 
 // Flags every boot-device launch passes (`-noaudio` unless the caller opts
 // into sound — see launchHardeningArgs below). Performance: `-noaudio` skips
-// guest audio init, `-no-boot-anim` skips the boot animation (a CPU spike
-// under software rendering), `-netfast` disables network shaping. Dialog
-// suppression: `-crash-report-mode never` and `-no-metrics` stop emulator
-// crash/metrics consent dialogs from blocking the next boot until a human
-// dismisses them.
+// guest pulseaudio init (one thread, ~50 MB RSS); `-no-boot-anim` skips the
+// Pixel boot animation, a major CPU spike on software-rendered GPU modes;
+// `-netfast` disables network shaping (latency/speed simulation), pure
+// overhead for MCP use cases. Measured on a 4-core Skylake host with a
+// 4096 MB / 228 MB-heap AVD: warm-cache cold boot drops 66 s → 49 s (~25%),
+// qemu RSS at +20 s drops ~190 MB. android-emulator-runner (the canonical CI
+// launcher) passes the same three by default for the same reasons.
 //
-// `-noaudio` and `-netfast` change qemu device topology, so they must be
-// passed identically to the snapshot probe, hot boot and cold boot — a
-// mismatch would silently invalidate the snapshot the previous cold boot
-// saved.
-const LAUNCH_HARDENING_ARGS = [
-  "-no-boot-anim",
-  "-netfast",
-  "-crash-report-mode",
-  "never",
-  "-no-metrics",
-] as const;
+// Dialog suppression: `-no-metrics` suppresses the metrics-collection consent
+// dialog, which blocks the next boot until a human dismisses it. It is
+// Google's anonymous emulator-usage telemetry and is unrelated to any argent
+// profiler tool (those run guest-side via Perfetto/simpleperf or Metro CDP).
+//
+// All three are long-standing, documented emulator options (present in
+// `emulator -help`) and are flag-only with no host detection, so they apply
+// uniformly to macOS and Linux. The sibling dialog-suppression flag
+// `-crash-report-mode never` is deliberately NOT here: it is missing from many
+// builds (e.g. 36.1.9.0 answers `unknown option` for it) and an unrecognized
+// option aborts the launch, so it is feature-detected per boot — see
+// `crashReportArgs` in `bootAndroid`.
+//
+// `-noaudio` and `-netfast` change qemu device topology, so these must be
+// passed identically to the snapshot probe, hot boot, and cold boot: a
+// mismatch would silently invalidate the snapshot the previous cold boot saved.
+const LAUNCH_HARDENING_ARGS = ["-no-boot-anim", "-netfast", "-no-metrics"] as const;
 
 // `-noaudio` is opt-out rather than unconditional: the tool's `sound` argument
 // (defaulted by the `boot-sound` flag) drops it so audio-testing sessions can
@@ -983,10 +991,21 @@ async function bootAndroidImpl(params: {
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
 
-  // `-crash-report-mode` is undocumented and only present on newer emulator
-  // builds, so feature-detect it via `-help`. Computed after the reuse fast path
-  // so the probe is skipped when we are not going to spawn, and shared by both
-  // arg lists below.
+  // Suppress the emulator's crash-report prompt/uploader on builds that accept
+  // the flag: without it an emulator crash pops a Qt consent dialog that blocks
+  // the next boot until a human dismisses it. Crash dumps are still written to
+  // /tmp/android-unknown/emu-crash-*.db, so only the modal popup is lost.
+  //
+  // `-crash-report-mode` is undocumented and absent from many emulator builds
+  // (36.1.9.0 does not list it in `-help`), so feature-detect it via `-help`
+  // rather than pass it blind: an unrecognized flag aborts the launch before
+  // boot with "unknown option: -crash-report-mode" and the device never comes
+  // up. Computed here (after the already-running reuse fast-path returns) so
+  // the `-help` probe is skipped when we are not going to spawn, and shared by
+  // the snapshot probe and the hot- and cold-boot arg lists below. Unlike
+  // hardeningArgs this one carries no snapshot risk — it selects crash
+  // reporting, not qemu devices — but one decision reused across all three
+  // spawns is a flag that cannot be detected differently for each.
   const crashReportArgs = (await emulatorSupportsFlag("-crash-report-mode"))
     ? ["-crash-report-mode", "never"]
     : [];
@@ -1004,7 +1023,7 @@ async function bootAndroidImpl(params: {
     // "different renderer configured".
     const RENDERER_ARGS = ["-gpu", gpuMode, ...extraEmulatorArgs];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
-      extraArgs: [...RENDERER_ARGS, ...hardeningArgs],
+      extraArgs: [...RENDERER_ARGS, ...hardeningArgs, ...crashReportArgs],
     });
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
@@ -1060,10 +1079,12 @@ async function bootAndroidImpl(params: {
     }
   }
 
-  // Cold boot fallback. Renderer and hardening args mirror the hot-boot path so
-  // the snapshot this cold boot saves matches what the next launch's probe
-  // resolves — `-noaudio` and `-netfast` change device topology, so a mismatch
-  // between cold-save and hot-load would invalidate the snapshot.
+  // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
+  // Renderer args mirror the hot-boot path so the snapshot this cold boot
+  // saves matches the renderer the next launch's probe will resolve.
+  // hardeningArgs likewise — `-noaudio` and `-netfast` change device topology,
+  // so a mismatch between cold-save and hot-load would invalidate the saved
+  // snapshot. crashReportArgs rides along from the same detection.
   const coldArgs = [
     "-avd",
     params.avdName,

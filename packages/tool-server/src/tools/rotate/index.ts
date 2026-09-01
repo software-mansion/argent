@@ -40,7 +40,7 @@ Returns { orientation }. Fails if the target device is not booted.`,
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
-    sendCommand(api, { cmd: "rotate", direction: params.orientation });
+    await sendCommand(api, { cmd: "rotate", direction: params.orientation });
     return { orientation: params.orientation };
   },
 };

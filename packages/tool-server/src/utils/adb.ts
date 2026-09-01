@@ -59,12 +59,18 @@ const emulatorFlagSupportCache = new Map<string, boolean>();
 /**
  * Whether the resolved `emulator` binary lists `flag` in its `-help` output.
  *
- * Some launch flags (e.g. `-crash-report-mode`) exist only on newer builds and
- * are undocumented, so `-help` is the only reliable signal; passing an
- * unrecognized flag makes the emulator abort before boot.
+ * Some launch flags are undocumented in the release notes and present on only
+ * a subset of builds (e.g. `-crash-report-mode`, which 36.1.9.0 does not list),
+ * so the binary's own `-help` listing is the only reliable signal. Passing an
+ * unrecognized flag makes the emulator abort before boot, so callers must gate
+ * on this before adding such a flag to the launch args.
  *
- * Best-effort: returns false rather than throwing when the binary or `-help`
- * cannot be run.
+ * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
+ * be run, and never throws. Any killed `-help` run — whatever it managed to
+ * capture before dying — counts as a failed probe rather than a verdict, as
+ * does an empty capture from any other failure; both are reported to stderr
+ * and not memoized, so the next call retries instead of inheriting the verdict
+ * for the process lifetime.
  */
 export async function emulatorSupportsFlag(
   flag: string,
@@ -82,17 +88,36 @@ export async function emulatorSupportsFlag(
   if (cached !== undefined) return cached;
 
   let output: string;
+  let failure: string | null = null;
   try {
     const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
       timeout: options.timeoutMs ?? 10_000,
+      // Same hazard runAdb guards against: a SIGTERM-immune child (emulator
+      // wedged in Qt/graphics init) leaves execFile unsettled forever, and
+      // this await has no deadline of its own.
+      killSignal: "SIGKILL",
       maxBuffer: 8 * 1024 * 1024,
     });
     output = stdout + stderr;
   } catch (err) {
-    // `emulator -help` exits non-zero on some builds with the listing still
-    // attached to the error.
-    const e = err as { stdout?: string; stderr?: string };
-    output = (e.stdout ?? "") + (e.stderr ?? "");
+    // `emulator -help` exits non-zero on some builds; the listing is still
+    // attached to the error. Inspect whatever was captured before giving up.
+    const e = err as { stdout?: string; stderr?: string; killed?: boolean };
+    // A killed run (timeout) may have captured only part of the listing; the
+    // flag could sit in the untransmitted remainder, so that is no verdict.
+    output = e.killed ? "" : (e.stdout ?? "") + (e.stderr ?? "");
+    failure = err instanceof Error ? err.message : String(err);
+  }
+  if (output === "") {
+    // The probe learned nothing complete (timeout under load, transient spawn
+    // failure, silent exit), so leave the verdict uncached: the next boot
+    // retries instead of pinning a permanent verdict.
+    process.stderr.write(
+      `[argent] \`${emulatorPath} -help\` produced no complete listing ` +
+        (failure ? `(${failure})` : "but exited successfully") +
+        `; assuming "${flag}" unsupported for this boot and retrying on the next one\n`
+    );
+    return false;
   }
 
   const supported = output.includes(flag);
@@ -603,7 +628,10 @@ export async function listAvds(): Promise<AvdInfo[]> {
   const emulatorPath = await resolveAndroidBinary("emulator");
   if (!emulatorPath) return [];
   try {
-    const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], {
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
     return stdout
       .split("\n")
       .map((l) => l.trim())
@@ -645,6 +673,7 @@ export async function checkSnapshotLoadable(
     ];
     const { stdout } = await execFileAsync(emulatorPath, args, {
       timeout: options.timeoutMs ?? 10_000,
+      killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
     });
     const tail = stdout.split("\n").slice(-6).join("\n");

@@ -113,13 +113,20 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
 
     for (let i = 0; i <= steps; i++) {
       if (ctx?.signal?.aborted) {
-        // Fingers are on the glass from i=0 on; lift them so a cancelled run
-        // doesn't leave them held down.
-        if (i > 0) sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
         const err = new Error(
           `gesture-rotate aborted — cancelled mid-gesture after ${i} of ${steps + 1} frames`
         );
         err.name = "AbortError";
+        // Fingers are on the glass from i=0 on; lift them so a cancelled run
+        // doesn't leave them held down. Best effort, as in gesture-swipe: a
+        // refused lift rides along as `cause` instead of masking the abort.
+        if (i > 0) {
+          try {
+            await sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
+          } catch (liftErr) {
+            err.cause = liftErr;
+          }
+        }
         throw err;
       }
 
@@ -135,7 +142,7 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
+      await sendTouchEvent(api, type, x1, y1, x2, y2);
       lastX1 = x1;
       lastY1 = y1;
       lastX2 = x2;
