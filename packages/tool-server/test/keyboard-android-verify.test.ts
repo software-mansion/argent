@@ -135,7 +135,21 @@ describe("findFocusedTextField", () => {
       className: "android.widget.EditText",
       origin: "126,149",
       password: false,
+      idShared: false,
     });
+  });
+
+  it("marks an id that another editable view in the same capture also carries", () => {
+    // A layout id, not this field's identity: `isSameField` must fall back to
+    // position for it, or the boxes of an OTP form all match each other.
+    const shared = findFocusedTextField(
+      hierarchy({ text: "hello", alsoFocused: { rid: FIELD_RID } })
+    );
+    expect(shared?.idShared).toBe(true);
+    const alone = findFocusedTextField(
+      hierarchy({ text: "hello", alsoFocused: { rid: "com.example:id/other" } })
+    );
+    expect(alone?.idShared).toBe(false);
   });
 
   it("returns null when the focused view is not editable (a focused Button)", () => {
@@ -690,6 +704,42 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toMatch(/no longer the one the text was typed into/);
     // Nothing retyped, no backspaces — only the original injection.
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+  });
+
+  it("declines when focus auto-advances between boxes sharing one layout id", async () => {
+    // `<include>`d and RecyclerView-recycled views report the LAYOUT's id, so an
+    // OTP form's boxes all read the same `resource-id`. Matching on that id alone
+    // made box 2 look like box 1 while focus auto-advanced between the two reads:
+    // the repair then typed into the box the caller never targeted and reported
+    // the result verified, with box 1 left holding the one character that landed.
+    const otpForm = (focusedIndex: number, texts: string[]) =>
+      `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
+      `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" ` +
+      `package="com.example" content-desc="" focusable="false" focused="false" ` +
+      `password="false" bounds="[0,0][1080,2400]">` +
+      texts
+        .map(
+          (t, i) =>
+            `<node index="${i}" text="${t}" resource-id="com.example:id/otp_digit" ` +
+            `class="android.widget.EditText" package="com.example" content-desc="" ` +
+            `checkable="false" checked="false" clickable="true" enabled="true" focusable="true" ` +
+            `focused="${i === focusedIndex}" scrollable="false" long-clickable="true" ` +
+            `password="false" selected="false" bounds="[${100 + i * 200},149][${260 + i * 200},275]" />`
+        )
+        .join("") +
+      `</node></hierarchy>`;
+
+    const { registry } = registryServing([
+      otpForm(0, ["", ""]),
+      otpForm(1, ["1", ""]), // the burst put "1" in box 1 and focus moved on
+      otpForm(1, ["1", "1234"]), // what the repair would leave, if it ran
+    ]);
+    const res = await type(registry, "1234");
+    // Nothing deleted, nothing retyped: the second box is not the field this
+    // call typed into, so its contents prove nothing about the first.
+    expect(cmds()).toEqual(["input text '1234'"]);
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no longer the one the text was typed into/);
   });
 
   it("does not mistake the SAME field for another when typing resizes it", async () => {
@@ -1490,6 +1540,60 @@ describe("android keyboard read-back — cancellation", () => {
       ).rejects.toThrow(/abort/i);
       expect(cmds()).toEqual([]);
     }
+  });
+
+  it("rejects rather than reporting a verdict when the caller gives up mid-repair", async () => {
+    // The repair runs for tens of seconds and does not watch the signal, so the
+    // caller can be gone by the time it ends. Returning a verdict then records a
+    // typing failure ABOUT THE APP for a run that was cancelled — all three gates
+    // read `verified: false` that way — where a rejection is the aborted skip.
+    const controller = new AbortController();
+    const { registry } = registryServing(REPAIR_SCRIPT);
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd === "input text 'abcdefgh'") controller.abort();
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE,
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow(/abort/i);
+    // The repair itself is finished: abandoning it between the delete and the
+    // retype would leave the field holding less than the call found it.
+    expect(cmds()).toEqual([
+      "input text 'abcdefghijkl'",
+      "input keyevent 67 67 67 67 67 67 67 67",
+      "input text 'abcdefgh'",
+      "input text 'ijkl'",
+    ]);
+  });
+
+  it("rejects rather than reporting a broken repair once the caller has gone", async () => {
+    // The same rule where the repair itself failed: `repairFailedNote` describes
+    // a field left worse than the call found it, which the gates still read as a
+    // verdict on the app rather than as the cancellation it followed.
+    const controller = new AbortController();
+    const { registry } = registryServing(REPAIR_SCRIPT);
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd === "input text 'abcdefgh'") {
+        controller.abort();
+        throw new Error("adb: device offline");
+      }
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE,
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow(/abort/i);
   });
 
   it("keeps the helper socket alive across a repair longer than its read timeout", async () => {

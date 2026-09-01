@@ -131,9 +131,15 @@ interface FocusedField {
   text: string;
   /**
    * The field's `resource-id`, and the empty string when it has none. See
-   * `isSameField` for how the three identity attributes are weighed.
+   * `isSameField` for how the identity attributes are weighed.
    */
   resourceId: string;
+  /**
+   * Whether another editable view in the same capture carries that same
+   * `resource-id`, which makes it a layout id rather than this field's identity.
+   * See `isSameField`.
+   */
+  idShared: boolean;
   /** The field's `class`. See `isSameField`. */
   className: string;
   /** `"x,y"` of the field's bounds, or `""` when they do not parse. See `isSameField`. */
@@ -175,28 +181,35 @@ function findFocused(xml: string): { field: FocusedField | null; focusedClass: s
   if (!root) return { field: null, focusedClass: null };
   const stack = [root];
   let focusedClass: string | null = null;
+  let field: FocusedField | null = null;
+  // Counted over the whole capture, not stopped at the field: an id several
+  // editable views share is a layout id, which `isSameField` must not trust.
+  const idCounts = new Map<string, number>();
   while (stack.length > 0) {
     const node = stack.pop()!;
     // Push children in reverse so they pop back in document order.
     for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
     const attrs = node.attrs;
-    if (!attrIsTrue(attrs, "focused")) continue;
     const className = attrs.class ?? "";
+    const editable = EDITABLE_CLASS_RE.test(className);
+    const resourceId = attrs["resource-id"] ?? "";
+    if (editable && resourceId !== "")
+      idCounts.set(resourceId, (idCounts.get(resourceId) ?? 0) + 1);
+    if (field !== null || !attrIsTrue(attrs, "focused")) continue;
     if (focusedClass === null) focusedClass = className;
-    if (!EDITABLE_CLASS_RE.test(className)) continue;
+    if (!editable) continue;
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
-    return {
-      field: {
-        text: attrs.text ?? "",
-        resourceId: attrs["resource-id"] ?? "",
-        className,
-        origin: rect ? `${rect.x},${rect.y}` : "",
-        password: attrIsTrue(attrs, "password"),
-      },
-      focusedClass,
+    field = {
+      text: attrs.text ?? "",
+      resourceId,
+      className,
+      origin: rect ? `${rect.x},${rect.y}` : "",
+      password: attrIsTrue(attrs, "password"),
+      idShared: false,
     };
   }
-  return { field: null, focusedClass };
+  if (field !== null) field.idShared = (idCounts.get(field.resourceId) ?? 0) > 1;
+  return { field, focusedClass };
 }
 
 /** The focused editable view, or null when none of the focused views is one. */
@@ -215,13 +228,17 @@ export function findFocusedTextField(xml: string): FocusedField | null {
  *
  * A different widget class is a different field and settles it first. Past that
  * the two discriminators are not equally good, so they are weighed rather than
- * concatenated. A non-empty `resource-id` settles it on its own: it is the
- * Android view id, carrying the React Native `testID` (see
- * `flows/flow-android-tree.ts`), a screen does not put two focusable fields
- * behind one, and it does not change when the field moves. Position is only the
- * fallback for a field that has none — every untagged `TextInput` and Compose
- * `TextField` dumps `resource-id=""`, and treating those as one field is what
- * would let the repair type into the next box of an OTP form.
+ * concatenated. A `resource-id` no other editable view in the capture carries
+ * settles it on its own: it is the Android view id, carrying the React Native
+ * `testID` (see `flows/flow-android-tree.ts`), and it does not change when the
+ * field moves. An id is NOT an identity when the capture holds several editable
+ * views behind it: `getViewIdResourceName` reports the id of the layout, so six
+ * `<include>`d or recycled OTP boxes all read `…:id/otp_digit`, and matching on
+ * that alone let an auto-advancing form pass box 2 off as box 1 — the repair
+ * then backspaced and retyped into the box the caller never targeted and called
+ * it verified. Position is the fallback for those and for a field with no id at
+ * all — every untagged `TextInput` and Compose `TextField` dumps
+ * `resource-id=""`.
  *
  * Position is a fallback and not the primary because typing MOVES fields. The
  * bounds ORIGIN survives the growth that makes the full bounds useless — typing
@@ -234,7 +251,8 @@ export function findFocusedTextField(xml: string): FocusedField | null {
  */
 function isSameField(a: FocusedField, b: FocusedField): boolean {
   if (a.className !== b.className) return false;
-  if (a.resourceId !== "" || b.resourceId !== "") return a.resourceId === b.resourceId;
+  if (a.resourceId !== b.resourceId) return false;
+  if (a.resourceId !== "" && !a.idShared && !b.idShared) return true;
   return a.origin === b.origin;
 }
 
@@ -591,9 +609,9 @@ const READ_FAILED_REASON =
 const FOCUS_MOVED_REASON =
   "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
-  "being typed, in which case the text may have been split across both, or the field carries no " +
-  "id and moved on screen (a chat composer growing to a second line does this) and could not be " +
-  "matched again. Read the screen with `describe` before continuing.";
+  "being typed, in which case the text may have been split across both, or the field could not be " +
+  "matched again after moving on screen (a chat composer growing to a second line does this), " +
+  "because it carries no id or one its neighbours share, as an OTP form's boxes do. Read the screen with `describe` before continuing.";
 
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"
@@ -838,8 +856,9 @@ async function readFocusedField(
  * explaining why the check could not conclude. Two things do throw: errors from
  * the injection the call is actually FOR — a failed `input text` is a real
  * failure, not a verification problem — and a cancelled `signal`, which is
- * consulted only where nothing has been typed yet and where the destructive
- * repair would start.
+ * consulted where nothing has been typed yet, before the destructive repair
+ * starts, and before every verdict — a run the caller gave up on is owed a skip,
+ * not a finding about the app.
  */
 export async function typeAndroidTextVerified(
   registry: Registry,
@@ -914,6 +933,13 @@ async function verifyAgainstDevtools(
   await injectAndroidText(serial, text);
 
   const after = await readAfter(devtools, before, null);
+  // Every return past here is a finding ABOUT THE APP, and a caller that gave up
+  // is owed a skip instead: the three step gates key on `verified: false`, while
+  // both flow gates read a rejection as the uniform aborted skip (`run-sequence`,
+  // which has no skip, records it as that step's error). So the signal is
+  // re-read before each verdict — the burst, the repair and the reads between
+  // them are all long enough to be given up on.
+  signal?.throwIfAborted();
   if (after.blocked) return after.blocked;
   const verdict = classifyTypedText(before.text, after.field.text, text);
   if (verdict === "landed") return { verified: true };
@@ -926,19 +952,23 @@ async function verifyAgainstDevtools(
   // The repair is the one destructive sequence on this path — it deletes before
   // it retypes — so it must not START once the caller has given up: nothing is
   // waiting for the retyped field, and the MCP adapter replays a call it
-  // abandoned. Throwing rather than reporting the verdict keeps a cancelled run
-  // from recording a failure ABOUT THE APP: the three step gates key on
-  // `verified: false`, while both flow gates read an abort as the uniform
-  // aborted skip (`run-sequence`, which has no skip, records it as that step's
-  // error). Checked only here, not
-  // inside the loops below — once the delete has run, finishing the retype
-  // leaves the field in a better state than abandoning it half-restored.
+  // abandoned. Not re-read inside the loops below: once the delete has run,
+  // finishing the retype leaves the field in a better state than abandoning it
+  // half-restored.
   signal?.throwIfAborted();
 
+  let repairFailed = false;
   try {
     await deleteTrailing(serial, deletions);
     await injectInChunks(serial, text);
   } catch {
+    repairFailed = true;
+  }
+  // The repair spends tens of seconds on the device without consulting the
+  // signal, which makes it the widest window in the call for the caller to give
+  // up in.
+  signal?.throwIfAborted();
+  if (repairFailed) {
     // The undo runs before the retype, so a failure between them can leave the
     // field emptier than the call found it. Report that state instead of letting
     // an adb error imply nothing happened.
@@ -946,6 +976,7 @@ async function verifyAgainstDevtools(
   }
 
   const repaired = await readAfter(devtools, before, deletions);
+  signal?.throwIfAborted();
   if (repaired.blocked) return repaired.blocked;
   const repairedVerdict = classifyTypedText(before.text, repaired.field.text, text);
   if (repairedVerdict === "landed") return { verified: true, note: repairedNote(deletions) };
