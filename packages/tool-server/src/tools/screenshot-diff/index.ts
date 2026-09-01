@@ -332,10 +332,10 @@ async function captureLiveInput(params: {
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
 }): Promise<string> {
-  // Some Android emulators refuse the unscaled capture outright, which broke the
-  // whole baselinePath + captureCurrent flow there. Re-requesting the same frame
-  // at a scale routes around the refusal without giving up any of it, so a diff
-  // on those devices still compares the pixels a diff is for.
+  // Some Android emulators refuse the unscaled capture outright, taking the
+  // whole baselinePath + captureCurrent flow with it. Re-requesting the same
+  // frame at a scale routes around the refusal without giving up any of it, so a
+  // diff on those devices still compares the pixels a diff is for.
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(

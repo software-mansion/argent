@@ -205,12 +205,12 @@ export async function runSnapshot(
   // screenshot tool already registers it, so `shot.image` is a ready-made
   // handle for the `current` artifact.
   //
-  // Some Android emulators refuse the unscaled capture outright, which made
-  // `snapshot` unusable on them — including under --update-baselines, where
-  // there is nothing to compare yet. The retry asks the same device for the
-  // same pixels down the one code path that does not trip on it, so a device
-  // that needs it still gates at its own resolution, against the baseline every
-  // other host writes. `screenshot-diff` retries the same way.
+  // Some Android emulators refuse the unscaled capture outright, which alone
+  // would leave `snapshot` unusable there — including under --update-baselines,
+  // where there is nothing to compare yet. The retry asks the same device for
+  // the same pixels down the one code path that does not trip on it, so such a
+  // device gates at its own resolution, on the baseline every other host writes.
+  // `screenshot-diff` retries at the same scale.
   //
   // Only that refusal is retried: the retry re-requests the frame at the
   // resolution that just failed, so anything else — an unreachable server, a

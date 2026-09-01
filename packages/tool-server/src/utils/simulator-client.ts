@@ -61,9 +61,8 @@ export function isPixelBufferSizeMismatch(err: unknown): boolean {
  * one part in a million clears the server's own `1.0 - scale > f32::EPSILON`
  * test for that while staying inside half a pixel of the screen's own
  * dimensions — so `round(dimension × scale)` is the dimension itself, and
- * Lanczos3 between equal sizes is an identity. The frame that comes back is
- * byte-for-byte the one the unscaled request would have returned, which keeps a
- * baseline keyed on capture geometry on the key every other host writes.
+ * Lanczos3 between equal sizes is an identity. What comes back is byte-for-byte
+ * the frame the unscaled request would have returned.
  */
 export const REFUSED_CAPTURE_RETRY_SCALE = 1 - 1e-6;
 
