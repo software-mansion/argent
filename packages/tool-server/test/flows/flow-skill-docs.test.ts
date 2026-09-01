@@ -29,6 +29,13 @@ const LIVE_AUTHORING = path.resolve(
   "../../../skills/skills/argent-create-flow/references/live-authoring.md"
 );
 const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
+/**
+ * How each insertion in {@link LIVE_AUTHORING}'s list is spelled in rule 5 of
+ * the core skill, which enumerates them rather than counting them. Kept in
+ * step with that list by the length assertion in the guard below, so a fourth
+ * bullet cannot be added while rule 5 still says "the only" three.
+ */
+const RULE_5_INSERTIONS = ["`snapshot:`", "`await: { idle: true }`", "Chromium"];
 const INSERTION_COUNT_CITATIONS = [
   path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
 ];
@@ -144,9 +151,17 @@ describe("create-flow idle docs", () => {
       expect(quotes.length, `${file} no longer cites the insertion count`).toBeGreaterThan(0);
       for (const quote of quotes) expect(quote[1], file).toBe(spelled);
     }
-    const skill = readFileSync(SKILL, "utf8");
-    for (const token of ["`snapshot:`", "`await: { idle: true }`", "Chromium"]) {
-      expect(skill, `the core skill no longer names ${token} as an insertion`).toContain(token);
+    // Rule 5 cites no number — it ENUMERATES the insertions inline — so the
+    // spelled count above cannot police it. Hold it to the same list instead,
+    // and read only that sentence: `await: { idle: true }` is also in rule 4,
+    // so a file-wide search would pass with rule 5's copy of it deleted.
+    const rule5 = between(SKILL, "The only unrecorded insertions are", "\n");
+    expect(
+      RULE_5_INSERTIONS,
+      `rule 5 names ${RULE_5_INSERTIONS.length} insertions, the reference lists ${listed}`
+    ).toHaveLength(listed);
+    for (const token of RULE_5_INSERTIONS) {
+      expect(rule5, `rule 5 no longer names ${token} as an insertion`).toContain(token);
     }
   });
 
@@ -226,6 +241,63 @@ describe("create-flow directive-answer docs", () => {
     }
     for (const key of withRecordingTool) {
       expect(sentenceWith(description!, "have no recording tool"), key).not.toContain(`\`${key}\``);
+    }
+  });
+});
+
+/**
+ * The `script` account in the flow-execute description is the only agent-facing
+ * statement of what the step needs and where its path points, so the two claims
+ * an author acts on are pinned here rather than left to prose review.
+ */
+describe("create-flow script docs", () => {
+  const description = (): string => {
+    const { description: text } = createRunFlowTool({} as unknown as Registry);
+    expect(text, "flow-execute no longer declares a description").toBeDefined();
+    return text!;
+  };
+
+  it("names every step that still resolves a device beside a deviceless script", () => {
+    // `run` and `when` are the two whose own body can be nothing but scripts
+    // and that resolve one anyway — `run` because the fragment is read at run
+    // time, `when` because the guard reads the device itself. A platform-gated
+    // seed is the natural next thing to write after this sentence, and on a
+    // host with no device of that platform the whole run is refused.
+    for (const kind of ["run", "when"]) {
+      expect(description(), kind).toMatch(
+        new RegExp(`a script-only flow runs with nothing booted[^.]*\`${kind}\``)
+      );
+    }
+  });
+
+  it("shows a script path that reaches the directory scripts really live in", () => {
+    // A path relative to the flow FILE, so a saved flow anchors in
+    // `.argent/flows/`. `scripts/seed.mjs` there names
+    // `.argent/flows/scripts/seed.mjs`, which is two directories from where the
+    // reference page and the skills put a script.
+    expect(description()).toContain("script: { path: ../../scripts/seed.mjs");
+  });
+
+  it("lists a script path among what a flow_path run re-anchors", () => {
+    // `project_root` still names the script's working directory either way; it
+    // is the RESOLUTION that moves to the YAML, and a `script:` path is the
+    // third thing that moves with it.
+    const schema = zodObjectToJsonSchema(
+      createRunFlowTool({} as unknown as Registry).zodSchema!
+    ) as { properties: Record<string, { description?: string }> };
+    const projectRoot = schema.properties.project_root?.description;
+    expect(projectRoot, "`project_root` no longer describes itself").toBeDefined();
+    expect(projectRoot!).toMatch(/with flow_path[^.]*script:/);
+  });
+
+  it("lets the chromium hoist follow every step a leading launch can sit behind", () => {
+    // The same set `precedesLeadingLaunch` admits. A flow that seeds a backend
+    // before it launches is exactly the shape this PR added, and it boots its
+    // own instance like any other leading launch.
+    for (const kind of ["run:", "echo:", "script:"]) {
+      expect(description(), kind).toMatch(
+        new RegExp(`following a leading[^.]*\`${kind.replace(":", ":")}\``)
+      );
     }
   });
 });

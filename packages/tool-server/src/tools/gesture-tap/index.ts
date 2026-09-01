@@ -119,7 +119,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     const api = services.simulatorServer as SimulatorServerApi;
     for (let i = 1; i <= clickCount; i++) {
       if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-      sendCommand(api, {
+      await sendCommand(api, {
         cmd: "touch",
         type: "Down",
         x: params.x,
@@ -128,7 +128,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         second_y: null,
       });
       await sleep(TAP_HOLD_MS);
-      sendCommand(api, {
+      await sendCommand(api, {
         cmd: "touch",
         type: "Up",
         x: params.x,

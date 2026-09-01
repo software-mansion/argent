@@ -3189,6 +3189,25 @@ describe("flow validation", () => {
     ).toThrow(/must not declare executionPrerequisite/i);
   });
 
+  it("names the rule that classified the flow, not step 1", () => {
+    // The two tests above match only the half of the sentence the
+    // classification change left true. A launch admitted from BEHIND an
+    // `echo:`/`script:` is still the launch this refusal is about, so the
+    // sentence must not claim the flow "starts with" one, nor send the author
+    // after a "leading launch" they did not write first.
+    let message = "";
+    try {
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n  - script: { path: seed.mjs }\n  - launch: com.acme.app\n"
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("first step other than `echo:`/`script:` is a `launch`");
+    expect(message).not.toMatch(/starts with a launch step|leading launch/i);
+  });
+
   it("rejects a path-unsafe snapshot name (no traversal into baseline path)", () => {
     expect(() => parseFlow("steps:\n  - snapshot:\n      name: ../../etc/evil\n")).toThrow(
       /snapshot name/i
