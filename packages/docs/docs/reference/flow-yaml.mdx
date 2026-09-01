@@ -283,6 +283,8 @@ A failed step stops the flow. The verdict names the side that caused the failure
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
+`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
 On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
