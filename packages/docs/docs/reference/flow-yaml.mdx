@@ -281,6 +281,8 @@ A failed step stops the flow. The verdict names the side that caused the failure
 | Failed  | The script | An error, a load failure, a non-zero exit code, or a value in the `output` global that Argent cannot serialize             |
 | Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
 
+A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.
+
 The split holds only when the `timeout` is generous. Argent needs about a second to tell a script that never settles from a script the host stopped. Below that, the same defect of the script becomes a time limit, and the step is errored. Give a script a second or more before you read `errored` as a fact about the machine.
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.

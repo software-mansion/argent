@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   FAILURE_CODES,
   FailureError,
@@ -2364,6 +2365,83 @@ async function runScriptStep(
     : { ...outcome, reason: oneLineReason(outcome.reason) };
 }
 
+/**
+ * How many of the script's own frames ride into the reason. A thrown message
+ * alone names no file and no line, and a throw writes nothing to stderr, so
+ * without these the step's whole diagnostic is one sentence and there is
+ * nothing in CI to re-run against. Six is what a rethrow needs to show where it
+ * came from without turning the step line into the whole stack; the executor's
+ * `SCRIPT_MAX_FAILURE_STACK_CHARS` still holds what it captured.
+ */
+const SCRIPT_REASON_MAX_FRAMES = 6;
+
+/** A frame in the host's own machinery, not in anything the author wrote. */
+function isHostFrame(frame: string): boolean {
+  return (
+    frame.includes("node:internal") ||
+    frame.includes("flow-script-runner.mjs") ||
+    frame.includes("flow-script-watchdog")
+  );
+}
+
+/**
+ * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
+ * go on ONE step line, so the anchor is the run's own `project_root` — the
+ * directory the script also ran in. A script outside it keeps its absolute
+ * path, because a `..` chain says less than the path does.
+ *
+ * `roots` is that directory both as given and canonicalized, because only one
+ * of the two ever matches: Node resolves a module to its REAL path, so every
+ * frame is canonical, while `project_root` arrives as the caller spelled it. On
+ * macOS a project under `/var` (or any symlinked parent) is the ordinary case
+ * of the two differing.
+ */
+function readableFrame(frame: string, roots: readonly string[]): string {
+  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+    const split = /^(.*?)(:\d+:\d+)$/.exec(match);
+    const url = split ? split[1]! : match;
+    const position = split ? split[2]! : "";
+    let file: string;
+    try {
+      file = fileURLToPath(url);
+    } catch {
+      return match;
+    }
+    for (const root of roots) {
+      const relative = path.relative(root, file);
+      if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return `${relative}${position}`;
+      }
+    }
+    return `${file}${position}`;
+  });
+}
+
+/**
+ * The frames of a failed script, as a block appended to its message. Newline
+ * separated on purpose: {@link oneLineReason} escapes them, so the block reads
+ * as `\n    at …` on the step's own line and a reader can still tell one frame
+ * from the next. The stack's first line is dropped — it only repeats the
+ * message the reason already opens with.
+ */
+function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
+  if (!stack) return "";
+  const frames: string[] = [];
+  let dropped = 0;
+  for (const line of stack.split("\n")) {
+    const frame = line.trim();
+    if (!frame.startsWith("at ") || isHostFrame(frame)) continue;
+    if (frames.length >= SCRIPT_REASON_MAX_FRAMES) {
+      dropped++;
+      continue;
+    }
+    frames.push(`    ${readableFrame(frame, roots)}`);
+  }
+  if (frames.length === 0) return "";
+  if (dropped > 0) frames.push(`    … ${dropped} more frame${dropped === 1 ? "" : "s"}`);
+  return `\n${frames.join("\n")}`;
+}
+
 async function execScriptStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "script" }>,
@@ -2408,8 +2486,16 @@ async function execScriptStep(
     ...(state.signal ? { signal: state.signal } : {}),
   });
 
+  const verdict = scriptVerdict(result);
+  const frames = result.ok
+    ? ""
+    : scriptFrames(result.failure?.stack, [
+        state.projectRoot,
+        await canonicalFlowPath(state.projectRoot),
+      ]);
   return {
-    ...scriptVerdict(result),
+    ...verdict,
+    ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
     ...(result.log ? { scriptLog: result.log } : {}),
     ...(result.logTruncated ? { scriptLogTruncated: true } : {}),
   };

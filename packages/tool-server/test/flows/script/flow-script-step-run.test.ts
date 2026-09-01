@@ -204,6 +204,58 @@ describe("a script step that fails", () => {
     expect(result.skipped).toBe(1); // echo is narration and is not counted
   });
 
+  it("names the file, the line and the frames a bare node run would print", async () => {
+    // Without them the step's whole diagnostic is one sentence: a throw writes
+    // nothing to stderr, so there is no log either, and CI has nothing to
+    // re-run against.
+    await write(
+      "scripts/deep.mjs",
+      "function inner(o) { return o.id; }\nfunction outer() { return inner(undefined); }\nouter();\n"
+    );
+    await flow("deep", "steps:\n  - script: { path: ../../scripts/deep.mjs }\n");
+
+    const { result } = await runFlow("deep");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("Cannot read properties of undefined");
+    // Project-relative, so the frames fit the step line the reason rides on.
+    expect(reason).toContain("at inner (scripts/deep.mjs:1:30)");
+    expect(reason).toContain("at outer (scripts/deep.mjs:2:27)");
+    // Still one line: the frames are escaped like any other break in a reason.
+    expect(reason).not.toMatch(/[\n\r]/);
+  });
+
+  it("leaves the host's own frames out of the reason", async () => {
+    // A stack ends in the ESM loader and the runner that preloaded the script.
+    // Those name no line the author can open, and they would crowd out the
+    // frames that do.
+    await write("scripts/boom2.mjs", `throw new Error("seed API returned 500");`);
+    await flow("boom2", "steps:\n  - script: { path: ../../scripts/boom2.mjs }\n");
+
+    const { result } = await runFlow("boom2");
+
+    const reason = result.steps[0]!.reason!;
+    expect(reason).toContain("at scripts/boom2.mjs:1:7");
+    expect(reason).not.toContain("node:internal");
+    expect(reason).not.toContain("flow-script-runner");
+  });
+
+  it("caps the frames it folds in and says how many it left out", async () => {
+    await write(
+      "scripts/recurse.mjs",
+      "function down(n) { if (n === 0) throw new Error('bottom'); return down(n - 1); }\ndown(20);\n"
+    );
+    await flow("recurse", "steps:\n  - script: { path: ../../scripts/recurse.mjs }\n");
+
+    const { result } = await runFlow("recurse");
+
+    const reason = result.steps[0]!.reason!;
+    expect(reason).toContain("bottom");
+    expect(reason.match(/ at down \(/g) ?? []).toHaveLength(6);
+    expect(reason).toMatch(/… \d+ more frames/);
+  });
+
   it("keeps a multi-line throw message on the step's own line", async () => {
     // The ordinary shape of a rethrown API error. Raw, the JSON body lands at
     // column 0 under the `✗` line, outside the step framing every renderer is
