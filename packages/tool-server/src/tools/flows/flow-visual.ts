@@ -22,7 +22,7 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
  * paths — so a client on another machine can materialize them. Absent on a
- * clean pass, so renderers never fetch full-res PNGs nobody needs.
+ * clean pass, so renderers never fetch saved PNGs nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;

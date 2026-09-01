@@ -81,5 +81,6 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
+- On Chromium, Argent uses the optional `sharp` package to scale and to rotate a screenshot. Install `sharp` in the environment of the tool-server before you use `scale` or `rotation` there. Without `sharp`, Argent returns the capture unchanged and reports no error.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { getScreenshotScale } from "../src/utils/simulator-client";
-import { readAgentDocs, sentencesClaimingSize } from "./helpers/size-claims";
+import { readAgentDocs, sentencesClaimingSize, toPosixName } from "./helpers/size-claims";
 
 let docs: Array<{ name: string; text: string }> = [];
 
@@ -125,6 +125,10 @@ describe("agent docs reaching for a full-resolution screenshot", () => {
     expect(new Set(docs.map(({ name }) => name.split("/")[0]))).toEqual(
       new Set(["skills", "rules", "agents"])
     );
+    // …and the split above reads a win32 name too, where `path.relative` returns
+    // backslashes. Untranslated, every name is one segment, this Set holds three
+    // whole paths, and the check fails for the walk it was written to defend.
+    expect(toPosixName("skills\\argent-screenshot-diff\\SKILL.md").split("/")[0]).toBe("skills");
   });
 });
 

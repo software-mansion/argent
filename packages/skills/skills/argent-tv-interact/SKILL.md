@@ -23,7 +23,7 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 - `tv-remote {udid, button}` — D-pad / remote. `button` is one key **or a whole path** (run in one call). Keys: `up`/`down`/`left`/`right`, `select`, `back`, `menu`, `home`, `playPause`, plus media keys `rewind`/`fastForward`/`next`/`previous`/`volumeUp`/`volumeDown`/`mute`. Single: `{button:"down"}`; repeat: `{button:"down", repeat:3}`; path: `{button:["up","right","select"]}`.
 - `keyboard {udid, text}` — type into the focused field (focus it with `tv-remote` first). One call carries `text` or `key`, never both — to type and then press a key, send two `keyboard` steps in one `run-sequence`. Named `key` presses (e.g. `{key:"enter"}`) work on Vega; on Apple TV / Android TV move focus with `tv-remote` instead.
 - `launch-app` / `restart-app` / `reinstall-app {udid, bundleId}` — `bundleId` from the app manifest. Vega `reinstall-app` takes `appPath` = a `.vpkg`.
-- `screenshot {udid, scale?}` — Apple TV via `xcrun simctl io`; Android TV through the same simulator-server backend a phone or emulator uses; Vega host-side through the emulator console (`adb emu screenrecord screenshot`). All three downscale to the tool-server's screenshot scale unless `scale` says otherwise.
+- `screenshot {udid, scale?}` — Apple TV via `xcrun simctl io`; Android TV through the same simulator-server backend a phone or emulator uses; Vega host-side through the emulator console (`adb emu screenrecord screenshot`). Android TV and Vega downscale to the tool-server's screenshot scale unless `scale` says otherwise; Apple TV downscales with `sips`, and when `sips` fails it returns the capture `xcrun simctl io` took, with nothing in the result saying the scale was dropped.
 
 ## Per-platform
 

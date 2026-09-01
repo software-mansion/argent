@@ -27,29 +27,55 @@ describe("screenshotDiffTool", () => {
   });
 
   it("carries each spelling its vocabulary claims, and none of the near misses", () => {
-    // Every size-claim sweep is exactly as wide as this regex, and most of its
-    // alternatives match no sentence in the corpus, so they could be deleted
-    // unnoticed. The negatives are the exclusions the helper's own
-    // comment promises — `native resolution` (argent-screen-recording uses it
-    // correctly for h264), a range mention, the percentage form that asserts
-    // the opposite, and the three tokens that merely contain "scale".
+    // Every size-claim sweep is exactly as wide as this vocabulary, and most of
+    // its alternatives match no sentence in the corpus, so they could be deleted
+    // unnoticed. The negatives are the exclusions the helper's own comment
+    // promises: a range mention, the percentage form that asserts the opposite,
+    // the three tokens that merely contain "scale", the recording surfaces that
+    // take h264 frames at the device's native resolution, and the spellings that
+    // carry no subject of their own — this sweep runs over all 77 tools, so
+    // "opens the full-size dialog" failing a screenshot check would point the
+    // next author at the wrong problem.
     const claims: Array<[string, boolean]> = [
       ["The capture is at full resolution.", true],
       ["Saved full-res for later.", true],
-      ["Written at full size.", true],
       ["The bytes are unscaled.", true],
-      ["Pixels map 1:1 with the device.", true],
+      ["The comparison is pixel-for-pixel.", true],
       ["It is never downscaled.", true],
       ["The frame is not resampled.", true],
+      ["There is no resampling of either side.", true],
+      ["The diff keeps the original dimensions.", true],
       ["Kept at 100% of original resolution.", true],
       ["Written at original resolution.", true],
+      ["The image is written at its original size.", true],
+      ["Kept at the device's resolution.", true],
+      ["The baseline is saved at the device's native resolution.", true],
       ["Pass scale: 1.0 for a baseline.", true],
+      // The parameter spelling is a claim wherever it appears, determiner and
+      // all: a surface writing `scale = 1` is writing about this parameter.
+      ["Handle the scale = 1 case.", true],
+      // …and the spellings that need a subject before they are a claim.
+      ["The diff image is written at full size.", true],
+      ["Pixels map 1:1 with the device.", true],
+      ["The baseline is captured at 1x.", true],
+      ["The capture is at 1.0 scale.", true],
+      ["The tool will rescale to 1.0 before diffing.", true],
+      // Typography, not vocabulary: a non-breaking hyphen and a typographic
+      // apostrophe read the same to an agent and slip an ASCII-only sweep.
+      ["Captured at full\u2011resolution.", true],
+      ["Kept at the device\u2019s resolution.", true],
       ["h264 frames stay at native resolution.", false],
+      ["Argent records at the device's native resolution.", false],
       ["`scale` accepts values from 0.01 to 1.0.", false],
       ["Downscaled to 30% of original resolution.", false],
       ["grayscale = 1 is the default.", false],
       ["upscale: 1 leaves it alone.", false],
       ["Set ARGENT_SCREENSHOT_SCALE to change it.", false],
+      ["There is a 1:1 mapping of remote presses to key events.", false],
+      ["Opens the full-size dialog.", false],
+      ["Rate it on a scale of 1 to 5.", false],
+      ["Chromium uses scale 1.0 by default.", false],
+      ["Set the zoom scale to 1 before measuring.", false],
     ];
     expect(claims.map(([text]) => [text, sentencesClaimingSize(text).length > 0] as const)).toEqual(
       claims
@@ -232,6 +258,36 @@ describe("screenshotDiffTool", () => {
     );
   });
 
+  it("does not fall back for an outputDir it can reach but not write into", async () => {
+    // The fallback the description advertises is keyed on the tool-server not
+    // being able to *reach* the directory. A path it reaches and cannot use is
+    // not covered by it, and the call ends with no artifacts at all — so the
+    // clause has to stop short of promising the images come back either way.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-outdir-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 4, 4, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 4, 4, { r: 255, g: 0, b: 0 });
+    // An existing file rather than a read-only directory: the same reachable
+    // path the fallback declines to replace, and it fails for root too.
+    const notADirectory = path.join(dir, "already-a-file");
+    await fs.writeFile(notADirectory, "x");
+
+    await expect(
+      executeScreenshotDiffTool(
+        {},
+        { baselinePath, currentPath, udid: "ABC", outputDir: notADirectory },
+        { artifacts: new ArtifactStore() }
+      )
+    ).rejects.toThrow(/EEXIST/);
+
+    expect(screenshotDiffTool.zodSchema!.shape.outputDir.description).toContain(
+      "a directory it reaches but cannot write into ends the call instead"
+    );
+    // …and the Fails line, which is the clause that actually covers it.
+    expect(screenshotDiffTool.description).toContain("outputDir cannot be written");
+  });
+
   it("normalizes inside the tolerance its description names, and mismatches outside it", async () => {
     // The description is the only place that 1% appears in prose and nothing
     // read it, so both its threshold and its direction could be inverted with
@@ -397,7 +453,8 @@ describe("screenshotDiffTool", () => {
     // a platform sits on is the half an agent acts on, and it is free to be
     // re-partitioned while the figure stays right. Apple TV takes the resolved
     // scale (index.ts hands `tvScreenshot` the `?? getScreenshotScale()` value,
-    // which sips-downscales below 1), Chromium is handed `params.scale` alone.
+    // which sips applies below 1, best-effort), Chromium is handed
+    // `params.scale` alone.
     expect(scaleDescription).toContain(
       `On iOS, Android, Apple TV and Vega, defaults to ARGENT_SCREENSHOT_SCALE env var, or ${fallback} whenever that is unset or outside (0,1]`
     );
@@ -411,6 +468,26 @@ describe("screenshotDiffTool", () => {
       "if the device rejects a capture at the requested scale"
     );
     expect(screenshotDiffTool.description).toContain("a requested live capture cannot be taken");
+  });
+
+  it("keeps the user-facing copy of that scale, and of who reads it, in step", async () => {
+    // The one written copy of the default outside the tool surfaces: `readAgentDocs`
+    // walks packages/skills, so nothing swept this row and a stale value sat in
+    // it from #878 until it was found by hand.
+    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "");
+    const row = (
+      await fs.readFile(path.join(__dirname, "../../docs/docs/reference/configuration.mdx"), "utf8")
+    )
+      .split("\n")
+      .filter((line) => line.includes("`ARGENT_SCREENSHOT_SCALE`"));
+
+    expect(row).toHaveLength(1);
+    expect(row[0]).toContain(`\`${getScreenshotScale()}\``);
+    // …and which platforms read it. Unqualified, this row contradicts `scale`'s
+    // own description: the Chromium branch forwards `params.scale` raw, so an
+    // omitted scale reaches it as undefined and the variable changes nothing.
+    expect(row[0]).toContain("on iOS, Android, Apple TV and Vega");
+    expect(row[0]).toContain("Chromium does not read this variable");
   });
 
   it("does not promise a full-resolution capture, or a full-size diff image", () => {

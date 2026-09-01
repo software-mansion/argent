@@ -303,6 +303,18 @@ describe("diffPngFiles", () => {
     for (const { name, text } of caveats) {
       expect(text, name).toMatch(names(statusIn(normalized)));
     }
+
+    // The user-facing page is the fourth surface, and the one no sweep here
+    // reaches: `readAgentDocs` walks packages/skills, so a rename lands in
+    // packages/docs by no route at all. It gave the overall status as
+    // "Unchanged or changed" and named neither of these until this was written.
+    const feature = await fs.readFile(
+      path.join(__dirname, "../../docs/docs/features/visual-regression.mdx"),
+      "utf8"
+    );
+    for (const word of [statusIn(normalized), statusIn(aspectMismatch)]) {
+      expect(feature, "visual-regression.mdx").toMatch(names(word));
+    }
   });
 
   it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {
