@@ -111,6 +111,12 @@ const REPAIR_CHUNK_DELAY_MS = 100;
  * `input keyevent` accepts several keycodes per call and injects them from one
  * `app_process` boot, so the undo runs as a handful of calls instead of one per
  * character. Capped so the device-side command line stays short.
+ *
+ * Deliberately un-paced, unlike the retype: the burst that loses characters is
+ * the one this repair exists to undo, so the asymmetry is worth a measurement.
+ * On the Settings search box (Pixel 6 / API 34), one call of 64 `KEYCODE_DEL`
+ * removed exactly 64 characters in 5 runs of 5 — filled both by a paced retype
+ * and by a single un-paced `input text`.
  */
 const DELETE_KEYCODES_PER_CALL = 64;
 
