@@ -254,6 +254,29 @@ describe("plannedUndoDeletions", () => {
     expect(plannedUndoDeletions("a", "abcdefghi", "abcdefghijkl")).toBeNull();
   });
 
+  it("declines a selection at the END of the field, where nothing follows the text", () => {
+    // The occurrence sits at the last index the scan reaches, with an empty
+    // suffix — the mirror of the leading selection below, and the ordinary
+    // editing gesture: tap the field, double-tap the LAST word, retype. Field
+    // "bb aa" with "aa" selected and `text: "aaa"` gives the correct "bb aaa",
+    // a growth of 1 rather than 3; reading that as this call's whole
+    // contribution deletes 1, retypes 3 and leaves "bb aaaaa", which is
+    // `before.length + text.length` and so satisfies the `inserted` branch.
+    expect(classifyTypedText("bb aa", "bb aaa", "aaa")).toBe("indeterminate");
+    expect(plannedUndoDeletions("bb aa", "bb aaa", "aaa")).toBeNull();
+  });
+
+  it("still repairs a drop whose residue LEADS the text", () => {
+    // The other half of the same proof. Cursor at 0 of a field reading "abc",
+    // typing "abc", the burst dropping everything but the final "c": the field
+    // reads "cabc", which CONTAINS the text, but "abc" does not start "c", so no
+    // selection explains it and the repair must still run. `before.endsWith`
+    // proves the trailing-residue case ("abcac" below); this is the one only
+    // `before.startsWith` can rule out.
+    expect(classifyTypedText("abc", "cabc", "abc")).toBe("not-landed");
+    expect(plannedUndoDeletions("abc", "cabc", "abc")).toBe(1);
+  });
+
   it("refuses a reading a replaced selection produces just as well", () => {
     // `input text` replaces a selection, so "cat food" with "cat" double-tap
     // selected and "catt" typed with its last character dropped reads back
@@ -525,6 +548,14 @@ describe("android keyboard read-back — fault injection", () => {
     const res = await type(registry, "abcdefghijkl");
     expect(res.verified).toBe(false);
     expect(res.note).toMatch(/could not be safely restored/);
+    // The total is the READ-BACK's, not the baseline's: an agent deciding how many
+    // characters to clear before retyping acts on this number, and the note's own
+    // next sentence tells it the total is what the field holds.
+    expect(res.note).toContain("12 characters were typed and the field now holds 11 in total");
+    expect(res.note).toContain("an empty field reads back as its hint");
+    expect(res.note).toContain("it is not a count of how many characters were lost");
+    // …and what to do about it, which is the half an agent acts on.
+    expect(res.note).toMatch(/type in shorter pieces or send a value the field accepts/);
     // No backspaces, no retype — only the original injection reached the device.
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
   });

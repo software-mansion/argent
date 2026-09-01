@@ -281,14 +281,14 @@ function beforeSurvived(before: string, after: string): boolean {
  *
  *  - The field did not change at all and already contains `text`: a correct type
  *    into a field that held the same value is indistinguishable from an injection
- *    that landed nothing.
+ *    that landed nothing. (The empty-selection reading of the clause below.)
  *  - The field now reads exactly `text` AND the prior content survived as edges:
  *    "abc" + a correct replacement by "abcdef" looks the same as "abc" plus a
  *    partial landing of "def" out of "abcdef". A hint reaches this shape too,
  *    whenever it happens to sit at an edge of the typed text — hint "0" under
  *    "100" — so a correct type into an empty field can land here. Declining is
  *    still the only sound answer: nothing in the two readings distinguishes it
- *    from the partial landing.
+ *    from the partial landing. (The whole-field reading of the clause below.)
  *  - The whole of `text` sits where replacing a SELECTION would have put it —
  *    `after` is `before` with one run cut out and `text` dropped in its place
  *    (`replacedSelection`). `input text` replaces the selection, so a field
@@ -327,8 +327,6 @@ function beforeSurvived(before: string, after: string): boolean {
 export function classifyTypedText(before: string, after: string, text: string): TypedTextVerdict {
   if (after.includes(text) && after.length === before.length + text.length) return "landed";
   if (after === text && !beforeSurvived(before, after)) return "landed";
-  if (after === before && after.includes(text)) return "indeterminate";
-  if (after === text && beforeSurvived(before, after)) return "indeterminate";
   if (replacedSelection(before, after, text)) return "indeterminate";
   if (!after.includes(text) && isSubsequence(text, after)) return "indeterminate";
   return "not-landed";
