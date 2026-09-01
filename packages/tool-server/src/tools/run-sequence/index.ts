@@ -233,6 +233,13 @@ proved the typed text did not land — and returns partial results.`,
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          // A tool that watches the signal rejects when the caller gives up mid-call
+          // — the gesture tools do, and so does the Android keyboard read-back,
+          // which holds the call for tens of seconds while it repairs. Recording
+          // that as a step error would report a cancelled run as a failed one:
+          // `flow-nested-outcome.ts` reads an error entry as a step failure and a
+          // sequence that merely stopped short as the aborted skip.
+          if (signal?.aborted) break;
           const reframed = describeNestedParamError(
             registry,
             err,

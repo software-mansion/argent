@@ -434,6 +434,38 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
   });
 
+  it("records no failure when the step it is running is cancelled", async () => {
+    const controller = new AbortController();
+    // What a cancelled `keyboard` read-back or gesture does: the caller goes away
+    // mid-call and the tool rejects. An `error` entry here would reach the flow
+    // report as "run-sequence stopped at keyboard: This operation was aborted",
+    // a step failure blaming the app for the cancellation.
+    const registry = mockRegistry(() => {
+      controller.abort();
+      throw new Error("This operation was aborted");
+    });
+    const tool = createRunSequenceTool(registry);
+    const ctx = { artifacts: {}, signal: controller.signal } as unknown as ToolContext;
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { text: "hello" }, delayMs: 0 },
+          { tool: "keyboard", args: { key: "enter" }, delayMs: 0 },
+        ],
+      },
+      ctx
+    );
+
+    // Stopped short with nothing recorded — the shape `flow-nested-outcome.ts`
+    // maps to a skip.
+    expect(result.steps).toEqual([]);
+    expect(result.completed).toBe(0);
+    expect(result.total).toBe(2);
+  });
+
   describe("a step whose args the sub-tool rejects", () => {
     const liveRegistry = () => {
       const registry = new Registry();

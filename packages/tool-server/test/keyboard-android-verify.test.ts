@@ -438,12 +438,25 @@ describe("plannedUndoDeletions", () => {
     // A field of one character the call never typed rules out every non-empty
     // run, so nothing decides the search short of its own length: below the cap
     // it answers, above it it refuses — the answer an ambiguous reading gets
-    // anyway. The two sizes straddle READING_SEARCH_STEPS; raising that constant
-    // must be a deliberate edit, not a silent one.
-    const under = "z".repeat(1_999_998);
+    // anyway. Each offset costs two steps here, the empty run it scans and the
+    // one-character run it rules out, so the straddle sits at half
+    // READING_SEARCH_STEPS; raising that constant must be a deliberate edit, not
+    // a silent one.
+    const under = "z".repeat(999_999);
     expect(plannedUndoDeletions(under, under, "abc")).toBe(0);
-    const over = "z".repeat(2_000_002);
+    const over = "z".repeat(1_000_001);
     expect(plannedUndoDeletions(over, over, "abc")).toBeNull();
+  });
+
+  it("charges the scan, so a field that matches long runs cannot outrun the cap", () => {
+    // Every offset of this field matches a run that scans most of `text` before
+    // it fails, which is where the work is: charging one step per reading instead
+    // of the characters it read turns a 7 ms refusal into a 4 s answer.
+    const before = "a".repeat(1_999);
+    const after = "a".repeat(2_000);
+    const started = Date.now();
+    expect(plannedUndoDeletions(before, after, "a" + "z".repeat(999))).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it("scans `text` only as far as the run it matches, so a big field still answers", () => {
@@ -772,6 +785,67 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       expect(res.note).toMatch(/no longer the one the text was typed into/);
       expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
     });
+  });
+
+  it("verifies an untagged field whose bounds enclose no area", async () => {
+    // A keystroke-capture `TextInput` sized to nothing dumps `[540,1200][540,1200]`
+    // and carries no id, so identity comes down to the rectangle — which an area
+    // test excludes from its own area, refusing the field even against its own
+    // unchanged read.
+    const at = (text: string) => hierarchy({ text, rid: "", bounds: "[540,1200][540,1200]" });
+    const { registry } = registryServing([at("XY"), at("XYabcdefghijkl")]);
+    await expect(type(registry, "abcdefghijkl")).resolves.toMatchObject({ verified: true });
+  });
+
+  it("declines a field it cannot place, rather than matching it to anything", async () => {
+    // Bounds that do not parse identify nothing. Reading them as a match makes
+    // every unparseable capture a repair into a field the call cannot locate.
+    const at = (text: string) => hierarchy({ text, rid: "", bounds: "not-a-rectangle" });
+    const { registry } = registryServing([at("XY"), at("XYabcdefgh")]);
+    const res = await type(registry, "abcdefghijkl");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no longer the one the text was typed into/);
+    expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+  });
+
+  it("keeps two shared-id boxes that touch edge to edge apart", async () => {
+    // Stacked rows of a form share their layout's id and meet exactly on a pixel
+    // row. Overlap has to be strict there: boxes that only touch are two fields,
+    // and treating them as one retypes into the box the caller never targeted.
+    const stacked = (focusedIndex: number, texts: string[]) =>
+      `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
+      `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" ` +
+      `package="com.example" content-desc="" focusable="false" focused="false" ` +
+      `password="false" bounds="[0,0][1080,2400]">` +
+      texts
+        .map(
+          (t, i) =>
+            `<node index="${i}" text="${t}" resource-id="com.example:id/row_input" ` +
+            `class="android.widget.EditText" package="com.example" content-desc="" ` +
+            `checkable="false" checked="false" clickable="true" enabled="true" focusable="true" ` +
+            `focused="${i === focusedIndex}" scrollable="false" long-clickable="true" ` +
+            `password="false" selected="false" bounds="[100,${100 + i * 100}][500,${200 + i * 100}]" />`
+        )
+        .join("") +
+      `</node></hierarchy>`;
+
+    const { registry } = registryServing([stacked(0, ["", ""]), stacked(1, ["a", ""])]);
+    const res = await type(registry, "abcdefghijkl");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no longer the one the text was typed into/);
+    expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+  });
+
+  it("repairs a uniquely-id'd field that moved clear of where it was", async () => {
+    // What makes the id the primary test rather than a tiebreak: a list scrolled
+    // by more than a row leaves no overlap at all, and an id no other editable
+    // view carries is still the same field.
+    const { registry } = registryServing([
+      hierarchy({ text: "XY", bounds: "[126,149][1080,275]" }),
+      hierarchy({ text: "XYabcdefgh", bounds: "[126,1500][1080,1626]" }),
+      hierarchy({ text: "XYabcdefghijkl", bounds: "[126,1500][1080,1626]" }),
+    ]);
+    await expect(type(registry, "abcdefghijkl")).resolves.toMatchObject({ verified: true });
   });
 
   it("still repairs a shared-id field that moved but still covers where it was", async () => {
@@ -1125,6 +1199,41 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.verified).toBe(false);
     expect(res.note).toMatch(/retry could not be completed/);
     expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
+  });
+
+  it("does not claim characters were removed when the backspaces never went out", async () => {
+    // The first `input keyevent` is the call that fails here, so the field still
+    // holds what the read-back found. Reporting the planned count as removed
+    // describes a field emptier than the one the caller has.
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: "XYabcdefgh" }),
+    ]);
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd.startsWith("input keyevent")) throw new Error("adb: device offline");
+      return "";
+    });
+    const res = await type(registry, "abcdefghijkl");
+    expect(res.verified).toBe(false);
+    expect(res.note).toMatch(/backspaces it starts with did not go out/);
+    expect(res.note).not.toMatch(/8 characters were removed/);
+  });
+
+  it("says the retry may have gone elsewhere when focus was already lost", async () => {
+    // The repair types into whatever holds focus. If focus was gone before it
+    // ran, the backspaces and chunks never reached the field, so asserting the
+    // field was modified — which every post-repair note does — needs the caveat.
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: "XYabcdefgh" }),
+      hierarchy({ focused: false }),
+    ]);
+    const res = await type(registry, "abcdefghijkl");
+    // `false`, not absent: the last thing measured is the failure that sent the
+    // call to the repair.
+    expect(res.verified).toBe(false);
+    expect(res.note).toMatch(/no editable field held input focus/);
+    expect(res.note).toMatch(/focus was already gone when the retry ran/);
   });
 
   it("says what a repair with nothing to delete did — repaired, blocked, failed", async () => {
@@ -1895,7 +2004,7 @@ describe("android keyboard read-back — cancellation", () => {
   });
 
   it("declares longRunning, so the MCP adapter does not abandon and replay a repair", async () => {
-    // A 600-character repair is 86 adb calls plus the inter-chunk pauses, well
+    // A 600-character repair is 85 adb calls plus the inter-chunk pauses, well
     // past the adapter's 30 s fetch timeout — which does not cancel anything, it
     // re-POSTs the identical body up to five times, and this tool types the whole
     // string again on every one of them.

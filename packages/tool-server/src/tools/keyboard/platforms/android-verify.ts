@@ -172,10 +172,11 @@ interface FocusedField {
  * They need different notes: the advice for the first is "tap the field", which
  * for the second is advice for a screen this is not.
  *
- * Walked in document order and takes the first match: a capture spanning several
+ * Walked in document order and takes the first match. A capture spanning several
  * windows (the helper walks every interactive window it is given — see
  * `captureMode` / `windowCount` on `HierarchyResult`) can carry a stale
- * `focused="true"` in a background window behind the one actually taking input.
+ * `focused="true"` in a background window, and the dump says nothing about which
+ * window takes input, so the first match is a guess on such a capture.
  */
 function findFocused(xml: string): { field: FocusedField | null; focusedClass: string | null } {
   const root = parseUiAutomatorXml(xml);
@@ -263,9 +264,18 @@ function isSameField(a: FocusedField, b: FocusedField): boolean {
   return boundsOverlap(a.bounds, b.bounds);
 }
 
-/** Whether two parsed bounds share any pixel. Unparseable bounds identify nothing. */
+/**
+ * Whether two parsed bounds share any pixel, with an identical rectangle always
+ * matching itself: a keystroke-capture `TextInput` dumps `[540,1200][540,1200]`,
+ * and an area test excludes a zero-area rect from its own area, which would
+ * refuse to match such a field even against its own unchanged read.
+ * (`framesOverlap` in `flows/flow-actions.ts` shares the blind spot; there it
+ * costs a best-effort focus poll that types anyway.) Unparseable bounds identify
+ * nothing.
+ */
 function boundsOverlap(a: FocusedField["bounds"], b: FocusedField["bounds"]): boolean {
   if (!a || !b) return false;
+  if (a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h) return true;
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
@@ -301,8 +311,11 @@ function beforeSurvived(before: string, after: string): boolean {
  *    contained. A dropped character breaks the contiguous-substring half; a
  *    doubled injection breaks the length half.
  *  - *replaced*: the field now holds precisely `text` and the prior content did
- *    NOT survive into it — which an unchanged field cannot satisfy, since
- *    `before` always survives into itself. That is the empty-field case —
+ *    NOT survive into it whole — which an unchanged field cannot satisfy, since
+ *    `before` always survives into itself. An edge of the prior content shared
+ *    with `text` is not ruled out, so a partial landing that the field's own
+ *    residue completes into exactly `text` reads as landed: the field then holds
+ *    precisely what was asked for, which is what the verdict claims. That is the empty-field case —
  *    the baseline read was the hint (see `FocusedField.text`) — and equally a
  *    selection that `input text` replaced.
  *
@@ -337,8 +350,10 @@ function beforeSurvived(before: string, after: string): boolean {
  *    added of its own (`isSubsequence(text, after)` while `text` is NOT there
  *    contiguously). That is what a field which REFORMATS what it is given does —
  *    "5551234567" typed into Contacts' Phone box reads back "(555) 123-4567" —
- *    and a dropped key-event burst cannot manufacture it, because dropping only
- *    ever removes characters. A `not-landed` here is a hard step failure across
+ *    and a dropped key-event burst cannot manufacture it out of an empty field,
+ *    because dropping only ever removes characters — on a field that already held
+ *    characters of its own it can (typing "123" into "1-3" and landing only "2"),
+ *    which is why the reading is ambiguous rather than accepted. A `not-landed` here is a hard step failure across
  *    the three gates on a value that landed exactly as asked, which every phone,
  *    card, date and currency field would meet. Requiring `text` NOT to be there
  *    contiguously is what keeps a doubled injection ("abc" typed into an empty
@@ -456,6 +471,10 @@ export function plannedUndoDeletions(before: string, after: string, text: string
     // — without which a field of one repeated character costs the full search.
     const canStartRun = typedChars.has(after[i]!);
     for (let j = Math.max(i, before.length - suffix); j <= before.length; j++) {
+      // Every pair costs a step, not only the ones that reach the scan: on a field
+      // of one repeated character the arms below skip most readings without
+      // reading anything, and that is where the search spends its time.
+      if (--steps < 0) return null;
       const landedLength = added + (j - i);
       if (landedLength < 0) continue;
       if (landedLength > text.length) break;
@@ -467,7 +486,7 @@ export function plannedUndoDeletions(before: string, after: string, text: string
       // Charge what the scan reads, not the run it matches: a run that does not
       // match reads the whole of `text`, so counting characters read is what
       // makes the budget a bound on the work.
-      steps -= scanned + 1;
+      steps -= scanned;
       if (steps < 0) return null;
       if (!matched) continue;
       if (proven === null) proven = landedLength;
@@ -552,7 +571,7 @@ function abortRepair(signal: AbortSignal | undefined, progress: string): void {
   if (signal?.aborted) throw repairAbortError(`${progress}, the field is part-way repaired`);
 }
 
-/** Named `AbortError` because that is the name every caller keys on. */
+/** Named `AbortError` because `utils/format-error.ts` classifies a cancel by it. */
 function repairAbortError(detail: string, cause?: unknown): Error {
   const err = new Error(`keyboard repair aborted - ${detail}`);
   err.name = "AbortError";
@@ -560,14 +579,18 @@ function repairAbortError(detail: string, cause?: unknown): Error {
   return err;
 }
 
-async function deleteTrailing(serial: string, count: number, signal?: AbortSignal): Promise<void> {
+/** Reports each batch as it goes out, so a failure can be described by what was sent. */
+async function deleteTrailing(
+  serial: string,
+  count: number,
+  onSent: (batch: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
   for (let remaining = count; remaining > 0; remaining -= DELETE_KEYCODES_PER_CALL) {
     abortRepair(signal, `${count - remaining} of ${count} backspaces sent`);
-    await injectAndroidKeycodeRepeated(
-      serial,
-      KEYCODE_BACKSPACE,
-      Math.min(remaining, DELETE_KEYCODES_PER_CALL)
-    );
+    const batch = Math.min(remaining, DELETE_KEYCODES_PER_CALL);
+    await injectAndroidKeycodeRepeated(serial, KEYCODE_BACKSPACE, batch);
+    onSent(batch);
   }
 }
 
@@ -638,14 +661,14 @@ const READ_FAILED_REASON =
 
 // Distinct from a read failure: both reads succeeded and the field in focus
 // afterwards is not the one the text was typed into. Telling the agent to hunt
-// dropped characters would bury the actionable fact. Every cause is named because
-// the read cannot tell them apart — see `isSameField`.
+// dropped characters would bury the actionable fact. The causes are named
+// together because the read cannot tell them apart — see `isSameField`.
 const FOCUS_MOVED_REASON =
   "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
   "being typed, in which case the text may have been split across both, or the field could not be " +
-  "matched again after moving on screen (a chat composer growing to a second line does this), " +
-  "because it carries no id or one its neighbours share, as an OTP form's boxes do. Read the screen with `describe` before continuing.";
+  "matched again: it moved clear of where it was (a list scrolled by more than a row does this), " +
+  "or it carries no id or one its neighbours share, as an OTP form's boxes do. Read the screen with `describe` before continuing.";
 
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"
@@ -685,16 +708,30 @@ const MASKED_AFTER_REASON =
  */
 function blockedNote(reason: string, deleted: number | null): string {
   if (deleted === null) return `${UNVERIFIED_PREFIX}: ${reason} Nothing was retyped.`;
-  // `adb input` goes to whatever holds focus at the moment it runs, so a focus
-  // change that happened before the repair sent the backspaces and the retype
-  // into the OTHER field. That is the worst state this module can leave behind
-  // and the only note that can name it.
-  const misdirected =
-    reason === FOCUS_MOVED_REASON
-      ? " If focus moved before the retry rather than during the read, those key events reached " +
-        "the field that holds focus now, not the one the text was typed into."
-      : "";
-  return `${UNCONFIRMED_REPAIR_PREFIX}: ${reason} ${retypedClause(deleted)}${misdirected}`;
+  return `${UNCONFIRMED_REPAIR_PREFIX}: ${reason} ${retypedClause(deleted)}${misdirected(reason)}`;
+}
+
+/**
+ * `adb input` goes to whatever holds focus at the moment it runs, so a focus
+ * change that happened before the repair sent the backspaces and the retype
+ * somewhere else. That is the worst state this module can leave behind and these
+ * are the only notes that can name it — `retypedClause` above them asserts the
+ * field was modified, which holds only if the repair reached it.
+ */
+function misdirected(reason: string): string {
+  if (reason === FOCUS_MOVED_REASON) {
+    return (
+      " If focus moved before the retry rather than during the read, those key events reached " +
+      "the field that holds focus now, not the one the text was typed into."
+    );
+  }
+  if (reason === FOCUS_LOST_REASON) {
+    return (
+      " If focus was already gone when the retry ran, those key events reached whatever the app " +
+      "had focused instead, or nothing at all."
+    );
+  }
+  return "";
 }
 
 /**
@@ -784,13 +821,21 @@ function mismatchNote(typed: number, present: number, repaired: boolean): string
 // retyping, so the field can be left holding LESS than when the call started —
 // the one path where that is possible, and it must be reported rather than
 // swallowed into a generic transport error.
-function repairFailedNote(deleted: number): string {
-  if (deleted === 0) {
+function repairFailedNote(deleted: number, planned: number): string {
+  if (planned === 0) {
     return (
       "The typed text did not land, and the retry could not be completed: nothing had to be " +
       "deleted first, and the retype did not finish. The field may hold anything from what it " +
       "held before this call to that plus a truncated copy of the text. Read it with `describe` " +
       "and retype from a known state."
+    );
+  }
+  if (deleted === 0) {
+    return (
+      "The typed text did not land, and the retry could not be completed: the backspaces it " +
+      "starts with did not go out. The field may hold anything from what it held when this call " +
+      "read it back to that with part of the typed text removed. Read it with `describe` and " +
+      "retype from a known state."
     );
   }
   return (
@@ -880,9 +925,10 @@ async function readFocusedField(
 /**
  * Type `text` into the focused field and prove it landed.
  *
- * Injects exactly once on every path — the text is typed whether or not it can
- * be verified — plus at most one chunked re-injection when the first attempt is
- * caught having dropped characters. Two attempts total: each one costs a
+ * Injects exactly once on every path that reaches the injection — the text is
+ * typed whether or not it can be verified, and only a cancellation seen before
+ * the first keystroke types nothing — plus at most one chunked re-injection when
+ * the first attempt is caught having dropped characters. Two attempts total: each one costs a
  * hierarchy read, and a field that drops events under both a single burst and a
  * slow chunked cadence is not failing for cadence reasons (an input mask,
  * autocorrect, a maxLength, a field rejecting characters), so a third identical
@@ -993,8 +1039,9 @@ async function verifyAgainstDevtools(
     return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };
   }
   let repairFailed = false;
+  let deleted = 0;
   try {
-    await deleteTrailing(serial, deletions, signal);
+    await deleteTrailing(serial, deletions, (batch) => (deleted += batch), signal);
     await injectInChunks(serial, text, signal);
   } catch (err) {
     // A repair that stopped because the caller did is a cancellation, not a
@@ -1015,8 +1062,9 @@ async function verifyAgainstDevtools(
   if (repairFailed) {
     // The undo runs before the retype, so a failure between them can leave the
     // field emptier than the call found it. Report that state instead of letting
-    // an adb error imply nothing happened.
-    return { verified: false, note: repairFailedNote(deletions) };
+    // an adb error imply nothing happened — counting the backspaces that went out
+    // rather than the ones planned, since the call that failed may be the first.
+    return { verified: false, note: repairFailedNote(deleted, deletions) };
   }
 
   const repaired = await readAfter(devtools, before, deletions);
