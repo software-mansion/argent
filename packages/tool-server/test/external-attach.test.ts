@@ -317,19 +317,12 @@ describe("attaching to a provider's simulator-server", () => {
     );
   });
 
-  it("refuses an endpoint argent's own build does not serve", async () => {
-    const simulatorServer = await startSimulatorServer();
-    const device = attachTo(simulatorServer);
-    const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    /**
-     * Reaching past the parity allowlist must fail before any request is made,
-     * so the provider's server never even sees it.
-     */
-    await expect(httpScreenshotAtEndpoint(instance.api, "/api/clipboard")).rejects.toThrow(
-      /Refusing to call/
-    );
-    expect(simulatorServer.httpPaths).not.toContain("/api/clipboard");
-  });
+  /**
+   * The parity rule lives in `simulator-client-parity.test.ts`, against the
+   * real call sites. It was asserted here through a local helper that repeated
+   * the guard rather than reaching one, so it held whether or not any of them
+   * still called the allowlist. Deleting all three left it green.
+   */
 
   it("refuses to attach when the provider withheld the simulator-server capability", async () => {
     const simulatorServer = await startSimulatorServer();
@@ -369,17 +362,3 @@ describe("attaching to a provider's simulator-server", () => {
     });
   });
 });
-
-/**
- * Drive `simulatorPost`'s allowlist through its only public door. The
- * screenshot helper hard-codes its endpoint, so this mirrors what a future
- * caller reaching for a forbidden one would do.
- */
-async function httpScreenshotAtEndpoint(
-  api: { apiUrl: string; external?: boolean },
-  endpoint: string
-): Promise<unknown> {
-  const { assertAllowedSimServerEndpoint } = await import("../src/utils/external-devices");
-  if (api.external) assertAllowedSimServerEndpoint(endpoint);
-  return fetch(`${api.apiUrl}${endpoint}`, { method: "POST" });
-}
