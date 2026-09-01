@@ -5,26 +5,29 @@ description: Interact with a physical iPhone via argent. Use when tapping, swipi
 
 # Argent physical iOS devices
 
-## Critical
-
-- **Automation is app-scoped.** XCUITest drives one app at a time. `launch-app` (or `restart-app`) registers the target; `describe`, `await-ui-element`, and gestures then act on that app only. `describe`'s `bundleId` parameter is ignored on hardware.
-- **System UI needs an explicit registration.** `launch-app` with `com.apple.springboard` registers without launching (SpringBoard always runs) and exposes the home screen and system dialogs to `describe`. Register the real app again afterwards.
-- **A tool-server restart forgets the registration.** The first `describe` or gesture then fails with "No app is under automation on this device"; recover with `launch-app` (or `restart-app`) for the target.
-- `screenshot` and `screenshot-diff` live captures are the exception: they capture the whole screen and need no registered app.
+Run `launch-app` (or `restart-app`) for the target app first; nothing else works until it does. Automation on hardware is app-scoped: XCUITest drives one app at a time, and `describe`, `await-ui-element`, and gestures act on that registered app only. `describe`'s `bundleId` parameter is ignored on hardware.
 
 ## The interaction loop
 
-1. `describe` reads the registered app's accessibility tree with normalized frames.
-2. Tap/swipe/type with the supported tools below; coordinates are 0.0 to 1.0 as everywhere else.
-3. `describe` again (or `await-ui-element`) to confirm. The general tapping and sequencing rules from `argent-device-interact` still apply.
+1. `launch-app` (or `restart-app`) registers the target app.
+2. `describe` reads that app's accessibility tree with normalized frames.
+3. Tap, swipe, or type with the supported tools below; coordinates are 0.0 to 1.0 as everywhere else.
+4. `describe` again (or `await-ui-element`) to confirm.
+
+The general tapping and sequencing rules from `argent-device-interact` still apply.
+
+## Registration rules
+
+- **System UI needs an explicit registration.** `launch-app` with `com.apple.springboard` registers without launching (SpringBoard always runs) and exposes the home screen and system dialogs to `describe`. Register the real app again afterwards.
+- **A tool-server restart forgets the registration.** The first `describe` or gesture then fails with "No app is under automation on this device"; recover with `launch-app` (or `restart-app`) for the target.
+- **`open-url` re-registers.** It delivers the URL to one named app: `http(s)` URLs default to Safari, any other scheme needs the `bundleId` parameter, and the receiving app becomes the app under automation.
+- **`screenshot` and `screenshot-diff` live captures are the exception**: they capture the whole screen and need no registered app.
 
 ## Supported tools
 
 `list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `button`, `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the flow tools, and `stop-simulator-server`.
 
-`open-url` on hardware delivers the URL to one named app: `http(s)` URLs default to Safari, any other scheme needs the `bundleId` parameter, and the receiving app becomes the app under automation.
-
-Everything else fails with `not supported on ios device`. Reach for the alternative instead:
+Everything else fails with `not supported on ios device`. Do this instead:
 
 | Gated tool                        | Do instead                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------ |
@@ -43,15 +46,15 @@ Everything else fails with `not supported on ios device`. Reach for the alternat
 
 ## Typing
 
-- Tap the text field first. Typing with no focused field returns "Nothing on screen has keyboard focus. Tap the text field first, then retype."
-- `keyboard` carries `text`, and `enter` and `backspace` as the only named keys. Any other named key is rejected; tap on-screen keys with `gesture-tap` instead. `backspace` deletes one character per call.
-- XCTest types whole strings; `delayMs` is ignored.
+1. Tap the text field. Typing with no focused field returns "Nothing on screen has keyboard focus. Tap the text field first, then retype."
+2. Send `keyboard` with `text`, or with `enter` or `backspace` as the only named keys. Any other named key is rejected; tap on-screen keys with `gesture-tap` instead. `backspace` deletes one character per call.
+3. XCTest types whole strings; `delayMs` is ignored.
 
 ## Backgrounded targets
 
-Batch 3 semantics: observation never changes the screen.
+Observation never changes the screen; mutation may.
 
-- A backgrounded target makes `describe` and `await-ui-element` fail instead of re-fronting the app. The error offers the three ways out: `screenshot` for the current screen, `launch-app` to bring the app back, or `launch-app com.apple.springboard` to describe what is actually showing.
+- A backgrounded target makes `describe` and `await-ui-element` fail instead of re-fronting the app. The error names the three ways out: `screenshot` for the current screen, `launch-app` to bring the app back, or `launch-app com.apple.springboard` to describe what is actually showing.
 - Mutating tools (gestures, typing) do re-front a backgrounded target, and their result then carries `reactivated: true`: the foreground screen changed as a side effect, so re-describe before the next step.
 
 ## Pitfalls
