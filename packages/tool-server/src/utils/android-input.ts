@@ -293,12 +293,30 @@ function subprocessMetadataOf(
   };
 }
 
-/** The adb failure's own first line, without the 200-keycode command it quotes. */
+/**
+ * The adb failure's own diagnosis, on one line, without the 200-keycode command
+ * it quotes.
+ *
+ * A COLD adb prints its daemon banner before the error — two lines of
+ * `* daemon …` — and a cold adb is likeliest on the first Android call of a
+ * tool-server's life. Taking line 0 handed the caller
+ * "…failed: * daemon not running; starting now at tcp:5037" and dropped
+ * "adb: error: …", the only sentence that says what went wrong. The banner is
+ * removed wherever it sits, including inline after `failed:`, and the real error
+ * is pulled up to join the prefix it belongs to.
+ */
 function firstLine(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  return message
-    .split("\n")[0]!
-    .replace(/input keyevent[\d ]*\d/g, "input keyevent <the delete burst>");
+  const lines = message
+    .replace(/\* daemon[^\n]*/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const head = lines[0] ?? "";
+  // With the banner gone, the head can end at its own `failed:` with adb's
+  // error on the next line.
+  const line = /failed:$/.test(head) && lines[1] !== undefined ? `${head} ${lines[1]}` : head;
+  return line.replace(/input keyevent[\d ]*\d/g, "input keyevent <the delete burst>");
 }
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */

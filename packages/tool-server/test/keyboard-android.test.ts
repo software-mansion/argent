@@ -813,6 +813,32 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(err?.message).toMatch(/Read the field back/);
   });
 
+  it("quotes adb's own error, not the daemon banner printed ahead of it", async () => {
+    // A COLD adb prints two `* daemon …` lines before the error, and the first
+    // Android call of a tool-server's life is exactly when adb is cold. Taking
+    // the message's line 0 handed the caller the banner and dropped
+    // "adb: error: …" — the only sentence that says what went wrong. Verified
+    // against a real failing adb, whose stderr carries all three lines.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(
+      new Error(
+        "adb -s emulator-5554 shell input keyevent 67 112 67 112 failed: " +
+          "* daemon not running; starting now at tcp:5037\n" +
+          "* daemon started successfully\n" +
+          "adb: error: failed to get feature set: device offline"
+      )
+    );
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toMatch(/adb: error: failed to get feature set: device offline/);
+    expect(err?.message).not.toMatch(/daemon not running/);
+    // And the keycode dump is still stripped.
+    expect(err?.message).not.toMatch(/67 112 67 112/);
+    expect(err?.message).toMatch(/input keyevent <the delete burst>/);
+  });
+
   it("keeps the subprocess telemetry every other adb re-statement keeps", async () => {
     // `failure_exit_code` and `failure_signal` must survive the re-statement,
     // including the SIGKILL from the 90s cap that this budget exists to bound.
