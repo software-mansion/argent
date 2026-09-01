@@ -30,7 +30,7 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { checkSnapshotLoadable, listAndroidDevices, listAvds } from "../src/utils/adb";
+import { adbShell, checkSnapshotLoadable, listAndroidDevices, listAvds } from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -230,5 +230,50 @@ describe("checkSnapshotLoadable extraArgs (renderer-args parity)", () => {
       "-check-snapshot-loadable",
       "default_boot",
     ]);
+  });
+});
+
+describe("runAdb — the caller's own cancel reaches the child", () => {
+  /**
+   * `timeoutMs` bounds a hung child and `signal` cancels a live one; they answer
+   * different questions, and the clear burst needs both — a 90s budget nobody
+   * should have to wait out after the caller has gone.
+   *
+   * Asserted at the `execFile` boundary on purpose. Every caller-side test
+   * module-mocks `adbShell`, so "the option was passed to adbShell" is all they
+   * can see: deleting `signal` from the `execFile` options left the whole suite
+   * green while every adb child became uncancellable.
+   */
+  it("passes the AbortSignal and the timeout through to execFile", async () => {
+    let observed: { signal?: AbortSignal; timeout?: number } | undefined;
+    execFileMock.mockImplementation((_cmd: string, _args: readonly string[], options: unknown) => {
+      observed = options as { signal?: AbortSignal; timeout?: number };
+      return { stdout: "", stderr: "" };
+    });
+    const controller = new AbortController();
+
+    await adbShell("emulator-5554", "input keyevent 67", {
+      timeoutMs: 90_000,
+      signal: controller.signal,
+    });
+
+    // The very signal the request carries, not a copy: an abort fired on the
+    // caller's controller has to reach this child.
+    expect(observed?.signal).toBe(controller.signal);
+    expect(observed?.timeout).toBe(90_000);
+  });
+
+  it("leaves `signal` unset when the caller passes none", async () => {
+    // A call without one must behave exactly as it did before: `execFile`
+    // rejects a non-AbortSignal `signal` outright.
+    let observed: { signal?: AbortSignal } | undefined;
+    execFileMock.mockImplementation((_cmd: string, _args: readonly string[], options: unknown) => {
+      observed = options as { signal?: AbortSignal };
+      return { stdout: "", stderr: "" };
+    });
+
+    await adbShell("emulator-5554", "input text hi");
+
+    expect(observed?.signal).toBeUndefined();
   });
 });
