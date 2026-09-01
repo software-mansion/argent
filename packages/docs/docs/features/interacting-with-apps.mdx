@@ -27,7 +27,7 @@ The agent does not read coordinates from a screenshot. Before each tap, the agen
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
-On Android, the agent also reads the content of a `WebView`. Chromium puts the web page into the accessibility tree. Thus the agent gets the elements of the page and the native elements around them in one tree. Some WebView versions also send the HTML `id` of an element. The agent then selects a web control by id, in the same way as a native control. Other WebView versions send no id. Argent also drops the id of a layout element that has no name. The agent then selects such an element by its text or its role.
+On Android, the agent also reads the content of a `WebView`. Chromium puts the web page into the accessibility tree. Thus the agent gets the elements of the page and the native elements around them in one tree. Some WebView versions also send the HTML `id` of an element. The agent then selects a web control by id, in the same way as a native control. Other WebView versions send no id. The agent then selects the control by its text or its role. Argent also removes a layout element of the page that has no name. A `<div>` or a `<form>` is such an element. Argent removes its `id` with it. The agent selects the controls in the element instead.
 
 The renderer needs a moment to publish the page. Before it does, the agent sees the `WebView` and no content in it. The agent waits for an element of the page, then continues.
 
