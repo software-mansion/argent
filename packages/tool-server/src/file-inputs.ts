@@ -46,13 +46,19 @@ export interface UploadEntry {
   sha256: string;
 }
 
-export type UploadLookup = (uploadId: string) => UploadEntry | undefined;
+type UploadLookup = (uploadId: string) => UploadEntry | undefined;
 
-export interface ResolveFileInputsResult {
+interface ResolveFileInputsResult {
   /** The request body, with file-input wrappers resolved away. */
   args: Record<string, unknown>;
   /** Per-target outcomes, forwarded via `InvokeToolOptions.fileInputs`. */
   fileInputs: Record<string, ResolvedFileInput> | undefined;
+  /**
+   * Targets the client built out of other params (`flow_file`) rather than the
+   * caller naming them, so an error message can leave them out of the keys it
+   * reads back.
+   */
+  derivedTargets: string[];
   /**
    * Removes the temp files this call materialized. Uploads are call-scoped —
    * nothing may reference them after the response — so the caller must invoke
@@ -273,16 +279,27 @@ export async function resolveFileInputs(
 
   const specs = def.fileInputs;
   if (!specs || specs.length === 0 || typeof body !== "object" || body === null) {
-    return { args: (body ?? {}) as Record<string, unknown>, fileInputs: undefined, cleanup };
+    return {
+      args: (body ?? {}) as Record<string, unknown>,
+      fileInputs: undefined,
+      derivedTargets: [],
+      cleanup,
+    };
   }
 
   const args = { ...(body as Record<string, unknown>) };
   let resolved: Record<string, ResolvedFileInput> | undefined;
+  const derivedTargets: string[] = [];
 
   try {
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
+      // A path template naming anything but its own target was built by the
+      // client, so this key is the client's, not the caller's.
+      if (spec.path !== `\${${spec.target}}` && !derivedTargets.includes(spec.target)) {
+        derivedTargets.push(spec.target);
+      }
       if (spec.unwrapWhenSet !== undefined && isParamSet(args[spec.unwrapWhenSet])) {
         // Caller-authored dual-source: the superseding source param is also
         // set, so the tool's own exactly-one validation must diagnose the
@@ -315,5 +332,5 @@ export async function resolveFileInputs(
     throw err;
   }
 
-  return { args, fileInputs: resolved, cleanup };
+  return { args, fileInputs: resolved, derivedTargets, cleanup };
 }

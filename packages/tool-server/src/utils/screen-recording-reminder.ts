@@ -2,9 +2,9 @@
 // recordings synchronously on every tool call, without resolving the per-device
 // ScreenRecordingSession service. Keyed by device: at most one recording each.
 
-export type ScreenRecordingStatus = "recording" | "finalized";
+type ScreenRecordingStatus = "recording" | "finalized";
 
-export interface ActiveScreenRecording {
+interface ActiveScreenRecording {
   deviceId: string;
   startedAtMs: number;
   timeLimitSeconds: number;

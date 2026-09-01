@@ -82,6 +82,15 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
   installedHelpers.set(key, true);
 }
 
+/**
+ * Test-only helper to reset the install cache between runs.
+ *
+ * @public so knip keeps it: the only caller lives in the `argent-private`
+ * submodule, which knip lists under `ignoreWorkspaces` and CI never checks out.
+ * `research/android-describe-busy-ui/drivers/test-fallback.js` requires this
+ * module from `dist/` and calls this twice - once to force the install-fallback
+ * path, once to restore. Drop the tag when that driver becomes a vitest test.
+ */
 export function __resetAndroidDevtoolsInstallCache(): void {
   installedHelpers.clear();
 }

@@ -22,15 +22,7 @@ import type {
   ToolContext,
 } from "@argent/registry";
 
-export {
-  ArtifactStore,
-  ARTIFACT_MARKER,
-  type ArtifactHandle,
-  type ArtifactEntry,
-  type ArtifactKind,
-  type ArtifactListItem,
-  type RegisterArtifactOptions,
-} from "@argent/registry";
+export { ArtifactStore, type ArtifactHandle } from "@argent/registry";
 
 /**
  * Pull the registry-owned artifact store from a tool's `execute` context.

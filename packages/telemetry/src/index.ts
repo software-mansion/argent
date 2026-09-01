@@ -9,6 +9,7 @@ import {
   resolveConfig,
   type TelemetryClient,
 } from "./otel.js";
+import type { FlagScope } from "@argent/configuration-core";
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
 import {
@@ -257,17 +258,19 @@ export async function shutdown(timeoutMs = SHORT_FLUSH_TIMEOUT_MS): Promise<void
   }
 }
 
-/** Persist `enabled=true`. */
-export function markEnabled(): void {
-  writeConsentFlag(true);
+/** Persist `enabled=true` at `scope` (global by default). Clearing a committed
+ * project opt-out only re-enables telemetry when the global scope allows it
+ * too — see the restrictive merge in consent.ts. */
+export function markEnabled(scope: FlagScope = "global"): void {
+  writeConsentFlag(true, scope);
 }
 
-export async function markDisabled(): Promise<void> {
+export async function markDisabled(scope: FlagScope = "global"): Promise<void> {
   try {
     // Drain only a client that already exists; opting out must never construct
     // one (and mint a durable anon-id) on a machine that has never sent anything.
     const client = getConstructedClient();
-    writeConsentFlag(false);
+    writeConsentFlag(false, scope);
     if (client) {
       try {
         await raceDrain(client, SHORT_FLUSH_TIMEOUT_MS);
