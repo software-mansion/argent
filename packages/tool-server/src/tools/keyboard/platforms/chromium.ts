@@ -317,11 +317,13 @@ ${CONTENT_SIGNATURE_JS}
   // Whether what is there now is a DIFFERENT value, not the one the clear was
   // aimed at. Only meaningful when the target itself was read.
   const changed = same ? contentOf(el) !== record.before : false;
+  // Only the TAG is needed here: which element to count, and how. The label the
+  // caller sees is the CLEAR stage's — both read-back messages are worded off
+  // the element the clear ran against, which is the one that matters when a
+  // restoring editor has already moved focus somewhere else.
   const tag = el ? String(el.tagName).toLowerCase() : null;
-  const type = tag === "input" ? String(el.type || "text").toLowerCase() : null;
-  const focus = tag === null ? null : type === null ? tag : tag + " type=" + type;
   if (tag === "input" || tag === "textarea") {
-    return { focus: focus, same: same, changed: changed, remaining: String(el.value == null ? "" : el.value).length, embeds: 0 };
+    return { same: same, changed: changed, remaining: String(el.value == null ? "" : el.value).length, embeds: 0 };
   }
   if (el && el.isContentEditable === true) {
     // A cleared contenteditable keeps a placeholder <br> or an empty <p>, and an
@@ -337,11 +339,11 @@ ${CONTENT_SIGNATURE_JS}
     const embedded = el.querySelectorAll
       ? el.querySelectorAll("img,video,audio,canvas,svg,iframe,object,embed,input,textarea,select,table")
       : null;
-    return { focus: focus, same: same, changed: changed, remaining: text.length, embeds: embedded ? embedded.length : 0 };
+    return { same: same, changed: changed, remaining: text.length, embeds: embedded ? embedded.length : 0 };
   }
   // Nothing readable to look at. The delete already reported success, so there
   // is nothing here to contradict it.
-  return { focus: focus, same: same, changed: changed, remaining: null, embeds: 0 };
+  return { same: same, changed: changed, remaining: null, embeds: 0 };
 })()`;
 
 // The renderer answers the scripts above. Nothing else in the tool depends on
@@ -354,7 +356,6 @@ interface ClearOutcome {
 }
 
 interface ReadbackOutcome {
-  focus?: string | null;
   /** Whether the element read back is the very one the clear ran against. */
   same?: boolean;
   remaining?: number | null;

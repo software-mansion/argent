@@ -14,7 +14,6 @@ import {
  */
 
 interface Readback {
-  focus?: string | null;
   same?: boolean;
   changed?: boolean;
   remaining?: number | null;
@@ -85,7 +84,10 @@ describe("CLEAR_READBACK_SCRIPT — which element it reads", () => {
     const target = el("INPUT", { type: "text", value: "SECRETVALUE" });
     const elsewhere = el("BODY", {});
     const { readback } = run(elsewhere, { el: target, before: signatureOf(target) });
-    expect(readback.focus).toBe("input type=text");
+    // The stashed <input>, not the focused <body>: `same` says it was the very
+    // element the clear ran against, and the count is that element's value.
+    // The read-back reports no label of its own — both of its messages are
+    // worded off the CLEAR stage's, which is the element the caller aimed at.
     expect(readback.same).toBe(true);
     expect(readback.remaining).toBe(11);
   });
@@ -119,7 +121,7 @@ describe("CLEAR_READBACK_SCRIPT — which element it reads", () => {
     const inner = el("INPUT", { type: "password", value: "abc" });
     const host = el("MY-FIELD", { shadowRoot: { activeElement: inner } });
     const { readback } = run(host);
-    expect(readback.focus).toBe("input type=password");
+    // The host itself has no value to read and would answer `remaining: null`.
     expect(readback.remaining).toBe(3);
   });
 });
