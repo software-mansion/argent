@@ -548,7 +548,9 @@ function scrollClipOf(
  * negative area — while children of it are still on screen. The dump's numbers
  * render as a zero-height frame, and `getDescribeTapPoint` on that returns a
  * point on the frame's top edge rather than on anything the node covers. The
- * union of the children that survived is the region it does cover.
+ * union of the children that survived is the region those children cover, which
+ * is the best-known region for the node: the trim runs first, so a child it
+ * dropped (a decorative `ImageView`) contributes nothing here.
  *
  * Chromium reports a loaded WebView this way under load, so the node this hits
  * is the landmark covering the whole page.
@@ -572,6 +574,26 @@ function boundsOverChildren(children: UiNode[]): PixelRect | null {
     };
   }
   return out;
+}
+
+/**
+ * The box a node publishes: its own, or — when it HAS one and that one is
+ * unusable — the region its surviving children cover.
+ *
+ * A node with no `bounds` attribute at all is a different case and must keep
+ * its `null`: `finalizeUiNode` has its own rule for a bounds-less wrapper
+ * (drop it when empty, pass through its sole child, union the frames
+ * otherwise), and handing it a pixel box here routes it past that rule — a
+ * bounds-less Compose wrapper would publish as an extra node whose frame just
+ * repeats its only child's.
+ */
+function publishedBounds(
+  bounds: PixelRect | null,
+  visible: boolean,
+  children: UiNode[]
+): PixelRect | null {
+  if (visible || !bounds) return bounds;
+  return boundsOverChildren(children) ?? bounds;
 }
 
 function computeNodeOutput(
@@ -658,7 +680,7 @@ function computeNodeOutput(
     const webView = makeUiNode(
       attrs,
       "WebView",
-      visible ? bounds : (boundsOverChildren(webChildren) ?? bounds),
+      publishedBounds(bounds, visible, webChildren),
       webLabel,
       webChildren
     );
@@ -771,7 +793,7 @@ function computeNodeOutput(
   const node = makeUiNode(
     attrs,
     role,
-    visible ? bounds : (boundsOverChildren(keptChildren) ?? bounds),
+    publishedBounds(bounds, visible, keptChildren),
     label,
     keptChildren
   );

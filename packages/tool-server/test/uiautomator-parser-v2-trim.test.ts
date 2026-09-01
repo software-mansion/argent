@@ -619,6 +619,22 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(card.frame.height).toBeCloseTo(100 / 600, 5);
   });
 
+  it("leaves a wrapper with no box at all to the bounds-less rule", () => {
+    // A missing `bounds` is not an unusable box: `finalizeUiNode` passes a
+    // bounds-less wrapper's sole child through in the wrapper's place. Handing
+    // the wrapper the children's union here routes it past that rule, and a
+    // Compose screen — which emits such wrappers routinely — grows one extra
+    // node per wrapper whose frame only repeats its child's.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="androidx.compose.ui.platform.ComposeView">
+    <node class="android.widget.Button" bounds="[0,0][100,50]" text="left"/>
+  </node>
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children.map((c) => c.role)).toEqual(["Button"]);
+  });
+
   it("does not let a scroller with an unusable box clip its own content away", () => {
     // Chromium reports a WebView at negative height while its content is still
     // on screen. `rectFullyOutside` reads a zero-height window as "everything
