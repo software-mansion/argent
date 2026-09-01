@@ -635,4 +635,36 @@ describe("cancelling a run that contains a script step", () => {
     expect(result.aborted).toBe(true);
     expect(result.ok).toBe(false);
   });
+
+  it("says the run was cancelled on the steps after the script, not just under it", async () => {
+    // The script's `error` stops the run, so the steps below it take the
+    // hard-stop path rather than the abort guard every other cancelled step
+    // uses. They still have to say why they did not run: a cancellation is not
+    // collateral of a step that failed.
+    const marker = path.join(root, "started-2.txt");
+    await write(
+      "scripts/slow.mjs",
+      `import { writeFileSync } from "node:fs";\n` +
+        `writeFileSync(${JSON.stringify(marker)}, "go");\n` +
+        `await new Promise((r) => setTimeout(r, 30000));`
+    );
+    await flow(
+      "mid-cancel-tail",
+      "steps:\n  - script: { path: ../../scripts/slow.mjs }\n  - wait: 1\n  - wait: 1\n"
+    );
+
+    const controller = new AbortController();
+    const { registry } = mockRegistry();
+    const pending = run(registry, { name: "mid-cancel-tail" }, {
+      signal: controller.signal,
+    } as ToolContext);
+    await until(() => fsSync.existsSync(marker), "the script to start");
+    controller.abort();
+
+    const result = await pending;
+    expect(result.steps.slice(1).map((s) => [s.kind, s.status, s.reason])).toEqual([
+      ["wait", "skip", "run aborted"],
+      ["wait", "skip", "run aborted"],
+    ]);
+  });
 });

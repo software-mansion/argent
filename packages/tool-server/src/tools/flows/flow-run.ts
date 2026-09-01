@@ -1881,6 +1881,16 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     const index = state.reports.length;
 
     if (state.stopped) {
+      // A hard stop needs no reason of its own: the step above it carries the
+      // failure that explains every line below. A CANCELLED run does — and it
+      // reaches this branch rather than the abort guard below, because a
+      // `script` step cancelled after its process started reports `error`
+      // (what it already did to the backend is done) and an error stops the
+      // run. Without this the steps after a cancelled script read as collateral
+      // of a failure, with nothing on the line saying the run was cancelled,
+      // while the same cancellation during any other step reports "run
+      // aborted" on each of them.
+      const stopReason = state.signal?.aborted ? "run aborted" : undefined;
       pushReport(state, {
         index,
         kind: step.kind,
@@ -1888,6 +1898,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         flow: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
+        ...(stopReason ? { reason: stopReason } : {}),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -1895,7 +1906,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
       const inner = blockSteps(step);
-      if (inner) reportBlockSkipped(state, inner, childScope(scope));
+      if (inner) reportBlockSkipped(state, inner, childScope(scope), stopReason);
       continue;
     }
     // The flow was resolved as needing no device, yet a step that acts on one
