@@ -1292,7 +1292,7 @@ describe("android keyboard read-back — cancellation", () => {
     // waiting for the result — and the MCP adapter replays an abandoned call.
     // It REJECTS rather than reporting `verified: false`: the gates read that as
     // a verdict about the app, so a cancelled run would record a typing failure
-    // where its own abort handling reads a rejection as a skip.
+    // where a flow's own abort handling reads a rejection as a skip.
     const controller = new AbortController();
     const reads = REPAIR_SCRIPT.slice(0, 2);
     let served = 0;

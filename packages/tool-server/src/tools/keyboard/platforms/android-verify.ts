@@ -864,11 +864,13 @@ async function readFocusedField(
  * Never throws for a verification problem, including one raised by the retry
  * itself: by the time anything here can go wrong the original keystrokes are
  * already on the device, so a thrown error would tell the agent the typing failed
- * when it may well have succeeded. Every outcome comes back as `verified: true`,
- * `verified: false`, or an absent `verified` with a note explaining why the check
- * could not conclude. Errors from the injection the call is actually FOR still
- * propagate — a failed `input text` is a real failure, not a verification
- * problem.
+ * when it may well have succeeded. Every verification outcome comes back as
+ * `verified: true`, `verified: false`, or an absent `verified` with a note
+ * explaining why the check could not conclude. Two things do throw: errors from
+ * the injection the call is actually FOR — a failed `input text` is a real
+ * failure, not a verification problem — and a cancelled `signal`, which is
+ * consulted only where nothing has been typed yet and where the destructive
+ * repair would start.
  */
 export async function typeAndroidTextVerified(
   registry: Registry,
@@ -937,7 +939,9 @@ export async function typeAndroidTextVerified(
   // waiting for the retyped field, and the MCP adapter replays a call it
   // abandoned. Throwing rather than reporting the verdict keeps a cancelled run
   // from recording a failure ABOUT THE APP: the three step gates key on
-  // `verified: false`, while an abort reads as a skip. Checked only here, not
+  // `verified: false`, while both flow gates read an abort as the uniform
+  // aborted skip (`run-sequence`, which has no skip, records it as that step's
+  // error). Checked only here, not
   // inside the loops below — once the delete has run, finishing the retype
   // leaves the field in a better state than abandoning it half-restored.
   signal?.throwIfAborted();
