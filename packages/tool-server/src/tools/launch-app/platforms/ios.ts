@@ -11,7 +11,7 @@ import {
   precheckNativeDevtools,
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
-import { isExternalId } from "../../../utils/external-devices";
+import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
@@ -32,8 +32,13 @@ export function makeIosImpl(
        * loads Argent's dylib into an app somebody else launched. Resolving
        * here would fail an otherwise fine launch with capability-denied, so
        * skip it. Only the native view-hierarchy fallback afterwards is lost.
+       *
+       * Keyed on the provider's claim, not on the `ext:` spelling. The same
+       * device named by its raw udid would otherwise take the branch below and
+       * fail on a grant the provider withheld, so one device would launch or
+       * not depending only on which of its names was used.
        */
-      if (!isExternalId(device.id)) {
+      if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
         const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
           ndRef.urn,

@@ -992,6 +992,53 @@ describe("simctl argv for a provider device", () => {
     ).rejects.toThrow(/'simctl' capability/);
   });
 
+  /**
+   * The raw udid is in plain sight (embedded in the `ext:` id and printed by
+   * `simctl list`) so a grant that only recognised the `ext:` spelling was a
+   * rename away from being no grant at all.
+   */
+  it("refuses the raw udid the provider claims when it withheld simctl", async () => {
+    useDescriptors(await liveDescriptor({}, { capabilities: ["simulator-server"] }));
+
+    await expect(
+      simctlArgsForUdid(IOS_UDID, ["launch", IOS_UDID, "com.example.app"])
+    ).rejects.toThrow(/'simctl' capability/);
+    await expect(simctlTargetForUdid(IOS_UDID)).rejects.toThrow(/'simctl' capability/);
+    expect(() => simctlTargetForUdidSync(IOS_UDID)).toThrow(/'simctl' capability/);
+    expect(() => simctlArgsForUdidSync(IOS_UDID, ["spawn", IOS_UDID, "launchctl", "list"])).toThrow(
+      /'simctl' capability/
+    );
+  });
+
+  /**
+   * Passing the grant is only half of it. Argv built for the default set would
+   * reach simctl and be told the device does not exist, so the provider's
+   * `--set` has to follow the same spelling the gate now admits.
+   */
+  it("targets the provider's device set for the raw udid it claims", async () => {
+    useDescriptors(await liveDescriptor());
+
+    await expect(
+      simctlArgsForUdid(IOS_UDID, ["launch", IOS_UDID, "com.example.app"])
+    ).resolves.toEqual([
+      "simctl",
+      "--set",
+      "/tmp/acme/Devices/iOS",
+      "launch",
+      IOS_UDID,
+      "com.example.app",
+    ]);
+  });
+
+  it("leaves a udid no provider claims on the default set", async () => {
+    useDescriptors(await liveDescriptor());
+    const unclaimed = "99999999-9999-9999-9999-999999999999";
+
+    await expect(
+      simctlArgsForUdid(unclaimed, ["launch", unclaimed, "com.example.app"])
+    ).resolves.toEqual(["simctl", "launch", unclaimed, "com.example.app"]);
+  });
+
   /** The sync form reads the file directly, so it needs no preceding lookup. */
   it("works synchronously with no preceding lookup", async () => {
     useDescriptors(await liveDescriptor());

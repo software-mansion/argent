@@ -19,6 +19,7 @@ import { getAdditionalIosDeviceSets } from "@argent/configuration-core";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 import {
   assertExternalCapabilitySync,
+  externalClaimForAnyId,
   externalNativeId,
   findExternalDevice,
   isExternalId,
@@ -111,16 +112,20 @@ export function cachedDeviceSetForUdid(udid: string): DeviceSetPath {
 
 /**
  * The device set an external provider declared for `udid`, or `undefined` when
- * `udid` is not an external device at all.
+ * no provider claims it.
  *
  * Never probed and never memoized: the provider states the set in its
  * descriptor, which is re-read on every call, so a device that moves or is
  * withdrawn is reflected immediately. A provider that declares no `deviceSet`
  * means the default set, exactly as for a local simulator.
+ *
+ * Answers for the raw udid too. It has to, the entitlement above now admits
+ * that spelling and argv that passed the grant but kept the default `--set`
+ * would reach simctl only to be told the device does not exist.
  */
 function externalDeviceSet(udid: string): DeviceSetPath | undefined {
-  if (!isExternalId(udid)) return undefined;
-  return findExternalDevice(udid)?.deviceSet ?? null;
+  const claim = externalClaimForAnyId(udid);
+  return claim ? (claim.deviceSet ?? null) : undefined;
 }
 
 /** The `simctl` argv prefix for a known device set. */
@@ -159,7 +164,12 @@ export async function simctlArgsForUdid(
 type SimctlEntitlement = { granted?: ExternalCapability };
 
 function assertSimctlEntitlement(udid: string, options?: SimctlEntitlement): void {
-  if (!isExternalId(udid)) return;
+  /**
+   * No spelling check of its own. `assertExternalCapabilitySync` resolves a raw
+   * udid through its provider's claim and no-ops for a device nobody claims.
+   * Gating only `ext:` ids left the grant a rename away. The raw udid is in
+   * plain sight, embedded in the `ext:` id and in `simctl list`.
+   */
   const capability = options?.granted ?? "simctl";
   assertExternalCapabilitySync(capability, udid, capability);
 }
