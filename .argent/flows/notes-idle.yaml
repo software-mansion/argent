@@ -1,5 +1,0 @@
-steps:
-  - launch: com.apple.mobilenotes
-  - await: { idle: true }
-  - tap: New note
-  - type: { into: Note, text: Idle check }
