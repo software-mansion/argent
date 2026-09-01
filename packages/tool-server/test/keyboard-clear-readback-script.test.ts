@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CLEAR_READBACK_SCRIPT } from "../src/tools/keyboard/platforms/chromium";
+import {
+  CLEAR_READBACK_SCRIPT,
+  CONTENT_SIGNATURE_JS,
+} from "../src/tools/keyboard/platforms/chromium";
 
 /**
  * `CLEAR_READBACK_SCRIPT` is the SECOND evaluate of a Chromium clear, and it is
@@ -61,16 +64,17 @@ function run(
   }
 }
 
-/** The signature the clear script stashes, for an element the script reads. */
-function signatureOf(node: Record<string, unknown>): string {
-  const tag = String(node.tagName).toLowerCase();
-  if (tag === "input" || tag === "textarea") return String(node.value ?? "");
-  const text = String(node.textContent ?? "")
-    .replace(/[\u200b\ufeff]/g, "")
-    .trim();
-  const q = node.querySelectorAll as undefined | (() => unknown[]);
-  return text + "\u0000" + (q ? q().length : 0);
-}
+/**
+ * The signature the clear script stashes, for an element the script reads.
+ *
+ * Evaluated from the SAME source both scripts interpolate, rather than
+ * hand-copied: the two stages compare their answers across two evaluates, so a
+ * third copy that drifted would leave this file agreeing with itself and with
+ * neither script.
+ */
+const signatureOf = (0, eval)(`(node) => { ${CONTENT_SIGNATURE_JS} return contentOf(node); }`) as (
+  node: Record<string, unknown>
+) => string | null;
 
 describe("CLEAR_READBACK_SCRIPT — which element it reads", () => {
   it("reads the element the clear ran against, not whatever holds focus now", () => {

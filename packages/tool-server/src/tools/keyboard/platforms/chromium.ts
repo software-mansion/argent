@@ -7,6 +7,46 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The content signature both clear stages compute, defined once and
+ * interpolated into both scripts. They COMPARE their answers across two
+ * `Runtime.evaluate` calls, so two hand-kept copies that drifted would make "the
+ * page rewrote the value" fire on a field nothing had touched.
+ *
+ * Exported for the two script tests, which would otherwise keep a third copy.
+ */
+export const CONTENT_SIGNATURE_JS = `
+  // What the two stages compare, and the ONLY thing carried across them. A
+  // DIGEST, never the content: a cleared field may have held a credential, this
+  // runs before any redaction the tool does, and the clear parks the answer on
+  // the PAGE's own \`window\` — where it outlives the call whenever the read-back
+  // that deletes it never runs. Only \`before !== after\` is ever computed from
+  // it, so a digest carries everything either stage needs. FNV-1a over the
+  // string, with its length appended: a collision costs one
+  // reformatted-vs-restored misclassification in an error message, nothing more.
+  const digest = (s) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h.toString(16) + ":" + s.length;
+  };
+  const contentOf = (node) => {
+    const t = node ? String(node.tagName).toLowerCase() : null;
+    if (t === "input" || t === "textarea") return digest(String(node.value == null ? "" : node.value));
+    if (!node || node.isContentEditable !== true) return null;
+    // Same measure the read-back counts by, so "changed" and "how much is left"
+    // can never disagree: end-trimmed text with the zero-width seeds an editor
+    // adds stripped, plus the content that HAS no text.
+    const text = String(node.textContent == null ? "" : node.textContent).replace(/[\\u200b\\ufeff]/g, "").trim();
+    const embedded = node.querySelectorAll
+      ? node.querySelectorAll("img,video,audio,canvas,svg,iframe,object,embed,input,textarea,select,table").length
+      : 0;
+    return digest(text + "\\u0000" + embedded);
+  };
+`;
+
 // Clearing over the DOM, not over key events. A modifier-only `Meta+A` /
 // `Ctrl+A` selects nothing in a Chromium renderer on macOS, and a 200-key delete
 // burst would deliver 200 keydowns to a page whose own shortcut handler may
@@ -39,22 +79,7 @@ export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
   // defined — measured on Chrome 152, the page's function was the one called.
   let restoreSelection = () => {};
   try {
-  // What the two stages compare, and the ONLY thing carried across them. A
-  // signature, never the content: a cleared field may have held a credential,
-  // and this runs before any redaction the tool does.
-  const contentOf = (node) => {
-    const t = node ? String(node.tagName).toLowerCase() : null;
-    if (t === "input" || t === "textarea") return String(node.value == null ? "" : node.value);
-    if (!node || node.isContentEditable !== true) return null;
-    // Same measure the read-back counts by, so "changed" and "how much is left"
-    // can never disagree: end-trimmed text with the zero-width seeds an editor
-    // adds stripped, plus the content that HAS no text.
-    const text = String(node.textContent == null ? "" : node.textContent).replace(/[\\u200b\\ufeff]/g, "").trim();
-    const embedded = node.querySelectorAll
-      ? node.querySelectorAll("img,video,audio,canvas,svg,iframe,object,embed,input,textarea,select,table").length
-      : 0;
-    return text + "\\u0000" + embedded;
-  };
+${CONTENT_SIGNATURE_JS}
   let el = document.activeElement;
   // A custom element hands focus down into its shadow root, where the real
   // <input> lives; document.activeElement only ever names the host.
@@ -270,22 +295,7 @@ export const CLEAR_FOCUSED_EDITABLE_SCRIPT = `(() => {
 // written, and this one decides just as much: which element is read, whether it
 // counts `value` or text, and what "still holds something" means.
 export const CLEAR_READBACK_SCRIPT = `(() => {
-  // What the two stages compare, and the ONLY thing carried across them. A
-  // signature, never the content: a cleared field may have held a credential,
-  // and this runs before any redaction the tool does.
-  const contentOf = (node) => {
-    const t = node ? String(node.tagName).toLowerCase() : null;
-    if (t === "input" || t === "textarea") return String(node.value == null ? "" : node.value);
-    if (!node || node.isContentEditable !== true) return null;
-    // Same measure the read-back counts by, so "changed" and "how much is left"
-    // can never disagree: end-trimmed text with the zero-width seeds an editor
-    // adds stripped, plus the content that HAS no text.
-    const text = String(node.textContent == null ? "" : node.textContent).replace(/[\\u200b\\ufeff]/g, "").trim();
-    const embedded = node.querySelectorAll
-      ? node.querySelectorAll("img,video,audio,canvas,svg,iframe,object,embed,input,textarea,select,table").length
-      : 0;
-    return text + "\\u0000" + embedded;
-  };
+${CONTENT_SIGNATURE_JS}
   // Read and dropped in one go, so a later clear cannot inherit a stale record.
   let record;
   try {
