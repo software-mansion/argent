@@ -1,17 +1,11 @@
 ---
 name: argent-ios-device-setup
-description: Set up and connect a physical iPhone using argent MCP tools. Use when the user wants to run or test on a real device, when list-devices shows an iOS entry with kind "device", or when a physical-device call fails with a flag, signing, cable, or trust error.
+description: Set up and connect a physical iPhone using argent MCP tools. Use when the user wants to run or test on a real device, when list-devices shows an iOS entry with kind "device", or when a physical-device call fails with a signing, cable, or trust error.
 ---
 
-## 1. Enable the feature flag
+Physical iPhone support works out of the box; physical iPads are not supported yet.
 
-Physical iPhone support is experimental and off by default; physical iPads are not supported yet.
-
-1. Run `argent enable ios-physical-devices` (add `--scope project` for one project only).
-2. The flag applies on the next tool call; no server restart is needed.
-3. With the flag off, physical devices are simply absent from `list-devices`; enable the flag and list again.
-
-## 2. Signing (zero-config in the common case)
+## 1. Signing (zero-config in the common case)
 
 The tool-server signs the on-device automation runner automatically. Three outcomes:
 
@@ -21,7 +15,7 @@ The tool-server signs the on-device automation runner automatically. Three outco
 
 `ARGENT_IOS_TEAM_ID` in the **tool-server's** environment is the only explicit override; there is no config key. An export in your client shell does not reach a running server. To apply it: `argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach`.
 
-## 3. Device prerequisites
+## 2. Device prerequisites
 
 1. **USB cable, always.** `list-devices` shows state `connected` (cabled, usable) or `paired` (known but unreachable; never auto-bound). If your device shows `paired`, reconnect the cable.
 2. **Phone unlocked**, screen awake, and **Developer Mode on** (Settings > Privacy & Security > Developer Mode).
@@ -31,7 +25,7 @@ The tool-server signs the on-device automation runner automatically. Three outco
 
 Once connected, read `argent-ios-device-interact` before interacting: the contract on hardware differs from simulators.
 
-## 4. Troubleshooting
+## 3. Troubleshooting
 
 Match the error text, apply the fix, retry the failed call:
 

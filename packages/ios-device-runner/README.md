@@ -4,8 +4,7 @@ Argent's on-device automation runner for **physical iOS devices**: an XCUITest
 bundle that, instead of running a scripted test, starts an HTTP command server
 and parks in an `XCTWaiter` wait for 24 hours. XCUITest is the only
 Apple-supported process allowed to drive arbitrary apps on real hardware, so
-Argent hosts its automation server inside one. The whole feature is gated
-behind the experimental `ios-physical-devices` flag, off by default.
+Argent hosts its automation server inside one.
 
 ## Layout
 

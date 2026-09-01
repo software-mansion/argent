@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /**
- * End-to-end smoke test for physical-iOS support (experimental branch).
+ * End-to-end smoke test for physical-iOS support.
  *
  * Drives the real tool registry against a connected iPhone:
  *   list-devices -> launch-app -> describe -> gesture-tap -> describe -> screenshot
  *
  * Prerequisites (see packages/ios-device-runner/README.md):
- *   - `argent enable ios-physical-devices`
  *   - device paired + trusted, Developer Mode on, UNLOCKED, connected over USB
  *   - an Apple Development identity in the keychain (ARGENT_IOS_TEAM_ID is
  *     required unless argent can detect the team from the keychain)

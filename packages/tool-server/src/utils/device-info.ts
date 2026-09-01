@@ -1,11 +1,4 @@
-import {
-  FAILURE_CODES,
-  FailureError,
-  type DeviceInfo,
-  type DeviceKind,
-  type Platform,
-} from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { type DeviceInfo, type DeviceKind, type Platform } from "@argent/registry";
 
 /**
  * iOS simulator UDID shape: 8-4-4-4-12 hex. Everything here classifies by shape
@@ -78,53 +71,16 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
   return serial.startsWith("emulator-");
 }
 
-// Unit tests see the flag as ON unless a suite flips it via the seam below:
-// device suites across the repo assert shape classification, and a real flag
-// read would make them depend on the developer's flags.json (the same reasoning
-// as `new Registry()` defaulting every flag to enabled). The vitest setup file
-// `test/setup/enable-ios-physical-flag.ts` sets the ON default before each test
-// module graph loads; outside tests the override stays undefined and the stored
-// flag decides.
-let iosPhysicalFlagForTests: boolean | undefined;
-
-export function __setIosPhysicalDevicesFlagForTests(value: boolean): void {
-  iosPhysicalFlagForTests = value;
-}
-
 /**
  * Kind is defaulted by shape (a physical-iOS-shaped UDID gets 'device');
  * platform impls can enrich the result with name/state/sdkLevel from
  * simctl/adb/sim-remote.
- *
- * Physical iOS hardware ships behind the experimental 'ios-physical-devices'
- * flag, and the gate lives here because resolveDevice is the narrowest waist
- * every hardware-touching path crosses first: tools resolve
- * `iosDeviceRunnerRef` in `services()`, before execute, so any later gate would
- * fire only after the runner was already built, signed and installed on the
- * phone. The flag read hides behind the UDID-shape check, so simulator and
- * Android hot paths never pay it.
  *
  * Vega is VVD-only: the tool-server neither connects to nor detects physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` and never
  * hits the `device` rejection in the `vega: { vvd: true }` capability gate.
  */
 export function resolveDevice(udid: string): DeviceInfo {
-  if (
-    isIosPhysicalUdid(udid) &&
-    !(iosPhysicalFlagForTests ?? isFlagEnabled("ios-physical-devices"))
-  ) {
-    throw new FailureError(
-      `'${udid}' is a physical iOS device; physical-device support is experimental ` +
-        "and currently disabled. Enable it with `argent enable ios-physical-devices`, then retry.",
-      {
-        error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
-        failure_stage: "device_resolution_flag_gate",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
-
   const platform = classifyDevice(udid);
 
   const kind: DeviceKind =

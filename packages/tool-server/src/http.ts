@@ -750,18 +750,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             res.status(400).json({ error: err.message });
             return;
           }
-          // `resolveDevice` also refuses a physical-iOS UDID while the
-          // experimental flag is off, with a typed FailureError whose message is
-          // caller guidance. Answer that the way the post-execute handler
-          // answers the same signal (400, classification preserved) instead of
-          // the internal-fault arm below, which reports no error_code at all and
-          // leaves the CLI unable to tell a rejected input from an infra fault.
-          const signal = getFailureSignal(err);
-          if (signal?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
-            emitHttpFailure(signal, parsedData);
-            res.status(400).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
-            return;
-          }
           // Anything else (today only a custom supports() refiner can throw one)
           // is an internal fault, not a client validation error: 500/unknown
           // rather than 400/validation.

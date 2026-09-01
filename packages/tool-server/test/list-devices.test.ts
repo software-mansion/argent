@@ -1,11 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const execFileMock = vi.fn();
-// Controls what `isFlagEnabled` reports; the real one reads flags.json files on
-// disk, so a developer's enabled `ios-physical-devices` flag would leak
-// devicectl discovery into every case here. Pinned false in beforeEach; the
-// physical-device test flips it on.
-const flagEnabledMock = vi.fn((_name: string) => false);
 
 // Production spawns `ps` by absolute path (PS_BIN); match on basename so the mock
 // fires regardless.
@@ -89,13 +84,6 @@ vi.mock("../src/utils/chromium-discovery", async () => {
 // is deterministic. Defaults to none; the dedicated test overrides per-call.
 vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }));
 
-vi.mock("@argent/configuration-core", async () => {
-  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
-    "@argent/configuration-core"
-  );
-  return { ...actual, isFlagEnabled: (name: string) => flagEnabledMock(name) };
-});
-
 // Physical-device discovery shells out to `xcrun devicectl` with a JSON output
 // file; mock the module seam and feed rows directly. Defaults to none; the
 // physical-device test overrides per-call.
@@ -155,8 +143,6 @@ function simctlJson(): string {
 
 beforeEach(() => {
   execFileMock.mockReset();
-  flagEnabledMock.mockReset();
-  flagEnabledMock.mockReturnValue(false);
 });
 
 describe("list-devices", () => {
@@ -521,7 +507,6 @@ describe("list-devices", () => {
     // unplugged phone keeps tunnelState "connected" while the tunnel migrates
     // to Wi-Fi (hardware-verified, devicectl 518.x). Only the wired one is reachable
     // over usbmux, so only it may present as "connected".
-    flagEnabledMock.mockImplementation((name: string) => name === "ios-physical-devices");
     vi.mocked(listIosPhysicalDevices).mockResolvedValueOnce([
       {
         udid: "00008120-000A44443333801E",

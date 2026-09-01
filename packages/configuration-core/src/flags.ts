@@ -64,10 +64,6 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
     defaultEnabled: true,
   },
-  {
-    name: "ios-physical-devices",
-    description: "Experimental physical iPhone support.",
-  },
 ];
 
 export function getFlagDefinition(

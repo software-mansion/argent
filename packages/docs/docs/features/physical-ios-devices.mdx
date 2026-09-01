@@ -8,10 +8,6 @@ sidebar_custom_props:
 
 Argent drives a physical iPhone over a USB cable. The agent launches the app, reads the screen, taps, swipes and types on the real device, in the same loop it uses on a simulator. Physical iPads are not supported yet.
 
-:::note
-Physical iOS device support is experimental and behind the `ios-physical-devices` flag, off by default. See [Enable physical devices](#enable-physical-devices).
-:::
-
 ## Requirements
 
 - A Mac with Xcode, and an Apple ID signed into Xcode.
@@ -57,7 +53,7 @@ Some simulator capabilities do not exist on hardware. Each one fails with a mess
 
 | Symptom                                           | Action                                                                                               |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| The device is missing from the device list        | Enable the flag if it is off. Connect the cable and unlock the phone, then list again.               |
+| The device is missing from the device list        | Connect the cable and unlock the phone, then list again.                                             |
 | The transport is not wired                        | Connect the device by USB cable. Argent does not use Wi-Fi.                                          |
 | A launch fails on an unlocked device              | Check the screen of the phone. A pending system prompt, for example a default-app choice, blocks it. |
 | The runner does not become ready on the first run | Trust the developer on the device: Settings > General > VPN & Device Management.                     |
@@ -65,13 +61,6 @@ Some simulator capabilities do not exist on hardware. Each one fails with a mess
 | The runner exits twice for the same app           | The current screen of the app is likely crashing the runner. Restart the app and retry.              |
 | The runner stops launching after about a week     | The free-team signature expired. Retry: the next interaction rebuilds and re-signs the runner.       |
 
-## Enable physical devices
+## In the device list
 
-```bash
-argent enable ios-physical-devices                    # global
-argent enable ios-physical-devices --scope project    # this project only
-```
-
-The flag applies on the next tool call. The device then appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. The [configuration reference](/docs/reference/configuration#feature-flags) lists all flags.
-
-Argent does this with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.
+The device appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.

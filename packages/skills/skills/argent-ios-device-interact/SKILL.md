@@ -1,6 +1,6 @@
 ---
 name: argent-ios-device-interact
-description: Interact with a physical iPhone via argent. Use when tapping, swiping, typing, or reading the screen on a physical iOS device (a list-devices iOS entry with kind "device"); the interaction contract differs from simulators. For flag, signing, cable, or trust problems, use argent-ios-device-setup first.
+description: Interact with a physical iPhone via argent. Use when tapping, swiping, typing, or reading the screen on a physical iOS device (a list-devices iOS entry with kind "device"); the interaction contract differs from simulators. For signing, cable, or trust problems, use argent-ios-device-setup first.
 ---
 
 # Argent physical iOS devices
