@@ -93,8 +93,12 @@ run_phase() {
   # carries the before/after evidence, because there the field is in the fixture.
   assert_field "$P" keyboard clear "{\"udid\":\"$DEV\",\"clear\":true}" '.cleared' 'true'
   # One action per call, `clear` included — the same guard as text+key above.
-  assert_reject "$P" keyboard clear-and-text \
-    "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"hello e2e\"}"
+  # Matched on the message: the rule is enforced in `execute`, not by the schema,
+  # so the rejection carries no zod issue path and bare `assert_reject` passes on
+  # ANY non-zero exit — a device that dropped off adb included.
+  assert_reject_matching "$P" keyboard clear-and-text \
+    "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"hello e2e\"}" \
+    "keyboard takes one of"
   # ...and its prescribed remedy: replace a value in one round-trip.
   assert_field "$P" run-sequence keyboard-clear-then-text \
     "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"keyboard\",\"args\":{\"clear\":true}},{\"tool\":\"keyboard\",\"args\":{\"text\":\"hello e2e\"}}]}" \

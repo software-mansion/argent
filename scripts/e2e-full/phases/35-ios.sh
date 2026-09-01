@@ -40,9 +40,17 @@ _search_tap_point() { # udid
   ' 2>/dev/null
 }
 
-# What the search field currently HOLDS, from its own `describe` node — "" when
-# the field is empty (the node then carries no `value=` at all) and "" when the
-# node is missing, which the caller has already ruled out by the time it asks.
+# What a read of the search field could not answer: a describe that failed, one
+# with no `.description`, or a tree with no Search node at all. NOT "" — the
+# empty string is the field's own answer when it holds nothing, and scoring the
+# two the same made every unreadable device pass the one assertion in this tier
+# that observes the field. Killing the transport mid-burst — the regression the
+# header says this tier exists to catch — printed "search field emptied".
+UNREADABLE='<unreadable>'
+
+# What the search field currently HOLDS, from its own `describe` node: "" when
+# the field is empty (the node then carries no `value=` at all), and $UNREADABLE
+# when the read itself did not produce an answer.
 #
 # The marker test alone cannot see a forward-delete regression: with the caret
 # one character from the end, backspaces alone leave exactly that character
@@ -51,15 +59,30 @@ _search_tap_point() { # udid
 # real iOS 26.5 simulator).
 _search_value() { # udid
   run_tool describe "{\"udid\":\"$1\"}"
-  printf '%s' "$RT_JSON" | jq -r '
+  if [ "$RT_RC" -ne 0 ] || [ -z "$RT_JSON" ]; then
+    printf '%s' "$UNREADABLE"; return
+  fi
+  local node
+  node="$(printf '%s' "$RT_JSON" | jq -r '
     (.description // "")
     | [splits("\n")]
     | map(select(test("AXGroup \"Search\"")))
     | first // ""
-    | (capture("value=\"(?<v>[^\"]*)\"") // {v: ""})
-    | .v
-  ' 2>/dev/null
+  ' 2>/dev/null)"
+  # The node itself missing is a read that failed, not an empty field: this tier
+  # has already seen "Search" on screen by the time it asks.
+  if [ -z "$node" ]; then
+    printf '%s' "$UNREADABLE"; return
+  fi
+  case "$node" in
+    *'value="'*) printf '%s' "${node#*value=\"}" | sed 's/".*//' ;;
+    *) : ;; # the node is there and carries no value= — the field is empty
+  esac
 }
+
+# Lowercased, for comparing against a UIKit search field that auto-capitalises
+# the first character it is given.
+_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 run_phase() {
   local P=ios
@@ -121,6 +144,20 @@ run_phase() {
   # iOS 26.5 simulator: from one character in, the full burst empties the field
   # and backspaces alone leave "k" behind.
   assert_ok "$P" keyboard caret-off-end "{\"udid\":\"$DEV\",\"key\":\"arrow-left\"}"
+  # ...and the caret is OBSERVED to have moved, by typing into it: the exit code
+  # of `arrow-left` says only that a key was sent. An arrow that stops landing
+  # puts the caret back at the end, where backspaces alone empty the field and
+  # the forward-delete half of the burst stops being load-bearing — the blind
+  # spot this step was added to close, left open by asserting only the exit code.
+  run_tool keyboard "{\"udid\":\"$DEV\",\"text\":\"z\",\"delayMs\":30}" >/dev/null 2>&1
+  local SPLICED CARET
+  SPLICED="${MARK%k}zk"
+  CARET="$(_lc "$(_search_value "$DEV")")"
+  if [ "$CARET" = "$SPLICED" ]; then
+    pass "$P" keyboard caret-moved "field reads \"$CARET\""
+  else
+    fail "$P" keyboard caret-moved "expected \"$SPLICED\", field reads \"$CARET\""
+  fi
 
   # The burst itself, in ONE call: `keys` is 200 — the CLEAR_KEY_PAIRS * 2
   # contract the tool description states to callers — and it cannot depend on
@@ -133,14 +170,24 @@ run_phase() {
   # a field still holding the character the forward-delete was meant to remove.
   local LEFT
   LEFT="$(_search_value "$DEV")"
-  if [ -z "$LEFT" ]; then
+  if [ "$LEFT" = "$UNREADABLE" ]; then
+    # Not a pass: nothing was observed, so the burst is unverified. This is the
+    # shape a dead transport takes — the very regression the tier exists for.
+    fail "$P" describe clear-took-effect "the search field could not be read back"
+  elif [ -z "$LEFT" ]; then
     pass "$P" describe clear-took-effect "search field emptied"
   else
     fail "$P" describe clear-took-effect "search field still holds \"$LEFT\""
   fi
 
   # One action per call, `clear` included — the same guard the other tiers make.
-  assert_reject "$P" keyboard clear-and-text "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"x\"}"
+  # Matched on the message, not on the exit code: the rule is enforced in
+  # `execute` rather than by the schema, so the rejection carries no zod issue
+  # path and bare `assert_reject` passes on ANY non-zero exit — a device that
+  # went away included.
+  assert_reject_matching "$P" keyboard clear-and-text \
+    "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"x\"}" \
+    "keyboard takes one of"
 
   # Replace-a-value, the form the tool description prescribes: one round-trip,
   # and the field ends up holding ONLY the new text. The focus tap is its own

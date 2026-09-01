@@ -157,7 +157,13 @@ run_phase() {
   await_ui "$DEV" "$CLEAR_MARK"
   assert_field "$P" describe clear-baseline "{\"udid\":\"$DEV\"}" \
     "(.description|contains(\"$CLEAR_MARK\"))" 'true'
-  assert_field "$P" keyboard clear "{\"udid\":\"$DEV\",\"clear\":true}" '.cleared' 'true'
+  # `clearVerified` too, and only this tier can: it is the one structural way to
+  # tell the two meanings of `cleared` apart, the tool description tells callers
+  # to branch on it, and no tier on any platform asserted it. On Chromium it is
+  # added only where the field was read back EMPTY, so a read-back that silently
+  # stopped answering would drop it while `cleared` stayed true.
+  assert_field "$P" keyboard clear "{\"udid\":\"$DEV\",\"clear\":true}" \
+    '(.cleared == true and .clearVerified == true)' 'true'
   # The node must still BE there, holding nothing: asserting only that the marker
   # is gone also passes if #clr dropped out of the tree for an unrelated reason.
   assert_field "$P" describe clear-took-effect "{\"udid\":\"$DEV\"}" \
@@ -165,10 +171,15 @@ run_phase() {
   # A second clear on the now-empty field: Chrome answers `selectAll: false`
   # there, and reading that instead of `delete`'s `true` would turn every clear
   # of an already-empty field into a spurious failure.
-  assert_field "$P" keyboard clear-already-empty "{\"udid\":\"$DEV\",\"clear\":true}" '.cleared' 'true'
+  assert_field "$P" keyboard clear-already-empty "{\"udid\":\"$DEV\",\"clear\":true}" \
+    '(.cleared == true and .clearVerified == true)' 'true'
   # One action per call, `clear` included — the same guard the android tier
-  # exercises for text+key.
-  assert_reject "$P" keyboard clear-and-text "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"x\"}"
+  # exercises for text+key. Matched on the message like the four refusals below:
+  # the rule is enforced in `execute` rather than by the schema, so it carries no
+  # zod issue path and bare `assert_reject` passes on any non-zero exit.
+  assert_reject_matching "$P" keyboard clear-and-text \
+    "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"x\"}" \
+    "keyboard takes one of"
   # The four refusals below are all InvalidToolInputErrors, so `assert_reject`
   # alone would pass on "the call failed" for every one of them — and a tap that
   # drifts off its field would silently degrade one into a duplicate of another.
@@ -196,8 +207,12 @@ run_phase() {
   # delete, so only reading the field back afterwards catches it. Without that
   # read-back this call reports success and the next typed value is APPENDED.
   run_tool gesture-tap "{\"udid\":\"$DEV\",\"x\":0.5,\"y\":0.92}" >/dev/null 2>&1
+  # The needle has to be one only the RESTORED branch produces: "after the
+  # delete" appears in the reformatted message too, so this case could not tell
+  # apart the split it exists to check — a field the page REWROTE (its old value
+  # already destroyed) from one that kept it.
   assert_reject_matching "$P" keyboard clear-restored "{\"udid\":\"$DEV\",\"clear\":true}" \
-    "after the delete"
+    "the value is the one it held before"
   assert_field "$P" describe clear-restored-intact "{\"udid\":\"$DEV\"}" \
     '(.description|contains("argentrichmark"))' 'true'
   # Replace-a-value, the form the tool description prescribes: one round-trip,
