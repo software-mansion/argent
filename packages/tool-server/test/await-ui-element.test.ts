@@ -97,6 +97,23 @@ function iosRegistry(ax: AXServiceApi) {
   return makeMockRegistry({ ax });
 }
 
+/**
+ * An AX service whose reads cost real time but only a fraction of the budget.
+ * A describe that resolves within a microtask cannot tell "the tree was too slow
+ * to read twice" from "the schedule left no room for a second read".
+ */
+function steadyAx(readMs: number): AXServiceApi {
+  return {
+    degraded: false,
+    describe: async () => {
+      await new Promise((r) => setTimeout(r, readMs));
+      return axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
+    },
+    alertCheck: async () => false,
+    ping: async () => true,
+  };
+}
+
 describe("await-ui-element tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
@@ -184,23 +201,11 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/single sample/i);
   });
 
-  // Each read here takes real time — a tenth of the budget, so the tree is
-  // plainly fast enough — because a describe that resolves within a microtask is
-  // not a transport any device has, and it is the one shape that cannot catch
-  // the failure: the wait always ends with a read cut off by the deadline, so a
-  // caveat keyed on that fires on every timeout, and only a fetch slow enough to
-  // lose the race against a zero-length timer shows it.
-  it("leaves the note unqualified when the tree was read plenty of times", async () => {
-    const steady: AXServiceApi = {
-      degraded: false,
-      describe: async () => {
-        await new Promise((r) => setTimeout(r, 20));
-        return axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
-      },
-      alertCheck: async () => false,
-      ping: async () => true,
-    };
-    const tool = createAwaitUiElementTool(iosRegistry(steady));
+  // `samples < 2` is also what a `pollIntervalMs` wider than the remaining budget
+  // produces, with a read that used a fraction of it. The caveat is right that
+  // the verdict rests on one sample; naming timeoutMs as the remedy is not.
+  it("names pollIntervalMs when the interval, not the read, starved the second sample", async () => {
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(15)));
 
     const result = await tool.execute(
       {},
@@ -208,7 +213,67 @@ describe("await-ui-element tool", () => {
         udid: IOS_UDID,
         condition: "visible",
         selector: { text: "Nope" },
-        timeoutMs: 200,
+        timeoutMs: 900,
+        pollIntervalMs: 2000,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/no element matched/i);
+    expect(result.note).toMatch(/pollIntervalMs \(2000ms\)/);
+    expect(result.note ?? "").not.toMatch(/only one tree read completed/i);
+  });
+
+  // The caveat is about the evidence behind the verdict, so it has to reach every
+  // condition's wording — not just the `visible` one the suite happened to check.
+  it.each(["exists", "visible", "hidden", "text"] as const)(
+    "qualifies the `%s` verdict when only one read completed",
+    async (condition) => {
+      const slowAx: AXServiceApi = {
+        degraded: false,
+        describe: async () => {
+          await new Promise((r) => setTimeout(r, 200));
+          return axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
+        },
+        alertCheck: async () => false,
+        ping: async () => true,
+      };
+      const tool = createAwaitUiElementTool(iosRegistry(slowAx));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_UDID,
+          condition,
+          // `hidden` only reaches the timeout note while something still matches.
+          selector: { text: condition === "hidden" ? "Settings" : "Nope" },
+          ...(condition === "text" ? { expectedText: "Nope" } : {}),
+          timeoutMs: 300,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.note).toMatch(/single sample/i);
+    }
+  );
+
+  // Each read here takes real time — a tenth of the budget, so the tree is
+  // plainly fast enough — because a describe that resolves within a microtask is
+  // not a transport any device has, and it is the one shape that cannot catch
+  // the failure: only a fetch slow enough to lose the race against a zero-length
+  // timer shows it. The budget is wide enough that a slipped read on a loaded
+  // runner still leaves several more inside it.
+  it("leaves the note unqualified when the tree was read plenty of times", async () => {
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(20)));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 600,
         pollIntervalMs: 5,
       }
     );
@@ -1024,7 +1089,7 @@ describe("await-ui-element tool", () => {
   });
 
   it.each(["visible", "hidden"] as const)(
-    "keeps `%s` unmet when only the deadline poll straddles, with the reads still fresh",
+    "keeps `%s` unmet when the loop stops at the deadline with the reads still fresh",
     async (condition) => {
       // The over-correction guard. `pollIntervalMs` exceeds `timeoutMs`, so the
       // loop ends at the deadline without issuing another read — the second one
@@ -1094,6 +1159,50 @@ describe("await-ui-element tool", () => {
     );
 
     expect(unmetUiWaitCause(result)).toBe("unreadable");
+  });
+
+  it("does not vouch for a verdict the last good read left a coarse interval behind", async () => {
+    // Every read here SUCCEEDS, so the final attempt is a trusted one — and it is
+    // still 2.5s old at the deadline, because the loop stops on the deadline
+    // rather than reading across it and `pollIntervalMs` is coarser than the
+    // remaining budget. A trusted final read is not by itself evidence about the
+    // deadline; only its age says that. `unmet` licenses a flow author to delete
+    // the step, which a 2.5s-stale observation has not earned.
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(15)));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 2600,
+        pollIntervalMs: 5000,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+  });
+
+  // The same shape one notch finer: with the interval inside the tolerance the
+  // stale tail is the routine end-of-wait sleep, and the miss stays a miss.
+  it("keeps the verdict unmet when the last good read is one ordinary interval back", async () => {
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(15)));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 1200,
+        pollIntervalMs: 400,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(unmetUiWaitCause(result)).toBe("unmet");
   });
 
   it("does not trust a final read that landed but was blind", async () => {

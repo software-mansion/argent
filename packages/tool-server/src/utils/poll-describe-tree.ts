@@ -7,6 +7,13 @@ import { settleWithin, sleepOrAbort } from "./timing";
  * this loop owns timing, cancellation, and the fetch lifecycle.
  */
 
+/**
+ * Prefix both wait tools put on a note that carries a fetch error, so a caller
+ * reading either one recognises the same shape. `unmetUiWaitCause` classifies
+ * off it.
+ */
+export const TREE_FETCH_FAILED_NOTE_PREFIX = "last tree fetch failed: ";
+
 /** Verdict from evaluating one successfully-fetched tree. */
 export type PollVerdict<R> = { done: true; result: R } | { done: false };
 
@@ -38,13 +45,13 @@ export interface PollDescribeTreeResult<R> {
    * How many fetches came back with a tree, as opposed to erroring or being cut
    * off by the deadline. Always `<= polls`.
    *
-   * This is what says whether a timed-out wait observed anything: a tree too
-   * slow to read starves the predicate of the samples it needs to ever say yes,
-   * and a caller that then reports its own negative verdict describes a screen
-   * it never got to look at. Whether the LAST fetch straddled the deadline does
-   * not say that — the loop keeps issuing fetches until the deadline, so the
-   * final one is cut off on almost every timed-out wait however fast the reads
-   * are, and a flag raised by that is raised on every timeout.
+   * This is what says whether a timed-out wait observed anything: a caller that
+   * reports its own negative verdict on fewer than two samples describes a
+   * screen it never got to compare with itself. Two different things starve it,
+   * and {@link lastAttemptSettled} tells them apart: a tree too slow to read
+   * (the deadline cuts a fetch off), or a `pollIntervalMs` that leaves no room
+   * for a second read inside `timeoutMs` (every fetch settled, the schedule ran
+   * out). Only the first is fixed by raising `timeoutMs`.
    */
   samples: number;
   /**

@@ -63,6 +63,21 @@ function iosRegistry(ax: AXServiceApi) {
 
 const content = () => axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
 
+// A read that costs real time but a small fraction of the budget: the shape that
+// separates "the tree was too slow" from "the schedule left no room". A describe
+// resolving within a microtask cannot make that distinction visible.
+function fastAx(readMs: number): AXServiceApi {
+  return {
+    degraded: false,
+    describe: async () => {
+      await new Promise((r) => setTimeout(r, readMs));
+      return content();
+    },
+    alertCheck: async () => false,
+    ping: async () => true,
+  };
+}
+
 describe("await-screen-idle tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
@@ -152,9 +167,10 @@ describe("await-screen-idle tool", () => {
   // The other half of the same guarantee: a screen that really is churning must
   // still come back as a plain negative, or the note stops meaning anything.
   //
-  // Every read here takes real time — a tenth of the budget, so the reads are
-  // plainly fast enough — because a describe that resolves within a microtask
-  // is not a transport any device has.
+  // Every read here takes real time — because a describe that resolves within a
+  // microtask is not a transport any device has — but a small enough share of
+  // the budget that several more still fit after a slipped read on a loaded
+  // runner. Two samples are what keeps the note off, so that margin is the test.
   it("omits the note when the screen genuinely keeps changing", async () => {
     let n = 0;
     const churning: AXServiceApi = {
@@ -170,7 +186,7 @@ describe("await-screen-idle tool", () => {
 
     const result = await tool.execute(
       {},
-      { udid: IOS_UDID, timeoutMs: 200, pollIntervalMs: 5, minStableMs: 150 }
+      { udid: IOS_UDID, timeoutMs: 600, pollIntervalMs: 5, minStableMs: 500 }
     );
 
     expect(result.settled).toBe(false);
@@ -178,11 +194,6 @@ describe("await-screen-idle tool", () => {
     expect(result.note).toBeUndefined();
   });
 
-  // A hard, actionable device error (locked screen, missing helper) must reach
-  // the agent as itself. Every fetch errors here, so `samples` stays 0 — without
-  // an error guard that lands in the same bucket as a tree too slow to read
-  // twice, and the note would tell the agent to raise timeoutMs: advice that
-  // cannot help and hides the real cause.
   // A hard, actionable device error (locked screen) must reach the agent as
   // itself. Every fetch throws on the Android legacy path here — the exact
   // locked-device trigger from review — so `samples` stays 0 and, without an
@@ -204,6 +215,133 @@ describe("await-screen-idle tool", () => {
     expect(result.settled).toBe(false);
     expect(result.note).toContain("last tree fetch failed:");
     expect(result.note).toContain("uiautomator could not capture");
+  });
+
+  // The other arm of the same guard. Here NO tree ever arrives — the first fetch
+  // is still in flight at the deadline — which leaves `lastError` set to the
+  // loop's own budget-expiry message. Reporting that as a failing fetch would
+  // relabel the slowest possible read as a broken device, so the guard requires
+  // `lastAttemptSettled` too. Dropping that clause flips this note.
+  it("calls a first read the deadline cut off a slow read, not a failing fetch", async () => {
+    const hangingAx: AXServiceApi = {
+      degraded: false,
+      describe: () => new Promise(() => {}),
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitScreenIdleTool(iosRegistry(hangingAx));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 120, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).not.toContain("last tree fetch failed");
+    expect(result.note).toContain("did not finish within the 120ms budget");
+    expect(result.note).toContain("Raise timeoutMs");
+  });
+
+  // `samples < 2` on its own does not mean the tree was slow: the same count
+  // comes back when a `pollIntervalMs` wider than the remaining budget leaves no
+  // room for a second read. Blaming timeoutMs there names a knob that is not the
+  // problem — the read here uses a sixtieth of the budget.
+  it("names pollIntervalMs when the interval, not the read, starved the second sample", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(15)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 900, pollIntervalMs: 2000, minStableMs: 250 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBe(1);
+    expect(result.note).toContain("pollIntervalMs (2000ms)");
+    expect(result.note).toContain("never sampled twice");
+    expect(result.note).not.toContain("outran the budget");
+  });
+
+  // The MCP auto-screenshot readiness wait passes timeoutMs 100 after `describe`
+  // with the default interval, so the default path hits the same starve.
+  it("names pollIntervalMs on the default interval when timeoutMs is small", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(5)));
+
+    const result = await tool.execute({}, { udid: IOS_UDID, timeoutMs: 100 });
+
+    expect(result.polls).toBe(1);
+    expect(result.note).toContain("pollIntervalMs (200ms)");
+    expect(result.note).not.toContain("Raise timeoutMs for a tree this large");
+  });
+
+  // A tree read many times over and empty every time is not a screen that kept
+  // changing — nothing was ever there to move. tvOS is the standing case: its
+  // accessibility tree is empty by design, so every Apple TV wait lands here.
+  it("reports an all-empty tree rather than an observed change", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([axResponse([])])));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 200, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBeGreaterThan(2);
+    expect(result.note).toContain("came back empty");
+    expect(result.note).toContain("not an observed change");
+  });
+
+  // Read repeatedly, never once different, and still `settled: false` — because
+  // minStableMs cannot elapse inside this budget. Saying nothing here would
+  // assert motion over a screen that was demonstrably still.
+  it("reports minStableMs left unconfirmed rather than an observed change", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(5)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 300, pollIntervalMs: 10, minStableMs: 5000 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBeGreaterThan(2);
+    expect(result.note).toContain("minStableMs (5000ms)");
+    expect(result.note).toContain("stillness left unconfirmed");
+  });
+
+  // A cancelled wait observed nothing at all. `await-ui-element` returns its own
+  // cancelled note off the same `aborted` flag; without one here the wait
+  // reported a tree-too-slow diagnosis for a read it never even issued.
+  it("reports a cancelled wait as cancelled, not as a slow read", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(5)));
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await tool.execute({}, { udid: IOS_UDID, timeoutMs: 30_000 }, {
+      signal: ac.signal,
+    } as never);
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBe(0);
+    expect(result.note).toBe("wait was cancelled before the screen settled");
+  });
+
+  // Every `settled: false` shape the tool distinguishes has to survive into the
+  // line the user reads, or the distinction stops at the JSON.
+  it("gives each unsettled shape its own completion message", () => {
+    const { interaction } = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
+    const msg = (result: { settled: boolean; note?: string }) =>
+      interaction?.completedMsg?.({ params: { udid: IOS_UDID }, result } as never);
+
+    expect(msg({ settled: true })).toBe("Screen settled");
+    expect(msg({ settled: false })).toBe("Screen did not settle before timeout");
+    expect(msg({ settled: false, note: "last tree fetch failed: device locked" })).toBe(
+      "Screen read failed before timeout"
+    );
+    expect(msg({ settled: false, note: "wait was cancelled before the screen settled" })).toBe(
+      "Wait for the screen cancelled"
+    );
+    expect(msg({ settled: false, note: "all 9 tree reads came back empty" })).toBe(
+      "Screen stillness went untested before timeout"
+    );
   });
 
   it("settles on the first non-empty read when minStableMs is 0", async () => {

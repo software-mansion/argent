@@ -13,7 +13,7 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { pollDescribeTree } from "../../utils/poll-describe-tree";
+import { pollDescribeTree, TREE_FETCH_FAILED_NOTE_PREFIX } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
@@ -48,7 +48,6 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
 // The `success: false` notes that are NOT a verdict on the condition. Named
 // here, and used below where the notes are built.
 const WAIT_CANCELLED_NOTE = "wait was cancelled before the condition was met";
-const TREE_FETCH_FAILED_NOTE_PREFIX = "last tree fetch failed: ";
 const HIDDEN_UNREADABLE_NOTE =
   "could not confirm the element is hidden — the UI tree was empty or unreadable at timeout";
 
@@ -215,16 +214,19 @@ type FinalRead = "trusted" | "untrusted" | "unsettled";
  * deadline. Three tiers, mirroring `waitForCondition` in flow-actions.ts:
  *
  * 1. No trusted read at all — nothing ever evaluated the condition.
- * 2. Trusted reads, but the window went dark at the end. `hidden` is stricter,
- *    because there the element LEAVING is the transition being waited on.
- * 3. A dark tail inside the tolerance — a last-poll blip, which must not turn a
- *    real miss into "nothing was compared".
+ * 2. Trusted reads, but they no longer describe the deadline: the window went
+ *    dark at the end, or the last one lies further behind the exit than a poll
+ *    can explain. `hidden` is stricter about a dark final read, because there
+ *    the element LEAVING is the transition being waited on.
+ * 3. A gap inside the tolerance — a last-poll blip or the routine sleep before
+ *    the exit, which must not turn a real miss into "nothing was compared".
  *
- * An `unsettled` final attempt takes the dark-tail measure on every condition.
- * The loop makes one on almost every timeout, because the poll sleep is clamped
- * to the deadline and the next iteration straddles it. The age of the last
- * trusted read is what separates that straddle from a source that stopped
- * answering.
+ * The age of the last trusted read is measured on every condition, INCLUDING a
+ * final attempt that came back with a good tree: the loop stops on the deadline
+ * rather than reading across it, so with a coarse `pollIntervalMs` that tree can
+ * be a whole interval old. `unmet` licenses a caller to rewrite or drop the
+ * check (see the flow-authoring guidance), which a verdict that stale has not
+ * earned.
  */
 function timeoutCause(
   condition: Params["condition"],
@@ -233,7 +235,6 @@ function timeoutCause(
   pollIntervalMs: number
 ): UnmetUiWaitCause {
   if (lastTrustedReadAt === undefined) return "unreadable";
-  if (finalRead === "trusted") return "unmet";
   if (finalRead === "untrusted" && condition === "hidden") return "unreadable";
   const darkTailMs = Date.now() - lastTrustedReadAt;
   const tolerance = Math.min(
@@ -286,18 +287,26 @@ function timeoutNote(
   lastTree: DescribeNode | null,
   fetchError: string | undefined,
   lastData: DescribeTreeData | null,
-  samples: number
+  samples: number,
+  budget: { timeoutMs: number; pollIntervalMs: number; lastAttemptSettled: boolean }
 ): string {
   if (fetchError) return `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`;
-  // A tree too slow to read more than once inside the budget leaves the verdict
-  // below resting on that single sample, which can be the one taken before the
-  // element ever appeared. Measured by samples returned, not by whether the last
-  // read straddled the deadline — the loop reads until the budget is gone, so
-  // one always does, however fast the reads are. The selector diagnosis is still
-  // the most useful thing to report, so qualify it rather than replace it.
+  // One tree read inside the budget leaves the verdict below resting on that
+  // single sample, which can be the one taken before the element appeared. The
+  // selector diagnosis is still the most useful thing to report, so qualify it
+  // rather than replace it — but name the knob that actually applies. Only a
+  // read the deadline cut off (`lastAttemptSettled` false, see
+  // poll-describe-tree) is the tree outrunning the budget; a read that finished
+  // and was never followed by a second one was starved by pollIntervalMs, and
+  // raising timeoutMs is not the smaller change there.
   const readCaveat =
     samples < 2
-      ? " (only one tree read completed within the budget, so this rests on that single sample — raise timeoutMs)"
+      ? budget.lastAttemptSettled
+        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — the read finished, but ` +
+          `pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a second — so this rests on that ` +
+          `single sample; lower pollIntervalMs or raise timeoutMs)`
+        : ` (only one tree read completed within the ${budget.timeoutMs}ms budget, so this rests on that ` +
+          `single sample — raise timeoutMs)`
       : "";
   const matches = lastTree ? findAll(lastTree, params.selector) : [];
   let base: string;
@@ -479,7 +488,12 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
           poll.lastData?.tree ?? null,
           poll.lastError,
           poll.lastData,
-          poll.samples
+          poll.samples,
+          {
+            timeoutMs,
+            pollIntervalMs,
+            lastAttemptSettled: poll.lastAttemptSettled,
+          }
         ),
         cause: timeoutCause(params.condition, lastTrustedReadAt, finalRead, pollIntervalMs),
       };

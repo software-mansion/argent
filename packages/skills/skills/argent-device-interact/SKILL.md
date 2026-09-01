@@ -245,6 +245,8 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 
 On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
+`settled: false` means the screen kept changing only when no `note` came back with it. A `note` says stillness went **untested** instead, and which way: the tree read failed outright, the wait was cancelled, the tree was never read twice inside the budget (the note names the knob — `timeoutMs` for a slow tree, `pollIntervalMs` when the interval left no room for a second read), every read came back empty (nothing rendered; on Apple TV the accessibility tree is empty by design, so every wait there ends this way), or the content held still but `minStableMs` is longer than the budget can reach. Fix what the note names and re-run rather than reading it as motion.
+
 Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
 ---

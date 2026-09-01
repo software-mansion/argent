@@ -48,32 +48,25 @@ export async function describeAndroid(
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
       const [{ xml }, size] = await Promise.all([
         // clearCache: every reader of this tree is answering "what is on the
-        // screen right now" — the `describe` tool, `await-screen-idle`,
-        // `await-ui-element` and the Lens/preview describe route all read it,
-        // and a selector match turns it into tap coordinates. The helper's
-        // long-lived connection caches AccessibilityNodeInfo per node, and only
-        // an accessibility content-change event from the app invalidates an
-        // entry. An app that emits none for a node — a running stopwatch is the
-        // reproducible case — leaves that entry valid forever, and the cached
-        // read keeps serving its first-seen text while the screen moves on. It
-        // takes no app restart: measured on a freshly-opened connection, 20
-        // cached reads across 30 s all returned 2:09.32 against a timer that had
-        // reached 2:40.32.
+        // screen right now" — the `describe` tool and its Android TV branch,
+        // `await-screen-idle`, `await-ui-element`, the shared selector match
+        // (which becomes tap coordinates) and the Lens/preview route all reach
+        // the helper through here. The helper's long-lived connection caches
+        // AccessibilityNodeInfo per node, and only an accessibility
+        // content-change event from the app invalidates an entry. An app that
+        // emits none for a node — a running stopwatch is the reproducible case —
+        // leaves that entry valid forever, and the cached read keeps serving its
+        // first-seen text while the screen moves on. It takes no app restart:
+        // measured on a freshly-opened connection, 20 cached reads across 30 s
+        // all returned 2:09.32 against a timer that had reached 2:40.32.
         //
-        // The cost scales with the tree, because dropping the cache means the
-        // walk re-fetches every node over binder. Measured device-side on arm64
-        // emulators: API 30 is linear at 0.28-0.31 ms/node from 330 to 4080
-        // nodes; API 34 runs 0.34-0.82 ms/node between 315 and 3065 nodes.
-        // Clearing in a single UiAutomation.clearCache() call at API 34+ does
-        // not make it the cheaper platform — it costs more than API 30's
-        // per-node refresh() at every size from 315 nodes up.
-        //
-        // On the polled readers that cost lands as a verdict, not just latency.
-        // They bound each fetch by the budget they were given and do not overrun
-        // it, but settling takes two samples that agree, so a tree too slow to
-        // read twice starves them of the second one. Both report that as a note
-        // rather than as a negative answer about the screen; see
-        // `samples` in poll-describe-tree.
+        // The cost scales with the tree, since dropping the cache makes the walk
+        // re-fetch every node over binder; `GetHierarchyOptions.clearCache` in
+        // the blueprint carries the per-node measurements. On the polled readers
+        // that cost lands as a verdict, not just latency: they bound each fetch
+        // by the budget they were given, so a tree too slow to read leaves them
+        // fewer samples than their verdict needs. Both say so in a note rather
+        // than answer about the screen; see `samples` in poll-describe-tree.
         devtools.getHierarchy({ clearCache: true }),
         devtools.getScreenSize(),
       ]);

@@ -78,16 +78,14 @@ function makeRecordingRegistry(): {
 
 /**
  * Coherence is guarded twice over: the reader names `clearCache` at its call
- * site, and the blueprint supplies `true` to anything that omits it. Either one
- * alone puts a coherent request on the wire, which is exactly why each needs its
- * own assertion — checking only the effective request lets the call site be
- * deleted with every test still green, and checking only the call site lets the
- * default be flipped back unnoticed. So each reader below asserts both: the raw
- * options it passed, and the request those options produce.
+ * site, and the blueprint supplies `true` to anything that omits it. This half
+ * pins the call sites, and only them — running options that already say
+ * `clearCache: true` back through `getHierarchyRequestParams` restates the line
+ * above and cannot fail. The `getHierarchy request defaults` block below is what
+ * pins the other half.
  */
 function expectCoherentRequest(opts: GetHierarchyOptions | undefined): void {
   expect(opts?.clearCache).toBe(true);
-  expect(getHierarchyRequestParams(opts).clearCache).toBe(true);
 }
 
 describe("Android describe reads bypass the helper's node cache", () => {
@@ -180,10 +178,10 @@ describe("Android describe reads bypass the helper's node cache", () => {
 
     expect(optionsSeen()).toHaveLength(1);
     expectCoherentRequest(optionsSeen()[0]);
-    // The flow path caps nodes well below the blueprint default; assert it so
-    // the coherence fix can't be "fixed" by dropping to the shared options.
-    expect(optionsSeen()[0]?.maxNodes).toBeGreaterThan(0);
-    expect(getHierarchyRequestParams(optionsSeen()[0]).maxNodes).toBe(optionsSeen()[0]?.maxNodes);
+    // The flow path caps nodes well above the blueprint default; pin the value,
+    // so the coherence fix can't be "fixed" by dropping to the shared options.
+    expect(optionsSeen()[0]?.maxNodes).toBe(12_000);
+    expect(getHierarchyRequestParams(optionsSeen()[0]).maxNodes).toBe(12_000);
   });
 });
 

@@ -13,7 +13,11 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { pollDescribeTree } from "../../utils/poll-describe-tree";
+import {
+  pollDescribeTree,
+  TREE_FETCH_FAILED_NOTE_PREFIX,
+  type PollDescribeTreeResult,
+} from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
@@ -24,9 +28,7 @@ export const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_MIN_STABLE_MS = 250;
-// Shared with await-ui-element's timeout note so both wait tools name a failing
-// fetch the same way.
-const TREE_FETCH_FAILED_NOTE_PREFIX = "last tree fetch failed: ";
+const WAIT_CANCELLED_NOTE = "wait was cancelled before the screen settled";
 
 const zodSchema = z.object({
   udid: z
@@ -68,10 +70,12 @@ interface IdleResult {
   waitedMs: number;
   polls: number;
   /**
-   * Present only when `settled: false` does not stand for "the screen kept
-   * changing": either the last tree fetch failed outright (the note carries
-   * that error), or the budget ran out mid-read, which leaves it standing for
-   * "never sampled twice" rather than "kept changing".
+   * Present whenever `settled: false` does not stand for "the screen kept
+   * changing". Every other way this wait ends negative says so here: the last
+   * tree fetch failed outright (the note carries that error), the caller
+   * cancelled, the screen was never sampled twice, every read came back empty,
+   * or the content held still but `minStableMs` was out of the budget's reach.
+   * A bare `settled: false` with no note is the observed change.
    */
   note?: string;
 }
@@ -96,6 +100,78 @@ function treeSignature(root: DescribeNode): string {
   };
   for (const child of root.children) walk(child);
   return parts.join("\n");
+}
+
+/**
+ * WHY a wait came back `settled: false`, or `undefined` when the plain reading —
+ * the screen was read repeatedly and kept changing — is the true one.
+ *
+ * Every arm here exists because `settled: false` alone would assert an observed
+ * change the wait never observed. They are ordered by how little the wait got to
+ * see, most blind first.
+ */
+function unsettledNote(
+  poll: PollDescribeTreeResult<true>,
+  wait: {
+    timeoutMs: number;
+    pollIntervalMs: number;
+    minStableMs: number;
+    nonEmptyReads: number;
+    signatureChanged: boolean;
+  }
+): string | undefined {
+  if (poll.aborted) return WAIT_CANCELLED_NOTE;
+
+  // A fetch that failed outright — a locked screen, a dead helper — must reach
+  // the agent as itself rather than be folded into a latency diagnosis: every
+  // fetch failing also leaves `samples` at 0, and telling the agent to raise
+  // timeoutMs there is advice that cannot help. `lastAttemptSettled` keeps this
+  // off the slow-read arm below, where the loop leaves `lastError` set to its
+  // own budget-expiry message for a read it abandoned at the deadline.
+  if (poll.lastAttemptSettled && poll.lastError !== undefined) {
+    return `${TREE_FETCH_FAILED_NOTE_PREFIX}${poll.lastError}`;
+  }
+
+  // Settling takes two samples that agree across minStableMs, so one sample is
+  // a screen the reader never got to compare with itself. Two different things
+  // starve it and they take opposite remedies, so name the right knob:
+  // `lastAttemptSettled` is false only when the deadline cut a fetch off, which
+  // is the read outrunning the budget. True means every fetch came back and the
+  // SCHEDULE ran out — one read plus one pollIntervalMs sleep does not fit in
+  // timeoutMs — where raising timeoutMs is not the smaller change.
+  if (poll.samples < 2) {
+    return poll.lastAttemptSettled
+      ? `the ${wait.timeoutMs}ms budget left room for only ${poll.samples} tree read, so the screen was ` +
+          `never sampled twice — this is not an observed change. The read itself finished; it is ` +
+          `pollIntervalMs (${wait.pollIntervalMs}ms) that leaves no room for a second one, so lower it ` +
+          `or raise timeoutMs.`
+      : `reading the tree did not finish within the ${wait.timeoutMs}ms budget, so the screen was never ` +
+          `sampled twice — this is a read that outran the budget, not an observed change. Raise ` +
+          `timeoutMs for a tree this large.`;
+  }
+
+  // Read repeatedly and empty every time: there was never any content to go
+  // still, which `settled: false` on its own would report as motion. The
+  // adapter's own hint (tvOS has no readable tree at all) says why.
+  if (wait.nonEmptyReads === 0) {
+    const base =
+      `all ${poll.samples} tree reads came back empty, so no content ever rendered to go still — ` +
+      `this is not an observed change.`;
+    return poll.lastData?.hint ? `${base} (${poll.lastData.hint})` : base;
+  }
+
+  // Read repeatedly, and no two reads ever differed. The screen was not seen
+  // changing; minStableMs simply never elapsed over a run of identical reads
+  // inside the budget.
+  if (!wait.signatureChanged) {
+    return (
+      `the ${poll.samples} tree reads were all identical, but minStableMs (${wait.minStableMs}ms) never ` +
+      `elapsed over them inside the ${wait.timeoutMs}ms budget — this is stillness left unconfirmed, not ` +
+      `an observed change. Lower minStableMs or raise timeoutMs.`
+    );
+  }
+
+  return undefined;
 }
 
 // The MCP layer times its auto-screenshot with this: capture once the screen is
@@ -123,11 +199,13 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
       completedMsg: ({ result }) =>
         result.settled
           ? "Screen settled"
-          : result.note?.startsWith(TREE_FETCH_FAILED_NOTE_PREFIX)
-            ? "Screen read failed before timeout"
-            : result.note
-              ? "Could not read the screen twice before timeout"
-              : "Screen did not settle before timeout",
+          : result.note === undefined
+            ? "Screen did not settle before timeout"
+            : result.note.startsWith(TREE_FETCH_FAILED_NOTE_PREFIX)
+              ? "Screen read failed before timeout"
+              : result.note === WAIT_CANCELLED_NOTE
+                ? "Wait for the screen cancelled"
+                : "Screen stillness went untested before timeout",
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
     },
@@ -136,9 +214,11 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
 ${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls, note? } — settled=false means the screen never
-went still before the timeout, except when a note is present: one kind reports the last tree fetch failing outright
-(fix its cause — e.g. unlock the device); the other says the tree could not be read twice inside the budget, so
-whether the screen was still went untested and raising timeoutMs is what resolves it. Use after a launch/navigation
+went still before the timeout ONLY when no note is present. A note says stillness went untested instead, and which
+way: the last tree fetch failed outright (fix its cause — e.g. unlock the device), the wait was cancelled, the tree
+was never read twice inside the budget (the note names the knob — timeoutMs for a slow tree, pollIntervalMs when the
+interval left no room for a second read), every read came back empty (nothing rendered; on tvOS the tree is empty by
+design), or the content held still but minStableMs is longer than the budget can reach. Use after a launch/navigation
 to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
@@ -165,25 +245,37 @@ to wait for the UI to render before screenshotting or tapping.`,
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
       const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
 
+      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+
       let stableSignature: string | undefined;
       let stableSince = 0;
+      // Reads that came back with content, and whether the content ever differed
+      // between two of them. Together they separate "nothing rendered" and "the
+      // screen was still all along" from the observed change `settled: false`
+      // otherwise asserts.
+      let nonEmptyReads = 0;
+      let signatureChanged = false;
 
       const poll = await pollDescribeTree<true>({
         fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
-        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+        timeoutMs,
+        pollIntervalMs,
         signal: ctx?.signal,
         onSample: (data, nowMs) => {
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
+            if (stableSignature !== undefined) signatureChanged = true;
             stableSignature = undefined;
             stableSince = 0;
             return { done: false };
           }
+          nonEmptyReads += 1;
           const signature = treeSignature(data.tree);
           if (signature === stableSignature) {
             if (nowMs - stableSince >= minStableMs) return { done: true, result: true };
           } else {
+            if (stableSignature !== undefined) signatureChanged = true;
             stableSignature = signature;
             stableSince = nowMs;
             if (minStableMs === 0) return { done: true, result: true };
@@ -193,45 +285,16 @@ to wait for the UI to render before screenshotting or tapping.`,
       });
 
       const settled = poll.result === true;
-      // A fetch that failed outright — a locked screen, a dead helper — must
-      // reach the agent as itself rather than be folded into the latency
-      // diagnosis below: every fetch failing also leaves `samples` at 0, and
-      // telling the agent to raise timeoutMs there is advice that cannot help.
-      // `lastAttemptSettled` keeps this from misfiring on the other arm of the
-      // caveat: the loop leaves `lastError` set (to its own budget-expiry
-      // message) for a read it abandoned at the deadline, and THAT case is a
-      // read too slow to finish, not a failing one. See `lastAttemptSettled` in
-      // poll-describe-tree.
-      if (!settled && poll.lastAttemptSettled && poll.lastError !== undefined) {
-        return {
-          settled,
-          waitedMs: poll.elapsedMs,
-          polls: poll.polls,
-          note: `${TREE_FETCH_FAILED_NOTE_PREFIX}${poll.lastError}`,
-        };
-      }
-      return {
-        settled,
-        waitedMs: poll.elapsedMs,
-        polls: poll.polls,
-        // Settling takes two samples that agree across minStableMs. A tree too
-        // slow to read twice inside the budget never yields the second one, so
-        // `settled: false` here would otherwise stand for "the screen kept
-        // changing" on a screen that may have been perfectly still — the reader
-        // simply never got to compare it with itself. Say which of the two
-        // happened, and name the knob that fixes this one. The test is how many
-        // samples came back, not whether the final read straddled the deadline:
-        // the loop reads until the budget is gone, so the last one is cut off on
-        // almost every timeout however fast the reads are.
-        ...(!settled && poll.samples < 2
-          ? {
-              note:
-                `reading the tree did not finish within the ${params.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms budget, ` +
-                `so the screen was never sampled twice — this is a read that outran the budget, not an observed change. ` +
-                `Raise timeoutMs for a tree this large.`,
-            }
-          : {}),
-      };
+      const base = { settled, waitedMs: poll.elapsedMs, polls: poll.polls };
+      if (settled) return base;
+      const note = unsettledNote(poll, {
+        timeoutMs,
+        pollIntervalMs,
+        minStableMs,
+        nonEmptyReads,
+        signatureChanged,
+      });
+      return note === undefined ? base : { ...base, note };
     },
   };
 }
