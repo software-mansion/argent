@@ -718,6 +718,29 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(all.find((n) => n.role === "ScrollView")?.scrollHidden).toBe(1);
   });
 
+  it("keeps the hidden-child count when the node that counted has no survivors", () => {
+    // The other way a counting node disappears: its own box is unusable and the
+    // clip hid every child it had, so the "invisible and nothing left" guard
+    // drops it. Both guards do it — the WebView one and the generic one — and
+    // the count is the only record left that the rows are there.
+    const rows = (cls: string) => `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.ScrollView" bounds="[0,400][1080,900]" scrollable="true">
+    <node class="android.widget.TextView" bounds="[0,420][1080,480]" text="Visible row"/>
+    <node class="${cls}" bounds="[0,500][1080,499]" content-desc="Buy">
+      <node class="android.widget.TextView" bounds="[0,1500][1080,1560]" text="Scrolled away"/>
+    </node>
+  </node>
+</hierarchy>`;
+
+    for (const cls of ["android.webkit.WebView", "android.widget.Button"]) {
+      const all = flatten(parseUiAutomatorDump(rows(cls), 1080, 2400));
+      expect(all.map((n) => n.label)).toContain("Visible row");
+      expect(all.some((n) => n.label === "Scrolled away")).toBe(false);
+      expect(all.find((n) => n.role === "ScrollView")?.scrollHidden).toBe(1);
+    }
+  });
+
   it("strips React Native SVG sub-paths entirely", () => {
     // com.horcrux.svg.{Path,Group,Svg}View are dump-side noise — the icon's
     // content-desc lives on the parent ImageView/Button, not these leaves.

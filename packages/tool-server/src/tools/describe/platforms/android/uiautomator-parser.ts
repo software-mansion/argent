@@ -635,6 +635,20 @@ function computeNodeOutput(
     }
   }
 
+  // Every path that discards this node routes through here: the count of what
+  // this node's clip hid has no node left to sit on, so it moves to the nearest
+  // surviving ancestor. An unnamed wrapper `<div>` — or the
+  // `<ScrollView><View>{rows}</View></ScrollView>` a React Native screen dumps
+  // as — is exactly such a node, so without this the "swipe before you tap"
+  // signal disappears on the most ordinary layout there is. A node dropped with
+  // NO survivors needs it too: when the node's own box is unusable and its clip
+  // hid every child it had, the guards below discard it, and the count is the
+  // only record left that those rows are there.
+  const passUp = (out: UiNode[]): UiNode[] => {
+    if (hiddenInScroll > 0) orphanHidden.set(parsed, hiddenInScroll);
+    return out;
+  };
+
   // WebView: the DOM *is* published to the accessibility tree — on most builds
   // Chromium maps an HTML `id` onto `resource-id`, so web controls are
   // addressable exactly like native ones (some WebView versions publish no ids
@@ -653,7 +667,7 @@ function computeNodeOutput(
   // area whose children are still on screen must not take the subtree down
   // with it.
   if (WEBVIEW_CLASSES.has(cls)) {
-    if (!visible && keptChildren.length === 0) return [];
+    if (!visible && keptChildren.length === 0) return passUp([]);
     const own = labelOf(attrs);
     // An app that hosts its own WebView reaches the dump twice, nested: the
     // app's `android.webkit.WebView` view, and Chromium's root web area, which
@@ -704,17 +718,6 @@ function computeNodeOutput(
     return [webView];
   }
 
-  // Every path that discards this node but keeps its children routes through
-  // here: the count of what this node's clip hid has no node left to sit on, so
-  // it moves to the nearest surviving ancestor. An unnamed wrapper `<div>` — or
-  // the `<ScrollView><View>{rows}</View></ScrollView>` a React Native screen
-  // dumps as — is exactly such a node, so without this the "swipe before you
-  // tap" signal disappears on the most ordinary layout there is.
-  const passUp = (out: UiNode[]): UiNode[] => {
-    if (hiddenInScroll > 0) orphanHidden.set(parsed, hiddenInScroll);
-    return out;
-  };
-
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
@@ -736,7 +739,7 @@ function computeNodeOutput(
     return passUp(keptChildren);
   }
 
-  if (!visible && keptChildren.length === 0) return [];
+  if (!visible && keptChildren.length === 0) return passUp([]);
 
   // Compound clickable with no label of its own: borrow descendant labels. Pure
   // scrollables are excluded — their descendants are a screenful of text.
