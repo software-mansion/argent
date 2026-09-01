@@ -2868,7 +2868,7 @@ export function serializeFlow(flow: FlowFile): string {
 export function validateFlow(flow: FlowFile): void {
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
+      "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",
