@@ -130,7 +130,7 @@ Each step contains one directive. A failed directive stops the flow.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
-`type` always appends: it focuses the element and types, and it has no clear form. Into a field that already holds a value — one the app remembered, or one an earlier run of the same flow left — that splices the new characters into the old one, and the flow replays that wrong value on every run. Where the field can arrive non-empty, write the steps by hand instead:
+`type` always appends: it focuses the element and types, and it has no clear form. A field can already hold a value: one the app remembered, or one an earlier run of the same flow left. `type` then splices the new characters into the old value, and the flow replays that wrong value on every run. Where the field can arrive non-empty, write the steps by hand instead:
 
 ```yaml
 - tap: { id: email }

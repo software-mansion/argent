@@ -85,7 +85,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
 - On mobile targets, the clear action removes up to 100 characters on each side of the cursor. A field with more characters on one side of the cursor keeps the remainder, and the agent clears it again. On Chromium there is no limit.
-- On Chromium, the agent reads the field again, and the result says `clearVerified` when that read found the field empty. On mobile targets the result says only what the agent sent, so the agent reads the field with `describe` when it needs proof.
+- On Chromium, the agent reads the field again after the clear, so it knows that the field is empty. On mobile targets the agent knows only what it sent, so it reads the field itself when it needs proof.
 - The clear action is not available on TV targets and Vega. There the agent uses the on-screen keyboard of the app.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.
