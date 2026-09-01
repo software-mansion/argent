@@ -248,6 +248,8 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 A `script` step runs a local `.mjs` file in a new Node process. Use a script for work that no device step does: a call to an API, a database seed, or a cleanup after the run.
 
+A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
 | Key       | Required | Description                                                                                                                |
