@@ -21,25 +21,19 @@ const PROVIDER_VOCABULARY = [
 ];
 
 /**
- * `provider` in an unrelated sense. Listed one by one so a new use is noticed.
- */
-const UNRELATED = [
-  /** screenshot-diff naming its OCR engine. */
-  /provider=\w+/g,
-  /text_analysis/g,
-];
-
-/**
- * Only the allowed token is removed, not the line carrying it. Dropping the
- * whole line would exempt everything beside it; `provider=text_analysis; use
- * the external provider` would sweep past the check on the strength of its
- * first half.
+ * No allowlist. There was one, for `provider=<engine>` where screenshot-diff
+ * names its OCR engine, but that spelling only ever appears in the tool's
+ * result, never in a description, so the exemption matched nothing and stood
+ * open; `provider=external` would have been erased before the sweep read the
+ * line.
+ *
+ * Should the catalog ever gain a legitimate unrelated `provider`, exempt that
+ * token alone rather than the line carrying it. Dropping the whole line would
+ * excuse everything beside it and `provider=ocr; use the external provider`
+ * would pass on the strength of its first half.
  */
 function offendingLines(text: string): string[] {
-  return text.split("\n").filter((line) => {
-    const remaining = UNRELATED.reduce((rest, allowed) => rest.replace(allowed, ""), line);
-    return PROVIDER_VOCABULARY.some((pattern) => pattern.test(remaining));
-  });
+  return text.split("\n").filter((line) => PROVIDER_VOCABULARY.some((p) => p.test(line)));
 }
 
 /** Every description a client receives, the tool's, plus each parameter's. */
@@ -56,6 +50,31 @@ function agentFacingText(def: ToolDefinition<any, any>): string[] {
 
   return texts;
 }
+
+/**
+ * The sweep below asserts an absence, so it passes just as well when it has
+ * stopped looking. These two hold the instrument itself to account: that the
+ * vocabulary still fires and that there is text for it to fire on.
+ */
+describe("the sweep can still find what it looks for", () => {
+  it.each([
+    "Pick the external device the provider offers.",
+    "Pass the ext: id from list-devices.",
+    "Set 'external: true' to reach a device provider.",
+    /** The line the removed `provider=<engine>` exemption would have erased. */
+    "provider=external",
+  ])("flags %j", (line) => {
+    expect(offendingLines(line)).toEqual([line]);
+  });
+
+  it("reads a description and its parameters, so the catalog sweep has input", () => {
+    const definitions = definitionsById(createRegistry());
+    const texts = [...definitions.values()].flatMap(agentFacingText);
+
+    expect(texts.length).toBeGreaterThan(definitions.size);
+    expect(texts.every((text) => text.length > 0)).toBe(true);
+  });
+});
 
 describe("device providers stay out of the always-shipped catalog", () => {
   const definitions = definitionsById(createRegistry());
