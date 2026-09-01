@@ -285,12 +285,15 @@ export async function uninstallApp(udid: string, bundleId: string): Promise<void
 
 interface LaunchAppOptions {
   terminateExisting?: boolean;
+  /** Deliver this URL to the app at launch through the payload-url flag. */
+  payloadUrl?: string;
 }
 
 /**
  * Launch an installed app by bundle id.
  *
  * @param opts.terminateExisting kill an already-running instance first.
+ * @param opts.payloadUrl pass this URL to the app at launch.
  */
 export async function launchApp(
   udid: string,
@@ -301,6 +304,10 @@ export async function launchApp(
 
   if (opts.terminateExisting) {
     args.push("--terminate-existing");
+  }
+
+  if (opts.payloadUrl) {
+    args.push("--payload-url", opts.payloadUrl);
   }
 
   args.push(bundleId);

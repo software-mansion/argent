@@ -20,14 +20,15 @@ description: Interact with a physical iPhone via argent. Use when tapping, swipi
 
 ## Supported tools
 
-`list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `button`, `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the flow tools, and `stop-simulator-server`.
+`list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `button`, `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the flow tools, and `stop-simulator-server`.
+
+`open-url` on hardware delivers the URL to one named app: `http(s)` URLs default to Safari, any other scheme needs the `bundleId` parameter, and the receiving app becomes the app under automation.
 
 Everything else fails with `not supported on ios device`. Reach for the alternative instead:
 
 | Gated tool                        | Do instead                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------ |
 | `gesture-pinch`, `gesture-rotate` | Drive the app's own zoom/rotate UI with taps and drags; no two-finger gestures |
-| `open-url`                        | `launch-app` the target, then navigate inside its UI                           |
 | `rotate`, `shake`                 | Real motion only: rotate/shake the phone by hand, or test on a simulator       |
 | `settings-permissions`            | Change the permission on the phone itself in Settings                          |
 | `paste`                           | Type with `keyboard`                                                           |

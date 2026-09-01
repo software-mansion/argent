@@ -70,6 +70,9 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   // Live captures go through the runner's device-wide screenshot. The diff
   // engine itself runs on the host either way.
   "screenshot-diff",
+  // devicectl launches the named receiving app with the URL as its payload.
+  // Web URLs default to Safari and any other scheme must name the app.
+  "open-url",
 ];
 
 describe("apple.device capability ratchet", () => {
