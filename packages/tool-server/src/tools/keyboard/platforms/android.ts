@@ -32,8 +32,9 @@ async function typeAndroidPhone(
     // cannot type has to be rejected ahead of that. `injectAndroidText` re-runs
     // the same pure check harmlessly.
     assertTypeableAndroidText(params.text);
-    // The signal, not just the text: the read-back's repair deletes before it
-    // retypes, and that must not start after the caller has gone away.
+    // The signal, not just the text: the read-back waits on the helper and on a
+    // hierarchy read before it types anything, and its repair deletes before it
+    // retypes. Neither may run on once the caller has gone away.
     verification = await typeAndroidTextVerified(registry, device, params.text, options?.signal);
     // `assertTypeableAndroidText` above has already rejected any non-ASCII, so
     // every character here is a single codepoint and a single UTF-16 unit —
