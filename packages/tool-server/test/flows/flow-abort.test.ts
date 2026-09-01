@@ -418,10 +418,10 @@ describe("run cancellation mid-directive", () => {
 
   it("presses no submitting Enter when the run is cancelled inside the keyboard call", async () => {
     const controller = new AbortController();
-    // On an Android phone the keyboard call reads the field back and can repair
-    // it, holding the call for tens of seconds — so the cancel lands inside a
-    // call that still RESOLVES, and its result has no `verified`, which is the
-    // value that passes the read-back gate. Nothing below it would stop the Enter.
+    // A keyboard call can still RESOLVE after the cancel — the TV and Vega
+    // backends, and the Android branch that types blind because the helper is
+    // unavailable — and its result then has no `verified`, which is the value
+    // that passes the read-back gate. Nothing below it would stop the Enter.
     currentFetch = () => ({
       tree: screen([
         n({

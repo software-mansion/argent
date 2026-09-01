@@ -210,7 +210,9 @@ describe("classifyTypedText", () => {
   });
 
   it("rejects a doubled injection", () => {
-    // Present as a contiguous substring, but the field grew by twice the text.
+    // Present as a contiguous substring, but the field grew by twice the text —
+    // and requiring it NOT to be there contiguously is what keeps the reformat
+    // clause from absorbing it: no single injection explains "abc" twice.
     expect(classifyTypedText("", "abcabc", "abc")).toBe("not-landed");
   });
 
@@ -266,6 +268,9 @@ describe("classifyTypedText", () => {
 describe("plannedUndoDeletions", () => {
   it("counts the observed growth when the prior content survived", () => {
     // 8 of 12 characters landed after "XY": deleting 8 restores "XY" exactly.
+    // "XY" is not a subsequence of the typed text, so the hint reading is ruled
+    // out and one reading is left — which is what keeps the refusal below from
+    // disabling the undo wherever the prior content is real.
     expect(plannedUndoDeletions("XY", "XYabcdefgh", "abcdefghijkl")).toBe(8);
   });
 
@@ -345,7 +350,7 @@ describe("plannedUndoDeletions", () => {
     expect(plannedUndoDeletions("", "", "abc")).toBe(0);
   });
 
-  it("gives up the retry on an unchanged field that could have held what landed", () => {
+  it("gives up the repair on an unchanged field that could have held what landed", () => {
     // The price of the model, pinned so it is a decision rather than a surprise:
     // on an unchanged field every position is a possible selection, so one
     // character the call could have typed is enough to make "a selection was
@@ -363,13 +368,6 @@ describe("plannedUndoDeletions", () => {
     // printable ASCII. A localized hint is therefore safe without a scan of its
     // own — here nothing is deleted at all, and the text is simply retyped.
     expect(plannedUndoDeletions("José", "José", "argent")).toBe(0);
-  });
-
-  it("still counts the growth when the field cannot have been empty", () => {
-    // "XY" is not a subsequence of the typed text, so the hint reading is ruled
-    // out and one reading is left. This is what keeps the refusal above from
-    // disabling the undo wherever the prior content is real.
-    expect(plannedUndoDeletions("XY", "XYabcdefgh", "abcdefghijkl")).toBe(8);
   });
 
   it("empties the field when everything in it came from this injection", () => {
@@ -630,7 +628,7 @@ describe("android keyboard read-back — fault injection", () => {
 
   it("does not touch a field it cannot safely restore, and says so", async () => {
     // An input mask rewrote the field: the prior content is not recoverable by
-    // backspacing, so destroying it to retry is not an option.
+    // backspacing, so destroying it to repair is not an option.
     const { registry } = registryServing([
       hierarchy({ text: "12345" }),
       hierarchy({ text: "1-2-3-45abc" }),
@@ -904,9 +902,10 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
 
   it("does not mistake the SAME field for another when typing MOVES it", async () => {
     // A bottom-anchored chat composer grows upward as its text wraps to a second
-    // line, so its bounds origin rises between the two reads while it is plainly
-    // the same field. Position alone calls that a focus change and refuses to
-    // verify; the `resource-id` is what survives it, and most composers have one.
+    // line, so its bounds ORIGIN rises between the two reads while it is plainly
+    // the same field. Both the id and the overlap survive that; an identity rule
+    // that compared origins would not. (The id's own weight is pinned by
+    // "repairs a uniquely-id'd field that moved clear of where it was".)
     const { registry } = registryServing([
       hierarchy({ text: "Message", rid: FIELD_RID, bounds: "[126,2100][1080,2226]" }),
       hierarchy({ text: "abcdefghijkl", rid: FIELD_RID, bounds: "[126,1974][1080,2226]" }),
@@ -1057,10 +1056,10 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   it("retypes without deleting when the field received nothing at all", async () => {
     // The reported shape: a field at its maxLength accepts nothing, so the read
     // back is byte-identical to the baseline and holds none of the typed text.
-    // There is nothing of ours to remove, so the retry must retype with zero
+    // There is nothing of ours to remove, so the repair must retype with zero
     // backspaces — deleting here would eat the field's own content. No character
     // of the hint is one this call typed, so no selection explains the reading
-    // and the count is proven ("gives up the retry on an unchanged field that
+    // and the count is proven ("gives up the repair on an unchanged field that
     // could have held what landed" is the price of that rule).
     const unchanged = hierarchy({ text: "Enter number" });
     const { registry } = registryServing([unchanged, unchanged, unchanged]);
@@ -1069,14 +1068,14 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
 
     expect(res.verified).toBe(false);
     expect(cmds().some((c) => c.includes("keyevent"))).toBe(false);
-    // One first burst plus the chunked retry (10 chars / 8 per chunk = 2).
+    // One first burst plus the chunked repair (10 chars / 8 per chunk = 2).
     expect(cmds().filter((c) => c.includes("input text"))).toHaveLength(3);
   });
 
   it("paces the retype instead of re-sending it as one burst", async () => {
     // The cadence IS the repair: the same string in one `input text` is what
     // dropped characters in the first place. Without a gap between chunks the
-    // retry is a blind repeat of the call that already failed.
+    // repair is a blind repeat of the call that already failed.
     const stamps: number[] = [];
     adbShell.mockImplementation(async (_serial: string, cmd: string) => {
       if (cmd.includes("input text")) stamps.push(Date.now());
@@ -1090,7 +1089,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
 
     await type(registry, "abcdefghijkl");
 
-    // stamps: [first burst, retry chunk 1, retry chunk 2]
+    // stamps: [first burst, repair chunk 1, repair chunk 2]
     expect(stamps).toHaveLength(3);
     expect(stamps[2]! - stamps[1]!).toBeGreaterThanOrEqual(80);
   });
@@ -1182,7 +1181,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
-  it("reports a retry that could not reach the device, and what that leaves behind", async () => {
+  it("reports a repair that could not reach the device, and what that leaves behind", async () => {
     // The undo runs before the retype, so a transport failure between them can
     // leave the field emptier than the call found it — and a failure between two
     // chunks leaves a truncated copy of the text. That must not surface as a raw
@@ -1197,7 +1196,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     });
     const res = await type(registry, "abcdefghijkl");
     expect(res.verified).toBe(false);
-    expect(res.note).toMatch(/retry could not be completed/);
+    expect(res.note).toMatch(/repair could not be completed/);
     expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
   });
 
@@ -1219,7 +1218,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).not.toMatch(/8 characters were removed/);
   });
 
-  it("says the retry may have gone elsewhere when focus was already lost", async () => {
+  it("says the repair may have gone elsewhere when focus was already lost", async () => {
     // The repair types into whatever holds focus. If focus was gone before it
     // ran, the backspaces and chunks never reached the field, so asserting the
     // field was modified — which every post-repair note does — needs the caveat.
@@ -1233,7 +1232,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // call to the repair.
     expect(res.verified).toBe(false);
     expect(res.note).toMatch(/no editable field held input focus/);
-    expect(res.note).toMatch(/focus was already gone when the retry ran/);
+    expect(res.note).toMatch(/focus was already gone when the repair ran/);
   });
 
   it("says what a repair with nothing to delete did — repaired, blocked, failed", async () => {
@@ -1373,7 +1372,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     const { registry } = registryServing([
       hierarchy({ text: "" }), // before: empty
       hierarchy({ text: "hunt" }), // after: 4 of 10 chars landed — the secret, on screen
-      hierarchy({ text: "hunt" }), // after the retry: still wrong
+      hierarchy({ text: "hunt" }), // after the repair: still wrong
     ]);
     const tool = createKeyboardTool(registry);
     const res = await tool.execute({}, { udid: SERIAL, text: "{{secret:APP_PASSWORD}}" });
@@ -1403,22 +1402,15 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
  *  - `input keyevent 67…` deletes the selection if there is one, else the
  *                         character immediately before the cursor.
  *
- * `render()` is what uiautomator reports — the hint when the content is empty
- * (see `FocusedField.text`). Driving the read-backs off THIS instead of a
- * scripted list is what makes a repair's effect on the field observable: the
- * assertions below are on the field the commands actually produce, not on a
- * third hierarchy the test chose.
+ * Driving the read-backs off THIS instead of a scripted list is what makes a
+ * repair's effect on the field observable: the assertions below are on the field
+ * the commands actually produce, not on a third hierarchy the test chose.
  */
 class FieldModel {
   text: string;
   selStart: number;
   selEnd: number;
-  constructor(
-    text: string,
-    selStart = text.length,
-    selEnd = selStart,
-    private readonly hint = ""
-  ) {
+  constructor(text: string, selStart = text.length, selEnd = selStart) {
     this.text = text;
     this.selStart = selStart;
     this.selEnd = selEnd;
@@ -1437,9 +1429,6 @@ class FieldModel {
       }
       this.selEnd = this.selStart;
     }
-  }
-  render(): string {
-    return this.text === "" ? this.hint : this.text;
   }
 }
 
@@ -1490,7 +1479,7 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const field = new FieldModel("cat food", 0, 3);
     driveFromAdb(field, (s) => s.slice(0, 3));
     const res = await type(
-      registryServingLive(() => field.render()),
+      registryServingLive(() => field.text),
       "catt"
     );
 
@@ -1508,7 +1497,7 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const field = new FieldModel("John Smith", 5, 10);
     driveFromAdb(field, (s) => s.slice(0, -1));
     const res = await type(
-      registryServingLive(() => field.render()),
+      registryServingLive(() => field.text),
       "John Smithe"
     );
 
@@ -1527,7 +1516,7 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const field = new FieldModel("aa bb", 0, 2);
     driveFromAdb(field, (s) => s);
     const res = await type(
-      registryServingLive(() => field.render()),
+      registryServingLive(() => field.text),
       "aaa"
     );
 
@@ -1544,7 +1533,7 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const field = new FieldModel("aa bb", 0, 2);
     driveFromAdb(field, (s) => s);
     const res = await type(
-      registryServingLive(() => field.render()),
+      registryServingLive(() => field.text),
       text
     );
 
@@ -1563,7 +1552,7 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const field = new FieldModel("abc");
     driveFromAdb(field, (s) => s.replace("b", ""));
     const res = await type(
-      registryServingLive(() => field.render()),
+      registryServingLive(() => field.text),
       "abc"
     );
 
@@ -1606,13 +1595,6 @@ describe("android keyboard read-back — shapes a repair must not touch", () => 
     const res = await type(registry, "5551234567");
     expect(res.verified).toBe(false);
   });
-
-  it("still fails a doubled injection, which the reformat clause must not absorb", async () => {
-    // "abc" appears in the field IN ORDER — twice. No single injection explains
-    // that, so requiring the text NOT to be present contiguously is what keeps
-    // this a failure.
-    expect(classifyTypedText("", "abcabc", "abc")).toBe("not-landed");
-  });
 });
 
 describe("android keyboard read-back — the repair's own outcomes", () => {
@@ -1635,13 +1617,6 @@ describe("android keyboard read-back — the repair's own outcomes", () => {
     expect(res.note).not.toContain("did NOT land");
     // ...and it still says the field was modified, like every other post-repair note.
     expect(res.note).toContain("deleted and retyped in smaller chunks");
-  });
-
-  it("still reports a repair that did NOT work as a failure", async () => {
-    const corrupt = hierarchy({ text: "XYabcdefgh" });
-    const { registry } = registryServing([hierarchy({ text: "XY" }), corrupt, corrupt]);
-    const res = await type(registry, "abcdefghijkl");
-    expect(res.verified).toBe(false);
   });
 });
 
@@ -1771,23 +1746,6 @@ describe("android keyboard read-back — cancellation", () => {
       "input text 'abcdefghijkl'",
       "input keyevent 67 67 67 67 67 67 67 67",
       "input text 'abcdefgh'",
-    ]);
-  });
-
-  it("repairs to completion on a signal that never aborts", async () => {
-    const { registry } = registryServing(REPAIR_SCRIPT);
-    const res: KeyboardResult = await makeAndroidImpl(registry).handler(
-      {},
-      { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
-      PHONE,
-      { signal: new AbortController().signal }
-    );
-    expect(res.verified).toBe(true);
-    expect(cmds()).toEqual([
-      "input text 'abcdefghijkl'",
-      "input keyevent 67 67 67 67 67 67 67 67",
-      "input text 'abcdefgh'",
-      "input text 'ijkl'",
     ]);
   });
 
@@ -1987,6 +1945,9 @@ describe("android keyboard read-back — cancellation", () => {
   });
 
   it("runs the repair normally when the caller has not aborted", async () => {
+    // The positive control for every abort check above, and the counterpart of
+    // `gesture-swipe`'s own: a check that fired on any signal rather than an
+    // aborted one would fail nothing else, since the other tests pass no signal.
     const { registry } = registryServing(REPAIR_SCRIPT);
     const res = await makeAndroidImpl(registry).handler(
       {},

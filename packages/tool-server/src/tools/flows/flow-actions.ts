@@ -1505,7 +1505,8 @@ async function runType(
   // waitForFocus returns void on abort as well as on focus/timeout — re-check
   // before every keyboard dispatch, so a cancelled run can never type into
   // whatever the app has focused after the caller gave up. The tool checks the
-  // signal too, but only on the Android phone path; this covers every backend.
+  // signal too and would reject, which the catch below turns into the same skip;
+  // checking here keeps a cancelled run off the device entirely.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
   let typed: unknown;
   try {

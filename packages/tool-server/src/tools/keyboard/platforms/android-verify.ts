@@ -37,7 +37,7 @@ import type { KeyboardVerification } from "../types";
  *
  * Cost, and why it is not gated on anything. A call that verifies and needs no
  * repair costs TWO `getHierarchy` calls over the helper's already-open socket,
- * each a wait for the screen to go quiet, bounded at 500 ms, plus the tree walk:
+ * each a wait for the screen to go quiet plus the tree walk:
  * measured on the same emulator, screen
  * and string, typing 76 characters into the Settings search box costs 1.6-1.8 s
  * unverified and 1.9-3.4 s verified. A call that REPAIRS costs a third
@@ -161,8 +161,8 @@ interface FocusedField {
    *    fail and every credential would be reported `verified: false`.
    *  - It must not be relied on to work. That masking is the platform's default,
    *    not a guarantee this code can enforce, which is why
-   *    `uiautomator-parser.ts` and `flows/flow-android-tree.ts` redact the
-   *    attribute rather than trusting it. Comparing a credential we read back
+   *    `uiautomator-parser.ts` and `flows/flow-android-tree.ts` replace such a
+   *    field's text with `[password]` rather than passing on what they read. Comparing a credential we read back
    *    would put the plaintext one refactor away from the result, against this
    *    tool's whole `{{secret:…}}` contract.
    */
@@ -727,13 +727,13 @@ function blockedNote(reason: string, deleted: number | null): string {
 function misdirected(reason: string): string {
   if (reason === FOCUS_MOVED_REASON) {
     return (
-      " If focus moved before the retry rather than during the read, those key events reached " +
+      " If focus moved before the repair rather than during the read, those key events reached " +
       "the field that holds focus now, not the one the text was typed into."
     );
   }
   if (reason === FOCUS_LOST_REASON) {
     return (
-      " If focus was already gone when the retry ran, those key events reached whatever the app " +
+      " If focus was already gone when the repair ran, those key events reached whatever the app " +
       "had focused instead, or nothing at all."
     );
   }
@@ -813,7 +813,7 @@ function mismatchNote(typed: number, present: number, repaired: boolean): string
     "field reads back as its hint — so it is not a count of how many characters were lost" +
     (repaired
       ? ", and retyping it in smaller chunks did not fix it either"
-      : ", and the field could not be safely restored to retry, so nothing was retyped") +
+      : ", and the field could not be safely restored, so nothing was retyped") +
     ". Either Android's key-event burst lost characters on a field that re-renders " +
     "per keystroke, or the field rejects or reformats what is typed into it (a " +
     "digits-only field, an input mask, a maxLength) — or part of it replaced a " +
@@ -823,14 +823,14 @@ function mismatchNote(typed: number, present: number, repaired: boolean): string
   );
 }
 
-// The retry itself failed to reach the device. It runs backspaces before
+// The repair itself failed to reach the device. It runs backspaces before
 // retyping, so the field can be left holding LESS than when the call started —
 // the one path where that is possible, and it must be reported rather than
 // swallowed into a generic transport error.
 function repairFailedNote(deleted: number, planned: number): string {
   if (planned === 0) {
     return (
-      "The typed text did not land, and the retry could not be completed: nothing had to be " +
+      "The typed text did not land, and the repair could not be completed: nothing had to be " +
       "deleted first, and the retype did not finish. The field may hold anything from what it " +
       "held before this call to that plus a truncated copy of the text. Read it with `describe` " +
       "and retype from a known state."
@@ -838,14 +838,14 @@ function repairFailedNote(deleted: number, planned: number): string {
   }
   if (deleted === 0) {
     return (
-      "The typed text did not land, and the retry could not be completed: the backspaces it " +
+      "The typed text did not land, and the repair could not be completed: the backspaces it " +
       "starts with did not go out. The field may hold anything from what it held when this call " +
       "read it back to that with part of the typed text removed. Read it with `describe` and " +
       "retype from a known state."
     );
   }
   return (
-    `The typed text did not land, and the retry could not be completed: ${deleted} ` +
+    `The typed text did not land, and the repair could not be completed: ${deleted} ` +
     `character${deleted === 1 ? "" : "s"} ${deleted === 1 ? "was" : "were"} removed, or partly ` +
     "removed, and the retype did not finish. The field may hold anything from less than it did " +
     "before this call to a truncated copy of the text. Read it with `describe` and retype from a " +
@@ -938,9 +938,9 @@ async function readFocusedField(
  * hierarchy read, and a field that drops events under both a single burst and a
  * slow chunked cadence is not failing for cadence reasons (an input mask,
  * autocorrect, a maxLength, a field rejecting characters), so a third identical
- * retry would only add latency to the same wrong answer.
+ * attempt would only add latency to the same wrong answer.
  *
- * Never throws for a verification problem, including one raised by the retry
+ * Never throws for a verification problem, including one raised by the repair
  * itself: by the time anything here can go wrong the original keystrokes are
  * already on the device, so a thrown error would tell the agent the typing failed
  * when it may well have succeeded. Every verification outcome comes back as
@@ -1027,8 +1027,8 @@ async function verifyAgainstDevtools(
   const after = await readAfter(devtools, before, null);
   // Past here the call reports on the field, and a caller that gave up is owed a
   // skip instead of a report: the three step gates key on `verified: false`, while
-  // both flow gates read a rejection as the uniform aborted skip (`run-sequence`,
-  // which has no skip, records it as that step's error). So the signal is re-read
+  // a rejection reaches all three as the uniform aborted skip (`run-sequence` has
+  // no verdict field, so it stops without recording the step). So the signal is re-read
   // before each outcome — the burst, the repair and the reads between them are
   // all long enough to be given up on. This one also stands in for the repair
   // below, which must not START once the caller has gone: it deletes before it
