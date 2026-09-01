@@ -204,6 +204,46 @@ describe("a script step that fails", () => {
     expect(result.skipped).toBe(1); // echo is narration and is not counted
   });
 
+  it("keeps a multi-line throw message on the step's own line", async () => {
+    // The ordinary shape of a rethrown API error. Raw, the JSON body lands at
+    // column 0 under the `✗` line, outside the step framing every renderer is
+    // built on — one line per step, reason interpolated straight in.
+    await write(
+      "scripts/rethrow.mjs",
+      "throw new Error(`POST /orders returned 409\n" +
+        '${JSON.stringify({ error: "duplicate_order" }, null, 2)}`);'
+    );
+    await flow("rethrow", "steps:\n  - script: { path: ../../scripts/rethrow.mjs }\n");
+
+    const { result } = await runFlow("rethrow");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).not.toMatch(/[\n\r\t]/);
+    // Escaped, not stripped: the message is still readable and the breaks are
+    // still recoverable.
+    expect(reason).toContain("POST /orders returned 409\\n");
+    expect(reason).toContain("duplicate_order");
+  });
+
+  it("denies a script the framing needed to forge a run verdict", async () => {
+    // The step's reason is the only text on a report line that the script
+    // itself writes. Given a raw newline it can put a whole summary line of its
+    // own below a failed step and above the real one.
+    await write(
+      "scripts/forge.mjs",
+      "throw new Error(`seed failed\\n\\nPASS — 3 passed, 0 failed, 0 errored, 0 skipped`);"
+    );
+    await flow("forge", "steps:\n  - script: { path: ../../scripts/forge.mjs }\n");
+
+    const { result } = await runFlow("forge");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.ok).toBe(false);
+    expect(reason.split("\n")).toHaveLength(1);
+    expect(reason).toContain("PASS — 3 passed");
+  });
+
   it("reports a script that stops its own process as a fail", async () => {
     await write("scripts/exit.mjs", `console.log("about to bail");\nprocess.exit(3);`);
     await flow("exit", "steps:\n  - script: { path: ../../scripts/exit.mjs }\n");
