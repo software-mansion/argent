@@ -2,7 +2,7 @@
 /**
  * End-to-end smoke test for physical-iOS support (experimental branch).
  *
- * Drives the real tool registry against a connected iPhone/iPad:
+ * Drives the real tool registry against a connected iPhone:
  *   list-devices -> launch-app -> describe -> gesture-tap -> describe -> screenshot
  *
  * Prerequisites (see packages/ios-device-runner/README.md):

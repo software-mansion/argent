@@ -1,11 +1,11 @@
 ---
 name: argent-ios-device-setup
-description: Set up and connect a physical iPhone or iPad using argent MCP tools. Use when the user wants to run or test on a real device, when list-devices shows an iOS entry with kind "device", or when a physical-device call fails with a flag, signing, cable, or trust error.
+description: Set up and connect a physical iPhone using argent MCP tools. Use when the user wants to run or test on a real device, when list-devices shows an iOS entry with kind "device", or when a physical-device call fails with a flag, signing, cable, or trust error.
 ---
 
 ## 1. Enable the feature flag
 
-Physical iPhone/iPad support is experimental and off by default.
+Physical iPhone support is experimental and off by default; physical iPads are not supported yet.
 
 1. Run `argent enable ios-physical-devices` (add `--scope project` for one project only).
 2. The flag applies on the next tool call; no server restart is needed.

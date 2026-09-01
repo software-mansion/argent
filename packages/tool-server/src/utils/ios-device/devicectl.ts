@@ -185,65 +185,76 @@ interface DevicectlListPayload {
 }
 
 /**
- * List physical iOS-family devices CoreDevice can currently see.
- * Returns an empty list when devicectl is missing or fails.
+ * List physical iPhones CoreDevice can currently see. Physical-device support
+ * is iPhone-only for now: iPads are deliberately skipped. Returns an empty
+ * list off-macOS and when devicectl is missing or fails.
  */
 export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
   if (process.platform !== "darwin") {
     return [];
   }
 
+  let json: unknown;
   try {
-    const { json } = await runDevicectl(["list", "devices"], "list devices", {
+    ({ json } = await runDevicectl(["list", "devices"], "list devices", {
       json: true,
       timeoutMs: DEVICECTL_LIST_TIMEOUT_MS,
-    });
-
-    const payload = json as DevicectlListPayload | null;
-    const devices = payload?.result?.devices ?? [];
-    const out: IosPhysicalDevice[] = [];
-
-    for (const d of devices) {
-      const hardwareProperties = d.hardwareProperties ?? {};
-      const udid = hardwareProperties.udid ?? d.identifier;
-
-      if (!udid) {
-        continue;
-      }
-
-      const platform = (hardwareProperties.platform ?? "").toLowerCase();
-      const productType = hardwareProperties.productType ?? null;
-
-      const isSupportedProductType = /^(iphone|ipad)/i.test(productType ?? "");
-
-      if (platform !== "ios" && !isSupportedProductType) {
-        continue;
-      }
-
-      // Physical hardware only. Real phones report reality "physical". Simulators report "simulated".
-      // The field is absent on older toolchains. Only an explicit non-physical value skips the row.
-      if (hardwareProperties.reality != null && hardwareProperties.reality !== "physical") {
-        continue;
-      }
-
-      out.push({
-        udid,
-        name: d.deviceProperties?.name ?? productType ?? udid,
-        model: hardwareProperties.marketingName ?? productType ?? null,
-        osVersion: d.deviceProperties?.osVersionNumber ?? null,
-        developerModeEnabled:
-          d.deviceProperties?.developerModeStatus == null
-            ? null
-            : d.deviceProperties.developerModeStatus === "enabled",
-        pairingState: d.connectionProperties?.pairingState ?? null,
-        transportType: d.connectionProperties?.transportType ?? null,
-        tunnelState: d.connectionProperties?.tunnelState ?? null,
-      });
-    }
-    return out;
+    }));
   } catch {
+    // Discovery is best-effort: a missing or failing devicectl reads as no
+    // physical devices rather than failing the whole device listing.
     return [];
   }
+
+  const payload = json as DevicectlListPayload | null;
+  const devices = payload?.result?.devices ?? [];
+  const out: IosPhysicalDevice[] = [];
+
+  for (const d of devices) {
+    const hardwareProperties = d.hardwareProperties ?? {};
+    const udid = hardwareProperties.udid ?? d.identifier;
+
+    if (!udid) {
+      continue;
+    }
+
+    const platform = (hardwareProperties.platform ?? "").toLowerCase();
+    const productType = hardwareProperties.productType ?? null;
+
+    // Physical hardware only. Real phones report reality "physical". Simulators report "simulated".
+    // The field is absent on older toolchains. Only an explicit non-physical value skips the row.
+    if (hardwareProperties.reality != null && hardwareProperties.reality !== "physical") {
+      continue;
+    }
+
+    // Physical-device support is iPhone-only for now: iPads are deliberately
+    // skipped. This runs after the reality check so only real hardware is
+    // considered at all.
+    if (/^ipad/i.test(productType ?? "")) {
+      continue;
+    }
+
+    const isSupportedProductType = /^iphone/i.test(productType ?? "");
+
+    if (platform !== "ios" && !isSupportedProductType) {
+      continue;
+    }
+
+    out.push({
+      udid,
+      name: d.deviceProperties?.name ?? productType ?? udid,
+      model: hardwareProperties.marketingName ?? productType ?? null,
+      osVersion: d.deviceProperties?.osVersionNumber ?? null,
+      developerModeEnabled:
+        d.deviceProperties?.developerModeStatus == null
+          ? null
+          : d.deviceProperties.developerModeStatus === "enabled",
+      pairingState: d.connectionProperties?.pairingState ?? null,
+      transportType: d.connectionProperties?.transportType ?? null,
+      tunnelState: d.connectionProperties?.tunnelState ?? null,
+    });
+  }
+  return out;
 }
 
 /** Install a .app / .ipa onto the device. */

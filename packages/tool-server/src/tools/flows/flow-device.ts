@@ -59,7 +59,7 @@ interface RawDevice {
   udid?: string;
   serial?: string;
   id?: string;
-  /** Physical iPhone/iPad when kind is "device". */
+  /** Physical iPhone when kind is "device". */
   kind?: string;
 }
 

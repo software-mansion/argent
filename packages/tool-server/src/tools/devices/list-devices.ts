@@ -21,7 +21,8 @@ import {
 type IosDevice = IosSimulator & { platform: "ios" };
 
 /**
- * A physical iPhone/iPad from CoreDevice (`xcrun devicectl`).
+ * A physical iPhone from CoreDevice (`xcrun devicectl`). Physical-device
+ * support is iPhone-only for now; discovery skips iPads and notes the skip.
  * Flag-gated behind `ios-physical-devices`.
  */
 type IosPhysicalDevice = {
@@ -203,7 +204,7 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
-Physical iPhones/iPads (experimental, behind the 'ios-physical-devices' flag) appear as iOS entries with kind 'device', discovered via \`xcrun devicectl\`; they must be paired/trusted with Developer Mode enabled, and do not need boot-device. Their state is 'connected' (cabled, usable now) or 'paired' (still listed from an earlier pairing but not reachable over USB; such devices are never auto-bound, so reconnect them before use).
+Physical iPhones (experimental, behind the 'ios-physical-devices' flag) appear as iOS entries with kind 'device', discovered via \`xcrun devicectl\`; they must be paired/trusted with Developer Mode enabled, and do not need boot-device. Physical-device support is iPhone-only for now: a physical iPad is never listed. Their state is 'connected' (cabled, usable now) or 'paired' (still listed from an earlier pairing but not reachable over USB; such devices are never auto-bound, so reconnect them before use).
 TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android) — these are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration — e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.

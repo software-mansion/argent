@@ -103,7 +103,10 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/ios-device/devicectl")>(
     "../src/utils/ios-device/devicectl"
   );
-  return { ...actual, listIosPhysicalDevices: vi.fn(async () => []) };
+  return {
+    ...actual,
+    listIosPhysicalDevices: vi.fn(async () => []),
+  };
 });
 
 import { listDevicesTool } from "../src/tools/devices/list-devices";

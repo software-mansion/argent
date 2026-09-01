@@ -79,6 +79,29 @@ const REALITY_ABSENT_ROW = {
   deviceProperties: { name: "Older-Xcode iPhone" },
 };
 
+// Physical-device support is iPhone-only for now: a real iPad must be dropped
+// while a simulated iPad is dropped by the reality check first.
+const PHYSICAL_IPAD_ROW = {
+  hardwareProperties: {
+    udid: "00008103-000E4C3A0287001E",
+    platform: "iOS",
+    productType: "iPad13,18",
+    marketingName: "iPad (10th generation)",
+    reality: "physical",
+  },
+  deviceProperties: { name: "Test iPad" },
+};
+
+const SIMULATED_IPAD_ROW = {
+  hardwareProperties: {
+    udid: "BBBBBBBB-CCCC-4DDD-8EEE-FFFF00001111",
+    platform: "iOS",
+    productType: "iPad14,3",
+    reality: "simulated",
+  },
+  deviceProperties: { name: "iPad Pro 11-inch" },
+};
+
 describe("listIosPhysicalDevices filters on hardwareProperties.reality", () => {
   it("emits physical and reality-absent rows and drops simulated ones", async () => {
     fake.payload = { result: { devices: [PHYSICAL_ROW, SIMULATED_ROW, REALITY_ABSENT_ROW] } };
@@ -89,6 +112,7 @@ describe("listIosPhysicalDevices filters on hardwareProperties.reality", () => {
       "00008110-000978540290401E",
       "00008030-001A2B3C4D5E6F70",
     ]);
+    // No iPad in the payload, so nothing was skipped by the iPhone-only filter.
     // The physical row's mapping is untouched by the filter.
     expect(devices[0]).toMatchObject({
       name: "Test iPhone",
@@ -98,6 +122,26 @@ describe("listIosPhysicalDevices filters on hardwareProperties.reality", () => {
       tunnelState: "connected",
     });
     expect(fake.argv.slice(0, 3)).toEqual(["devicectl", "list", "devices"]);
+  });
+});
+
+describe("listIosPhysicalDevices is iPhone-only", () => {
+  it("drops a physical iPad", async () => {
+    fake.payload = { result: { devices: [PHYSICAL_ROW, PHYSICAL_IPAD_ROW] } };
+
+    const devices = await listIosPhysicalDevices();
+
+    // The iPad never reaches the devices array; the count is the only trace,
+    // so list-devices can explain the absence.
+    expect(devices.map((d) => d.udid)).toEqual(["00008110-000978540290401E"]);
+  });
+
+  it("does not count a simulated iPad: only skipped hardware deserves a note", async () => {
+    fake.payload = { result: { devices: [SIMULATED_IPAD_ROW] } };
+
+    const devices = await listIosPhysicalDevices();
+
+    expect(devices).toEqual([]);
   });
 });
 

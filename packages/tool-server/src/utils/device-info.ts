@@ -28,7 +28,7 @@ const IOS_UDID_SHAPE =
  */
 const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
 
-/** True when `udid` has the modern physical-iPhone/iPad shape (see above). */
+/** True when `udid` has the modern physical-iPhone UDID shape (see above). */
 export function isIosPhysicalUdid(udid: string): boolean {
   return IOS_PHYSICAL_UDID_SHAPE.test(udid);
 }
@@ -146,7 +146,7 @@ export function resolveDevice(udid: string): DeviceInfo {
 }
 
 /**
- * True for physical iPhone/iPad hardware. Always check platform AND kind: a
+ * True for physical iPhone hardware. Always check platform AND kind: a
  * bare `kind === "device"` also matches physical ANDROID hardware
  * (resolveDevice above assigns it to non-emulator Android serials), so the
  * short spelling silently changes meaning outside an ios-platform guard.

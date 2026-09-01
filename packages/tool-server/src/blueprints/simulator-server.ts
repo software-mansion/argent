@@ -125,7 +125,7 @@ const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
  */
 function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_device" {
   if (device.platform === "ios") {
-    // Defense-in-depth: physical iPhones/iPads are driven by the XCUITest
+    // Defense-in-depth: physical iPhones are driven by the XCUITest
     // runner blueprint, never by simulator-server. A services() mistake that
     // routes one here must fail loudly instead of spawning a simulator-server
     // process against a hardware UDID.
