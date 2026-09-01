@@ -267,7 +267,7 @@ A `run:` path resolves against the directory of the flow file that contains the 
 | Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected                                                     |
 | Vega         | Use `tool: tv-remote` and `tool: keyboard`. `keyboard` takes `text` or `key`; `clear` is rejected. The runner rejects the touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) before it resolves a selector |
 
-Apple TV and Android TV are not flow targets. Their ids classify as `ios` and `android`, so the runner accepts the touch directives and dispatches them at a focus-driven UI where they do nothing useful — nothing in the engine rejects them, and an author must not write them. `keyboard` still refuses `key` and `clear` on both. Drive those two with the tools directly (`describe` for focus, `tv-remote`, `keyboard` with `text`).
+Apple TV and Android TV are not flow targets. Their ids classify as `ios` and `android`, so the runner accepts the touch directives instead of rejecting them, and an author must not write them. On Android TV they reach the device and do nothing useful at a focus-driven UI. On Apple TV they fail: every touch directive resolves the simulator-server, which refuses a tvOS id outright, so the step errors and the flow stops. `keyboard` still refuses `key` and `clear` on both. Drive those two with the tools directly (`describe` for focus, `tv-remote`, `keyboard` with `text`).
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 
