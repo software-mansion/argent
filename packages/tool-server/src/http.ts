@@ -808,7 +808,28 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const { reason, stale } = revalidateExternalDevice(deviceArg);
 
         if (stale) {
-          await disposeExternalDeviceServices(registry, deviceArg).catch(() => []);
+          try {
+            await disposeExternalDeviceServices(registry, deviceArg);
+          } catch (err) {
+            /**
+             * Fail closed. A handle that would not tear down is a handle that
+             * can still serve the grant the provider just took back and the
+             * next line would hand it the call. Refusing costs a retry, the
+             * alternative spends the revocation.
+             */
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
+                failure_stage: "external_device_revocation",
+                failure_area: "http",
+                error_kind: "unknown",
+              },
+              parsedData
+            );
+            res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+            return;
+          }
+
           process.stderr.write(
             `[device-providers] dropped cached services for ${deviceArg}: ${reason}\n`
           );

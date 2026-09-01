@@ -762,12 +762,16 @@ describe("assertExternalCapability", () => {
 });
 
 describe("revocation", () => {
-  function fakeRegistry(urns: string[]) {
+  function fakeRegistry(urns: string[], wedged: readonly string[] = []) {
     const disposed: string[] = [];
+    const attempted: string[] = [];
 
     return {
+      attempted,
       disposed,
       disposeService: async (urn: string) => {
+        attempted.push(urn);
+        if (wedged.includes(urn)) throw new Error(`${urn} will not tear down`);
         disposed.push(urn);
       },
       getSnapshot: () => ({ services: new Map(urns.map((urn) => [urn, {}])) }),
@@ -981,6 +985,25 @@ describe("revocation", () => {
     expect(disposed.sort()).toEqual(
       [`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`].sort()
     );
+  });
+
+  /**
+   * Each surviving handle is a door to the grant being revoked, so one that
+   * will not tear down must not shield the ones behind it. The sweep finishes,
+   * then says it could not.
+   */
+  it("tries every handle even after one refuses, and reports that it did not finish", async () => {
+    const deviceId = makeExternalId("acme", IOS_UDID);
+    const wedged = `SimulatorServer:${deviceId}`;
+    const urns = [wedged, `AXService:${deviceId}`, `JsRuntimeDebugger:8081:${deviceId}`];
+    const registry = fakeRegistry(urns, [wedged]);
+
+    await expect(disposeExternalDeviceServices(registry, deviceId)).rejects.toThrow(
+      /will not tear down/
+    );
+
+    expect(registry.attempted).toEqual(urns);
+    expect(registry.disposed).toEqual(urns.slice(1));
   });
 
   /**

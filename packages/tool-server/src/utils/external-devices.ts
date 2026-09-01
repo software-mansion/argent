@@ -171,6 +171,14 @@ function payloadNamesDevice(payload: string, spelling: string): boolean {
  * the registry would otherwise keep serving from a handle resolved while the
  * old answer held. Every external `dispose()` is a no-op, so this forgets
  * state without touching the provider's processes.
+ *
+ * Throws if any handle survived, having first tried all of them. Both halves
+ * matter. Stopping at the first rejection would leave the handles behind it
+ * warm and each one is a door to the grant being revoked, so a single wedged
+ * teardown must not shield the rest. Reporting the failure rather than
+ * returning is what lets the caller refuse the request: a partial sweep cannot
+ * be told apart from a complete one by its return value and the one thing that
+ * must not happen next is dispatching to a service the provider has taken back.
  */
 export async function disposeExternalDeviceServices(
   registry: {
@@ -181,6 +189,7 @@ export async function disposeExternalDeviceServices(
 ): Promise<string[]> {
   const spellings = deviceSpellings(deviceId, externalClaimForAnyId(deviceId));
   const disposed: string[] = [];
+  const survived: string[] = [];
 
   for (const urn of registry.getSnapshot().services.keys()) {
     const separator = urn.indexOf(":");
@@ -189,8 +198,26 @@ export async function disposeExternalDeviceServices(
     const payload = urn.slice(separator + 1);
 
     if (![...spellings].some((spelling) => payloadNamesDevice(payload, spelling))) continue;
-    await registry.disposeService(urn);
-    disposed.push(urn);
+
+    try {
+      await registry.disposeService(urn);
+      disposed.push(urn);
+    } catch (error) {
+      survived.push(`${urn} (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+
+  if (survived.length > 0) {
+    throw new FailureError(
+      `Could not drop every cached service for '${deviceId}', so the grant its provider ` +
+        `changed may still be reachable: ${survived.join("; ")}`,
+      {
+        error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
+        error_kind: "unknown",
+        failure_area: "tool_server",
+        failure_stage: "external_device_revocation",
+      }
+    );
   }
 
   return disposed;

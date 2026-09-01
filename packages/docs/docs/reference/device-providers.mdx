@@ -93,6 +93,8 @@ Argent reads the file of the provider again on every call. A provider can narrow
 
 The next call uses the new declaration. Argent also removes the handles that it holds for the device, under both names. A narrowed grant takes effect immediately.
 
+Argent tries to remove every handle. If one handle does not close, Argent stops the call and reports an error. Argent does not send the call to a service that the provider took back.
+
 ## Limits that Argent applies to itself
 
 Argent never starts, restarts or shuts down the device of a provider. `boot-device` refuses the device, also under its real udid or serial. `stop-simulator-server` stops no server of the provider. It removes the handles that Argent holds.
