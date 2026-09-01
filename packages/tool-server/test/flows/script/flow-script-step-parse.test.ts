@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
 import { parseFlow, serializeFlow, type FlowStep } from "../../../src/tools/flows/flow-utils";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
@@ -123,6 +124,20 @@ describe("script step rejections", () => {
     expect(step("{ path: seed.mjs, timeout: 800 }")).toEqual([
       { kind: "script", path: "seed.mjs", timeout: 800 },
     ]);
+  });
+
+  // The literals above read 100 because the shared bound does. Parse and the
+  // executor floor the same value from the same constant, so a change to it
+  // moves both at once — pinned here so a second literal cannot reappear and
+  // let the two drift apart while every fixed-number case still passes.
+  it("takes its floor from the bound the executor clamps to", () => {
+    const floor = MIN_SCRIPT_TIMEOUT_MS;
+    expect(step(`{ path: seed.mjs, timeout: ${floor} }`)).toEqual([
+      { kind: "script", path: "seed.mjs", timeout: floor },
+    ]);
+    expect(() => step(`{ path: seed.mjs, timeout: ${floor - 1} }`)).toThrow(
+      new RegExp(`script.timeout is in milliseconds and needs at least ${floor}\\b`)
+    );
   });
 
   it("refuses a body that is not a map", () => {

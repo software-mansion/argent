@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import {
@@ -2582,25 +2583,22 @@ function parseScriptPath(raw: unknown, value: unknown): string {
 }
 
 /**
- * Floor on a `script` step's `timeout`, sized from the fixed cost of the step
- * rather than from the script: a fork, a Node boot, the runner preload and the
- * script's own import all run before the first line the limit is meant to
- * bound. Measured with a script whose whole body is one `console.log` — idle,
- * 0 of 30 runs finished within 26ms and all 30 finished within 35ms; with every
- * core busy, 0 of 20 finished within 30ms, 1 within 40ms and 17 within 50ms.
- * 100ms is the lowest round value that finished every trial in both states, so
- * below it the step is either out of reach or decided by host load.
- */
-const SCRIPT_MIN_TIMEOUT_MS = 100;
-
-/**
  * The `timeout` a `script` step may carry, in milliseconds. The finiteness
  * check is not redundant: YAML `.inf` is typeof number and greater than 0. The
  * executor clamps whatever survives to the host's configured maximum and says
  * so in the step's report.
  *
- * The floor is this option's own, not a shape the millisecond options share.
- * Each draws its bound from the work it measures: `await`'s `timeout` takes 1
+ * The floor is {@link MIN_SCRIPT_TIMEOUT_MS} — the same constant the executor
+ * floors the host's `scripts.maxTimeoutMs` to, read from one place rather than
+ * spelled twice: a parse floor above the run-time one would refuse a limit the
+ * host would have honoured, and one below it would accept a limit the host
+ * silently raises. Its value is sized from the fixed cost of the step rather
+ * than from the script — a fork, a Node boot, the runner preload and the
+ * script's own import all run before the first line the limit is meant to
+ * bound.
+ *
+ * No other millisecond option shares that floor. Each draws its bound from the
+ * work it measures: `await`'s `timeout` takes 1
  * and `wait` takes 0, `idle`'s `timeout` carries a 600ms floor derived from the
  * settle reads it has to fit, and `idle.stableFor` a bounded integer range.
  * What this one measures starts a PROCESS first, so a limit under the floor
@@ -2615,10 +2613,10 @@ function parseScriptTimeout(raw: unknown, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     badEntry(raw, "script.timeout needs a positive number of milliseconds (e.g. `timeout: 30000`)");
   }
-  if (value < SCRIPT_MIN_TIMEOUT_MS) {
+  if (value < MIN_SCRIPT_TIMEOUT_MS) {
     badEntry(
       raw,
-      `script.timeout is in milliseconds and needs at least ${SCRIPT_MIN_TIMEOUT_MS} — the step ` +
+      `script.timeout is in milliseconds and needs at least ${MIN_SCRIPT_TIMEOUT_MS} — the step ` +
         `spends its first tens of milliseconds starting the Node process, so ${value} leaves the ` +
         `script too little to run in and errors the step (30 seconds is \`timeout: 30000\`)`
     );
