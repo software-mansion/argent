@@ -262,7 +262,14 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // the adapter flagged the read (`describeIos` returns an empty tree plus a hint /
 // should_restart instead of throwing), or when the selector matched on an earlier
 // poll and the tree has since gone blank mid-navigation.
+//
+// A PARTIAL tree is the same danger with a full-looking tree: the source stopped
+// at a walker budget, so an element it does not list may simply be past the cut.
+// This is the one place that draws a negative conclusion from a describe read,
+// so the flag has to be read before the emptiness test — a truncated capture is
+// rarely empty.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
+  if (data.truncated) return true;
   if (data.tree.children.length > 0) return false;
   return Boolean(data.hint || data.should_restart || everMatched);
 }

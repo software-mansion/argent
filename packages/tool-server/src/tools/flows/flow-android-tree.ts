@@ -371,7 +371,7 @@ export async function queryAndroidFullHierarchy(
       { cause: err }
     );
   }
-  const [{ xml }, size] = await Promise.all([
+  const [{ xml, truncated }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
     devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
     devtools.getScreenSize(),
@@ -380,6 +380,11 @@ export async function queryAndroidFullHierarchy(
   return {
     tree,
     source: "android-devtools",
+    // The helper stopped at a walk limit, so the tree is missing on-screen
+    // content while looking complete. `waitForCondition` reads this as a blind
+    // read, so an `assert { hidden }` cannot pass on an element that is merely
+    // past the cut.
+    ...(truncated ? { truncated: true } : {}),
     ...(size.width > 0 && size.height > 0
       ? { screen: { width: size.width, height: size.height } }
       : {}),

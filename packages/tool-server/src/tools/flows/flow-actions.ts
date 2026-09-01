@@ -1241,7 +1241,8 @@ async function runType(
  * trustworthy evidence for `hidden` (the only condition an empty tree satisfies)
  * when the adapter flagged the read as degraded or the selector had matched on
  * an earlier poll — a transient blank frame mid-navigation must not confirm the
- * element left.
+ * element left. A tree the source truncated at its walker budget is blind in the
+ * same way, whether or not it is empty.
  */
 async function waitForCondition(
   env: ActionEnv,
@@ -1273,8 +1274,13 @@ async function waitForCondition(
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
+      // A PARTIAL capture is blind too, and unlike the empty tree it looks
+      // complete: an element the source stopped short of is indistinguishable
+      // from one that left the screen.
       const blind =
-        data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
+        data.truncated === true ||
+        (data.tree.children.length === 0 &&
+          Boolean(data.hint || data.should_restart || everMatched));
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (

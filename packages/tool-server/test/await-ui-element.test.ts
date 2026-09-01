@@ -612,6 +612,91 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/empty or unreadable/i);
   });
 
+  it("does NOT confirm `hidden` on Android when the capture is partial", async () => {
+    // A truncated capture looks complete — it is a full tree of text with an
+    // element missing off the end of the walk. It is the same danger the empty
+    // guard exists for, and the flag that says so now reaches this tool.
+    const withButton =
+      `<hierarchy rotation="0">` +
+      `<node text="Sign in" resource-id="com.demo:id/signin" class="android.widget.Button" clickable="true" bounds="[100,200][980,320]" />` +
+      `</hierarchy>`;
+    const partial =
+      `<hierarchy rotation="0">` +
+      `<node text="Header" class="android.widget.TextView" bounds="[0,0][1080,120]" />` +
+      `</hierarchy>`;
+    let i = 0;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () =>
+        i++ === 0 ? { xml: withButton } : { xml: partial, truncated: true },
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "hidden",
+        selector: { text: "Sign in" },
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.cause).toBe("unreadable");
+    expect(result.note).toMatch(/PARTIAL tree/);
+  });
+
+  it("does NOT report a partial Android capture as a selector that never matched", async () => {
+    // The other half: with no `everMatched` to fall back on, a partial capture
+    // that never lists the element used to pass `hidden` immediately and steer
+    // the agent toward rewriting a selector that is correct.
+    const partial = `<hierarchy rotation="0"><node text="Header" class="android.widget.TextView" bounds="[0,0][1080,120]" /></hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml: partial, truncated: true }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "hidden",
+        selector: { text: "Sign in" },
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.cause).toBe("unreadable");
+  });
+
+  it("leaves a complete Android capture alone", async () => {
+    // The control: an untruncated read still resolves `hidden` at once.
+    const partial = `<hierarchy rotation="0"><node text="Header" class="android.widget.TextView" bounds="[0,0][1080,120]" /></hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml: partial, truncated: false }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "hidden",
+        selector: { text: "Sign in" },
+        timeoutMs: 1000,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(true);
+  });
+
   // ── Chromium branch ──────────────────────────────────────────────────────
 
   function makeChromiumApi(treeJson: unknown): ChromiumCdpApi {
