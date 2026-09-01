@@ -1200,10 +1200,11 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
   });
 
-  it("does not claim characters were removed when the backspaces never went out", async () => {
-    // The first `input keyevent` is the call that fails here, so the field still
-    // holds what the read-back found. Reporting the planned count as removed
-    // describes a field emptier than the one the caller has.
+  it("does not claim characters were removed when the first backspaces failed", async () => {
+    // The first `input keyevent` is the call that fails here, and a rejected
+    // `adbShell` — its 15 s timeout among the ways it rejects — does not prove
+    // the keycodes never reached the device. Reporting the planned count as
+    // removed describes a field emptier than the one the caller may have.
     const { registry } = registryServing([
       hierarchy({ text: "XY" }),
       hierarchy({ text: "XYabcdefgh" }),
@@ -1214,7 +1215,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     });
     const res = await type(registry, "abcdefghijkl");
     expect(res.verified).toBe(false);
-    expect(res.note).toMatch(/backspaces it starts with did not go out/);
+    expect(res.note).toMatch(/first batch of backspaces was not confirmed to have gone out/);
     expect(res.note).not.toMatch(/8 characters were removed/);
   });
 

@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
+import { makeIosImpl, makeIosRemoteImpl } from "../src/tools/keyboard/platforms/ios";
+import { cacheSimulatorRuntimeKind } from "../src/utils/ios-devices";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({
@@ -138,7 +140,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     });
 
     it("stops between keys once the caller cancels", async () => {
-      // 400 characters is ~80 s of presses here, and `longRunning` leaves the
+      // 400 characters is ~40 s of presses here, and `longRunning` leaves the
       // signal as the only thing that can end them: without this check they keep
       // landing in whatever the app focuses after the client is gone.
       const { events, api } = hidRecorder();
@@ -164,6 +166,39 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         ["Down", HID_H],
         ["Up", HID_H],
       ]);
+    });
+
+    it("stops between keys through both iOS platform handlers too", async () => {
+      // The loop check above is half the wiring: `makeIosImpl` and
+      // `makeIosRemoteImpl` have to hand the backend `options.signal`. Calling
+      // `typeSimulatorServer` directly leaves that argument unpinned, and
+      // without it every press of the ~40 s run goes out after the caller left
+      // — the chromium twin below is driven through its handler for this reason.
+      cacheSimulatorRuntimeKind(IOS_SIM.id, "mobile"); // else the impl probes `simctl`
+      for (const make of [makeIosImpl, makeIosRemoteImpl]) {
+        const { events, api } = hidRecorder();
+        const controller = new AbortController();
+        const aborting = {
+          pressKey: (direction: "Down" | "Up", keyCode: number) => {
+            api.pressKey(direction, keyCode);
+            controller.abort();
+          },
+        };
+
+        await expect(
+          make(registryWith(aborting)).handler(
+            {},
+            { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+            IOS_SIM,
+            { signal: controller.signal }
+          )
+        ).rejects.toThrow(/abort/i);
+
+        expect(events).toEqual([
+          ["Down", HID_H],
+          ["Up", HID_H],
+        ]);
+      }
     });
 
     it("shifts only the character that needs it", async () => {

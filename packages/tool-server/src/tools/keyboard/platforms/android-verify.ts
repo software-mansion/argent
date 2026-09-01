@@ -276,8 +276,9 @@ function isSameField(a: FocusedField, b: FocusedField): boolean {
  * and an area test excludes a zero-area rect from its own area, which would
  * refuse to match such a field even against its own unchanged read.
  * (`framesOverlap` in `flows/flow-actions.ts` shares the blind spot; there it
- * costs a best-effort focus poll that types anyway.) Unparseable bounds identify
- * nothing.
+ * costs a best-effort focus poll that types anyway.) Two DIFFERENT untagged
+ * fields drawn at one point are indistinguishable under this rule, which is the
+ * price of repairing the shape at all. Unparseable bounds identify nothing.
  */
 function boundsOverlap(a: FocusedField["bounds"], b: FocusedField["bounds"]): boolean {
   if (!a || !b) return false;
@@ -611,7 +612,10 @@ async function deleteTrailing(
  * A note that starts quoting what the field holds is a plaintext leak. The
  * character counts DO reveal the resolved value's length — as `keys` already
  * does for every secret type, verified or not — so this bounds the leak at what
- * the result already exposed, it does not eliminate it.
+ * the result already exposed, it does not eliminate it. On a flow `type:` step
+ * the note travels further than `keys` does: it rides on the step's `warning`
+ * while a directive step carries no `result` (see `flow-run.ts`), so the report
+ * and the CI log that quotes it hold the count alone.
  */
 const UNVERIFIED_PREFIX = "The typed text was not verified against the screen";
 
@@ -673,8 +677,8 @@ const FOCUS_MOVED_REASON =
   "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
   "being typed, in which case the text may have been split across both, or the field could not be " +
-  "matched again: it moved clear of where it was (a list scrolled by more than a row does this), " +
-  "or it carries no id or one its neighbours share, as an OTP form's boxes do. Read the screen with `describe` before continuing.";
+  "matched again: it carries no id, or one its neighbours share as an OTP form's boxes do, AND it " +
+  "moved clear of where it was (a list scrolled by more than a row does this). Read the screen with `describe` before continuing.";
 
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"
@@ -838,8 +842,8 @@ function repairFailedNote(deleted: number, planned: number): string {
   }
   if (deleted === 0) {
     return (
-      "The typed text did not land, and the repair could not be completed: the backspaces it " +
-      "starts with did not go out. The field may hold anything from what it held when this call " +
+      "The typed text did not land, and the repair could not be completed: the first batch of " +
+      "backspaces was not confirmed to have gone out. The field may hold anything from what it held when this call " +
       "read it back to that with part of the typed text removed. Read it with `describe` and " +
       "retype from a known state."
     );

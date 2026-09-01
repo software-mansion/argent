@@ -79,6 +79,15 @@ export function isUnlandedKeyboardTextResult(
   return (result as { verified?: unknown }).verified === false;
 }
 
+// The read-back's advisory `note`, from a result that crossed the registry
+// boundary untyped. Its companion above: that one decides a step's verdict, this
+// one carries what the call has to say about a step that passed anyway.
+export function keyboardResultNote(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const note = (result as { note?: unknown }).note;
+  return typeof note === "string" && note !== "" ? note : undefined;
+}
+
 /**
  * Prefixed onto a read-back note when the call typed a resolved `{{secret:…}}`.
  *

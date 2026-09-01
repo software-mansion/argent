@@ -2435,6 +2435,46 @@ describe("a recorded keyboard step whose text did not land", () => {
     expect(result.stepCount).toBe(1);
   });
 
+  it("stays quiet when the run-sequence step failed for some other reason", async () => {
+    // The arm keys on the read-back's own error prefix, not on there being an
+    // error: `run-sequence` also records a disallowed tool, an unsupported
+    // operation, an unmet `await-ui-element` condition and any transport
+    // failure, and "the text did not reach the field" is false for every one.
+    await startRecording("other-sequence-error");
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "run-sequence") {
+          return {
+            completed: 1,
+            total: 2,
+            steps: [{ tool: "await-ui-element", error: "condition not met after 5000ms" }],
+          };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "other-sequence-error",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: ANDROID,
+          steps: [
+            { tool: "await-ui-element", args: { text: "NoSuchThing" } },
+            { tool: "keyboard", args: { text: TYPED_TEXT } },
+          ],
+        }),
+      }
+    );
+
+    expect(warningOf(result, "other-sequence-error")).toBeUndefined();
+    expect(result.stepCount).toBe(1);
+  });
+
   // Only a read-back that RAN and disagreed may warn.
   const QUIET: Array<{ name: string; result: Record<string, unknown> }> = [
     {

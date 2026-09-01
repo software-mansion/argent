@@ -195,11 +195,13 @@ export interface StepReport {
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
    * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
-   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * `await: { idle: true }` whenever the screen could not be proved settled, by
+   * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited — and by a `type` step whose `keyboard` result carries a
+   * note: the read-back could not conclude, or it repaired the field to get
+   * there, and a directive step has no `result` to carry that in.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1248,7 +1250,8 @@ A \`type\` step presses Enter after the text unless \`submit: false\`; on an And
 \`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
 (\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
 \`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
-that could not conclude, before or after the retry — passes.
+that could not conclude, before or after the repair — passes, carrying that tool's note as the
+step's warning so an unverified pass is not read as a verified one.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved

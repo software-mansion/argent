@@ -21,7 +21,7 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
-import { isUnlandedKeyboardTextResult } from "../keyboard";
+import { isUnlandedKeyboardTextResult, keyboardResultNote } from "../keyboard";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
@@ -1549,13 +1549,6 @@ async function runType(
   // are indistinguishable in the report.
   const note = keyboardResultNote(typed);
   return note ? { ok: true, warning: note } : { ok: true };
-}
-
-/** The read-back's `note`, from a result that crossed the registry untyped. */
-function keyboardResultNote(result: unknown): string | undefined {
-  if (typeof result !== "object" || result === null) return undefined;
-  const note = (result as { note?: unknown }).note;
-  return typeof note === "string" && note !== "" ? note : undefined;
 }
 
 /**
