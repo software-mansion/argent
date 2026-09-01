@@ -21,20 +21,23 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
 }));
 
 // Both ios branches probe the runtime kind by shelling out; stub them so the
-// routing tests below are not host-dependent.
-const { isRemoteTvOsSimulator } = vi.hoisted(() => ({
-  isRemoteTvOsSimulator: vi.fn(async (_udid: string): Promise<boolean> => false),
+// routing tests below are not host-dependent. Three-valued, as the impls read
+// them: `undefined` is "the listing did not answer", which is a different
+// verdict from "mobile".
+type RuntimeKind = "mobile" | "tv" | undefined;
+const { getRemoteSimulatorRuntimeKind } = vi.hoisted(() => ({
+  getRemoteSimulatorRuntimeKind: vi.fn(async (_udid: string): Promise<RuntimeKind> => "mobile"),
 }));
 vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
-  isRemoteTvOsSimulator,
+  getRemoteSimulatorRuntimeKind,
 }));
-const { isTvOsSimulator } = vi.hoisted(() => ({
-  isTvOsSimulator: vi.fn(async (_udid: string): Promise<boolean> => false),
+const { getSimulatorRuntimeKind } = vi.hoisted(() => ({
+  getSimulatorRuntimeKind: vi.fn(async (_udid: string): Promise<RuntimeKind> => "mobile"),
 }));
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
-  isTvOsSimulator,
+  getSimulatorRuntimeKind,
 }));
 
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
@@ -434,7 +437,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   });
 
   // The LOCAL Apple TV route, which no test reached: `makeIosImpl` appeared in
-  // none, and `isTvOsSimulator` was pinned false everywhere — so hoisting
+  // none, and the kind probe was pinned non-TV everywhere — so hoisting
   // `params.clear === true` above the probe would have aimed the 400-event burst
   // at a tvOS simulator with the whole suite green. (The route itself is
   // correct: on a real tvOS 26.5 simulator `clear` and `key` are both refused
@@ -443,7 +446,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     const APPLE_TV: DeviceInfo = { id: "TVOS-UDID", platform: "ios", kind: "simulator" };
 
     it("refuses a clear on a tvOS simulator instead of bursting at it", async () => {
-      isTvOsSimulator.mockResolvedValueOnce(true);
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
       const { events, api } = hidRecorder();
       await expect(
         makeIosImpl(registryWith(api)).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV)
@@ -452,7 +455,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     });
 
     it("refuses a named key on one too", async () => {
-      isTvOsSimulator.mockResolvedValueOnce(true);
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
       const { events, api } = hidRecorder();
       await expect(
         makeIosImpl(registryWith(api)).handler({}, { udid: APPLE_TV.id, key: "enter" }, APPLE_TV)
@@ -464,11 +467,47 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // The ordering is the whole guard: `clear` routed above the probe reaches
       // `clearSimulatorServer`, which resolves the simulator-server for a device
       // it cannot drive and bursts at it.
-      isTvOsSimulator.mockClear();
-      isTvOsSimulator.mockResolvedValue(false);
+      getSimulatorRuntimeKind.mockClear();
+      getSimulatorRuntimeKind.mockResolvedValue("mobile");
       const { api } = hidRecorder();
       await makeIosImpl(registryWith(api)).handler({}, { udid: IOS_SIM.id, clear: true }, IOS_SIM);
-      expect(isTvOsSimulator).toHaveBeenCalledWith(IOS_SIM.id);
+      expect(getSimulatorRuntimeKind).toHaveBeenCalledWith(IOS_SIM.id);
+    });
+
+    it("refuses a clear when the listing cannot say what the target is", async () => {
+      // `undefined` is not "not a TV": `getSimulatorRuntimeKind` answers it for a
+      // UDID missing from the listing, and `listIosSimulators` returns [] on ANY
+      // failure of `xcrun simctl list devices --json`, its own 10s timeout
+      // included. Collapsed onto `false`, a booted Apple TV took the burst and
+      // the caller was told `{ keys: 200, cleared: true }` — reproduced on a
+      // tvOS 26.5 simulator filtered out of the listing, with simulator-server
+      // spawned at the tvOS UDID.
+      getSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const err = await makeIosImpl(registryWith(api))
+        .handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_ios_runtime_kind");
+      expect(events).toEqual([]);
+    });
+
+    it("still types when the listing cannot say what the target is", async () => {
+      // The refusal is scoped to `clear`. `text` reaches an Apple TV through the
+      // same simulator-server HID transport it uses on a phone, so an unreadable
+      // listing must not take typing away with it.
+      getSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+        IOS_SIM
+      );
+      expect(result).toEqual({ typed: "hi", keys: 2 });
+      expect(events.length).toBeGreaterThan(0);
     });
 
     it("still types on a non-TV simulator", async () => {
@@ -530,7 +569,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // A remote tvOS sim is `ios-remote` by udid shape exactly as a local one is
       // `ios`, so without the probe a remote Apple TV took the 400-event burst —
       // the one thing platforms/tv.ts documents as unsupported on a TV.
-      isRemoteTvOsSimulator.mockResolvedValueOnce(true);
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce("tv");
       const { events, api } = hidRecorder();
       await expect(
         makeIosRemoteImpl(registryWith(api)).handler(
@@ -542,17 +581,33 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(events).toEqual([]);
     });
 
+    it("refuses a remote clear when the device list cannot say what the target is", async () => {
+      // The remote listing collapses the same way the local one does — a failed
+      // `sim-remote simctl list devices --json`, or one without this UDID, is
+      // indistinguishable from a phone unless the kind is read three-valued.
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      expect(events).toEqual([]);
+    });
+
     it("does not probe the TV kind for a plain typing call", async () => {
       // The probe is a round-trip to the orchestrator's device list. `text`
       // keeps the transport it already had, so it must not pay for it.
-      isRemoteTvOsSimulator.mockClear();
+      getRemoteSimulatorRuntimeKind.mockClear();
       const { api } = hidRecorder();
       await makeIosRemoteImpl(registryWith(api)).handler(
         {},
         { udid: IOS_REMOTE.id, text: "hi", delayMs: 0 },
         IOS_REMOTE
       );
-      expect(isRemoteTvOsSimulator).not.toHaveBeenCalled();
+      expect(getRemoteSimulatorRuntimeKind).not.toHaveBeenCalled();
     });
   });
 
