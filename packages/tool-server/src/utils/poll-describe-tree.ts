@@ -30,7 +30,7 @@ interface PollDescribeTreeArgs<R> {
   onSample: (data: DescribeTreeData, nowMs: number) => PollVerdict<R>;
 }
 
-interface PollDescribeTreeResult<R> {
+export interface PollDescribeTreeResult<R> {
   /** Result from the first `onSample` that returned done. */
   result: R | undefined;
   aborted: boolean;
