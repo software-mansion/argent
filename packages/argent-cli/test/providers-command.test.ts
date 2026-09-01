@@ -174,14 +174,18 @@ describe("argent providers publish", () => {
     expect(await runProviders("publish", "--stdin", "--pid", "nope")).toBe(2);
   });
 
-  /** This replaces a provider's startup cleanup, so it must happen on publish. */
-  it("prunes orphaned descriptors on the way through", async () => {
+  /**
+   * This replaces a provider's startup cleanup, so it must happen on publish.
+   * The crashed window carries a different id from the one publishing now, ids
+   * being unique per live instance, so what the two share is the vendor.
+   */
+  it("prunes the publishing vendor's own crashed instances on the way through", async () => {
     fs.mkdirSync(providersDir, { recursive: true });
-    const orphan = path.join(providersDir, "zenith-dead.json");
+    const orphan = path.join(providersDir, "acme-dead.json");
 
     fs.writeFileSync(
       orphan,
-      JSON.stringify(descriptor({ devices: [], id: "zenith-dead", pid: DEAD_PID }))
+      JSON.stringify(descriptor({ devices: [], id: "acme-dead", pid: DEAD_PID }))
     );
 
     withStdin(JSON.stringify(descriptor()));
@@ -191,6 +195,32 @@ describe("argent providers publish", () => {
 
     expect(JSON.parse(stdout()).pruned).toEqual([orphan]);
     expect(fs.existsSync(orphan)).toBe(false);
+  });
+
+  /**
+   * Saving your own descriptor is not a mandate to tidy up after a competitor.
+   * `argent providers prune` is where a user asks for all of them.
+   */
+  it("leaves another vendor's orphan alone", async () => {
+    fs.mkdirSync(providersDir, { recursive: true });
+    const foreign = path.join(providersDir, "zenith-dead.json");
+
+    fs.writeFileSync(
+      foreign,
+      JSON.stringify(descriptor({ devices: [], id: "zenith-dead", pid: DEAD_PID }))
+    );
+
+    withStdin(JSON.stringify(descriptor()));
+    expect(await runProviders("publish", "--stdin", "--json", "--pid", String(process.pid))).toBe(
+      0
+    );
+
+    expect(JSON.parse(stdout()).pruned).toEqual([]);
+    expect(fs.existsSync(foreign)).toBe(true);
+
+    /** Still reachable the way a user asks for it. */
+    expect(await runProviders("prune", "--json")).toBe(0);
+    expect(fs.existsSync(foreign)).toBe(false);
   });
 });
 

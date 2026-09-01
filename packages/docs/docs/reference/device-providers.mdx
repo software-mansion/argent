@@ -101,14 +101,16 @@ Argent never removes the file of a provider. Argent uses only the endpoints that
 
 ## Commands
 
-| Command                             | Description                                                    |
-| ----------------------------------- | -------------------------------------------------------------- |
-| `argent providers list`             | Show the devices that Argent sees at this moment               |
-| `argent providers check`            | Validate every registered provider against the contract        |
-| `argent providers check --file <p>` | Validate one descriptor file                                   |
-| `argent providers publish`          | Write a descriptor for a provider                              |
-| `argent providers withdraw <id>`    | Remove the descriptor of a provider                            |
-| `argent providers prune`            | Remove the descriptors of providers whose process is not alive |
+| Command                             | Description                                                         |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `argent providers list`             | Show the devices that Argent sees at this moment                    |
+| `argent providers check`            | Validate every registered provider against the contract             |
+| `argent providers check --file <p>` | Validate one descriptor file                                        |
+| `argent providers publish`          | Write a descriptor for a provider                                   |
+| `argent providers withdraw <id>`    | Remove the descriptor of a provider                                 |
+| `argent providers prune`            | Remove the descriptors of every provider whose process is not alive |
+
+`argent providers publish` also removes the descriptors of your own crashed instances. It finds them by the first segment of your provider id. Thus a provider that publishes on each device change needs no scheduled cleanup. Publish never removes the descriptor of a different provider. Only `argent providers prune` does that, because the user asks for it.
 
 Run `argent providers check` in your continuous integration if you write a provider. The command uses the same validators as the tool-server. Thus your implementation and Argent cannot diverge without a signal.
 

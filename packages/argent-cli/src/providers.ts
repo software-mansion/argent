@@ -253,6 +253,21 @@ async function runCheck(args: ParsedArgs): Promise<void> {
 
 // ── publish ─────────────────────────────────────────────────────────────────
 
+/**
+ * The vendor behind a provider id, which is its leading segment.
+ *
+ * Provider ids are `<vendor>-<instance-suffix>` and unique per live instance,
+ * so a vendor's crashed window carries a different id from the one publishing
+ * now. Matching the whole id would therefore prune only the descriptor about to
+ * be overwritten, which is the one case that needs no pruning.
+ *
+ * The same rule `externalProviderLabel` applies to a device id, from the other
+ * end: this starts at a bare provider id, so it has no `ext:` prefix to strip.
+ */
+function vendorOf(providerId: string): string {
+  return providerId.split("-")[0]!;
+}
+
 async function runPublish(args: ParsedArgs): Promise<void> {
   const { raw, source } = await readDocument(args);
 
@@ -267,8 +282,17 @@ async function runPublish(args: ParsedArgs): Promise<void> {
    * A provider publishing on every device change clears its own crashed
    * instances for free, with no scheduled job. Only `publish` does this.
    * `check` and `list` stay read-only.
+   *
+   * Scoped to the publishing vendor, which is what "its own" has to mean here.
+   * Unfiltered is what `argent providers prune` does, because a user running
+   * that by hand means all of them. Reaching the same width from inside another
+   * vendor's publish would have one editor delete a competitor's descriptor as
+   * a side effect of saving its own, and a dead pid is not a mandate to tidy up
+   * after somebody else.
    */
-  const pruned = pruneOrphanedProviders();
+  const pruned = pruneOrphanedProviders({
+    filter: (candidate) => vendorOf(candidate.id) === vendorOf(parsed.record.id),
+  });
 
   let result: { changed: boolean; path: string };
 
@@ -514,11 +538,13 @@ Subcommands:
   check                    Validate descriptors against the provider contract.
                            With no --file, checks every descriptor on disk.
   publish                  Validate a descriptor and write it to its canonical
-                           path, atomically. Also prunes orphaned descriptors.
+                           path, atomically. Also prunes your own vendor's
+                           orphaned descriptors.
   withdraw <id>            Remove the descriptor a provider published.
   list                     Show what argent currently sees: providers, devices,
                            capabilities and liveness.
-  prune                    Remove descriptors whose declared pid is dead.
+  prune                    Remove descriptors whose declared pid is dead, from
+                           every vendor.
 
 Options:
   --file <path>            check: validate this descriptor instead of every one
