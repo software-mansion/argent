@@ -126,8 +126,10 @@ describe("a raw tool: keyboard step the read-back failed", () => {
   });
 
   // Absent `verified` is every platform without a read-back (iOS, Chromium,
-  // Vega, Android TV) plus every Android case that could not conclude — failing
-  // on it would green-light nothing while breaking all of those.
+  // Vega, Android TV) plus an Android reading that concludes nothing — failing on
+  // it would green-light nothing while breaking all of those. After a repair, a
+  // read that cannot conclude reports `false` instead: the last measurement is
+  // then a failure.
   it("passes when verification is absent — not checked is not failed", async () => {
     const { run, registry } = await runGated("unchecked", {
       typed: "hello world",

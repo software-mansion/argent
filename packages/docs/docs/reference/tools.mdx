@@ -70,15 +70,20 @@ The result carries `verified`:
 | `false` | Argent read the field back and did not confirm the text          |
 | absent  | Argent did not confirm the text. This is not evidence of arrival |
 
-Argent makes one repair before it reports `false`. The repair covers only the characters
-that Argent can prove are its own. It deletes those characters. It then types the text
-again in small pieces. A `keyboard` call thus changes the field by more than the text that
-it adds. A long text spends tens of seconds in the repair. Argent leaves the field alone
-when it cannot prove which characters are its own.
+Argent makes one repair when the read-back does not find the text. The repair covers only
+the characters that Argent can prove are its own. It deletes those characters. It then
+types the text again in small pieces. A `keyboard` call thus changes the field by more than
+the text that it adds. This also holds for a `true` verdict, because the repair can work.
+The `note` field then says what Argent deleted and typed again. A long text spends tens of
+seconds in the repair. Argent leaves the field alone when it cannot prove which characters
+are its own.
 
 Argent also reports `false` when it repaired the field but could not read it again to
 confirm the result. The last measurement is a failure, so `note` says what the repair
 changed and why the confirmation is missing.
+
+Argent does not read back a password field. Argent also skips the read-back when the
+android-devtools helper is not available. `verified` is absent in both cases.
 
 `verified` is absent on every other platform, and on Android when the check cannot
 conclude. The `note` field gives the reason. The repair can run before an inconclusive

@@ -200,7 +200,9 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
             typed: String(args.text),
             keys: 7,
             verified: false,
-            note: "it holds 3 characters where 7 were expected",
+            note:
+              "The typed text did NOT land in the focused field: 7 characters were typed and " +
+              "the field now holds 3 in total.",
           }
     );
 
@@ -219,8 +221,8 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:fail"]);
     // The tool's own note becomes the step's reason, so the report says what the
-    // field actually held instead of a generic "type failed".
-    expect(result.steps[0]!.reason).toContain("it holds 3 characters where 7 were expected");
+    // read-back measured instead of a generic "type failed".
+    expect(result.steps[0]!.reason).toContain("7 characters were typed and the field now holds 3");
     // And the submitting Enter must NOT fire: submitting a field holding the
     // wrong value is worse than not submitting at all.
     expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
@@ -229,8 +231,8 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
   });
 
   it("passes the step when `verified` is absent — not checked is not failed", async () => {
-    // Every non-Android backend, and any Android call whose read-back could not
-    // conclude, returns no `verified`. Treating that as failure would break iOS,
+    // Every non-Android backend, and an Android call whose reading concludes
+    // nothing, return no `verified`. Treating that as failure would break iOS,
     // Chromium, Vega and every device without the android-devtools helper.
     const calls: Call[] = [];
     const registry = mockRegistry(calls, focusedEmail, (args) => ({

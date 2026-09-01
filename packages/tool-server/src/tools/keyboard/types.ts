@@ -19,9 +19,9 @@ export interface KeyboardVerification {
   /**
    * Whether the typed text was read back off the screen and found in the focused
    * field. `true` means the field really holds it. `false` means the read-back
-   * did not confirm that: the field was read and does not hold it, or it was
-   * measured not to and the read that would have confirmed the repair could not
-   * be taken. Either way the last measurement is a failure, and `note` says
+   * did not confirm that: the field was read and does not hold it, it was
+   * measured not to and the repair failed partway, or the read that would have
+   * confirmed the repair could not be taken. Either way the last measurement is a failure, and `note` says
    * which one it was.
    *
    * Absent means the text was NOT checked — never that it was checked and found

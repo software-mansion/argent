@@ -387,7 +387,7 @@ const UNLANDED_KEYBOARD_WARNING =
   "reads the field back and reports a mismatch by returning verified:false instead of failing, " +
   "so the step was written to the flow anyway. At replay that verdict FAILS the step and stops " +
   "the run there (and a `type:` step skips its Enter), so fix the typing before you rely on this " +
-  "flow: read `toolResult.note` for what the field holds and whether anything was retyped, then " +
+  "flow: read `toolResult.note` for what the read-back measured and whether anything was retyped, then " +
   "re-record the step. Delete the bad step after `flow-finish-recording` rather than " +
   "mid-recording: against a remote client the in-memory copy is authoritative and the next " +
   "append writes the step straight back, and in host mode the recorder re-reads the file before " +

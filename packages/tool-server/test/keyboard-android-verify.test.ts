@@ -233,7 +233,9 @@ describe("classifyTypedText", () => {
   });
 
   it("still decides `landed` when the field is empty and the text arrived whole", () => {
-    // The empty-and-no-hint baseline: nothing survived because there was nothing.
+    // The empty-and-no-hint baseline: the field grew by exactly `text`, which the
+    // insertion branch takes on its own — `beforeSurvived` is true of an empty
+    // baseline, so it decides nothing here.
     expect(classifyTypedText("", "abcdef", "abcdef")).toBe("landed");
   });
 });
@@ -332,10 +334,11 @@ describe("plannedUndoDeletions", () => {
     expect(plannedUndoDeletions("Search settings", "Search settings", "sound")).toBeNull();
   });
 
-  it("does not veto a zero-deletion repair over a non-ASCII baseline", () => {
-    // `added === 0` issues no backspace, so the grapheme rule has nothing to
-    // guard. Scanning the whole field there would disable the repair on every
-    // localized hint, since one accented character anywhere would veto it.
+  it("plans a zero-deletion repair over a non-ASCII baseline", () => {
+    // No reading can hand a character the FIELD put there to `KEYCODE_DEL`, whose
+    // delete is grapheme-sized: a landed run is a subsequence of `text`, which is
+    // printable ASCII. So a localized hint needs no scan of its own to be safe —
+    // here nothing is deleted at all, and the text is simply retyped.
     expect(plannedUndoDeletions("José", "José", "argent")).toBe(0);
   });
 
@@ -398,6 +401,31 @@ describe("plannedUndoDeletions", () => {
   it("refuses to delete more characters than the call asked to type", () => {
     // The field grew by more than we typed, so something else wrote into it too.
     expect(plannedUndoDeletions("", "abcdefghijkl", "abc")).toBeNull();
+  });
+
+  it("gives up on a search past its work cap instead of running it out", () => {
+    // A field of one character the call never typed rules out every non-empty
+    // run, so nothing decides the search short of its own length: below the cap
+    // it answers, above it it refuses — the answer an ambiguous reading gets
+    // anyway. The two sizes straddle READING_SEARCH_STEPS; raising that constant
+    // must be a deliberate edit, not a silent one.
+    const under = "z".repeat(1_999_998);
+    expect(plannedUndoDeletions(under, under, "abc")).toBe(0);
+    const over = "z".repeat(2_000_002);
+    expect(plannedUndoDeletions(over, over, "abc")).toBeNull();
+  });
+
+  it("scans `text` only as far as the run it matches, so a big field still answers", () => {
+    // Every offset of this field matches its empty run against `text`, and a
+    // scan that read to the end of `text` regardless made the search
+    // O(field x text): 12.9 s measured on this input, all of it synchronous on
+    // the tool-server's only thread — and, once the budget charges what a scan
+    // really reads, a refusal where the answer is plain.
+    const field = "1234567890".repeat(20_000);
+    const text = "abcdefghij".repeat(2_000);
+    const started = Date.now();
+    expect(plannedUndoDeletions(field, field, text)).toBe(0);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

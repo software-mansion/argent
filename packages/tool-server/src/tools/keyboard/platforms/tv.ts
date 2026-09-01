@@ -13,10 +13,11 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 // bursts, but a space-free one — an email address, a username, a URL, which is
 // most of what a TV login box takes — is still injected as a single burst that a
 // re-rendering field can drop characters from. It is not verified here because
-// this function is shared with Apple TV, whose HID transport cannot read a field
-// back at all, so covering Android TV means adding a platform branch to a
-// function that deliberately has none, and because the reported defect was on a
-// phone. A TV `keyboard` result therefore carries no `verified` — absent means
+// this function is shared with Apple TV, whose `TvControlApi.describe` reports a
+// focused element with no field identity to match it by (no resource-id, no
+// bounds), which is what the comparison and the repair are built on — so covering
+// Android TV means adding a platform branch to a function that deliberately has
+// none — and because the reported defect was on a phone. A TV `keyboard` result therefore carries no `verified` — absent means
 // "not checked", never "checked and fine".
 export async function typeTv(
   registry: Registry,

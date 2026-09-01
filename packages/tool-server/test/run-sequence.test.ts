@@ -228,7 +228,9 @@ describe("run-sequence", () => {
           typed: "abcdefghijkl",
           keys: 12,
           verified: false,
-          note: "the field holds 0 characters where 12 were expected",
+          note:
+            "The typed text did NOT land in the focused field: 12 characters were typed and " +
+            "the field now holds 0 in total.",
         };
       }
       return { tapped: true };
@@ -252,7 +254,7 @@ describe("run-sequence", () => {
     const last = result.steps[1] as { tool: string; error?: string };
     expect(last.tool).toBe("keyboard");
     expect(last.error).toMatch(/did not land/i);
-    expect(last.error).toMatch(/holds 0 characters/);
+    expect(last.error).toMatch(/the field now holds 0 in total/);
     expect(result.completed).toBe(1);
   });
 

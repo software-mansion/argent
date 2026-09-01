@@ -1484,6 +1484,7 @@ async function runSwipe(
  * keyboard tool. Unless `submit` is explicitly `false`, a trailing Enter commits
  * the value and dismisses the keyboard so it can't obscure later steps (chained
  * form fields ending in an explicit submit `tap` should pass `submit: false`).
+ * A read-back that proves the text did not land fails the step before that Enter.
  */
 async function runType(
   env: ActionEnv,
@@ -1523,9 +1524,10 @@ async function runType(
   // keyboard/platforms/android-verify.ts). The step fails on that, because
   // `input text` exits 0 having dropped characters: whether the tool returned
   // says nothing about what reached the field, so only the read-back can gate a
-  // step that types. An ABSENT `verified` is not evidence of failure — it means the field
-  // could not be read (another platform, no helper, a password field) — so only
-  // an explicit `false` fails, carrying the tool's own note as the reason.
+  // step that types. An ABSENT `verified` is not evidence of failure — the field
+  // was not read (another platform, no helper, a password field) or was read to a
+  // reading that concludes nothing — so only an explicit `false` fails, carrying
+  // the tool's own note as the reason.
   if (isUnlandedKeyboardTextResult("keyboard", typed)) {
     return { ok: false, reason: typed.note ?? "the typed text did not land in the field" };
   }

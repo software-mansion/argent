@@ -72,8 +72,8 @@ import type { KeyboardVerification } from "../types";
  * skipped, rather than charging a locked-down device (exactly the device where
  * `adb install -t` is blocked) two dumps per typed string.
  *
- * Neither read passes `waitForIdleMs`, so both take the blueprint's 500 ms
- * settle. Overriding the "before" read to 0 would save that, but it runs right
+ * No read passes `waitForIdleMs`, so each takes the blueprint's 500 ms settle.
+ * Overriding the "before" read to 0 would save that, but it runs right
  * after the agent's own tap on the field, and reading before the framework has
  * published `focused="true"` turns a healthy call into a spurious "no editable
  * field had focus" note.
@@ -213,7 +213,8 @@ export function findFocusedTextField(xml: string): FocusedField | null {
  * another's text would have the repair retype into a field the caller never
  * targeted.
  *
- * The two discriminators are not equally good, so they are weighed rather than
+ * A different widget class is a different field and settles it first. Past that
+ * the two discriminators are not equally good, so they are weighed rather than
  * concatenated. A non-empty `resource-id` settles it on its own: it is the
  * Android view id, carrying the React Native `testID` (see
  * `flows/flow-android-tree.ts`), a screen does not put two focusable fields
@@ -281,7 +282,7 @@ function beforeSurvived(before: string, after: string): boolean {
  *
  *  - The field did not change at all and already contains `text`: a correct type
  *    into a field that held the same value is indistinguishable from an injection
- *    that landed nothing. (The empty-selection reading of the clause below.)
+ *    that landed nothing. (The clause below, with a selection that held `text`.)
  *  - The field now reads exactly `text` AND the prior content survived as edges:
  *    "abc" + a correct replacement by "abcdef" looks the same as "abc" plus a
  *    partial landing of "def" out of "abcdef". A hint reaches this shape too,
@@ -295,11 +296,11 @@ function beforeSurvived(before: string, after: string): boolean {
  *    reading "aa bb" with "aa" double-tapped and "aaa" typed correctly ends at
  *    "aaa bb" (measured, Pixel-class API 35): the text is entirely present, and
  *    the field is `text.length` minus the selection longer rather than
- *    `text.length` longer. `not-landed` is the dangerous answer here, not merely
- *    a wrong one — it sends the reading to the repair, which takes the growth for
- *    this call's whole contribution, deletes too few, retypes onto the residue
- *    and leaves "aaaaa bb", a doubling shaped precisely to satisfy the *inserted*
- *    branch above and so reported as success. `landed` is unavailable too: a
+ *    `text.length` longer. `not-landed` is wrong here in the
+ *    expensive direction: the text is entirely present, so it would fail the step
+ *    over a field holding exactly what was asked for (and hand the reading to a
+ *    planner that refuses it, so the report would blame the app for a selection
+ *    the agent replaced). `landed` is unavailable too: a
  *    partial landing into content that happens to hold those characters produces
  *    the same reading.
  *  - Every character of `text` is present in order among characters the field
@@ -432,9 +433,13 @@ export function plannedUndoDeletions(before: string, after: string, text: string
       // that landed nothing left the selection alone too.
       if (landedLength === 0 && j !== i) continue;
       if (landedLength > 0 && !canStartRun) break;
-      steps -= landedLength + 1;
+      const { matched, scanned } = subsequenceScan(after.slice(i, j + added), text);
+      // Charge what the scan reads, not the run it matches: a run that does not
+      // match reads the whole of `text`, so counting characters read is what
+      // makes the budget a bound on the work.
+      steps -= scanned + 1;
       if (steps < 0) return null;
-      if (!isSubsequence(after.slice(i, j + added), text)) continue;
+      if (!matched) continue;
       if (proven === null) proven = landedLength;
       else if (proven !== landedLength) return null;
     }
@@ -443,11 +448,13 @@ export function plannedUndoDeletions(before: string, after: string, text: string
 }
 
 /**
- * Work cap for the reading search, in character comparisons. A field that is one
- * long repeated character makes every offset a candidate run start, so the
- * search is O(field length × text length) there — synchronous CPU on the
- * tool-server's only thread. Exhausting the cap refuses the repair, which is the
- * answer an ambiguous reading gets anyway.
+ * Work cap for the reading search, in characters of `text` read. Every offset of
+ * the common prefix opens a candidate run and every run is matched against
+ * `text`, so the search is O(field length × text length) on a field whose
+ * characters keep those runs alive — synchronous CPU on the tool-server's only
+ * thread, on a string a `describe` will happily hand back at 100 kB. Exhausting
+ * the cap refuses the repair, which is the answer an ambiguous reading gets
+ * anyway.
  */
 const READING_SEARCH_STEPS = 2_000_000;
 
@@ -472,11 +479,23 @@ function coversByEdges(short: string, long: string, gap: number): boolean {
 
 /** Whether `candidate` can be obtained from `source` by deleting characters only. */
 function isSubsequence(candidate: string, source: string): boolean {
-  let i = 0;
-  for (const char of source) {
-    if (i < candidate.length && candidate[i] === char) i++;
+  return subsequenceScan(candidate, source).matched;
+}
+
+/**
+ * The subsequence test above, plus how much of `source` it had to read: the walk
+ * stops on the character that completes `candidate`, so an empty candidate reads
+ * nothing and a short run costs its position in `source` rather than the whole
+ * string. That count is what `plannedUndoDeletions` charges its budget.
+ */
+function subsequenceScan(candidate: string, source: string): { matched: boolean; scanned: number } {
+  let matched = 0;
+  let scanned = 0;
+  while (matched < candidate.length && scanned < source.length) {
+    if (candidate[matched] === source[scanned]) matched++;
+    scanned++;
   }
-  return i === candidate.length;
+  return { matched: matched === candidate.length, scanned };
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -680,13 +699,14 @@ function indeterminateAfterRepairNote(deleted: number): string {
 }
 
 /**
- * Two causes produce this, and the read-back cannot tell them apart, so the note
- * names both rather than asserting the likelier one: the key-event burst lost
- * characters on a field that re-renders per keystroke, or the field itself
- * rejected or reformatted what arrived (a digits-only field, an input mask, a
- * maxLength — the dialer's number field silently drops every letter typed into
- * it). Retyping in chunks fixes the first and cannot fix the second, which is why
- * the advice covers both.
+ * Three readings produce this and the read-back cannot tell them apart, so the
+ * note carries all of them rather than asserting the likeliest: the key-event
+ * burst lost characters on a field that re-renders per keystroke, the field
+ * itself rejected or reformatted what arrived (a digits-only field, an input
+ * mask, a maxLength — the dialer's number field silently drops every letter typed
+ * into it), or the text replaced a selection with a shorter value. Retyping in
+ * chunks fixes the first and neither of the others, which is why the advice
+ * covers all three.
  */
 function mismatchNote(typed: number, present: number, repaired: boolean): string {
   return (

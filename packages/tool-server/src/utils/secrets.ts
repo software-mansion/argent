@@ -136,10 +136,10 @@ export function redactSecretsFromError(
 /**
  * Not `err[key] = value`: a `DOMException` — what `AbortSignal.throwIfAborted`
  * raises, and this module runs on the cancellation path of a tool that types
- * secrets — inherits `message` and `stack` as getter-ONLY prototype accessors,
- * where assignment throws in strict mode. That threw the redaction away along
- * with the error it was scrubbing. An own data property shadows the getter and
- * keeps the error's class.
+ * secrets — inherits `message` as a getter-ONLY prototype accessor, where
+ * assignment throws in strict mode (its `stack` is an own accessor that does have
+ * a setter). That threw the redaction away along with the error it was scrubbing.
+ * An own data property shadows the getter and keeps the error's class.
  */
 function overwrite(err: Error, key: "message" | "stack", value: string): void {
   Object.defineProperty(err, key, { value, writable: true, configurable: true });
