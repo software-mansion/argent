@@ -40,14 +40,13 @@ Reading the screen does not change the screen. When the target app is in the bac
 
 ## What works
 
-The agent launches, restarts and reinstalls apps, reads the accessibility tree, takes screenshots, taps and double-taps, swipes, long-presses and drags, presses the hardware buttons, types text, waits for elements, and records and replays [flows](/docs/features/flows).
+The agent launches, restarts and reinstalls apps, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the hardware buttons, types text, waits for elements, and records and replays [flows](/docs/features/flows).
 
 Some simulator capabilities do not exist on hardware. Each one fails with a message that names the alternative:
 
 - Two-finger gestures such as pinch and rotate are not possible. The agent drives the zoom controls of the app instead.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
 - The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
-- The agent compares full-resolution screenshots on the host instead of the on-device screenshot comparison.
 
 ## Troubleshooting
 

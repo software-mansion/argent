@@ -10,7 +10,7 @@ description: Interact with a physical iPhone via argent. Use when tapping, swipi
 - **Automation is app-scoped.** XCUITest drives one app at a time. `launch-app` (or `restart-app`) registers the target; `describe`, `await-ui-element`, and gestures then act on that app only. `describe`'s `bundleId` parameter is ignored on hardware.
 - **System UI needs an explicit registration.** `launch-app` with `com.apple.springboard` registers without launching (SpringBoard always runs) and exposes the home screen and system dialogs to `describe`. Register the real app again afterwards.
 - **A tool-server restart forgets the registration.** The first `describe` or gesture then fails with "No app is under automation on this device"; recover with `launch-app` (or `restart-app`) for the target.
-- `screenshot` is the exception: it captures the whole screen and needs no registered app.
+- `screenshot` and `screenshot-diff` live captures are the exception: they capture the whole screen and need no registered app.
 
 ## The interaction loop
 
@@ -20,18 +20,17 @@ description: Interact with a physical iPhone via argent. Use when tapping, swipi
 
 ## Supported tools
 
-`list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `describe`, `screenshot`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `button`, `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the flow tools, and `stop-simulator-server`.
+`list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `button`, `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the flow tools, and `stop-simulator-server`.
 
 Everything else fails with `not supported on ios device`. Reach for the alternative instead:
 
-| Gated tool                        | Do instead                                                                          |
-| --------------------------------- | ----------------------------------------------------------------------------------- |
-| `gesture-pinch`, `gesture-rotate` | Drive the app's own zoom/rotate UI with taps and drags; no two-finger gestures      |
-| `open-url`                        | `launch-app` the target, then navigate inside its UI                                |
-| `rotate`, `shake`                 | Real motion only: rotate/shake the phone by hand, or test on a simulator            |
-| `settings-permissions`            | Change the permission on the phone itself in Settings                               |
-| `paste`                           | Type with `keyboard`                                                                |
-| `screenshot-diff`                 | Capture full-resolution screenshots (`scale: 1.0`) and compare the PNGs on the host |
+| Gated tool                        | Do instead                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `gesture-pinch`, `gesture-rotate` | Drive the app's own zoom/rotate UI with taps and drags; no two-finger gestures |
+| `open-url`                        | `launch-app` the target, then navigate inside its UI                           |
+| `rotate`, `shake`                 | Real motion only: rotate/shake the phone by hand, or test on a simulator       |
+| `settings-permissions`            | Change the permission on the phone itself in Settings                          |
+| `paste`                           | Type with `keyboard`                                                           |
 
 ## Gesture recipes
 

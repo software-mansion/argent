@@ -67,6 +67,9 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "await-screen-idle",
   // Outer gate only: each step still pre-flights its own capability.
   "run-sequence",
+  // Live captures go through the runner's device-wide screenshot. The diff
+  // engine itself runs on the host either way.
+  "screenshot-diff",
 ];
 
 describe("apple.device capability ratchet", () => {

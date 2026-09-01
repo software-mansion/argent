@@ -14,7 +14,10 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
 import { httpScreenshot } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
@@ -53,7 +56,10 @@ const zodSchema = z
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
-      .describe("Orientation override for live baseline/current captures."),
+      .describe(
+        "Orientation override for live baseline/current captures. Ignored on physical iPhones, " +
+          "where the capture always follows the device's real orientation."
+      ),
     outputDir: z
       .string()
       .min(1)
@@ -80,7 +86,7 @@ interface ScreenshotDiffResult {
 type CaptureScreenshot = typeof httpScreenshot;
 
 const capability: ToolCapability = {
-  apple: { simulator: true },
+  apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -102,23 +108,30 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend (simulator-server, or the on-device XCUITest runner for a physical iPhone) can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
+Physical iPhones are supported for both file diffs and live captures; a live capture on hardware is device-wide and needs no registered app. Keep baselines per device model and resolution: same-aspect images are rescaled to compare, while different aspect ratios fail as a dimension mismatch.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend / physical-device runner is not reachable.`,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
   capability,
   fileInputs,
   services: (params): Record<string, ServiceRef> => {
-    // Requesting the SimulatorServer unconditionally would resolve (and start) it
-    // even for pure static-PNG diffs, which fails on tvOS simulators that have no
-    // SimulatorServer backend.
+    // Only a live capture needs a capture backend. Requesting one
+    // unconditionally would resolve and start it even for pure static-PNG
+    // diffs, which fails on tvOS simulators that have no SimulatorServer
+    // backend and would build the XCUITest runner for a diff that never
+    // touches the device.
     if (params.captureBaseline || params.captureCurrent) {
-      return { simulatorServer: simulatorServerRef(resolveDevice(params.udid)) };
+      const device = resolveDevice(params.udid);
+      if (isIosPhysicalDevice(device)) {
+        return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+      }
+      return { simulatorServer: simulatorServerRef(device) };
     }
     return {};
   },
@@ -238,31 +251,33 @@ async function resolveInputPaths(
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);
 
-  const baselinePath = params.captureBaseline
-    ? await captureLiveInput({
-        api: requireSimulatorServer(services),
-        device: resolveDevice(params.udid),
-        peekFor,
+  // Physical iPhones capture through the on-device XCUITest runner. Simulators
+  // and Android capture through the simulator-server.
+  const captureLive = (name: "baseline" | "current"): Promise<string> => {
+    const device = resolveDevice(params.udid);
+    if (isIosPhysicalDevice(device)) {
+      return captureIosDeviceLiveInput({
+        runner: requireIosDeviceRunner(services),
         outputDir,
-        name: "baseline",
-        rotation: params.rotation,
-        signal: options?.signal,
-        captureScreenshot,
-      })
-    : params.baselinePath!;
+        name,
+      });
+    }
+    return captureLiveInput({
+      api: requireSimulatorServer(services),
+      device,
+      peekFor,
+      outputDir,
+      name,
+      rotation: params.rotation,
+      signal: options?.signal,
+      captureScreenshot,
+    });
+  };
 
-  const currentPath = params.captureCurrent
-    ? await captureLiveInput({
-        api: requireSimulatorServer(services),
-        device: resolveDevice(params.udid),
-        peekFor,
-        outputDir,
-        name: "current",
-        rotation: params.rotation,
-        signal: options?.signal,
-        captureScreenshot,
-      })
-    : params.currentPath!;
+  const baselinePath = params.captureBaseline
+    ? await captureLive("baseline")
+    : params.baselinePath!;
+  const currentPath = params.captureCurrent ? await captureLive("current") : params.currentPath!;
 
   return { baselinePath, currentPath };
 }
@@ -317,6 +332,39 @@ function requireSimulatorServer(services: Record<string, unknown>): SimulatorSer
     throw new Error("Live screenshot capture requires a simulatorServer service.");
   }
   return api;
+}
+
+// Same reasoning as requireSimulatorServer. The registry resolves the runner
+// before a physical-device live capture runs, so only a direct caller of the
+// exported executeScreenshotDiffTool can trip this.
+function requireIosDeviceRunner(services: Record<string, unknown>): IosDeviceRunnerApi {
+  const runner = services.iosDeviceRunner as IosDeviceRunnerApi | undefined;
+  if (!runner) {
+    throw new Error(
+      "Live screenshot capture on a physical iPhone requires an iosDeviceRunner service."
+    );
+  }
+  return runner;
+}
+
+/**
+ * Physical-iOS live capture through the on-device XCUITest runner. The runner
+ * returns one full-resolution device-wide PNG, so no app session is required
+ * and the simulator scale fallback does not apply. The rotation parameter is
+ * deliberately not forwarded, because the capture always follows the device's
+ * real orientation, the same behaviour as the screenshot tool on hardware.
+ */
+async function captureIosDeviceLiveInput(params: {
+  runner: IosDeviceRunnerApi;
+  outputDir: string;
+  name: "baseline" | "current";
+}): Promise<string> {
+  const png = await captureRunnerScreenshotPng(params.runner, RUNNER_COMMAND_TIMEOUT_MS);
+  const suffix = crypto.randomBytes(4).toString("hex");
+  const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await fs.writeFile(destination, png);
+  return destination;
 }
 
 async function captureLiveInput(params: {
