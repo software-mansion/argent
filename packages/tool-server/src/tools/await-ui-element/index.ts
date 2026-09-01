@@ -13,7 +13,11 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { pollDescribeTree, TREE_FETCH_FAILED_NOTE_PREFIX } from "../../utils/poll-describe-tree";
+import {
+  MIN_POLL_INTERVAL_MS,
+  pollDescribeTree,
+  TREE_FETCH_FAILED_NOTE_PREFIX,
+} from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
@@ -58,7 +62,10 @@ const HIDDEN_UNREADABLE_NOTE =
  * judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
- * - `unreadable` — the tree source never answered, so nothing was observed.
+ * - `unreadable` — no read that can speak for the screen at the deadline. The
+ *   source never answered, or it went dark at the end, or the last good read is
+ *   further behind the deadline than a poll explains (a coarse `pollIntervalMs`
+ *   does that on a source that never failed at all). Nothing was judged.
  * - `cancelled` — the caller gave up before the deadline. Also no verdict.
  */
 export type UnmetUiWaitCause = "unmet" | "unreadable" | "cancelled";
@@ -136,7 +143,7 @@ const zodSchema = z
     pollIntervalMs: z
       .number()
       .int()
-      .min(50)
+      .min(MIN_POLL_INTERVAL_MS)
       .max(5000)
       .optional()
       .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
@@ -211,7 +218,9 @@ type FinalRead = "trusted" | "untrusted" | "unsettled";
  *
  * Only `unmet` judges the condition, so it has to be earned: some read must
  * have been trustworthy, and the reads must still describe the screen at the
- * deadline. Three tiers, mirroring `waitForCondition` in flow-actions.ts:
+ * deadline. Three tiers, following `waitForCondition` in flow-actions.ts — which
+ * reaches its own final read by polling once PAST the deadline, where this loop
+ * stops on it, so only here can a trusted final read be a whole poll old:
  *
  * 1. No trusted read at all — nothing ever evaluated the condition.
  * 2. Trusted reads, but they no longer describe the deadline: the window went
@@ -288,23 +297,40 @@ function timeoutNote(
   fetchError: string | undefined,
   lastData: DescribeTreeData | null,
   samples: number,
-  budget: { timeoutMs: number; pollIntervalMs: number; lastAttemptSettled: boolean }
+  budget: {
+    timeoutMs: number;
+    pollIntervalMs: number;
+    lastAttemptSettled: boolean;
+    slowestFetchMs: number;
+  }
 ): string {
-  if (fetchError) return `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`;
+  if (fetchError !== undefined) {
+    // `lastError` carries the loop's OWN budget-expiry message when the deadline
+    // abandoned a fetch before any tree arrived, and calling that a failed fetch
+    // sends the reader after a source that was only slow. `lastAttemptSettled`
+    // (see poll-describe-tree) is what separates the two; the sibling tool draws
+    // the same line.
+    return budget.lastAttemptSettled
+      ? `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`
+      : `reading the tree did not finish within the ${budget.timeoutMs}ms budget, so no tree was ever ` +
+          `read and nothing judged the selector. Raise timeoutMs if the tree is merely large, or repair ` +
+          `the source if it has stopped answering altogether.`;
+  }
   // One tree read inside the budget leaves the verdict below resting on that
   // single sample, which can be the one taken before the element appeared. The
   // selector diagnosis is still the most useful thing to report, so qualify it
-  // rather than replace it — but name the knob that actually applies. Only a
-  // read the deadline cut off (`lastAttemptSettled` false, see
-  // poll-describe-tree) is the tree outrunning the budget; a read that finished
-  // and was never followed by a second one was starved by pollIntervalMs, and
-  // raising timeoutMs is not the smaller change there.
+  // rather than replace it — but name the knob that applies. Lowering the sleep
+  // helps only when the sleep is what ran out: not when the deadline cut a fetch
+  // off (`lastAttemptSettled` false, see poll-describe-tree), and not when the
+  // one read that landed is over half the budget, since a second needs its
+  // length again plus the shortest sleep the schema takes.
   const readCaveat =
     samples < 2
-      ? budget.lastAttemptSettled
-        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — the read finished, but ` +
-          `pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a second — so this rests on that ` +
-          `single sample; lower pollIntervalMs or raise timeoutMs)`
+      ? budget.lastAttemptSettled &&
+        2 * budget.slowestFetchMs + MIN_POLL_INTERVAL_MS <= budget.timeoutMs
+        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — it took ` +
+          `${budget.slowestFetchMs}ms, and pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a ` +
+          `second — so this rests on that single sample; lower pollIntervalMs or raise timeoutMs)`
         : ` (only one tree read completed within the ${budget.timeoutMs}ms budget, so this rests on that ` +
           `single sample — raise timeoutMs)`
       : "";
@@ -392,7 +418,8 @@ It polls the same accessibility / DOM tree as \`describe\`
 
 Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
 condition holding, which is not always a verdict on the condition: \`cause\` says which it was — \`unmet\` (the tree
-was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or
+was read and the condition was false there), \`unreadable\` (no read that can speak for the screen at the deadline:
+the source never answered, went dark at the end, or the last good read is too far behind it — poll more often) or
 \`cancelled\` — and \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
 tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
     alwaysLoad: true,
@@ -493,6 +520,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             timeoutMs,
             pollIntervalMs,
             lastAttemptSettled: poll.lastAttemptSettled,
+            slowestFetchMs: poll.slowestFetchMs,
           }
         ),
         cause: timeoutCause(params.condition, lastTrustedReadAt, finalRead, pollIntervalMs),

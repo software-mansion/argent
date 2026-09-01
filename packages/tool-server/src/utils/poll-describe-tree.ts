@@ -14,6 +14,12 @@ import { settleWithin, sleepOrAbort } from "./timing";
  */
 export const TREE_FETCH_FAILED_NOTE_PREFIX = "last tree fetch failed: ";
 
+/**
+ * Smallest `pollIntervalMs` either wait tool's schema accepts. A caller told to
+ * lower theirs has to be able to; below this the sleep is not the knob.
+ */
+export const MIN_POLL_INTERVAL_MS = 50;
+
 /** Verdict from evaluating one successfully-fetched tree. */
 type PollVerdict<R> = { done: true; result: R } | { done: false };
 
@@ -47,11 +53,12 @@ export interface PollDescribeTreeResult<R> {
    *
    * This is what says whether a timed-out wait observed anything: a caller that
    * reports its own negative verdict on fewer than two samples describes a
-   * screen it never got to compare with itself. Two different things starve it,
-   * and {@link lastAttemptSettled} tells them apart: a tree too slow to read
-   * (the deadline cuts a fetch off), or a `pollIntervalMs` that leaves no room
-   * for a second read inside `timeoutMs` (every fetch settled, the schedule ran
-   * out). Only the first is fixed by raising `timeoutMs`.
+   * screen it never got to compare with itself. Three things starve it, taking
+   * two different remedies, and {@link lastAttemptSettled} with
+   * {@link slowestFetchMs} tell them apart: the deadline cut a fetch off; every
+   * fetch settled but one read was over half the budget, so a second could not
+   * have fitted at any interval; or every fetch settled and `pollIntervalMs`
+   * left no room. Only the last is fixed by polling more often.
    */
   samples: number;
   /**
@@ -64,6 +71,15 @@ export interface PollDescribeTreeResult<R> {
    * fetch, so that the caller can still build a note from an older tree.
    */
   lastAttemptSettled: boolean;
+  /**
+   * The longest single fetch attempt, from issue to settle — or, for one the
+   * deadline cut off, to the cut-off.
+   *
+   * What it answers is whether a second sample was ever affordable: a read this
+   * size needs its own length again before the deadline, so past half the budget
+   * no `pollIntervalMs` buys a second one and only a larger `timeoutMs` will.
+   */
+  slowestFetchMs: number;
 }
 
 export async function pollDescribeTree<R>(
@@ -78,6 +94,7 @@ export async function pollDescribeTree<R>(
   let lastError: string | undefined;
   let samples = 0;
   let lastAttemptSettled = false;
+  let slowestFetchMs = 0;
 
   const outcome = (result: R | undefined, aborted: boolean): PollDescribeTreeResult<R> => ({
     result,
@@ -88,6 +105,7 @@ export async function pollDescribeTree<R>(
     lastError,
     samples,
     lastAttemptSettled,
+    slowestFetchMs,
   });
 
   for (;;) {
@@ -102,8 +120,10 @@ export async function pollDescribeTree<R>(
     // tree was too slow to read. The first fetch is exempt, because a budget
     // too small to read anything IS the tree outrunning it.
     if (polls > 0 && remaining === 0) break;
+    const issuedAt = Date.now();
     const settled = await settleWithin(fetchTree(), remaining, signal);
     polls += 1;
+    slowestFetchMs = Math.max(slowestFetchMs, Date.now() - issuedAt);
 
     if (settled.type === "aborted") return outcome(undefined, true);
     lastAttemptSettled = settled.type !== "timeout";

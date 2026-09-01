@@ -224,6 +224,27 @@ describe("await-ui-element tool", () => {
     expect(result.note ?? "").not.toMatch(/only one tree read completed/i);
   });
 
+  // Same shape on this tool: the single read settled, but it is over half the
+  // budget, so no pollIntervalMs would have bought a second sample.
+  it("names timeoutMs when one settled read leaves no room for a second at any interval", async () => {
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(350)));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 600,
+        pollIntervalMs: 400,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/only one tree read completed within the 600ms budget/i);
+    expect(result.note ?? "").not.toMatch(/pollIntervalMs \(400ms\)/);
+  });
+
   // The caveat is about the evidence behind the verdict, so it has to reach every
   // condition's wording — not just the `visible` one the suite happened to check.
   it.each(["exists", "visible", "hidden", "text"] as const)(
@@ -1316,7 +1337,11 @@ describe("await-ui-element tool", () => {
 
     expect(result.success).toBe(false);
     expect(elapsed).toBeLessThan(1000);
-    expect(result.note).toMatch(/did not complete within/i);
+    expect(result.note).toMatch(/did not finish within the 80ms budget/i);
+    // The loop's own budget-expiry message is not a fetch failure: nothing about
+    // the source is known to be broken, and the sibling tool says the same.
+    expect(result.note ?? "").not.toMatch(/last tree fetch failed/i);
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
   });
 
   it("a final fetch straddling the deadline still reports the condition note, not a fetch failure", async () => {

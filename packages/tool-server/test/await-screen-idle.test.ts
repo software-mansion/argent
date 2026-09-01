@@ -269,14 +269,42 @@ describe("await-screen-idle tool", () => {
     const result = await tool.execute({}, { udid: IOS_UDID, timeoutMs: 100 });
 
     expect(result.polls).toBe(1);
-    expect(result.note).toContain("pollIntervalMs (200ms)");
-    expect(result.note).not.toContain("Raise timeoutMs for a tree this large");
+    expect(result.note).toContain("never sampled twice");
+    // Whether the remedy is the interval or the budget depends on how long the
+    // one read took, which a loaded runner decides; what must never come back is
+    // the claim that reading the tree did not finish inside the budget.
+    expect(result.note).not.toContain("outran the budget");
   });
 
-  // A tree read many times over and empty every time is not a screen that kept
-  // changing — nothing was ever there to move. tvOS is the standing case: its
-  // accessibility tree is empty by design, so every Apple TV wait lands here.
-  it("reports an all-empty tree rather than an observed change", async () => {
+  // The third starve, between the two above. Every fetch settles — so the
+  // deadline cut nothing off — but the one read that landed took most of the
+  // budget, and pollIntervalMs is already at the schema minimum. Naming the
+  // sleep there points at a knob the caller cannot turn: a second read needs the
+  // first one's length again, which no interval buys.
+  it("names timeoutMs when one settled read leaves no room for a second at any interval", async () => {
+    // 350ms of a 600ms budget: the clamped sleep reaches the deadline, so no
+    // fetch is cut off, and yet a second read of that size could not have fitted
+    // however short the sleep was made.
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(350)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 600, pollIntervalMs: 400, minStableMs: 100 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBe(1);
+    expect(result.note).toContain("at any pollIntervalMs");
+    expect(result.note).toContain("Raise timeoutMs");
+    expect(result.note).not.toContain("pollIntervalMs (400ms)");
+  });
+
+  // A tree read many times over with nothing in it is not a screen that kept
+  // changing. Which of the two reasons it is — nothing rendered, or the reader
+  // cannot see the app — belongs to the adapter, so the note says both are open
+  // and appends the hint that decides. Apple TV is the standing case: this
+  // tool's iOS reader has no focus tree to return there at all.
+  it("reports a tree that never returned content rather than an observed change", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([axResponse([])])));
 
     const result = await tool.execute(
@@ -286,8 +314,68 @@ describe("await-screen-idle tool", () => {
 
     expect(result.settled).toBe(false);
     expect(result.polls).toBeGreaterThan(2);
-    expect(result.note).toContain("came back empty");
+    expect(result.note).toContain("never seen holding anything still");
     expect(result.note).toContain("not an observed change");
+    // The adapter's account of WHY the tree was empty has to survive into the
+    // note, or the two readings stay indistinguishable to the agent.
+    expect(result.note).toContain("not evidence that nothing is on screen");
+  });
+
+  // A tree source that dies mid-wait reads as an empty tree, not as a throw:
+  // `describeIos` folds the failure into a hint. Counting that as a content
+  // change is what let a dead reader come back as the observed change a bare
+  // `settled: false` asserts.
+  it("does not call a source that went blind mid-wait an observed change", async () => {
+    let reads = 0;
+    const dying: AXServiceApi = {
+      degraded: false,
+      describe: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        reads += 1;
+        if (reads === 1) return content();
+        throw new Error("ax service died");
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitScreenIdleTool(iosRegistry(dying));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 300, pollIntervalMs: 30, minStableMs: 100 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBeGreaterThan(3);
+    expect(result.note).toContain("came back empty");
+    expect(result.note).toContain("The accessibility read failed (ax service died)");
+  });
+
+  // The other order: blank until the app paints, then identical content. The
+  // count has to be of the reads that returned content — saying all of them were
+  // identical would be a claim about reads that held nothing.
+  it("counts only the reads that returned content when the screen painted late", async () => {
+    let reads = 0;
+    const latePaint: AXServiceApi = {
+      degraded: false,
+      describe: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        reads += 1;
+        return reads < 6 ? axResponse([]) : content();
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitScreenIdleTool(iosRegistry(latePaint));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 400, pollIntervalMs: 30, minStableMs: 5000 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toMatch(/only \d+ of the \d+ tree reads returned content/);
+    expect(result.note).not.toContain("tree reads were all identical");
   });
 
   // Read repeatedly, never once different, and still `settled: false` — because

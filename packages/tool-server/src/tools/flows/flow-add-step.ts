@@ -360,13 +360,16 @@ const UNMET_WAIT_WARNING =
 const UNREADABLE_WAIT_WARNING =
   "recorded, but this wait reached its deadline without a trustworthy read of the UI tree, so " +
   "the condition was never judged — `await-ui-element` returns success:false for that too, and " +
-  "the step was written to the flow anyway. Either no read in the window could be trusted, or " +
-  "the reads went dark before the end and what they saw no longer describes it. Whether the " +
-  "condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source error " +
-  "where a fetch threw, and describes what was seen where the tree was merely empty or " +
-  "degraded. Get that source back and re-record the step to find out. Do not delete the step on " +
-  "this warning alone. The cross-tree re-probe was skipped: it asks whether a check that PASSED " +
-  "would survive conversion to `await:`/`assert:`, and this one never got an answer";
+  "the step was written to the flow anyway. No read in the window could be trusted, or the reads " +
+  "went dark before the end, or the last good read sits further behind the deadline than a poll " +
+  "explains — which a `pollIntervalMs` above 2000ms produces on a source that never failed at " +
+  "all. Whether the condition holds is UNKNOWN, not known-bad: `toolResult.note` names the " +
+  "tree-source error where a fetch threw, describes what was seen where the tree was merely " +
+  "empty or degraded, and quotes the single-sample caveat where the polling was too sparse. Fix " +
+  "what the note names — get the source back, or poll more often — and re-record the step to " +
+  "find out. Do not delete the step on this warning alone. The cross-tree re-probe was skipped: " +
+  "it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, and this " +
+  "one never got an answer";
 
 const CANCELLED_WAIT_WARNING =
   "recorded, but this wait was cancelled before its deadline, so the condition was never settled " +

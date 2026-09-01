@@ -66,7 +66,8 @@ export async function describeAndroid(
         // that cost lands as a verdict, not just latency: they bound each fetch
         // by the budget they were given, so a tree too slow to read leaves them
         // fewer samples than their verdict needs. Both say so in a note rather
-        // than answer about the screen; see `samples` in poll-describe-tree.
+        // than let the verdict stand unqualified; see `samples` in
+        // poll-describe-tree.
         devtools.getHierarchy({ clearCache: true }),
         devtools.getScreenSize(),
       ]);

@@ -235,7 +235,7 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
-Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
+Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false. `unreadable` covers every wait with no read that speaks for the screen at the deadline - a source that never answered, one that went dark at the end, and a last good read left further behind the deadline than a poll explains, which a `pollIntervalMs` above 2000ms produces on a perfectly healthy source.
 
 ### await-screen-idle — Block until the screen stops changing
 
@@ -247,7 +247,9 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 
 On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
-`settled: false` means the screen kept changing only when no `note` came back with it. A `note` says stillness went **untested** instead, and which way: the tree read failed outright, the wait was cancelled, the tree was never read twice inside the budget (the note names the knob — `timeoutMs` for a slow tree, `pollIntervalMs` when the interval left no room for a second read), every read came back empty (nothing rendered; on Apple TV the accessibility tree is empty by design, so every wait there ends this way), or the content held still but `minStableMs` is longer than the budget can reach. Fix what the note names and re-run rather than reading it as motion.
+`settled: false` means the screen kept changing only when no `note` came back with it. A `note` says stillness went **untested** instead, and which way: the tree read failed outright, the wait was cancelled, the tree was never read twice inside the budget (the note names the knob - `timeoutMs` for a slow tree, `pollIntervalMs` when the interval left no room for a second read), no read returned any content (nothing rendered yet, or the tree could not be read - the note appends the adapter's own hint, which is what tells the two apart), or the content that was read never differed and `minStableMs` was never met over it. Fix what the note names and re-run rather than reading it as motion.
+
+The `timeoutMs` above is a starting point, not a safe default everywhere: an Android `describe` reads the tree uncached, which costs roughly 0.3-0.8 ms per node, so a screen of a few thousand nodes needs several seconds of budget before two reads fit. The note names the knob when that happens.
 
 Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 

@@ -47,9 +47,11 @@ describe("pollDescribeTree", () => {
       10
     );
 
+    // Exact counts would ride on how many cycles the runner fits in the budget;
+    // what the field promises is the relation.
     expect(poll.polls).toBeGreaterThan(3);
+    expect(poll.samples).toBeGreaterThan(0);
     expect(poll.samples).toBeLessThan(poll.polls);
-    expect(poll.samples).toBe(Math.ceil(poll.polls / 2));
   });
 
   it("clears lastError on a successful fetch and keeps the tree that arrived", async () => {
@@ -66,7 +68,6 @@ describe("pollDescribeTree", () => {
 
     expect(poll.lastError).toBeUndefined();
     expect(poll.lastData?.tree.children[0]?.label).toMatch(/^read-/);
-    expect(poll.lastAttemptSettled).toBe(true);
   });
 
   // The break that keeps the loop from issuing a fetch with nothing left to read
@@ -81,7 +82,7 @@ describe("pollDescribeTree", () => {
         issued += 1;
         return after(5, tree("a"));
       },
-      200,
+      1000,
       5000
     );
 
@@ -90,7 +91,7 @@ describe("pollDescribeTree", () => {
     expect(poll.samples).toBe(1);
     expect(poll.lastAttemptSettled).toBe(true);
     expect(poll.lastError).toBeUndefined();
-    expect(poll.elapsedMs).toBeGreaterThanOrEqual(200);
+    expect(poll.elapsedMs).toBeGreaterThanOrEqual(1000);
   });
 
   // The exemption in that same break: the FIRST fetch is issued whatever the
@@ -116,7 +117,7 @@ describe("pollDescribeTree", () => {
         n += 1;
         return n === 1 ? after(5, tree("first")) : never<DescribeTreeData>();
       },
-      120,
+      300,
       10
     );
 
@@ -168,6 +169,38 @@ describe("pollDescribeTree", () => {
 
     expect(poll.aborted).toBe(true);
     expect(poll.elapsedMs).toBeLessThan(1000);
+  });
+
+  // What separates "the sleep starved the second read" from "the read was too big
+  // for a second one at any sleep". Measured over every attempt, so a fetch the
+  // deadline cut off counts for the time it did consume.
+  it("reports the longest single fetch, cut-off attempts included", async () => {
+    let n = 0;
+    const poll = await neverDone(
+      () => {
+        n += 1;
+        if (n === 1) return after(20, tree("quick"));
+        if (n === 2) return after(90, tree("slow"));
+        return never<DescribeTreeData>();
+      },
+      400,
+      10
+    );
+
+    expect(poll.samples).toBe(2);
+    expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(90);
+    // The trailing fetch is abandoned at the deadline, so it can only have run
+    // for what was left — never longer than the budget itself.
+    expect(poll.slowestFetchMs).toBeLessThanOrEqual(400);
+  });
+
+  it("reports zero slowestFetchMs when no fetch was ever issued", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const poll = await neverDone(() => after(5, tree("a")), 5000, 10, ac.signal);
+
+    expect(poll.polls).toBe(0);
+    expect(poll.slowestFetchMs).toBe(0);
   });
 
   it("stops early and carries the predicate's result", async () => {

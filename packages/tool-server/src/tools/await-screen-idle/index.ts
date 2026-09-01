@@ -14,6 +14,7 @@ import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import {
+  MIN_POLL_INTERVAL_MS,
   pollDescribeTree,
   TREE_FETCH_FAILED_NOTE_PREFIX,
   type PollDescribeTreeResult,
@@ -47,7 +48,7 @@ const zodSchema = z.object({
   pollIntervalMs: z
     .number()
     .int()
-    .min(50)
+    .min(MIN_POLL_INTERVAL_MS)
     .max(5000)
     .optional()
     .describe(`How often to re-read the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
@@ -73,8 +74,8 @@ interface IdleResult {
    * Present whenever `settled: false` does not stand for "the screen kept
    * changing". Every other way this wait ends negative says so here: the last
    * tree fetch failed outright (the note carries that error), the caller
-   * cancelled, the screen was never sampled twice, every read came back empty,
-   * or the content held still but `minStableMs` was out of the budget's reach.
+   * cancelled, the screen was never sampled twice, no read returned content, or
+   * the content that was read never differed and `minStableMs` was never met.
    * A bare `settled: false` with no note is the observed change.
    */
   note?: string;
@@ -102,6 +103,11 @@ function treeSignature(root: DescribeNode): string {
   return parts.join("\n");
 }
 
+/** Fold the adapter's own account of an unreadable tree into the note. */
+function withHint(base: string, poll: PollDescribeTreeResult<true>): string {
+  return poll.lastData?.hint ? `${base} (${poll.lastData.hint})` : base;
+}
+
 /**
  * WHY a wait came back `settled: false`, or `undefined` when the plain reading —
  * the screen was read repeatedly and kept changing — is the true one.
@@ -116,8 +122,8 @@ function unsettledNote(
     timeoutMs: number;
     pollIntervalMs: number;
     minStableMs: number;
-    nonEmptyReads: number;
-    signatureChanged: boolean;
+    contentReads: number;
+    contentChanged: boolean;
   }
 ): string | undefined {
   if (poll.aborted) return WAIT_CANCELLED_NOTE;
@@ -133,42 +139,64 @@ function unsettledNote(
   }
 
   // Settling takes two samples that agree across minStableMs, so one sample is
-  // a screen the reader never got to compare with itself. Two different things
-  // starve it and they take opposite remedies, so name the right knob:
-  // `lastAttemptSettled` is false only when the deadline cut a fetch off, which
-  // is the read outrunning the budget. True means every fetch came back and the
-  // SCHEDULE ran out — one read plus one pollIntervalMs sleep does not fit in
-  // timeoutMs — where raising timeoutMs is not the smaller change.
+  // a screen the reader never got to compare with itself. Three things starve
+  // it and only one is fixed by the sleep, so name the knob that applies.
   if (poll.samples < 2) {
-    return poll.lastAttemptSettled
-      ? `the ${wait.timeoutMs}ms budget left room for only ${poll.samples} tree read, so the screen was ` +
-          `never sampled twice — this is not an observed change. The read itself finished; it is ` +
-          `pollIntervalMs (${wait.pollIntervalMs}ms) that leaves no room for a second one, so lower it ` +
-          `or raise timeoutMs.`
-      : `reading the tree did not finish within the ${wait.timeoutMs}ms budget, so the screen was never ` +
-          `sampled twice — this is a read that outran the budget, not an observed change. Raise ` +
-          `timeoutMs for a tree this large.`;
-  }
-
-  // Read repeatedly and empty every time: there was never any content to go
-  // still, which `settled: false` on its own would report as motion. The
-  // adapter's own hint (tvOS has no readable tree at all) says why.
-  if (wait.nonEmptyReads === 0) {
-    const base =
-      `all ${poll.samples} tree reads came back empty, so no content ever rendered to go still — ` +
-      `this is not an observed change.`;
-    return poll.lastData?.hint ? `${base} (${poll.lastData.hint})` : base;
-  }
-
-  // Read repeatedly, and no two reads ever differed. The screen was not seen
-  // changing; minStableMs simply never elapsed over a run of identical reads
-  // inside the budget.
-  if (!wait.signatureChanged) {
+    if (!poll.lastAttemptSettled) {
+      return (
+        `reading the tree did not finish within the ${wait.timeoutMs}ms budget, so the screen was never ` +
+        `sampled twice — this is a read that outran the budget, not an observed change. Raise timeoutMs ` +
+        `if the tree is merely large, or repair the source if it has stopped answering altogether.`
+      );
+    }
+    // Every fetch came back, so what ran out was the schedule. A second read
+    // needs the first one's length again plus the shortest sleep the schema
+    // takes; past that no pollIntervalMs buys one and only timeoutMs will.
+    if (2 * poll.slowestFetchMs + MIN_POLL_INTERVAL_MS > wait.timeoutMs) {
+      return (
+        `one tree read took ${poll.slowestFetchMs}ms of the ${wait.timeoutMs}ms budget, leaving no room for ` +
+        `a second at any pollIntervalMs, so the screen was never sampled twice — this is not an observed ` +
+        `change. Raise timeoutMs for a tree this large.`
+      );
+    }
     return (
-      `the ${poll.samples} tree reads were all identical, but minStableMs (${wait.minStableMs}ms) never ` +
-      `elapsed over them inside the ${wait.timeoutMs}ms budget — this is stillness left unconfirmed, not ` +
-      `an observed change. Lower minStableMs or raise timeoutMs.`
+      `the ${wait.timeoutMs}ms budget left room for only ${poll.samples} tree read, so the screen was never ` +
+      `sampled twice — this is not an observed change. The read took ${poll.slowestFetchMs}ms; it is ` +
+      `pollIntervalMs (${wait.pollIntervalMs}ms) that leaves no room for a second one, so lower it or ` +
+      `raise timeoutMs.`
     );
+  }
+
+  // Read repeatedly and empty every time. Which of the two reasons that is —
+  // nothing has rendered, or the reader cannot see the app — is the adapter's to
+  // say, so the note stops short of choosing and appends the hint that does. An
+  // empty iOS tree carries one; so does tvOS, where this tool's reader has no
+  // focus tree to return at all.
+  if (wait.contentReads === 0) {
+    return withHint(
+      `no tree read returned any content across ${poll.samples} reads, so the screen was never seen ` +
+        `holding anything still — this is not an observed change. Either nothing has rendered yet or ` +
+        `the tree could not be read.`,
+      poll
+    );
+  }
+
+  // Content was read more than once and never differed between two of those
+  // reads, so nothing was seen to move. What kept it from settling was
+  // minStableMs — over an unbroken run, which an empty read in between breaks.
+  if (!wait.contentChanged) {
+    const blanks = poll.samples - wait.contentReads;
+    return blanks === 0
+      ? `the ${poll.samples} tree reads were all identical, but minStableMs (${wait.minStableMs}ms) never ` +
+          `elapsed over them inside the ${wait.timeoutMs}ms budget — this is stillness left unconfirmed, ` +
+          `not an observed change. Lower minStableMs or raise timeoutMs.`
+      : withHint(
+          `only ${wait.contentReads} of the ${poll.samples} tree reads returned content and those were ` +
+            `identical; the other ${blanks} came back empty, so minStableMs (${wait.minStableMs}ms) never ` +
+            `elapsed over an unbroken run inside the ${wait.timeoutMs}ms budget — this is stillness left ` +
+            `unconfirmed, not an observed change.`,
+          poll
+        );
   }
 
   return undefined;
@@ -217,9 +245,10 @@ ${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls, note? }
 went still before the timeout ONLY when no note is present. A note says stillness went untested instead, and which
 way: the last tree fetch failed outright (fix its cause — e.g. unlock the device), the wait was cancelled, the tree
 was never read twice inside the budget (the note names the knob — timeoutMs for a slow tree, pollIntervalMs when the
-interval left no room for a second read), every read came back empty (nothing rendered; on tvOS the tree is empty by
-design), or the content held still but minStableMs is longer than the budget can reach. Use after a launch/navigation
-to wait for the UI to render before screenshotting or tapping.`,
+interval left no room for a second read), no read returned any content (nothing rendered yet, or the tree could not be
+read — the note carries the adapter's hint, which on Apple TV says this tool's reader has no tree there and to use
+tv-remote focus instead), or the content that was read never differed and minStableMs was never met over it. Use after
+a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
@@ -250,12 +279,14 @@ to wait for the UI to render before screenshotting or tapping.`,
 
       let stableSignature: string | undefined;
       let stableSince = 0;
-      // Reads that came back with content, and whether the content ever differed
-      // between two of them. Together they separate "nothing rendered" and "the
-      // screen was still all along" from the observed change `settled: false`
-      // otherwise asserts.
-      let nonEmptyReads = 0;
-      let signatureChanged = false;
+      // Reads that came back with content, and whether two of THOSE ever
+      // differed. An empty read is not a content change — it is the reader
+      // seeing nothing, which on iOS is what a failing accessibility read looks
+      // like too. Counting one as a change would let a tree source that died
+      // mid-wait come back as the observed change `settled: false` asserts.
+      let contentReads = 0;
+      let contentChanged = false;
+      let lastContentSignature: string | undefined;
 
       const poll = await pollDescribeTree<true>({
         fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
@@ -265,17 +296,19 @@ to wait for the UI to render before screenshotting or tapping.`,
         onSample: (data, nowMs) => {
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
-            if (stableSignature !== undefined) signatureChanged = true;
             stableSignature = undefined;
             stableSince = 0;
             return { done: false };
           }
-          nonEmptyReads += 1;
+          contentReads += 1;
           const signature = treeSignature(data.tree);
+          if (lastContentSignature !== undefined && signature !== lastContentSignature) {
+            contentChanged = true;
+          }
+          lastContentSignature = signature;
           if (signature === stableSignature) {
             if (nowMs - stableSince >= minStableMs) return { done: true, result: true };
           } else {
-            if (stableSignature !== undefined) signatureChanged = true;
             stableSignature = signature;
             stableSince = nowMs;
             if (minStableMs === 0) return { done: true, result: true };
@@ -291,8 +324,8 @@ to wait for the UI to render before screenshotting or tapping.`,
         timeoutMs,
         pollIntervalMs,
         minStableMs,
-        nonEmptyReads,
-        signatureChanged,
+        contentReads,
+        contentChanged,
       });
       return note === undefined ? base : { ...base, note };
     },
