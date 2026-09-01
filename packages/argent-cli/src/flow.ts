@@ -306,6 +306,14 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * A PASSING script step's log is the same case: it is the step's only output,
  * every other report surface prints it whatever the status, and a seed script
  * that ran here is what explains a later step that failed.
+ *
+ * So is the note such a step carries in `reason` — the host lowered the time
+ * limit the flow declared, or ran the script somewhere other than the
+ * project_root it was handed. Nothing else on the line reports that, and a
+ * script that writes nothing has no log to carry it in either: the flow ran
+ * under bounds it never asked for and the batch said only PASS. Restricted to
+ * `script`, because a passing `when` guard, snapshot or chromium launch also
+ * sets `reason`, and those narrate a result the summary already counts.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -314,7 +322,14 @@ export function renderFailedSteps(report: FlowReport): string[] {
     if (s.kind === "echo") continue;
     n++;
     const scriptLog = renderScriptLogLines(s, n);
-    if (s.status !== "fail" && s.status !== "error" && !s.warning && scriptLog.length === 0) {
+    const scriptNote = s.kind === "script" && Boolean(s.reason);
+    if (
+      s.status !== "fail" &&
+      s.status !== "error" &&
+      !s.warning &&
+      !scriptNote &&
+      scriptLog.length === 0
+    ) {
       continue;
     }
     lines.push(renderStepLine(s, n, report.flow));

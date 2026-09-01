@@ -111,6 +111,37 @@ describe("script log rendering", () => {
     expect(lines[1]).toContain("… output truncated");
   });
 
+  it("carries a passing script's executor note into batch mode, log or no log", () => {
+    // A silent script under a clamped time limit is the case with nothing else
+    // to show: no log, no warning, a pass — and a host that quietly lowered the
+    // bound the flow asked for.
+    const clamped: StepReport = {
+      index: 0,
+      kind: "script",
+      status: "pass",
+      target: "scripts/seed.mjs",
+      reason:
+        "The requested 10m time limit is above this host's maximum of 5m; the step ran with the maximum.",
+    };
+    const lines = renderFailedSteps(report([clamped]));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("✓  1 script scripts/seed.mjs");
+    expect(lines[0]).toContain("above this host's maximum of 5m");
+  });
+
+  it("leaves a passing NON-script step's self-narrating reason out of batch mode", () => {
+    // A `when` guard, a snapshot and a chromium launch all report a reason on a
+    // pass. Those narrate a result the summary already counts, so admitting
+    // every passing reason would print most of the run back.
+    const guard: StepReport = {
+      index: 0,
+      kind: "when",
+      status: "pass",
+      reason: "condition met (platform ios)",
+    };
+    expect(renderFailedSteps(report([guard]))).toEqual([]);
+  });
+
   it("leaves a passing step that wrote no log out of batch mode", () => {
     const tapped: StepReport = { index: 0, kind: "tap", status: "pass", target: "#checkout" };
     const lines = renderFailedSteps(report([tapped, PASSING]));
