@@ -159,11 +159,10 @@ export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
    */
   invalid_params?: string[];
   /**
-   * Which zod constraints those parameters broke, deduped. `invalid_params`
-   * alone cannot separate "the agent asked for a 5-minute timeout" (`too_big`,
-   * answered by widening the bound) from "the agent sent a string" (
-   * `invalid_type`, answered by the description) — the two call for opposite
-   * fixes.
+   * Which zod constraints those parameters broke, deduped. The name alone
+   * cannot separate a value over the bound (`too_big`, answered by widening
+   * it) from a value of the wrong type (`invalid_type`, answered by the
+   * parameter description) — opposite fixes.
    */
   invalid_param_issues?: ZodIssueCode[];
 }

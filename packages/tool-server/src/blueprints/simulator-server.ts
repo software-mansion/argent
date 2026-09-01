@@ -206,9 +206,9 @@ async function spawnSimulatorServerProcess(
     const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     // The binary names the cause of an early exit only on stderr — "emulator
     // <serial> not found among running emulators", a missing resource, a
-    // permission refusal. Keep a bounded tail so the failure below can carry
-    // it: the exit code is 1 for every one of these, and without the text the
-    // agent and the telemetry both see an unclassifiable "exited".
+    // permission refusal — and the exit code is 1 for every one of them. Keep a
+    // bounded tail so the failure below can carry the one thing that separates
+    // them.
     let stderrBuf = "";
     proc.stderr?.on("data", (data: Buffer) => {
       process.stderr.write(`[sim ${udidTag}] ${data}`);
