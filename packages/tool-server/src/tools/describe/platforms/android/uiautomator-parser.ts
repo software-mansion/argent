@@ -550,7 +550,10 @@ function scrollClipOf(
  * point on the frame's top edge rather than on anything the node covers. The
  * union of the children that survived is the region those children cover, which
  * is the best-known region for the node: the trim runs first, so a child it
- * dropped (a decorative `ImageView`) contributes nothing here.
+ * dropped (a decorative `ImageView`) contributes nothing here. When nothing
+ * survives — the label dedup can empty a node's children after the visibility
+ * guard has let it through — there is no region to read and the caller keeps
+ * the dump's numbers, tap point and all.
  *
  * Chromium reports a loaded WebView this way under load, so the node this hits
  * is the landmark covering the whole page.
