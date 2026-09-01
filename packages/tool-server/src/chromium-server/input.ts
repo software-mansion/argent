@@ -2,8 +2,6 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ButtonType, KeyDirection, Point, Rotation, TouchType, ViewportSize } from "./types";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 function clampPx(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     throw new FailureError(`Chromium input: non-finite coordinate ${value}`, {
@@ -76,11 +74,6 @@ export async function sendKey(
   if (desc.text !== undefined) payload.text = desc.text;
   if (desc.code !== undefined) payload.windowsVirtualKeyCode = desc.code;
   await cdp.send("Input.dispatchKeyEvent", payload);
-}
-
-/** A keyDown alone inserts nothing; the `char` event carries the codepoint into the focused input. */
-export async function sendCharInsert(cdp: CDPClient, text: string): Promise<void> {
-  await cdp.send("Input.dispatchKeyEvent", { type: "char", text });
 }
 
 /** Only `Back` has a Chromium equivalent: Alt+Left walks the navigation history. */
@@ -192,5 +185,3 @@ export async function sendRotate(
     },
   });
 }
-
-export const __test = { toCssPixels, clampPx, sleep };

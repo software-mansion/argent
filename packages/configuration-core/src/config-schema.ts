@@ -88,8 +88,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     key: "telemetry.enabled",
     description:
       "Whether anonymous opt-out telemetry is enabled (on by default; environment opt-outs " +
-      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent).",
-    scopes: ["global"],
+      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent). " +
+      "`false` in either scope wins, so a committed project opt-out holds for every teammate.",
+    scopes: ["project", "global"],
     parse: asBoolean,
     merge: "prioritize-restrictive",
     // Opt-out: consent.ts reads an unstored value as enabled, so the config
@@ -98,6 +99,19 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // Opt-in/out goes through the dedicated command so the live client is
     // drained/reset, not just the file rewritten.
     manageCommand: "argent telemetry",
+  },
+  {
+    key: "allowlist.enabled",
+    description:
+      "Whether `argent update` re-applies editor auto-approve allowlist rules. Unset (the " +
+      "default) keeps the current behavior: update refreshes the rules for editors that " +
+      "already have argent configured. Set to `false` to keep update from touching editor " +
+      "allowlists. `false` in either scope wins, so a committed project opt-out holds for " +
+      "every teammate.",
+    scopes: ["project", "global"],
+    parse: asBoolean,
+    merge: "prioritize-restrictive",
+    example: "false",
   },
   {
     key: "lens.agent",

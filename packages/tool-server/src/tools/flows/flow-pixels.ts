@@ -21,7 +21,7 @@ export interface PixelFrame {
 }
 
 /** What {@link comparePixels} saw between two captures. */
-export type PixelChange = "still" | "localized" | "moving";
+type PixelChange = "still" | "localized" | "moving";
 
 // Motion detection only needs to see a region of the screen change, and a
 // quarter-scale frame decodes ~16x faster. Chromium rasterizes at this scale in

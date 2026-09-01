@@ -201,7 +201,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const cdp = new CDPClient(selected.webSocketUrl);
     await cdp.connect();
 
-    const sourceMaps = new SourceMapsRegistry(metro.projectRoot);
+    const sourceMaps = new SourceMapsRegistry();
 
     cdp.events.on("scriptParsed", (script) => {
       sourceMaps.registerFromScriptParsed(script.url, script.scriptId, script.sourceMapURL);
