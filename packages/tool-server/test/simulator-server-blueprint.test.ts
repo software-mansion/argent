@@ -51,14 +51,17 @@ function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;
     stderr: Readable;
-    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn>; writable: boolean };
     kill: ReturnType<typeof vi.fn>;
   };
   proc.stdout = new Readable({ read() {} });
   proc.stderr = new Readable({ read() {} });
   // An EventEmitter, not a bare `{ write }`: a real `child.stdin` is a socket
-  // that emits `error`, and the blueprint has to listen for it.
-  proc.stdin = Object.assign(new EventEmitter(), { write: vi.fn() });
+  // that emits `error`, and the blueprint has to listen for it. `writable` is
+  // part of that shape too — a real socket starts writable and turns false the
+  // moment it is destroyed. Left off, the guard that reads it was unreachable
+  // in every test here, so deleting that half kept the file green.
+  proc.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), writable: true });
   proc.kill = vi.fn();
   return proc;
 }
@@ -270,9 +273,31 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
       thrown = err;
     }
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.SIMULATOR_SERVER_TERMINATED);
+    // The pipe's own error rides along as the cause: the message says the helper
+    // is gone, and the cause says how it went.
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
     // And nothing further was written: a burst that keeps going after the pipe
     // is gone is exactly what produced the silent success.
     expect(fakeProc.stdin.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a pressKey once the pipe is no longer writable", async () => {
+    // The second half of the guard, and not redundant: `writable` turns false
+    // the moment the stream is destroyed — a `dispose` on THIS side — where no
+    // `error` and no `close` has been seen, so the recorded-EPIPE half has
+    // seen nothing.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55558);
+    const instance = await factoryPromise;
+
+    fakeProc.stdin.writable = false;
+    expect(() => instance.api.pressKey("Down", 0x29)).toThrow(/no longer accepting key events/);
+    expect(fakeProc.stdin.write).not.toHaveBeenCalled();
   });
 
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
