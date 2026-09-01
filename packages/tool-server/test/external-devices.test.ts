@@ -781,6 +781,13 @@ describe("revocation", () => {
     );
   }
 
+  /** Withdraw every capability but the one the device set is keyed on. */
+  function narrow(descriptorPath: string): void {
+    const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
+    descriptor.devices[0].capabilities = ["simulator-server"];
+    fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  }
+
   /**
    * No TTL to wait out. The file is re-read on every call, so a narrowed grant
    * is visible to the very next dispatch. That immediacy is the dividend of
@@ -790,11 +797,9 @@ describe("revocation", () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
-    await lookupExternalDevice(deviceId);
+    expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
 
-    const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
-    descriptor.devices[0].capabilities = ["simulator-server"];
-    fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
+    narrow(descriptorPath);
 
     const result = revalidateExternalDevice(deviceId);
     expect(result.stale).toBe(true);
@@ -805,7 +810,7 @@ describe("revocation", () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
-    await lookupExternalDevice(deviceId);
+    expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
     rewrite(descriptorPath, []);
     expect(revalidateExternalDevice(deviceId)).toMatchObject({ stale: true });
   });
@@ -815,6 +820,53 @@ describe("revocation", () => {
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
     await lookupExternalDevice(deviceId);
     expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+  });
+
+  /**
+   * The baseline is the grant a warm handle was built under, so only a dispatch
+   * may move it. Reads happen constantly and for their own reasons
+   * (`list-devices` from any session, the simulator watcher every ten seconds,
+   * every argv builder resolving a claim) and one landing between the change
+   * and the next dispatch used to re-base the comparison onto the new reading,
+   * which silently swallowed the revocation it exists to catch.
+   */
+  describe("a read between two dispatches does not mask the change", () => {
+    it.each([
+      ["list-devices", async () => void (await listExternalDevices({ probe: false }))],
+      ["a watcher-style claim lookup", async () => void externalClaimForNativeId(IOS_UDID)],
+      [
+        "an ext: lookup",
+        async () => void findExternalDevice(makeExternalId("acme-3f2a9c", IOS_UDID)),
+      ],
+    ])("survives %s", async (_label, read) => {
+      const descriptorPath = await liveDescriptor();
+      useDescriptors(descriptorPath);
+      const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+      expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+
+      narrow(descriptorPath);
+      await read();
+
+      expect(revalidateExternalDevice(deviceId)).toMatchObject({ stale: true });
+    });
+  });
+
+  /**
+   * Both spellings name one device, so a dispatch under either has to answer
+   * for the handles cached under the other. Without this a session that only
+   * ever says `ext:` leaves the raw-keyed handle with no reading to compare
+   * against and its first raw dispatch after a narrowing reports nothing.
+   */
+  it("carries the reading from an ext: dispatch over to the raw spelling", async () => {
+    const descriptorPath = await liveDescriptor();
+    useDescriptors(descriptorPath);
+    expect(revalidateExternalDevice(makeExternalId("acme-3f2a9c", IOS_UDID))).toEqual({
+      stale: false,
+    });
+
+    narrow(descriptorPath);
+
+    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
   });
 
   it("is a no-op for a device argent booted itself", () => {

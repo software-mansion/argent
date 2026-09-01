@@ -100,6 +100,33 @@ export function assertAllowedSimServerEndpoint(endpoint: string): void {
 }
 
 /**
+ * Every name one device answers to. The `ext:` id and the raw udid / serial the
+ * platform's own tooling uses.
+ *
+ * The registry keys a service by whichever id the caller named, so a device
+ * driven by its raw udid caches as `SimulatorServer:<udid>` while the same
+ * device named the other way caches as `SimulatorServer:ext:…`. Revocation has
+ * to reach both handles and the reading each was built under has to be
+ * remembered for both or one spelling keeps serving a grant the other already
+ * gave up.
+ *
+ * The first two entries are derived without the descriptor, so a withdrawal
+ * (the case that most needs revoking) is not the one case that cannot resolve
+ * its own spellings. `claim` only adds the spelling the caller did not use, so
+ * passing `undefined` narrows the answer rather than making it wrong.
+ */
+function deviceSpellings(deviceId: string, claim: ExternalDevice | undefined): Set<string> {
+  const spellings = new Set<string>([deviceId, externalNativeId(deviceId)]);
+
+  if (claim) {
+    spellings.add(claim.id);
+    spellings.add(claim.nativeId);
+  }
+
+  return spellings;
+}
+
+/**
  * Drop every cached service handle bound to `deviceId`.
  *
  * Used when a provider withdraws a device or narrows its capabilities, since
@@ -114,24 +141,7 @@ export async function disposeExternalDeviceServices(
   },
   deviceId: string
 ): Promise<string[]> {
-  /**
-   * Both spellings, because the registry keys a service by whichever id the
-   * caller named. A device driven by its raw udid caches as
-   * `SimulatorServer:<udid>`, which a sweep for the `ext:` id alone never
-   * matches (the grant would be revoked while the warm handle kept serving it,
-   * since the capability gate only runs in the factory).
-   *
-   * Derived without the descriptor so a withdrawal, the case that most needs
-   * disposing, is not the one case that cannot resolve its own spellings.
-   */
-  const spellings = new Set<string>([deviceId, externalNativeId(deviceId)]);
-  const claim = externalClaimForAnyId(deviceId);
-
-  if (claim) {
-    spellings.add(claim.id);
-    spellings.add(claim.nativeId);
-  }
-
+  const spellings = deviceSpellings(deviceId, externalClaimForAnyId(deviceId));
   const disposed: string[] = [];
 
   for (const urn of registry.getSnapshot().services.keys()) {
@@ -166,19 +176,15 @@ export function __resetExternalDeviceCacheForTesting(): void {
  * Every device a provider's file currently declares, validated against
  * `classifyDevice` and joined to that provider.
  *
- * The capability bookkeeping is this side's, not the package's:
- * {@linkcode revalidateExternalDevice} compares against it, so every read that
- * could observe a change has to refresh it. Doing that here rather than at each
- * call site is what makes that true by construction.
+ * Deliberately does not touch the capability bookkeeping
+ * {@linkcode revalidateExternalDevice} compares against. Refreshing it from
+ * every read is what a reader expects and it is exactly wrong. The baseline
+ * has to be the grant a cached service was built under, so a plain read between
+ * two dispatches (`list-devices`, a watcher tick, an argv builder resolving a
+ * claim) would move it past the change it exists to catch.
  */
 function readProviderDevices(record: ProviderRecord): ExternalDevice[] {
-  const devices = readDeclaredDevices(record, classifyDevice);
-
-  for (const device of devices) {
-    lastSeenCapabilities.set(device.id, capabilityKey(device.capabilities));
-  }
-
-  return devices;
+  return readDeclaredDevices(record, classifyDevice);
 }
 
 /**
@@ -428,9 +434,15 @@ export function assertExternalCapabilitySync(
 }
 
 /**
- * Capability sets as last observed, keyed by device id. Comparing against this
- * is how a mid-session capability change or a withdrawn device invalidates a
- * service the registry has cached and would otherwise keep serving.
+ * The grant each device was last dispatched under, keyed by every spelling it
+ * answers to. Comparing against this is how a mid-session capability change or
+ * a withdrawn device invalidates a service the registry has cached and would
+ * otherwise keep serving.
+ *
+ * Written only by {@linkcode revalidateExternalDevice}, which runs at the HTTP
+ * edge immediately before the factory that builds those services. That is what
+ * makes an entry mean "the reading the warm handle was built from" rather than
+ * "the last thing anything happened to read".
  */
 const lastSeenCapabilities = new Map<string, string>();
 
@@ -454,17 +466,19 @@ function capabilityKey(capabilities: ReadonlySet<string>): string {
  */
 export function revalidateExternalDevice(id: string): { reason?: string; stale: boolean } {
   /**
-   * Keyed on the spelling the caller used, not on the canonical id. A withdrawn
-   * device cannot be resolved to its canonical form and that is precisely when
-   * the previous reading has to be found. Each spelling then tracks the grant
-   * it was last dispatched under, which is the reading its own cached service
-   * was built from.
+   * Every spelling, read and written together, because a grant binds to the
+   * device rather than to one of its names. A session that has only ever named
+   * the `ext:` id still has to answer for the `SimulatorServer:<udid>` handle
+   * something else warmed and the reverse.
    */
-  const previous = lastSeenCapabilities.get(id);
   const device = externalClaimForAnyId(id);
+  const spellings = deviceSpellings(id, device);
+  const previous = [...spellings]
+    .map((spelling) => lastSeenCapabilities.get(spelling))
+    .find((seen) => seen !== undefined);
 
   if (!device) {
-    lastSeenCapabilities.delete(id);
+    for (const spelling of spellings) lastSeenCapabilities.delete(spelling);
 
     return previous === undefined
       ? { stale: false }
@@ -473,7 +487,7 @@ export function revalidateExternalDevice(id: string): { reason?: string; stale: 
 
   const current = capabilityKey(device.capabilities);
 
-  lastSeenCapabilities.set(id, current);
+  for (const spelling of spellings) lastSeenCapabilities.set(spelling, current);
 
   if (previous !== undefined && previous !== current) {
     return { reason: "its provider changed the capabilities it grants", stale: true };
