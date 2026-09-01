@@ -8,8 +8,8 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 /**
  * `keyboard` reports an Android typed-text read-back failure (`verified: false`,
  * see platforms/android-verify.ts) in its result instead of throwing, so a raw
- * `tool:` step whose text demonstrably did not land used to read green and let
- * the run submit a field holding the wrong value. Mirrors
+ * `tool:` step whose text demonstrably did not land would read green without
+ * this gate, and the run would submit a field holding the wrong value. Mirrors
  * flow-native-devtools-gate.test.ts and the flow `type` directive's own gate.
  */
 

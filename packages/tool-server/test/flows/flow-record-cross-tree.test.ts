@@ -218,8 +218,11 @@ async function recordWait(
   );
 }
 
-// The reviewer's reproduction: a phone number typed into the Contacts Phone
-// field, which the Android read-back found the app had reformatted away.
+// A phone number typed into a field that dropped part of the key-event burst,
+// which the Android read-back measured and could not repair. (A field that
+// REFORMATS what it is given reads back as `indeterminate` instead, with no
+// `verified` — see keyboard/platforms/android-verify.ts — so it would not reach
+// this warning at all.)
 const TYPED_TEXT = "5551234567";
 
 /** A registry whose `keyboard` returns exactly the result the caller hands it. */
@@ -1678,10 +1681,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(finished.summary).toHaveLength(2);
     for (const line of finished.summary) expect(line).not.toContain("warning:");
     // …and `message` must not advertise what the summary no longer carries.
+    // Kind-neutral wording: the discard check drops a typing verdict the same
+    // way it drops a wait's, and telling the author to re-record "that wait"
+    // sends them to the wrong step.
     expect(finished.message).toBe(
       'Finished recording "edited" flow (2 steps) — 1 warning raised during this recording is ' +
         "NOT in `summary`: a hand edit to the .yaml moved the step it judged, so which step it " +
-        "belongs to is no longer knowable — re-record that wait to see it again"
+        "belongs to is no longer knowable — re-record that step to see it again"
     );
   });
 
@@ -2364,7 +2370,11 @@ describe("a recorded keyboard step whose text did not land", () => {
     typed: TYPED_TEXT,
     keys: 10,
     verified: false,
-    note: "field reads (555) 123-4567 after 1 retype; the app reformats as you type",
+    // Shaped like a real note: counts and structural facts, never the field's
+    // contents (a note that quotes them leaks a typed `{{secret:…}}`).
+    note:
+      "The typed text did NOT land in the focused field: 10 characters were typed and the field " +
+      "now holds 4 in total, and retyping it in smaller chunks did not fix it either.",
   };
 
   it("warns that the text never reached the field, and records the step anyway", async () => {

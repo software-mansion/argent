@@ -64,16 +64,20 @@ of that burst, and `adb` reports success. The read-back finds this.
 
 The result carries `verified`:
 
-| Value   | Meaning                                              |
-| ------- | ---------------------------------------------------- |
-| `true`  | Argent read the field back and found the text in it  |
-| `false` | Argent read the field back and the text is not in it |
-| absent  | Argent did not check. This is not a pass             |
+| Value   | Meaning                                                    |
+| ------- | ---------------------------------------------------------- |
+| `true`  | Argent read the field back and found the text in it        |
+| `false` | Argent read the field back and did not find the text in it |
+| absent  | Argent did not check. This is not a pass                   |
 
 Before Argent reports `false`, it makes one repair: it deletes the characters it can prove
 are its own, then types the text again in small pieces. A `keyboard` call can therefore
-change the field by more than the text it adds. Argent leaves the field alone when it
-cannot prove which characters are its own.
+change the field by more than the text it adds. A long text spends tens of seconds in that
+repair. Argent leaves the field alone when it cannot prove which characters are its own.
+
+Argent also reports `false` when it repaired the field but could not read it again to
+confirm the result. The last measurement is a failure, so `note` says what the repair
+changed and why the confirmation is missing.
 
 `verified` is absent on every other platform, and on Android when the check cannot
 conclude. The `note` field gives the reason.

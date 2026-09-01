@@ -153,6 +153,7 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
       // that ran after the dispatch would show up here. The vega branch never
       // references the registry, so this line cannot fail on that row;
       // `injections()` above is what carries it.
+      expect(r.resolveService).not.toHaveBeenCalled();
     });
 
     // Positive control for the test above — which would otherwise also pass

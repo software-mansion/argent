@@ -21,6 +21,7 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
@@ -1501,9 +1502,10 @@ async function runType(
   }
   await waitForFocus(env, step.into, frame);
   // waitForFocus returns void on abort as well as on focus/timeout — re-check
-  // before every keyboard dispatch (the keyboard tool has no abort handling of
-  // its own), so a cancelled run can never type into whatever the app has
-  // focused after the caller gave up.
+  // before every keyboard dispatch, so a cancelled run can never type into
+  // whatever the app has focused after the caller gave up. The tool checks the
+  // signal too, but only on the Android phone path and only around its
+  // read-back; this covers every backend.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
   const typed = await invokeOnDevice(env, "keyboard", { text: step.text });
   // On Android phones/tablets the keyboard tool reads the field back and reports
@@ -1514,9 +1516,8 @@ async function runType(
   // step that types. An ABSENT `verified` is not evidence of failure — it means the field
   // could not be read (another platform, no helper, a password field) — so only
   // an explicit `false` fails, carrying the tool's own note as the reason.
-  const verification = typed as { verified?: boolean; note?: string } | undefined;
-  if (verification?.verified === false) {
-    return { ok: false, reason: verification.note ?? "the typed text did not land in the field" };
+  if (isUnlandedKeyboardTextResult("keyboard", typed)) {
+    return { ok: false, reason: typed.note ?? "the typed text did not land in the field" };
   }
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;

@@ -335,7 +335,8 @@ describe("android-input — rejects text `adb input text` can't type", () => {
 
 // Exercises `makeAndroidImpl().handler` end-to-end (the piece the low-level
 // helper tests above never invoke): the isAndroidTv phone-vs-TV branch, the
-// `keys` count, and the `{ typed, keys }` result shape.
+// `keys` count, and the result's key set, which carries the read-back's `note`
+// alongside `typed` and `keys`.
 describe("android keyboard impl — routing, keys count, result shape", () => {
   const impl = makeAndroidImpl(new Registry());
   const phone = { id: SERIAL, platform: "android", kind: "handset" } as unknown as DeviceInfo;

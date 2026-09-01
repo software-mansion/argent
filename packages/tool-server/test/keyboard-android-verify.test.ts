@@ -83,16 +83,21 @@ function hierarchy(
 function registryServing(xmls: string[]): {
   registry: Registry;
   getHierarchy: ReturnType<typeof vi.fn>;
+  ping: ReturnType<typeof vi.fn>;
 } {
   const queue = [...xmls];
+  const ping = vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" }));
   const getHierarchy = vi.fn(async (_opts?: unknown) => {
     const xml = queue.shift();
     if (xml === undefined) throw new Error("test: getHierarchy called more times than scripted");
     return { xml, captureMode: "active-window", windowCount: 1, nodeCount: 2, elapsedMs: 1 };
   });
   return {
-    registry: { resolveService: vi.fn(async () => ({ getHierarchy })) } as unknown as Registry,
+    registry: {
+      resolveService: vi.fn(async () => ({ getHierarchy, ping })),
+    } as unknown as Registry,
     getHierarchy,
+    ping,
   };
 }
 
@@ -247,6 +252,48 @@ describe("plannedUndoDeletions", () => {
     // content, the retype appends to it, and the doubled result is shaped to
     // satisfy classifyTypedText's first branch (see the end-to-end test below).
     expect(plannedUndoDeletions("a", "abcdefghi", "abcdefghijkl")).toBeNull();
+  });
+
+  it("refuses a reading a replaced selection produces just as well", () => {
+    // `input text` replaces a selection, so "cat food" with "cat" double-tap
+    // selected and "catt" typed with its last character dropped reads back
+    // UNCHANGED — the same reading as a burst that landed nothing. Taking the
+    // second retypes onto the "cat" that IS ours, and "catcatt food" is `before`
+    // with `text` inserted, which classifyTypedText calls `landed`: a doubled
+    // field reported as success, the defect this whole module exists to catch.
+    expect(plannedUndoDeletions("cat food", "cat food", "catt")).toBeNull();
+    // One character over the selection instead of exactly it: growth of 1, which
+    // a plain insertion explains and so does the selection.
+    expect(plannedUndoDeletions("cat food", "catt food", "catty")).toBeNull();
+    // The measured "aa bb" case, one character short of landing.
+    expect(plannedUndoDeletions("aa bb", "aa bb", "aaa")).toBeNull();
+  });
+
+  it("still repairs an unchanged field no selection can explain", () => {
+    // The counterpart, and the reason the refusal above is not a blanket one on
+    // unchanged fields: nothing in "hello" starts "abc", so the reading has only
+    // one explanation — the burst landed nothing — and retyping cannot double it.
+    expect(plannedUndoDeletions("hello", "hello", "abc")).toBe(0);
+    // An empty baseline cannot host a selection at all, which is what keeps the
+    // reported shape (typed into an empty hint-less box, nothing landed)
+    // repairable however the text starts.
+    expect(plannedUndoDeletions("", "", "abc")).toBe(0);
+  });
+
+  it("gives up the retry on an unchanged field that could have held the first character", () => {
+    // The price of the refusal above, pinned so it is a decision rather than a
+    // surprise: on an unchanged field every position is a possible insertion
+    // point, so one shared character is enough to make a replaced selection as
+    // good an explanation as a burst that landed nothing. "hello" holds the "h"
+    // of "hat", so the call reports the failure instead of retyping.
+    expect(plannedUndoDeletions("hello", "hello", "hat")).toBeNull();
+  });
+
+  it("does not veto a zero-deletion repair over a non-ASCII baseline", () => {
+    // `added === 0` issues no backspace, so the grapheme rule has nothing to
+    // guard. Scanning the whole field there would disable the repair on every
+    // localized hint, since one accented character anywhere would veto it.
+    expect(plannedUndoDeletions("José", "José", "argent")).toBe(0);
   });
 
   it("still counts the growth when the field cannot have been empty", () => {
@@ -677,7 +724,8 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       if (!next) throw new Error("test: getHierarchy called more times than scripted");
       return { xml: next.xml, truncated: next.truncated ?? false };
     });
-    return { resolveService: vi.fn(async () => ({ getHierarchy })) } as unknown as Registry;
+    const ping = vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" }));
+    return { resolveService: vi.fn(async () => ({ getHierarchy, ping })) } as unknown as Registry;
   }
 
   it("reports a truncated read-BACK as unknown, not as a focus change", async () => {
@@ -766,6 +814,32 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toMatch(/no longer the one the text was typed into/);
     expect(res.note).not.toMatch(/Nothing was retyped/);
     expect(res.note).toMatch(/modified beyond the original typing/);
+    // And the verdict travels with it: the last thing measured was a failure, so
+    // an absent `verified` here would pass all three step gates and submit the
+    // field with the most evidence against it.
+    expect(res.verified).toBe(false);
+    expect(res.note).toMatch(/did NOT land/);
+  });
+
+  it("fails the call on every way the confirming read can be blocked", async () => {
+    // One case per blocked cause, all after a repair: a read that throws, a lost
+    // focus, and a field that has started masking. Each leaves the pre-repair
+    // failure as the last measurement, so none of them may report "not checked".
+    const landed = hierarchy({ text: "XY" });
+    const partial = hierarchy({ text: "XYabcdefgh" });
+    const blocked = [
+      { label: "focus lost", xml: hierarchy({ focused: false }) },
+      { label: "masks now", xml: hierarchy({ text: "••••", password: true }) },
+    ];
+    for (const { label, xml } of blocked) {
+      adbShell.mockClear();
+      const res = await type(
+        registryServingReads([{ xml: landed }, { xml: partial }, { xml }]),
+        "abcdefghijkl"
+      );
+      expect(res.verified, label).toBe(false);
+      expect(res.note, label).toMatch(/modified beyond the original typing/);
+    }
   });
 
   it("raises the node cap above the helper default so a dense screen is not truncated", () => {
@@ -797,10 +871,11 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
-  it("reports a retry that could not reach the device, and says the field may hold less", async () => {
+  it("reports a retry that could not reach the device, and what that leaves behind", async () => {
     // The undo runs before the retype, so a transport failure between them can
-    // leave the field emptier than the call found it. That must not surface as a
-    // raw adb error implying nothing happened, nor be swallowed as success.
+    // leave the field emptier than the call found it — and a failure between two
+    // chunks leaves a truncated copy of the text. That must not surface as a raw
+    // adb error implying nothing happened, nor be swallowed as success.
     const { registry } = registryServing([
       hierarchy({ text: "XY" }),
       hierarchy({ text: "XYabcdefgh" }),
@@ -812,7 +887,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     const res = await type(registry, "abcdefghijkl");
     expect(res.verified).toBe(false);
     expect(res.note).toMatch(/retry could not be completed/);
-    expect(res.note).toMatch(/may now hold less/);
+    expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
   });
 
   it("takes the FIRST focused editable node in document order", async () => {
@@ -984,6 +1059,7 @@ function registryServingLive(read: () => string): Registry {
         nodeCount: 2,
         elapsedMs: 1,
       })),
+      ping: vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" })),
     })),
   } as unknown as Registry;
 }
@@ -1009,13 +1085,32 @@ function driveFromAdb(field: FieldModel, corruptFirstBurst: (s: string) => strin
 }
 
 describe("android keyboard read-back — shapes a repair must not touch", () => {
+  it("leaves a selection that swallowed exactly what landed alone", async () => {
+    // The partial-landing twin of the case below: "cat" double-tap selected,
+    // `text: "catt"`, the last character dropped. `input text` replaced the
+    // selection with "cat", so the field reads back UNCHANGED and the growth is
+    // 0 — the same reading a burst that landed nothing gives. Retyping there
+    // would put "catt" on top of the "cat" that is already ours and leave
+    // "catcatt food", which is `before` with `text` inserted and so `landed`.
+    const field = new FieldModel("cat food", 0, 3);
+    driveFromAdb(field, (s) => s.slice(0, 3));
+    const res = await type(
+      registryServingLive(() => field.render()),
+      "catt"
+    );
+
+    expect(field.text).toBe("cat food");
+    expect(cmds()).toEqual(["input text 'catt'"]);
+    expect(res.verified).toBe(false);
+  });
+
   it("declines a replaced selection instead of deleting the growth and doubling the value", async () => {
     // Measured on a Pixel-class API 35 emulator: field "aa bb", the word "aa"
     // double-tap selected, `keyboard { text: "aaa" }`. `input text` REPLACES the
     // selection, so the correct outcome is "aaa bb" — and the field grew by 1,
     // not by 3. Reading that growth as this call's whole contribution deleted one
-    // character and retyped three, leaving "aaaaa bb", which satisfies the
-    // `inserted` branch and came back `verified: true` with no note.
+    // character and retyped three, leaving "aaaaa bb" — which satisfies the
+    // `inserted` branch, so the doubled field reads as a verified success.
     const field = new FieldModel("aa bb", 0, 2);
     driveFromAdb(field, (s) => s);
     const res = await type(
@@ -1113,8 +1208,8 @@ describe("android keyboard read-back — the repair's own outcomes", () => {
     // the ":". The undo empties the field (plan B) and the chunked retype puts the
     // text back exactly — and the re-classification then lands on `after === text
     // && beforeSurvived`, which is `indeterminate`. Collapsing that into
-    // `verified: false` shipped prose telling the caller to send a value the field
-    // accepts, over a field holding precisely what was asked for.
+    // `verified: false` would tell the caller to send a value the field accepts,
+    // over a field holding precisely what was asked for.
     const field = new FieldModel("", 0, 0, "https://");
     driveFromAdb(field, (s) => s.replace(":", ""));
     const res = await type(
@@ -1144,21 +1239,90 @@ describe("android keyboard read-back — cancellation", () => {
     hierarchy({ text: "XYabcdefghijkl" }),
   ];
 
+  it("types nothing at all when the caller has already gone", async () => {
+    // Resolving the helper installs an APK and spawns it — minutes on a cold
+    // device — so the caller can be gone before anything would be typed, and the
+    // keystrokes would land in whatever holds focus by then.
+    const { registry } = registryServing(REPAIR_SCRIPT);
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE,
+        { signal: AbortSignal.abort() }
+      )
+    ).rejects.toThrow(/abort/i);
+    expect(cmds()).toEqual([]);
+  });
+
   it("does not START the destructive repair once the caller has aborted", async () => {
     // The repair deletes before it retypes, so beginning it after the client is
     // gone can leave the field holding LESS than the call found it, with nobody
     // waiting for the result — and the MCP adapter replays an abandoned call.
-    const { registry } = registryServing(REPAIR_SCRIPT.slice(0, 2));
-    const res = await makeAndroidImpl(registry).handler(
-      {},
-      { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
-      PHONE,
-      { signal: AbortSignal.abort() }
-    );
-    // The text was still typed — the keystrokes are on the device by then.
+    // It REJECTS rather than reporting `verified: false`: the gates read that as
+    // a verdict about the app, so a cancelled run would record a typing failure
+    // where its own abort handling reads a rejection as a skip.
+    const controller = new AbortController();
+    const reads = REPAIR_SCRIPT.slice(0, 2);
+    let served = 0;
+    const registry = {
+      resolveService: vi.fn(async () => ({
+        getHierarchy: vi.fn(async () => {
+          const xml = reads[served++]!;
+          // The caller gives up between the read that measures the drop and the
+          // repair it would trigger.
+          if (served === 2) controller.abort();
+          return { xml, captureMode: "active-window", windowCount: 1, nodeCount: 2, elapsedMs: 1 };
+        }),
+        ping: vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" })),
+      })),
+    } as unknown as Registry;
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE,
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow(/abort/i);
+    // The first burst is on the device; nothing was deleted or retyped over it.
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
-    expect(res.verified).toBe(false);
-    expect(res.note).toContain("nothing was retyped");
+  });
+
+  it("keeps the helper socket alive across a repair longer than its read timeout", async () => {
+    // The helper closes a socket left idle for 60 s and the host turns that into
+    // a full service teardown, so a repair that sends it nothing for that long
+    // guarantees the confirming read fails AND costs every other tool sharing the
+    // helper a cold start.
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      const { registry, ping } = registryServing(REPAIR_SCRIPT);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+        if (cmd === "input text 'abcdefgh'") await held;
+        return "";
+      });
+
+      const call = makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE
+      );
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(ping).toHaveBeenCalled();
+
+      release();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await call;
+      // And it stops with the repair: the interval must not outlive the call.
+      const during = ping.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(ping.mock.calls.length).toBe(during);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs the repair normally when the caller has not aborted", async () => {

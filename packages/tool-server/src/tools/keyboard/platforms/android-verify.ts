@@ -28,13 +28,17 @@ import type { KeyboardVerification } from "../types";
  *
  * So the only way to know what a `keyboard` call actually did is to look: read
  * the focused field before injecting, read it again after, and compare. Only
- * this backend needs it — the iOS / Chromium / Vega transports do not
- * synthesise a KeyEvent burst through a KeyCharacterMap and are not exposed to
- * this failure.
+ * this backend does it. The iOS / Chromium / Vega transports synthesise no
+ * KeyEvent burst through a KeyCharacterMap and are not exposed to the failure at
+ * all. Android TV IS exposed — `blueprints/android-tv-control.ts` reaches the
+ * same `injectAndroidText` — but it types one space-free word per call, and its
+ * backend is shared with Apple TV, which cannot read a field back at all: see
+ * the scoping comment in `tv.ts`.
  *
  * Cost, and why it is not gated on anything. A call that verifies and needs no
  * repair costs TWO `getHierarchy` calls over the helper's already-open socket,
- * each a 500 ms settle plus the tree walk: measured on the same emulator, screen
+ * each a wait for the screen to go quiet, bounded at 500 ms, plus the tree walk:
+ * measured on the same emulator, screen
  * and string, typing 76 characters into the Settings search box costs 1.6-1.8 s
  * unverified and 1.9-3.4 s verified. A call that REPAIRS costs a third
  * `getHierarchy` plus the repair itself, which then dominates everything else:
@@ -109,6 +113,10 @@ const REPAIR_CHUNK_DELAY_MS = 100;
  * character. Capped so the device-side command line stays short.
  */
 const DELETE_KEYCODES_PER_CALL = 64;
+
+// Half the helper's own 60 s socket read timeout, so one missed tick still
+// leaves the connection open.
+const DEVTOOLS_KEEPALIVE_MS = 30_000;
 
 interface FocusedField {
   /**
@@ -260,8 +268,9 @@ function beforeSurvived(before: string, after: string): boolean {
  *    `text.length`. Holds wherever the cursor sat and whatever the field already
  *    contained. A dropped character breaks the contiguous-substring half; a
  *    doubled injection breaks the length half.
- *  - *replaced*: the field now holds precisely `text`, its content changed, and
- *    the prior content did NOT survive into it. That is the empty-field case —
+ *  - *replaced*: the field now holds precisely `text` and the prior content did
+ *    NOT survive into it — which an unchanged field cannot satisfy, since
+ *    `before` always survives into itself. That is the empty-field case —
  *    the baseline read was the hint (see `FocusedField.text`) — and equally a
  *    selection that `input text` replaced.
  *
@@ -309,12 +318,15 @@ function beforeSurvived(before: string, after: string): boolean {
  * Known limitation, reported as `not-landed`: a selection replaced with a
  * *shorter* string shrinks the field, which reads as a failure — unless the
  * whole of `text` is still recoverable, where the two clauses above accept it as
- * ambiguous. `plannedUndoDeletions` still refuses every shrinking shape, so the
- * cost is a false alarm in the note, never the field's content.
+ * ambiguous. What keeps the cost to a false alarm in the note rather than the
+ * field's content is `plannedUndoDeletions`: a shrinking reading is repaired
+ * only where every character left is one this call could have typed AND `before`
+ * cannot explain it, so a residue that may be the user's surviving text is
+ * refused instead of deleted.
  */
 export function classifyTypedText(before: string, after: string, text: string): TypedTextVerdict {
   if (after.includes(text) && after.length === before.length + text.length) return "landed";
-  if (after === text && after !== before && !beforeSurvived(before, after)) return "landed";
+  if (after === text && !beforeSurvived(before, after)) return "landed";
   if (after === before && after.includes(text)) return "indeterminate";
   if (after === text && beforeSurvived(before, after)) return "indeterminate";
   if (replacedSelection(before, after, text)) return "indeterminate";
@@ -367,11 +379,15 @@ function replacedSelection(before: string, after: string, text: string): boolean
  *     never have added more characters than we asked to type — and by the run
  *     being typeable, see `undoRunIsTypeable`.
  *  B. Every character in the field is accounted for by this injection: `after`
- *     is a subsequence of `text`. Dropped-keystroke corruption only ever
- *     deletes events, never reorders or invents them, so a field holding only a
- *     subsequence of what we just typed held nothing before it — the baseline
- *     read was a hint. Then `after.length` backspaces empty the field, which is
- *     its true prior state. This is the shape the reported bug takes.
+ *     is a subsequence of `text` and NOT one of `before`. Dropped-keystroke
+ *     corruption only ever deletes events, never reorders or invents them, so a
+ *     field holding only a subsequence of what we just typed held nothing before
+ *     it — the baseline read was a hint. Then `after.length` backspaces empty
+ *     the field, which is its true prior state. This is the shape the reported
+ *     bug takes. The `before` half is what keeps a replaced selection out: a
+ *     field reading "abcdef" that ends at "abc" after typing "abcxyz" satisfies
+ *     the `text` half, and deleting three there would take the user's surviving
+ *     characters rather than ours.
  *
  * Each proof reads the same field a different way, so where BOTH apply they
  * usually disagree about what is ours and neither can be trusted. That overlap
@@ -389,17 +405,21 @@ function replacedSelection(before: string, after: string, text: string): boolean
  * `added`, B deletes `after.length`, and they are equal exactly when `before`
  * is empty — a hint-less empty field reports `text=""` (uiautomator has nothing
  * else to say). There both readings describe the same deletion: restore the
- * empty field. Declining there would leave the PR's own repro shape (typed into
- * an empty hint-less box, characters dropped) unrepaired every time.
+ * empty field. Declining there would leave the shape this module exists for
+ * (typed into an empty hint-less box, characters dropped) unrepaired every
+ * time.
  */
 export function plannedUndoDeletions(before: string, after: string, text: string): number | null {
   const added = after.length - before.length;
+  // Neither proof survives a reading a replaced selection also explains: what it
+  // leaves in the field is partly ours, so both counts are short.
+  if (selectionMimicsInsertion(before, after, text, added)) return null;
   const grewByOneRun =
     added >= 0 &&
     added <= text.length &&
     coversByEdges(before, after, added) &&
     undoRunIsTypeable(before, after, added);
-  const allOurs = isSubsequence(after, text);
+  const allOurs = isSubsequence(after, text) && !isSubsequence(after, before);
   if (grewByOneRun && allOurs) {
     // Both proofs apply. They agree only when they name the same deletion
     // count, which is exactly the empty baseline (see above); otherwise the
@@ -410,6 +430,67 @@ export function plannedUndoDeletions(before: string, after: string, text: string
   if (grewByOneRun) return added;
   if (allOurs) return after.length;
   return null;
+}
+
+/**
+ * Whether a replaced SELECTION produces the same reading as the insertion the
+ * plans take it for — in which case what they leave in the field is partly ours,
+ * and the repair retypes on top of it.
+ *
+ * `input text` replaces a selection, so a burst that lands `k + added`
+ * characters over a selection of `k` reads back as an insertion of `added`:
+ * "cat food" with "cat" double-tapped, `text: "catt"`, final `t` dropped, is
+ * "cat food" again — unchanged, `added` 0. Plan A then attributes nothing to
+ * this call, retypes the whole string on top of the "cat" that IS ours, and the
+ * result ("catcatt food") is `before` with `text` inserted, which the *inserted*
+ * branch of `classifyTypedText` reports as `landed`. Nothing in the two readings
+ * distinguishes that from a correct call.
+ *
+ * What it tests is whether what landed can reconstruct `before` around the
+ * insertion point: the characters of `before` next to it, followed by the
+ * inserted run, forming a PREFIX of `text` — a burst drops from where it fails
+ * onward, so the head is what survives. Where the field GREW that pins the
+ * insertion point to within the common edges and the test is a narrow one. On an
+ * UNCHANGED field it is not: every position is an insertion point, so it reduces
+ * to `before` holding the first character of `text`, and a baseline that happens
+ * to contain that character costs the retry. That is the deliberate side of the
+ * trade — the retry is worth having, and not worth typing a second copy over
+ * characters that may already be ours.
+ *
+ * Where a hint reads like the text ("https://" under "https://example.com") this
+ * is the same refusal the overlapping-proofs guard below makes, one step earlier.
+ */
+function selectionMimicsInsertion(
+  before: string,
+  after: string,
+  text: string,
+  added: number
+): boolean {
+  if (added < 0 || text === "") return false;
+  // An unchanged field puts the insertion point anywhere, so the test collapses
+  // to "does `before` hold any prefix of `text`" — which its first character
+  // settles. Coarse on purpose: it costs a repair on a field whose baseline
+  // happens to contain that one character, and the alternative is retyping over
+  // characters that may already be ours.
+  if (before === after) return before.includes(text[0]!);
+  let prefix = 0;
+  while (prefix < before.length && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < before.length &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  // The insertion point has to sit inside both common edges.
+  for (let i = Math.max(0, before.length - suffix); i <= Math.min(prefix, before.length); i++) {
+    const inserted = after.slice(i, i + added);
+    for (let k = 1; k <= i && k + added < text.length; k++) {
+      if (!text.startsWith(inserted, k)) continue;
+      if (before.startsWith(text.slice(0, k), i - k)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -425,12 +506,17 @@ export function plannedUndoDeletions(before: string, after: string, text: string
  * grapheme, so two presses are issued and the second takes a character the user
  * typed.
  *
- * Only the run the deletion can touch is checked, not the whole field: the run
- * sits somewhere in `[before.length - suffix, prefix + added)` where prefix and
- * suffix are the maximal common edges, so an ASCII insertion into a field that
- * already holds an accented name still repairs.
+ * Only the run the deletion can touch is checked, not the whole field: for
+ * `added > 0` the run sits somewhere in `[before.length - suffix, prefix + added)`
+ * where prefix and suffix are the maximal common edges, so an ASCII insertion
+ * into a field that already holds an accented name still repairs. `added === 0`
+ * issues no backspace at all, and the window degenerates to the whole field
+ * there, so it is answered before the scan — otherwise one accented character
+ * anywhere in a localized field's baseline would veto a repair that deletes
+ * nothing.
  */
 function undoRunIsTypeable(before: string, after: string, added: number): boolean {
+  if (added === 0) return true;
   let prefix = 0;
   while (prefix < before.length && before[prefix] === after[prefix]) prefix++;
   let suffix = 0;
@@ -554,8 +640,8 @@ const PASSWORD_FIELD_NOTE =
   "may simply have been typed incompletely: clear the field and retype rather than assuming the " +
   "credential is wrong.";
 
-const READ_FAILED_BASE =
-  `${UNVERIFIED_PREFIX}: reading the focused field back failed. The text was typed, but Android ` +
+const READ_FAILED_REASON =
+  "reading the focused field back failed. The text was typed, but Android " +
   "typing can silently drop characters — confirm the field's contents with `describe`.";
 
 // Distinct from a read failure: both reads succeeded and the field in focus
@@ -563,8 +649,8 @@ const READ_FAILED_BASE =
 // dropped characters would bury the actionable fact. Both causes are named
 // because the read cannot tell them apart for a field with no `resource-id` —
 // see `isSameField`.
-const FOCUS_MOVED_BASE =
-  `${UNVERIFIED_PREFIX}: the focused field is no longer the one the text was typed into, so that ` +
+const FOCUS_MOVED_REASON =
+  "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
   "being typed, in which case the text may have been split across both, or the field carries no " +
   "id and moved on screen (a chat composer growing to a second line does this) and could not be " +
@@ -573,15 +659,15 @@ const FOCUS_MOVED_BASE =
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"
 // would send the agent looking for one.
-const FOCUS_LOST_BASE =
-  `${UNVERIFIED_PREFIX}: no editable field held input focus once the text had been typed, so the ` +
+const FOCUS_LOST_REASON =
+  "no editable field held input focus once the text had been typed, so the " +
   "field it started in could not be checked. Read the screen with `describe` before continuing.";
 
 // The read-back equivalent of TRUNCATED_READ_NOTE. A capture that stopped before
 // reaching the field proves nothing about focus, so it must not be reported as a
 // focus change — the same reason the baseline read distinguishes the two.
-const TRUNCATED_AFTER_BASE =
-  `${UNVERIFIED_PREFIX}: the screen has more elements than one capture returns, so the read-back ` +
+const TRUNCATED_AFTER_REASON =
+  "the screen has more elements than one capture returns, so the read-back " +
   "was truncated before the field could be found again. This says nothing about whether the text " +
   "landed — read the field with `describe` to confirm.";
 
@@ -592,8 +678,8 @@ const TRUNCATED_AFTER_BASE =
 // applies just as much here, that a credential must not be read back to be
 // compared at all (see `FocusedField.password`). Checked on BOTH reads, or the
 // contract holds on only one of them.
-const MASKED_AFTER_BASE =
-  `${UNVERIFIED_PREFIX}: the focused field masks its input now, though it did not when the text ` +
+const MASKED_AFTER_REASON =
+  "the focused field masks its input now, though it did not when the text " +
   "was typed — a password reveal toggle, or a field that masks once it holds something. It reads " +
   "back as bullets rather than characters, so there is nothing to compare, and reading a " +
   "credential back to compare it is what typing a `{{secret:…}}` placeholder exists to avoid.";
@@ -606,15 +692,21 @@ const MASKED_AFTER_BASE =
  * was retyped" there would be false about a destructive action and would invite
  * the caller to type the value a third time.
  */
-function blockedNote(base: string, retyped: boolean): string {
+function blockedNote(reason: string, retyped: boolean): string {
+  if (!retyped) return `${UNVERIFIED_PREFIX}: ${reason} Nothing was retyped.`;
   return (
-    base +
-    (retyped
-      ? " The characters this call could attribute to itself had already been deleted and retyped " +
-        "in smaller chunks, so the field has been modified beyond the original typing."
-      : " Nothing was retyped.")
+    `${UNCONFIRMED_REPAIR_PREFIX}: ${reason} The characters this call could attribute to itself ` +
+    "had already been deleted and retyped in smaller chunks, so the field has been modified " +
+    "beyond the original typing."
   );
 }
+
+// Only the confirming read is blocked on that path, so the last thing actually
+// measured is the failure that sent the call to the repair. `UNVERIFIED_PREFIX`
+// would report it as an unchecked call, which is the value every gate passes.
+const UNCONFIRMED_REPAIR_PREFIX =
+  "The typed text did NOT land in the focused field, and whether retyping it fixed that could " +
+  "not be checked";
 
 // The observation is consistent with success AND with failure (see
 // `classifyTypedText`, which enumerates the four shapes that reach here). Acting
@@ -677,12 +769,15 @@ function mismatchNote(typed: number, present: number, repaired: boolean): string
 // the one path where that is possible, and it must be reported rather than
 // swallowed into a generic transport error.
 function repairFailedNote(deleted: number): string {
+  const undo =
+    deleted === 0
+      ? "nothing had to be deleted first"
+      : `${deleted} character${deleted === 1 ? "" : "s"} ${deleted === 1 ? "was" : "were"} ` +
+        "removed, or partly removed";
   return (
-    `The typed text did not land, and the retry could not be completed: ${deleted} ` +
-    `character${deleted === 1 ? "" : "s"} ${deleted === 1 ? "was" : "were"} removed, or partly ` +
-    "removed, before the retype failed to reach the device. " +
-    "The field may now hold less than it did before this call. Read it with `describe` and " +
-    "retype from a known state."
+    `The typed text did not land, and the retry could not be completed: ${undo}, and the retype ` +
+    "then stopped partway. The field may hold anything from less than it did before this call to " +
+    "a truncated copy of the text. Read it with `describe` and retype from a known state."
   );
 }
 
@@ -693,6 +788,13 @@ function repairFailedNote(deleted: number): string {
 // position 0, an OTP box steps focus back a slot — and every OTHER post-repair
 // outcome says the field was modified. This is the one that actually did it.
 function repairedNote(deleted: number): string {
+  if (deleted === 0) {
+    return (
+      "The typed text is in the field, but not from the first attempt: Android's key-event burst " +
+      "did not deliver it, so it was retyped in smaller chunks. Nothing had to be deleted first, " +
+      "but the app saw both rounds of key events."
+    );
+  }
   return (
     "The typed text is in the field, but not from the first attempt: Android's key-event burst " +
     `did not deliver it, so ${deleted} character${deleted === 1 ? "" : "s"} ` +
@@ -778,6 +880,13 @@ export async function typeAndroidTextVerified(
 ): Promise<KeyboardVerification> {
   const serial = device.id;
   const devtools = await resolveDevtools(registry, device);
+  // Resolving installs the helper APK on a cold device and spawns it — minutes,
+  // where the pre-check path was a single `adb shell input text` — so the caller
+  // can be gone before anything would be typed. Nothing is waiting for those
+  // keystrokes, and they would land in whatever holds focus by now, so this must
+  // not type at all. Throwing (rather than reporting a verdict) is what makes a
+  // cancelled flow read the step as a skip instead of an app failure.
+  signal?.throwIfAborted();
   if (!devtools) {
     await injectAndroidText(serial, text);
     return { note: HELPER_UNAVAILABLE_NOTE };
@@ -794,7 +903,7 @@ export async function typeAndroidTextVerified(
     } = await readFocusedField(devtools));
   } catch {
     await injectAndroidText(serial, text);
-    return { note: blockedNote(READ_FAILED_BASE, false) };
+    return { note: blockedNote(READ_FAILED_REASON, false) };
   }
   if (!before) {
     await injectAndroidText(serial, text);
@@ -828,12 +937,21 @@ export async function typeAndroidTextVerified(
   // The repair is the one destructive sequence on this path — it deletes before
   // it retypes — so it must not START once the caller has given up: nothing is
   // waiting for the retyped field, and the MCP adapter replays a call it
-  // abandoned. Checked HERE and not between the two halves, where bailing would
-  // itself be the corruption the `catch` below reports.
-  if (signal?.aborted) {
-    return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };
-  }
+  // abandoned. Throwing rather than reporting the verdict keeps a cancelled run
+  // from recording a failure ABOUT THE APP: the three step gates key on
+  // `verified: false`, while an abort reads as a skip. Checked only here, not
+  // inside the loops below — once the delete has run, finishing the retype
+  // leaves the field in a better state than abandoning it half-restored.
+  signal?.throwIfAborted();
 
+  // The helper closes a socket left idle for 60 s (SOCKET_READ_TIMEOUT_MS in
+  // SnapshotInstrumentation.java) and the repair is the one stretch of this call
+  // that sends it nothing — a ~900-character retype is silent for longer than
+  // that. The close tears down the whole service, so the confirming read below
+  // would fail AND every other tool sharing the helper would pay a cold start.
+  const keepalive = setInterval(() => {
+    void devtools.ping().catch(() => {});
+  }, DEVTOOLS_KEEPALIVE_MS);
   try {
     await deleteTrailing(serial, deletions);
     await injectInChunks(serial, text);
@@ -842,6 +960,8 @@ export async function typeAndroidTextVerified(
     // field emptier than the call found it. Report that state instead of letting
     // an adb error imply nothing happened.
     return { verified: false, note: repairFailedNote(deletions) };
+  } finally {
+    clearInterval(keepalive);
   }
 
   const repaired = await readAfter(devtools, before, true);
@@ -867,27 +987,36 @@ async function readAfter(
   | { blocked?: undefined; field: FocusedField }
   | { blocked: KeyboardVerification; field?: undefined }
 > {
+  // After the repair the verdict is not open: the text was measured not to have
+  // landed, and the field was then backspaced and retyped. A blocked read leaves
+  // that the last thing known about it, so the verdict travels with the note —
+  // an absent one is the pass value at all three step gates, which would submit
+  // exactly the field with the most evidence against it and the most changes
+  // made to it.
+  const blocked = (reason: string): { blocked: KeyboardVerification } => ({
+    blocked: { ...(retyped ? { verified: false } : {}), note: blockedNote(reason, retyped) },
+  });
+
   let field: FocusedField | null;
   let truncated: boolean;
   try {
     ({ field, truncated } = await readFocusedField(devtools));
   } catch {
-    return { blocked: { note: blockedNote(READ_FAILED_BASE, retyped) } };
+    return blocked(READ_FAILED_REASON);
   }
   if (!field) {
     // A truncated capture never reached the field, so "nothing has focus" is not
     // a conclusion it supports — the same distinction the baseline read draws.
-    const base = truncated ? TRUNCATED_AFTER_BASE : FOCUS_LOST_BASE;
-    return { blocked: { note: blockedNote(base, retyped) } };
+    return blocked(truncated ? TRUNCATED_AFTER_REASON : FOCUS_LOST_REASON);
   }
   if (!isSameField(before, field)) {
-    return { blocked: { note: blockedNote(FOCUS_MOVED_BASE, retyped) } };
+    return blocked(FOCUS_MOVED_REASON);
   }
   // The baseline read declines a masked field; so must this one, or the contract
   // holds on only one of the two and a field that starts masking mid-typing gets
   // its bullets compared as content and its credential backspaced and re-injected.
   if (field.password) {
-    return { blocked: { note: blockedNote(MASKED_AFTER_BASE, retyped) } };
+    return blocked(MASKED_AFTER_REASON);
   }
   return { field };
 }

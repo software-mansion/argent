@@ -137,10 +137,11 @@ A gesture that resolves no selector passes with a warning when the runner cannot
 ### Typed text
 
 On an Android phone or tablet, the tool-server reads the field back after a `type` step.
-The step fails when the read-back proves that the text is not in the field. The reason
-gives the counts and the probable cause. Argent does not press the Enter for a failed
-step. Argent makes one repair before it fails a step: it deletes the characters that it
-can prove are its own, then types the text again in small pieces.
+The step fails when the read-back does not confirm that the text is in the field. The
+reason gives the counts and the probable cause. Argent does not press the Enter for a
+failed step. Argent makes one repair before it fails a step: it deletes the characters
+that it can prove are its own, then types the text again in small pieces. A step also
+fails when that repair ran and Argent could not read the field again to confirm it.
 
 The step passes when the read-back cannot conclude, and on every other platform. A step
 that passes is therefore not a proof that the text arrived. See the [tools
