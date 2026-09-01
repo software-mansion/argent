@@ -619,6 +619,49 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(card.frame.height).toBeCloseTo(100 / 600, 5);
   });
 
+  it("covers the whole width its children span", () => {
+    // The union has to reach each child's right edge, not its left one. With
+    // the far side dropped the landmark ends exactly where its right-hand child
+    // starts, so a tap centred on it lands between the two.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.webkit.WebView" bounds="[0,128][1084,-1174]" text="FIXED">
+    <node class="android.widget.TextView" bounds="[0,200][100,300]" text="Left row"/>
+    <node class="android.widget.TextView" bounds="[500,200][900,300]" text="Right row"/>
+  </node>
+</hierarchy>`;
+    const webview = flatten(parseUiAutomatorDump(xml, 1080, 2400)).find(
+      (n) => n.role === "WebView"
+    )!;
+    expect(webview.frame.x).toBeCloseTo(0, 5);
+    expect(webview.frame.width).toBeCloseTo(900 / 1080, 5);
+  });
+
+  it("reads no region off a child whose own box is unusable", () => {
+    // A degenerate child can reach the union: the label dedup empties a node's
+    // kept children after the "invisible and nothing left" guard has already
+    // let it through, so it publishes its own degenerate box to its parent.
+    // Counting that box stretches the parent to the degenerate origin and moves
+    // its tap centre off everything it covers.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.view.ViewGroup" resource-id="section" content-desc="Section" clickable="true" bounds="[0,0][0,0]">
+    <node class="android.view.ViewGroup" resource-id="row" content-desc="Open settings" clickable="true" bounds="[400,400][400,400]">
+      <node class="android.widget.TextView" bounds="[400,400][700,460]" text="Settings"/>
+    </node>
+    <node class="android.widget.TextView" bounds="[100,1000][900,1060]" text="Visible row"/>
+  </node>
+</hierarchy>`;
+    const all = flatten(parseUiAutomatorDump(xml, 1080, 2400));
+    const section = all.find((n) => n.identifier === "section")!;
+    const row = all.find((n) => n.label === "Visible row")!;
+    // Only the row with a usable box contributes, so the two frames match.
+    expect(section.frame).toEqual(row.frame);
+    // ...and the tap centre lands on that row rather than between it and the
+    // degenerate node's origin.
+    expect(getDescribeTapPoint(section.frame).y).toBeCloseTo(1030 / 2400, 5);
+  });
+
   it("leaves a wrapper with no box at all to the bounds-less rule", () => {
     // A missing `bounds` is not an unusable box: `finalizeUiNode` passes a
     // bounds-less wrapper's sole child through in the wrapper's place. Handing
