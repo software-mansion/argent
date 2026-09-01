@@ -99,7 +99,8 @@ that passes with a `note` carries that note as the step warning.
 
 A cancelled call stops the typing. Argent types nothing when the cancel arrives before the
 first keystroke. The iOS simulator and Chromium backends stop between keys. An Android call
-stops at its next device call, which inside a repair is a chunk boundary. A cancel inside an
+stops when the burst it is in has gone out. Mid-typing that is after the read-back that follows
+the burst. Inside a repair it is the next chunk or batch of backspaces. A cancel inside an
 Android repair can leave the field with fewer characters than it held before the call,
 because the repair deletes before it types.
 

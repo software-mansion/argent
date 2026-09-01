@@ -677,8 +677,9 @@ const FOCUS_MOVED_REASON =
   "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
   "being typed, in which case the text may have been split across both, or the field could not be " +
-  "matched again: it carries no id, or one its neighbours share as an OTP form's boxes do, AND it " +
-  "moved clear of where it was (a list scrolled by more than a row does this). Read the screen with `describe` before continuing.";
+  "matched again: it moved clear of where it was (a list scrolled by more than a row does this) AND " +
+  "its `resource-id` could not identify it — absent, shared with a neighbour as an OTP form's boxes " +
+  "are, or unprovable because the capture was truncated. Read the screen with `describe` before continuing.";
 
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"

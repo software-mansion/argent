@@ -1250,8 +1250,9 @@ A \`type\` step presses Enter after the text unless \`submit: false\`; on an And
 \`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
 (\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
 \`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
-that could not conclude, before or after the repair — passes, carrying that tool's note as the
-step's warning so an unverified pass is not read as a verified one.
+that could not conclude, before or after the repair — passes. Any passing \`keyboard\` result that
+carries a note — the read-back could not conclude, or a repair got the text in — carries it as that
+step's warning, so neither is read as a plain verified pass.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
