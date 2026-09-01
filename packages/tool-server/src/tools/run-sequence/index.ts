@@ -5,6 +5,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { DEVICE_QUEUE_TOOLS, holdDeviceQueue } from "../../utils/device-serial";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 const ALLOWED_TOOLS = new Set([
@@ -171,79 +172,94 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
-      const device = resolveDevice(udid);
-      const results: StepResult[] = [];
-      // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
-      // drops the MCP adapter's own fetch timeout — so honour the signal between
-      // steps and on the inter-step delay instead of running the rest of the
-      // sequence at the device.
-      const signal = ctx?.signal;
+      // A sequence that uses the keyboard takes the device's keyboard queue for
+      // ALL of its steps, not just those steps. The queue holds `keyboard` and
+      // `paste` and nothing else, so the `[gesture-tap, keyboard { clear }]`
+      // recipe above landed its tap at once and then queued the clear behind
+      // another session's call — and whatever moved focus in between redirected
+      // it. Measured on Chrome 152: the clear emptied a textarea this sequence
+      // never addressed and still reported `completed: 2 of 2` with
+      // `clearVerified: true`. The steps' own `keyboard` / `paste` calls re-enter
+      // the hold rather than deadlocking on it.
+      return steps.some((step) => DEVICE_QUEUE_TOOLS.has(step.tool))
+        ? holdDeviceQueue(udid, runSteps)
+        : runSteps();
 
-      for (const step of steps) {
-        if (signal?.aborted) break;
+      async function runSteps() {
+        const device = resolveDevice(udid);
+        const results: StepResult[] = [];
+        // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
+        // drops the MCP adapter's own fetch timeout — so honour the signal between
+        // steps and on the inter-step delay instead of running the rest of the
+        // sequence at the device.
+        const signal = ctx?.signal;
 
-        if (!ALLOWED_TOOLS.has(step.tool)) {
-          results.push({
-            tool: step.tool,
-            error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
-          });
-          break;
-        }
+        for (const step of steps) {
+          if (signal?.aborted) break;
 
-        // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
-        // layer does), so pre-flight here: otherwise a mobile-only step like
-        // `button` on a Chromium device fails inside the simulator-server
-        // service factory instead of with a clean "not supported" error.
-        const subTool = registry.getTool(step.tool);
-        if (subTool?.capability) {
-          try {
-            assertSupported(step.tool, subTool.capability, device);
-          } catch (err) {
-            if (err instanceof UnsupportedOperationError) {
-              results.push({ tool: step.tool, error: err.message });
-              break;
-            }
-            throw err;
-          }
-        }
-
-        const toolArgs = { ...step.args, udid };
-
-        try {
-          const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
-          if (isUnmetUiWaitResult(step.tool, result)) {
-            const note = (result as { note?: string }).note;
+          if (!ALLOWED_TOOLS.has(step.tool)) {
             results.push({
               tool: step.tool,
-              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+              error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
             });
             break;
           }
-          results.push({ tool: step.tool, result });
-        } catch (err) {
-          const reframed = describeNestedParamError(
-            registry,
-            err,
-            step.tool,
-            toolArgs,
-            step.args ?? {}
-          );
-          results.push({
-            tool: step.tool,
-            error: reframed ?? (err instanceof Error ? err.message : String(err)),
-          });
-          break;
+
+          // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
+          // layer does), so pre-flight here: otherwise a mobile-only step like
+          // `button` on a Chromium device fails inside the simulator-server
+          // service factory instead of with a clean "not supported" error.
+          const subTool = registry.getTool(step.tool);
+          if (subTool?.capability) {
+            try {
+              assertSupported(step.tool, subTool.capability, device);
+            } catch (err) {
+              if (err instanceof UnsupportedOperationError) {
+                results.push({ tool: step.tool, error: err.message });
+                break;
+              }
+              throw err;
+            }
+          }
+
+          const toolArgs = { ...step.args, udid };
+
+          try {
+            const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
+            if (isUnmetUiWaitResult(step.tool, result)) {
+              const note = (result as { note?: string }).note;
+              results.push({
+                tool: step.tool,
+                error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+              });
+              break;
+            }
+            results.push({ tool: step.tool, result });
+          } catch (err) {
+            const reframed = describeNestedParamError(
+              registry,
+              err,
+              step.tool,
+              toolArgs,
+              step.args ?? {}
+            );
+            results.push({
+              tool: step.tool,
+              error: reframed ?? (err instanceof Error ? err.message : String(err)),
+            });
+            break;
+          }
+
+          const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
+          if (delay > 0 && !(await sleepOrAbort(delay, signal))) break;
         }
 
-        const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
-        if (delay > 0 && !(await sleepOrAbort(delay, signal))) break;
+        return {
+          completed: results.filter((r) => "result" in r).length,
+          total: steps.length,
+          steps: results,
+        };
       }
-
-      return {
-        completed: results.filter((r) => "result" in r).length,
-        total: steps.length,
-        steps: results,
-      };
     },
   };
 }

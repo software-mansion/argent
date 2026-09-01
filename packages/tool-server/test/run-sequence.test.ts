@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { serializedPerDevice } from "../src/utils/device-serial";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -32,6 +33,89 @@ const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 // iOS-shaped udid so `resolveDevice` classifies it as an iOS simulator without
 // touching a real device (classification is purely shape-based).
 const IOS = "11111111-1111-1111-1111-111111111111";
+
+describe("run-sequence — the device keyboard queue", () => {
+  // The queue holds `keyboard` and `paste` and nothing else, so a `gesture-tap`
+  // never waits on it. A sequence that taps a field and then clears it therefore
+  // landed its tap AT ONCE and queued the clear behind another session's call —
+  // and anything that moved focus in between redirected the clear. Measured on
+  // Chrome 152 against a second session holding the queue for 20s: the clear
+  // emptied a textarea the sequence never addressed and reported
+  // `completed: 2 of 2` with `clearVerified: true`.
+  it("waits for the queue BEFORE its first step when a step uses the keyboard", async () => {
+    const { registry, calls } = makeMockRegistry();
+    const tool = createRunSequenceTool(registry);
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      IOS,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+
+    const sequence = tool.execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+          { tool: "keyboard", args: { clear: true } },
+        ],
+      }
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    // The tap is the step that has to be inside the critical section: it is what
+    // decides where the clear lands.
+    expect(calls).toEqual([]);
+
+    release();
+    await blocking;
+    expect((await sequence).completed).toBe(2);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap", "keyboard"]);
+  });
+
+  it("does not deadlock on the queue it is itself holding", async () => {
+    // The steps go through the registry to the real `keyboard` / `paste`
+    // execute, which take the same queue. Without the re-entrancy check a held
+    // sequence would wait for itself forever.
+    const { registry, calls } = makeMockRegistry();
+    registry.invokeTool = vi.fn(async (tool: string, args: Record<string, unknown>) => {
+      calls.push({ tool, args });
+      return serializedPerDevice(IOS, async () => ({ ok: true }));
+    });
+    const result = await createRunSequenceTool(registry).execute!(
+      {},
+      { udid: IOS, steps: [{ tool: "keyboard", args: { text: "hi" }, delayMs: 0 }] }
+    );
+    expect(result.completed).toBe(1);
+  });
+
+  it("leaves the queue alone when no step uses the keyboard", async () => {
+    // A gesture-only batch must not wait behind another session's clear, nor
+    // make one wait behind it: the hazard is the focused field, and a batch that
+    // never touches it has none.
+    const { registry, calls } = makeMockRegistry();
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      IOS,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+
+    const result = await createRunSequenceTool(registry).execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 }, delayMs: 0 },
+        ],
+      }
+    );
+    expect(result.completed).toBe(2);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap", "gesture-tap"]);
+
+    release();
+    await blocking;
+  });
+});
 
 describe("run-sequence", () => {
   it("allows TV steps and dispatches them in order with the shared udid injected", async () => {
