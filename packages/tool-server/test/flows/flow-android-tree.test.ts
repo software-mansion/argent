@@ -562,6 +562,48 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(findAll(flow, { identifier: "com.acme:id/player" })).toHaveLength(1);
   });
 
+  // The other half of describe's degenerate-box handling. A node whose own box
+  // clips to zero area while its children are on screen is published there at
+  // the region those children cover, so it is a normal addressable element —
+  // and used to be missing here, which splits what an `assert` decides: a
+  // `visible` copied out of describe failed and a `hidden` passed on an element
+  // describe reports on screen.
+  it("keeps a node whose own box is unusable, as describe does", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.ListView" resource-id="com.acme:id/menu" package="com.acme.app" bounds="[40,600][1040,600]">
+      <node index="0" class="android.widget.TextView" package="com.acme.app" text="Row A" bounds="[40,600][1040,700]" />
+      <node index="1" class="android.widget.TextView" package="com.acme.app" text="Row B" bounds="[40,700][1040,800]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const flow = findAll(adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H), {
+      identifier: "com.acme:id/menu",
+    });
+    const described = findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), {
+      identifier: "com.acme:id/menu",
+    });
+    expect(described).toHaveLength(1);
+    expect(flow).toHaveLength(1);
+    expect(flow[0]!.frame).toEqual(described[0]!.frame);
+  });
+
+  // A node with no `bounds` attribute at all is not the same case: describe
+  // leaves it to its own bounds-less rule, so this tree must not invent a frame
+  // for it either.
+  it("invents no frame for a node the dump gave no box", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="androidx.compose.ui.platform.ComposeView" resource-id="com.acme:id/host" package="com.acme.app">
+    <node index="0" class="android.widget.Button" package="com.acme.app" text="left" bounds="[0,0][100,50]" />
+  </node>
+</hierarchy>`;
+    const flow = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    expect(findAll(flow, { identifier: "com.acme:id/host" })).toHaveLength(0);
+    expect(findAll(flow, { text: "left" })).toHaveLength(1);
+  });
+
   // The clip guard's flow-tree half. A zero-height window makes
   // `rectFullyOutside` true for everything, so a scroller whose own box is
   // unusable must clip nothing — otherwise this tree drops a page describe
