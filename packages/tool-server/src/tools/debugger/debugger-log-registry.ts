@@ -148,9 +148,9 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
               `on disk — do not try to read that path. What is left of them is those counts, ` +
               `and clusters that are a capped and truncated view rather than the lines ` +
               `themselves. The writer either could not create it, or something has removed it ` +
-              `since. Check that ~/.argent/tmp is writable. This writer opened its file once ` +
-              `and does not try again, and debugger-connect hands back this same session, so ` +
-              `end it with stop-all-simulator-servers scoped to this device, then connect.`
+              `since. Check that ~/.argent/tmp is writable. The writer opens its file once and ` +
+              `does not try again, and debugger-connect hands back this same session, so end it ` +
+              `with stop-all-simulator-servers scoped to this device, then connect.`
           );
         }
         if (notes.length > 0) response.note = notes.join(" ");
