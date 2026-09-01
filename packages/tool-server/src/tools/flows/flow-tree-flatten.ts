@@ -117,17 +117,18 @@ export function flattenHoisting<T>(
   // container's viewport even when its bounds still fall on the device screen:
   // keeping it would falsely fail an `assert { hidden }`, falsely pass
   // `visible`, hoist its text onto the container, and resolve a tap point
-  // outside the scroller. Two deliberate divergences from `pruneSubtree`:
-  //   - the clip applies from the scroll's DIRECT children down, one level
-  //     earlier, because flows deliberately keep the testID-only containers
-  //     describe's interactables trim discards — otherwise scrolled-out testID
-  //     rows would survive. Non-scrollable parents never clip: an overlay or
-  //     badge hanging outside its parent's bounds is kept;
-  //   - a nested scroll INTERSECTS the inherited clip with its own rect where
-  //     `pruneSubtree` replaces it. Replacing would re-admit everything inside
-  //     an inner scroller whose rect extends past the outer viewport — a
-  //     content-sized embedded RecyclerView / UICollectionView straddling the
-  //     outer fold would report rows below the fold as visible.
+  // outside the scroller. The clip applies from the scroll's DIRECT children
+  // down, which `pruneSubtree` also does — flows keep the testID-only
+  // containers describe's interactables trim discards, so a level later would
+  // let a scrolled-out testID row survive here. Non-scrollable parents never
+  // clip: an overlay or badge hanging outside its parent's bounds is kept.
+  //
+  // One deliberate divergence from `pruneSubtree`: a nested scroll INTERSECTS
+  // the inherited clip with its own rect where `pruneSubtree` replaces it.
+  // Replacing would re-admit everything inside an inner scroller whose rect
+  // extends past the outer viewport — a content-sized embedded RecyclerView /
+  // UICollectionView straddling the outer fold would report rows below the
+  // fold as visible.
   if (scrollClip && view.rect && rectFullyOutside(view.rect, scrollClip)) return "";
   const childClip = view.scrolls && view.rect ? intersectClip(view.rect, scrollClip) : scrollClip;
 

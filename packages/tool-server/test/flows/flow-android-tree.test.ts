@@ -786,8 +786,6 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   // there turns the list's box into a clip window and drops a control the page
   // paints below it — while describe, which trusts the framework flag, still
   // shows it.
-  // The leaves sit under a wrapper because the describe trim applies a clip
-  // to a scroller's grandchildren, not to its own children.
   it("does not let a non-scrolling web list clip the flow tree", () => {
     const web = (scrollable: string) => `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
