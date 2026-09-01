@@ -1848,8 +1848,9 @@ function stepFlow(step: FlowStep, scope: StepScope): string {
 }
 
 /**
- * The directory `run:` paths resolve against — the canonical containing
- * file's, so a symlinked flow anchors where its real file and siblings live.
+ * The directory a step's file reference resolves against — a `run:` target and
+ * a `script:` path alike. The canonical containing file's, so a symlinked flow
+ * anchors where its real file, its sibling fragments and its scripts live.
  */
 function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
