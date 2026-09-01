@@ -33,10 +33,16 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
 }));
 
 // The ios branch runtime-probes the TV kind by shelling out to `xcrun`; a real
-// probe would make these tests host-dependent (and slow).
+// probe would make these tests host-dependent (and slow). `getSimulatorRuntimeKind`
+// is the one the keyboard backend reads — three-valued, because an unknown kind
+// refuses a clear rather than aiming it — so leaving it real made every iOS case
+// here depend on whether the host's `simctl` happens to list this UDID.
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
   isTvOsSimulator: vi.fn(async (_udid: string): Promise<boolean> => false),
+  getSimulatorRuntimeKind: vi.fn(
+    async (_udid: string): Promise<"mobile" | "tv" | undefined> => "mobile"
+  ),
 }));
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({

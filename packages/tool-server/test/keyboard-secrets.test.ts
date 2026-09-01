@@ -20,7 +20,13 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => {
 // stub it so the test never shells out to `simctl`.
 vi.mock("../src/utils/ios-devices", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
-  return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
+  // Both probes: the keyboard backend reads the kind three-valued, and a real
+  // read shells out to `xcrun` on every iOS call in this file.
+  return {
+    ...actual,
+    isTvOsSimulator: vi.fn(async () => false),
+    getSimulatorRuntimeKind: vi.fn(async () => "mobile" as const),
+  };
 });
 vi.mock("../src/utils/check-deps", () => ({ ensureDeps: vi.fn(async () => {}) }));
 
