@@ -665,6 +665,31 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     getAndroidRuntimeKind.mockResolvedValue("mobile");
   });
 
+  it("acts on the RE-PROBE's answer when the first probe could not tell", async () => {
+    // The retry exists to be believed. `void getAndroidRuntimeKind(...)` —
+    // discarding its answer and refusing anyway — passes every "undefined twice"
+    // case, and no test used to let the second probe resolve.
+    adbShell.mockClear();
+    getAndroidRuntimeKind.mockResolvedValueOnce(undefined).mockResolvedValueOnce("mobile");
+    const res = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+    expect(adbShell).toHaveBeenCalledTimes(1);
+    expect(getAndroidRuntimeKind).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes to the TV backend when the RE-PROBE says TV", async () => {
+    // The other half of believing it: a first probe that missed its budget on a
+    // real Android TV must still end in the refusal, not in a 200-key burst.
+    adbShell.mockClear();
+    typeTv.mockClear();
+    typeTv.mockResolvedValueOnce({ typed: "", keys: 0 });
+    getAndroidRuntimeKind.mockResolvedValueOnce(undefined).mockResolvedValueOnce("tv");
+    await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
+    expect(typeTv).toHaveBeenCalledTimes(1);
+    expect(typeTv.mock.calls[0]![2]).toMatchObject({ clear: true });
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
   it("still types `text` when the form factor could not be determined", async () => {
     // The positive control, and the reason the guard is per shape: on Android TV
     // `TvControlApi.type` IS `adb shell input text`, the same channel the phone
