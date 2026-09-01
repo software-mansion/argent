@@ -12,7 +12,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function typeSimulatorServer(
   registry: Registry,
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  signal?: AbortSignal
 ): Promise<KeyboardResult> {
   const ref = simulatorServerRef(device);
   const api = await registry.resolveService<SimulatorServerApi>(ref.urn, ref.options);
@@ -37,6 +38,11 @@ export async function typeSimulatorServer(
   // The tool rejects text + key (./index.ts), so at most one block below runs.
   if (params.text) {
     for (const char of params.text) {
+      // 400 characters is ~80 s of presses and `longRunning` leaves nothing else
+      // to stop them, so bail between keys once the caller cancels — the same
+      // rule, for the same reason, as `tv-remote`'s button loop. Sent presses
+      // cannot be taken back, so it throws rather than reporting a partial tally.
+      signal?.throwIfAborted();
       const press = charToKeyPress(char);
       // Caller input error → 400 via the error class, so the granular
       // KEYBOARD_CHARACTER_UNSUPPORTED code survives (#420).

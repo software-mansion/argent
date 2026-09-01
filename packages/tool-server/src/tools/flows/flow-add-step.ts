@@ -29,6 +29,7 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { isUnlandedKeyboardTextResult } from "../keyboard";
+import { UNLANDED_KEYBOARD_STEP_ERROR } from "../run-sequence";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { stepAnchor, summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -387,8 +388,8 @@ const UNLANDED_KEYBOARD_WARNING =
   "reads the field back and reports a mismatch by returning verified:false instead of failing, " +
   "so the step was written to the flow anyway. At replay that verdict FAILS the step and stops " +
   "the run there (and a `type:` step skips its Enter), so fix the typing before you rely on this " +
-  "flow: read `toolResult.note` for what the read-back measured and whether anything was retyped, then " +
-  "re-record the step. Delete the bad step after `flow-finish-recording` rather than " +
+  "flow: read what the read-back measured and whether anything was retyped — `toolResult.note`, or " +
+  "the stopped step's `error` when the call was a `run-sequence` — then re-record the step. Delete the bad step after `flow-finish-recording` rather than " +
   "mid-recording: against a remote client the in-memory copy is authoritative and the next " +
   "append writes the step straight back, and in host mode the recorder re-reads the file before " +
   "each append, so an edit that renumbers the steps costs the finish the verdicts it would " +
@@ -848,6 +849,28 @@ export function directiveCommandHint(command: string): string | undefined {
 const RUN_TARGET_COMMAND = "flow-execute";
 
 /**
+ * The Android read-back verdict in either spelling the recorder can be handed:
+ * the `keyboard` call itself, or a `run-sequence` holding one, which converts the
+ * verdict into a step error of its own and returns normally. Both record green
+ * and both fail at replay.
+ */
+function unlandedKeyboardStep(command: string, result: unknown): boolean {
+  if (isUnlandedKeyboardTextResult(command, result)) return true;
+  if (command !== "run-sequence" || typeof result !== "object" || result === null) return false;
+  const steps = (result as { steps?: unknown }).steps;
+  return (
+    Array.isArray(steps) &&
+    steps.some(
+      (step) =>
+        typeof step === "object" &&
+        step !== null &&
+        typeof (step as { error?: unknown }).error === "string" &&
+        (step as { error: string }).error.startsWith(UNLANDED_KEYBOARD_STEP_ERROR)
+    )
+  );
+}
+
+/**
  * Rewrite a nested `flow-execute` target from `flow_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
@@ -1261,7 +1284,7 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
           const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
           if (probed) waitWarning = { warning: probed, kind: "conversion" };
         }
-      } else if (isUnlandedKeyboardTextResult(params.command, toolResult)) {
+      } else if (unlandedKeyboardStep(params.command, toolResult)) {
         // Same gap, different tool: a verdict reported in the result rather than
         // thrown records green and replays red. See UNLANDED_KEYBOARD_WARNING.
         waitWarning = { warning: UNLANDED_KEYBOARD_WARNING, kind: "typed" };

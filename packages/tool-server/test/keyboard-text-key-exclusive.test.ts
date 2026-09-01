@@ -369,6 +369,25 @@ describe("keyboard — how the constraint reaches a client", () => {
     expect(key.description).toMatch(/run-sequence/);
   });
 
+  for (const { platform, udid, injections } of BACKENDS) {
+    it(`${platform}: types nothing when the caller has already cancelled`, async () => {
+      // `longRunning` drops the MCP adapter's 30 s bound, so the signal is all
+      // that is left to stop a call nobody is waiting for. Checked in `execute`
+      // as well as inside the backends that loop per key, because this is the
+      // last point common to all four where nothing has reached the device.
+      await expect(
+        createKeyboardTool(registry()).execute(
+          {},
+          { udid, text: "hi", delayMs: 0 } as never,
+          {
+            signal: AbortSignal.abort(),
+          } as never
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(injections()).toBe(0);
+    });
+  }
+
   it("accepts and rejects exactly the shapes the docs describe", async () => {
     // The runtime table the prose above stands for. Without it "text OR key"
     // is only ever asserted one shape at a time, and the neither/empty-half

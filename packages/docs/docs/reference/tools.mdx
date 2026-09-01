@@ -94,7 +94,13 @@ conclude. The `note` field gives the reason. The repair can run before an inconc
 read, so an absent `verified` does not mean that the field is untouched.
 
 A `false` verdict stops a `run-sequence` at that step. It also fails a flow `type` step
-and a flow `tool: keyboard` step. An absent `verified` stops nothing.
+and a flow `tool: keyboard` step. An absent `verified` stops nothing. A flow `type` step
+that passes with a `note` carries that note as the step warning.
+
+A cancelled call stops the typing. Argent types nothing when the cancel arrives before the
+first keystroke. The Android, iOS simulator and Chromium backends also stop between keys.
+A cancel inside an Android repair can leave the field with fewer characters than it held
+before the call, because the repair deletes before it types.
 
 ## JavaScript runtime debugging
 

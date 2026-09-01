@@ -255,6 +255,11 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    // Passing is not the whole verdict: the note says the read-back could not
+    // conclude, and a directive step carries no `result` for the reader to find
+    // it in — so it rides on `warning`, as `runIdle`'s weak passes do. Without it
+    // an unverified type step and a verified one are the same row.
+    expect(result.steps[0].warning).toContain("was not verified against the screen");
     expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
       "a@b.com",
       "enter",
@@ -283,6 +288,9 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    // A verdict with nothing to caveat carries no warning, so the one above is a
+    // real observation rather than a field every type step has.
+    expect(result.steps[0].warning).toBeUndefined();
   });
 });
 

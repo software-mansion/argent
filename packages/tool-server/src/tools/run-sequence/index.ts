@@ -84,6 +84,14 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
+/**
+ * How a `keyboard` read-back verdict reads once this tool has converted it into a
+ * step error. `flows/flow-add-step.ts` matches on it: its own gate keys on the
+ * recorded command being `keyboard`, which the sequence spelling — the one the
+ * keyboard description prescribes for typing a secret and submitting it — hides.
+ */
+export const UNLANDED_KEYBOARD_STEP_ERROR = "typed text did not land";
+
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
@@ -227,7 +235,7 @@ proved the typed text did not land — and returns partial results.`,
           if (isUnlandedKeyboardTextResult(step.tool, result)) {
             results.push({
               tool: step.tool,
-              error: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
+              error: `${UNLANDED_KEYBOARD_STEP_ERROR}${result.note ? `: ${result.note}` : ""}`,
             });
             break;
           }

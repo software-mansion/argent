@@ -137,6 +137,35 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
     });
 
+    it("stops between keys once the caller cancels", async () => {
+      // 400 characters is ~80 s of presses here, and `longRunning` leaves the
+      // signal as the only thing that can end them: without this check they keep
+      // landing in whatever the app focuses after the client is gone.
+      const { events, api } = hidRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          controller.abort();
+        },
+      };
+
+      await expect(
+        typeSimulatorServer(
+          registryWith(aborting),
+          IOS_SIM,
+          { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+          controller.signal
+        )
+      ).rejects.toThrow(/abort/i);
+
+      // "h" was on its way when the cancel landed; "i" never went out.
+      expect(events).toEqual([
+        ["Down", HID_H],
+        ["Up", HID_H],
+      ]);
+    });
+
     it("shifts only the character that needs it", async () => {
       const { events, api } = hidRecorder();
 
@@ -203,6 +232,31 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   });
 
   describe("chromium", () => {
+    it("stops between keys once the caller cancels", async () => {
+      // Three CDP events and a pause per character, with `longRunning` leaving
+      // nothing else to end them once the client is gone.
+      const { events, api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      await expect(
+        makeChromiumImpl(registryWith(aborting)).handler(
+          {},
+          { udid: CHROMIUM.id, text: "hi", delayMs: 0 },
+          CHROMIUM,
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/abort/i);
+
+      // The triple for "h" completes; nothing of "i" is dispatched.
+      expect(events.map((e) => e.type)).toEqual(["keyDown", "char", "keyUp"]);
+    });
+
     it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {
       const { events, api } = cdpRecorder();
 

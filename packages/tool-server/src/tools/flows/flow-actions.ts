@@ -1541,7 +1541,20 @@ async function runType(
     // UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
-  return { ok: true };
+  // A note on a passing result is the read-back reporting that it could not
+  // conclude, or that it repaired the field to get there. The raw `tool: keyboard`
+  // spelling of the same call keeps it in the step's `result`; a directive step
+  // carries no result, so without this an unverified type step and a verified one
+  // are indistinguishable in the report.
+  const note = keyboardResultNote(typed);
+  return note ? { ok: true, warning: note } : { ok: true };
+}
+
+/** The read-back's `note`, from a result that crossed the registry untyped. */
+function keyboardResultNote(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const note = (result as { note?: unknown }).note;
+  return typeof note === "string" && note !== "" ? note : undefined;
 }
 
 /**

@@ -7,7 +7,11 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise<KeyboardResult> {
+async function runChromium(
+  api: ChromiumCdpApi,
+  params: KeyboardParams,
+  signal?: AbortSignal
+): Promise<KeyboardResult> {
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
@@ -15,6 +19,10 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   // one of the two blocks below runs.
   if (params.text) {
     for (const char of params.text) {
+      // Three CDP events plus a pause per character, with `longRunning` leaving
+      // no other bound: stop between keys once the caller cancels, as the
+      // simulator-server backend and `tv-remote`'s button loop do.
+      signal?.throwIfAborted();
       const desc = charToChromiumKey(char);
       if (!desc) {
         // Caller input error → 400, in the cross-backend
@@ -86,10 +94,10 @@ export function makeChromiumImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       const ref = chromiumCdpRef(device);
       const chromium = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-      return runChromium(chromium, params);
+      return runChromium(chromium, params, options?.signal);
     },
   };
 }

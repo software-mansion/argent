@@ -2395,6 +2395,46 @@ describe("a recorded keyboard step whose text did not land", () => {
     ]);
   });
 
+  it("warns the same way when the typing was recorded inside a run-sequence", async () => {
+    // The spelling the keyboard description prescribes for typing a secret and
+    // submitting it. `run-sequence` converts the verdict into a step error of its
+    // own and returns normally, so a gate keyed on the recorded command being
+    // `keyboard` sees a plain result — and `flow-run` still fails it at replay.
+    await startRecording("typed-in-sequence");
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "run-sequence") {
+          return {
+            completed: 0,
+            total: 2,
+            steps: [{ tool: "keyboard", error: `typed text did not land: ${UNLANDED.note}` }],
+          };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "typed-in-sequence",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: ANDROID,
+          steps: [
+            { tool: "keyboard", args: { text: TYPED_TEXT } },
+            { tool: "keyboard", args: { key: "enter" } },
+          ],
+        }),
+      }
+    );
+
+    expect(warningOf(result, "typed-in-sequence")).toContain("the text did not reach the field");
+    expect(result.stepCount).toBe(1);
+  });
+
   // Only a read-back that RAN and disagreed may warn.
   const QUIET: Array<{ name: string; result: Record<string, unknown> }> = [
     {

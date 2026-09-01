@@ -11,10 +11,10 @@ export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    handler: async (_services, params, device) =>
+    handler: async (_services, params, device, options) =>
       (await isTvOsSimulator(device.id))
         ? typeTv(registry, device, params)
-        : typeSimulatorServer(registry, device, params),
+        : typeSimulatorServer(registry, device, params, options?.signal),
   };
 }
 
@@ -22,6 +22,7 @@ export function makeIosRemoteImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    handler: async (_services, params, device) => typeSimulatorServer(registry, device, params),
+    handler: async (_services, params, device, options) =>
+      typeSimulatorServer(registry, device, params, options?.signal),
   };
 }
