@@ -45,7 +45,15 @@ export interface PollDescribeTreeResult<R> {
   elapsedMs: number;
   /** Most recent successfully-fetched tree; null if none ever arrived. */
   lastData: DescribeTreeData | null;
-  /** Fetch error or timeout message; cleared by a successful fetch. */
+  /**
+   * Message from a fetch that FAILED. Cleared by a successful fetch, and never
+   * written for a fetch the deadline merely abandoned — that one is
+   * {@link lastAttemptSettled}, and conflating the two tells a caller its source
+   * is broken when it was only slow.
+   *
+   * Set does not mean the LAST fetch failed, though: a deadline that abandons a
+   * fetch leaves the previous poll's failure standing here.
+   */
   lastError?: string;
   /**
    * How many fetches came back with a tree, as opposed to erroring or being cut
@@ -128,12 +136,11 @@ export async function pollDescribeTree<R>(
     if (settled.type === "aborted") return outcome(undefined, true);
     lastAttemptSettled = settled.type !== "timeout";
     if (settled.type === "timeout") {
-      // A fetch that merely straddled the deadline leaves lastData in place for
-      // the caller's note; only report a hard failure when no tree ever arrived.
-      // `lastAttemptSettled` is what tells that stale tree from a fresh one.
-      if (lastData === null) {
-        lastError ??= `tree fetch did not complete within the ${timeoutMs}ms wait budget`;
-      }
+      // Nothing is written to `lastError`: the deadline abandoning a fetch is not
+      // that fetch failing, and a caller told otherwise goes looking for a broken
+      // source. `lastAttemptSettled` carries it instead, and any error already
+      // here belongs to a genuine failure earlier in the wait. `lastData` is left
+      // in place too, so the caller can still build a note from the older tree.
       break;
     }
     if (settled.type === "error") {

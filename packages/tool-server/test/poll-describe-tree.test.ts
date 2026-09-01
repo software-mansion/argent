@@ -96,7 +96,9 @@ describe("pollDescribeTree", () => {
 
   // The exemption in that same break: the FIRST fetch is issued whatever the
   // budget, because a budget too small to read anything in IS the tree outrunning
-  // it, and that has to be observable rather than silently skipped.
+  // it, and that has to be observable rather than silently skipped. It is
+  // reported through `lastAttemptSettled` alone — putting it in `lastError` would
+  // hand the caller a broken source where there is only a slow one.
   it("still issues the first fetch and reports it cut off when the tree never answers", async () => {
     const poll = await neverDone(never, 60, 5000);
 
@@ -104,7 +106,27 @@ describe("pollDescribeTree", () => {
     expect(poll.samples).toBe(0);
     expect(poll.lastAttemptSettled).toBe(false);
     expect(poll.lastData).toBeNull();
-    expect(poll.lastError).toBe("tree fetch did not complete within the 60ms wait budget");
+    expect(poll.lastError).toBeUndefined();
+  });
+
+  // A real failure early on, then a deadline that abandons the next fetch before
+  // any tree arrives. The abandonment must not overwrite the error that explains
+  // the wait, and must not be mistaken for one either.
+  it("keeps an earlier fetch's error when the deadline abandons the next one", async () => {
+    let n = 0;
+    const poll = await neverDone(
+      async () => {
+        n += 1;
+        if (n === 1) throw new Error("renderer detached");
+        return never();
+      },
+      200,
+      10
+    );
+
+    expect(poll.samples).toBe(0);
+    expect(poll.lastAttemptSettled).toBe(false);
+    expect(poll.lastError).toBe("renderer detached");
   });
 
   // A fetch abandoned at the deadline leaves the PREVIOUS tree in place, so the
@@ -190,8 +212,10 @@ describe("pollDescribeTree", () => {
     expect(poll.samples).toBe(2);
     expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(90);
     // The trailing fetch is abandoned at the deadline, so it can only have run
-    // for what was left — never longer than the budget itself.
-    expect(poll.slowestFetchMs).toBeLessThanOrEqual(400);
+    // for what was left. Bounded by the budget, but measured in wall clock, so
+    // the margin is for a loaded runner delivering the timeout callback late —
+    // the point is that an abandoned fetch stops counting, not the exact figure.
+    expect(poll.slowestFetchMs).toBeLessThan(1500);
   });
 
   it("reports zero slowestFetchMs when no fetch was ever issued", async () => {

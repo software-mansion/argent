@@ -47,27 +47,19 @@ export async function describeAndroid(
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
       const [{ xml }, size] = await Promise.all([
-        // clearCache: every reader of this tree is answering "what is on the
-        // screen right now" — the `describe` tool and its Android TV branch,
-        // `await-screen-idle`, `await-ui-element`, the shared selector match
-        // (which becomes tap coordinates) and the Lens/preview route all reach
-        // the helper through here. The helper's long-lived connection caches
+        // clearCache: the helper's long-lived connection caches
         // AccessibilityNodeInfo per node, and only an accessibility
-        // content-change event from the app invalidates an entry. An app that
-        // emits none for a node — a running stopwatch is the reproducible case —
-        // leaves that entry valid forever, and the cached read keeps serving its
-        // first-seen text while the screen moves on. It takes no app restart:
-        // measured on a freshly-opened connection, 20 cached reads across 30 s
-        // all returned 2:09.32 against a timer that had reached 2:40.32.
-        //
-        // The cost scales with the tree, since dropping the cache makes the walk
-        // re-fetch every node over binder; `GetHierarchyOptions.clearCache` in
-        // the blueprint carries the per-node measurements. On the polled readers
-        // that cost lands as a verdict, not just latency: they bound each fetch
-        // by the budget they were given, so a tree too slow to read leaves them
-        // fewer samples than their verdict needs. Both say so in a note rather
-        // than let the verdict stand unqualified; see `samples` in
-        // poll-describe-tree.
+        // content-change event from the app invalidates an entry — so an app
+        // that emits none for a node, a running stopwatch being the reproducible
+        // case, leaves the cached read serving its first-seen text while the
+        // screen moves on. It takes no app restart: on a freshly-opened
+        // connection, 20 cached reads across 30 s all returned 2:09.32 against a
+        // timer that had reached 2:40.32. Everything reaching the helper through
+        // here is answering "what is on the screen right now", down to the
+        // selector matches that become tap coordinates, so a wrong tree beats a
+        // slow one only in latency. `GetHierarchyOptions.clearCache` carries
+        // what the coherent walk costs — a cost the wait tools take as fewer
+        // samples, and report in a note (see `samples` in poll-describe-tree).
         devtools.getHierarchy({ clearCache: true }),
         devtools.getScreenSize(),
       ]);

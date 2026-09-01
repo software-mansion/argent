@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -62,6 +63,23 @@ function iosRegistry(ax: AXServiceApi) {
 }
 
 const content = () => axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
+
+const CHROMIUM_ID = "chromium-cdp-9222";
+
+// The Chromium equivalent of `content()`: one labelled node under the document.
+const DOM_TREE = {
+  role: "html",
+  frame: { x: 0, y: 0, width: 1, height: 1 },
+  children: [
+    {
+      role: "button",
+      label: "Continue",
+      clickable: true,
+      frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
+      children: [],
+    },
+  ],
+};
 
 // A read that costs real time but a small fraction of the budget: the shape that
 // separates "the tree was too slow" from "the schedule left no room". A describe
@@ -239,6 +257,7 @@ describe("await-screen-idle tool", () => {
     expect(result.settled).toBe(false);
     expect(result.note).not.toContain("last tree fetch failed");
     expect(result.note).toContain("did not finish within the 120ms budget");
+    expect(result.note).toContain("the screen was never read");
     expect(result.note).toContain("Raise timeoutMs");
   });
 
@@ -255,7 +274,7 @@ describe("await-screen-idle tool", () => {
     );
 
     expect(result.settled).toBe(false);
-    expect(result.polls).toBe(1);
+    expect(result.note).toContain("only 1 tree read");
     expect(result.note).toContain("pollIntervalMs (2000ms)");
     expect(result.note).toContain("never sampled twice");
     expect(result.note).not.toContain("outran the budget");
@@ -268,7 +287,7 @@ describe("await-screen-idle tool", () => {
 
     const result = await tool.execute({}, { udid: IOS_UDID, timeoutMs: 100 });
 
-    expect(result.polls).toBe(1);
+    expect(result.note).toContain("only 1 tree read");
     expect(result.note).toContain("never sampled twice");
     // Whether the remedy is the interval or the budget depends on how long the
     // one read took, which a loaded runner decides; what must never come back is
@@ -294,9 +313,12 @@ describe("await-screen-idle tool", () => {
 
     expect(result.settled).toBe(false);
     expect(result.polls).toBe(1);
-    expect(result.note).toContain("at any pollIntervalMs");
+    expect(result.note).toContain("two reads that size do not fit");
     expect(result.note).toContain("Raise timeoutMs");
+    // The interval is not the knob here, so it must not be named as one — but
+    // the note may not rule it out either: a faster next read could still fit.
     expect(result.note).not.toContain("pollIntervalMs (400ms)");
+    expect(result.note).toContain("only if the next read is faster");
   });
 
   // A tree read many times over with nothing in it is not a screen that kept
@@ -304,6 +326,25 @@ describe("await-screen-idle tool", () => {
   // cannot see the app — belongs to the adapter, so the note says both are open
   // and appends the hint that decides. Apple TV is the standing case: this
   // tool's iOS reader has no focus tree to return there at all.
+  // A read that used half the budget, and a poll sleep that then handed the next
+  // one less than it needs. That fetch times out on the schedule, not on the
+  // tree — calling it a tree too slow to read points at `timeoutMs` for the
+  // wrong reason and, worse, contradicts the read that plainly did land. Only a
+  // window where NOTHING came back is the tree outrunning the budget.
+  it("does not call a read that took half the budget one that outran it", async () => {
+    const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(200)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 400, pollIntervalMs: 100, minStableMs: 250 }
+    );
+
+    expect(result.polls).toBe(2);
+    expect(result.note).not.toContain("outran the budget");
+    expect(result.note).toContain("one tree fetch took");
+    expect(result.note).toContain("Raise timeoutMs");
+  });
+
   it("reports a tree that never returned content rather than an observed change", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([axResponse([])])));
 
@@ -381,6 +422,56 @@ describe("await-screen-idle tool", () => {
   // Read repeatedly, never once different, and still `settled: false` — because
   // minStableMs cannot elapse inside this budget. Saying nothing here would
   // assert motion over a screen that was demonstrably still.
+  it("keeps a fetch failure the deadline hid from the last-attempt check", async () => {
+    // Chromium, because a throw out of the iOS AX service is swallowed into an
+    // empty tree plus a hint — it never reaches `lastError`. Here the failing
+    // read is not the LAST attempt either: the one after it is still in flight
+    // when the deadline lands, so the fetch-failed arm cannot see it. Without
+    // the append the note offers `minStableMs` and `timeoutMs` to a caller whose
+    // renderer has gone.
+    let call = 0;
+    const chromium = {
+      refreshViewport: async () => ({ width: 1024, height: 768 }),
+      cdp: {
+        send: async (method: string) => {
+          if (method !== "Runtime.evaluate") return {};
+          call += 1;
+          if (call <= 2) return { result: { value: JSON.stringify({ tree: DOM_TREE }) } };
+          if (call === 3) throw new Error("renderer detached");
+          return new Promise(() => {});
+        },
+      },
+    } as unknown as ChromiumCdpApi;
+    const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
+
+    const result = await tool.execute(
+      { chromium },
+      { udid: CHROMIUM_ID, timeoutMs: 500, pollIntervalMs: 50, minStableMs: 5000 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toMatch(/minStableMs/);
+    expect(result.note).toMatch(/a tree read also failed: renderer detached/);
+  });
+
+  it("does not call a lone content read identical to anything", async () => {
+    // One read with content and the rest empty. Nothing was compared, so the
+    // note must not describe a comparison — the arm below it would say the
+    // reads "were identical".
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(makeSequencedAXService([content(), axResponse([])]))
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 300, pollIntervalMs: 60, minStableMs: 100 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toMatch(/never compared with anything/);
+    expect(result.note).not.toMatch(/identical/);
+  });
+
   it("reports minStableMs left unconfirmed rather than an observed change", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(5)));
 
@@ -410,6 +501,101 @@ describe("await-screen-idle tool", () => {
     expect(result.settled).toBe(false);
     expect(result.polls).toBe(0);
     expect(result.note).toBe("wait was cancelled before the screen settled");
+  });
+
+  // The counter has to be TRAILING blanks, not any blank: a blank in the middle
+  // of a run that ends with content leaves the deadline properly watched, and
+  // the arm below must not fire on it and report a last read that came back
+  // empty when the last read had content.
+  it("keeps a blank in the middle from reading as a dark tail", async () => {
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(
+        makeSequencedAXService([
+          content(),
+          axResponse([]),
+          axResponse([{ label: "Moved", frame: FRAME, traits: ["button"] }]),
+        ])
+      )
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 400, pollIntervalMs: 50, minStableMs: 5000 }
+    );
+
+    expect(result.settled).toBe(false);
+    // The screen was seen changing and was still being watched at the deadline:
+    // the bare verdict is the whole answer.
+    expect(result.note).toBeUndefined();
+  });
+
+  // A change seen early, then a reader that goes dark and stays dark. The change
+  // is real — two content reads did differ — but nothing watched the screen up
+  // to the deadline, and a bare `settled: false` claims the motion was followed
+  // to the end. On iOS a run of empty trees is what a failing read looks like.
+  it("does not report motion it stopped watching as motion up to the deadline", async () => {
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(
+        makeSequencedAXService([
+          content(),
+          axResponse([{ label: "Moved", frame: FRAME, traits: ["button"] }]),
+          axResponse([]),
+        ])
+      )
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 400, pollIntervalMs: 50, minStableMs: 250 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toMatch(/seen changing/);
+    expect(result.note).toMatch(/came back empty/);
+    expect(result.note).toMatch(/stillness is untested/);
+  });
+
+  // The cancel arm and the fetch-failed arm can both be true at once: a fetch
+  // that threw sets `lastError`, and the caller giving up during the next poll
+  // sleep sets `aborted`. Cancellation is the truer answer — the wait stopped
+  // because the caller stopped it — so it has to be tested first. The already-
+  // aborted test above leaves `lastError` unset and cannot see the order.
+  it("prefers cancelled over a fetch error that happened before the cancel", async () => {
+    const tool = createAwaitScreenIdleTool({
+      resolveService: vi.fn(async () => {
+        throw new Error("no android-devtools helper");
+      }),
+    } as any);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 80);
+
+    const result = await tool.execute({}, { udid: "emulator-5554", timeoutMs: 30_000 }, {
+      signal: ac.signal,
+    } as never);
+
+    expect(result.polls).toBeGreaterThan(0);
+    expect(result.note).toBe("wait was cancelled before the screen settled");
+  });
+
+  // The upper edge of the two-sample gate. A wait that DID compare the screen
+  // with itself must not be told it never was — widening the threshold to 3 is
+  // otherwise invisible.
+  it("does not claim a two-sample wait was never sampled twice", async () => {
+    // Two content reads, then empties: enough samples to compare, and a verdict
+    // that still cannot be `settled`.
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(makeSequencedAXService([content(), content(), axResponse([])]))
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 400, pollIntervalMs: 50, minStableMs: 5000 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBeGreaterThanOrEqual(3);
+    expect(result.note).not.toMatch(/never sampled twice/);
+    expect(result.note).toMatch(/minStableMs/);
   });
 
   // Every `settled: false` shape the tool distinguishes has to survive into the

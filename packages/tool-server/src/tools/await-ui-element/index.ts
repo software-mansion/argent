@@ -62,10 +62,11 @@ const HIDDEN_UNREADABLE_NOTE =
  * judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
- * - `unreadable` — no read that can speak for the screen at the deadline. The
- *   source never answered, or it went dark at the end, or the last good read is
- *   further behind the deadline than a poll explains (a coarse `pollIntervalMs`
- *   does that on a source that never failed at all). Nothing was judged.
+ * - `unreadable` — no read that speaks for the screen at the deadline. The
+ *   source never answered, or it went dark at the end, or the last good read
+ *   lies further behind the deadline than a poll excuses (a `pollIntervalMs`
+ *   past 2000ms does that on a source that never failed at all). Anything
+ *   judged was judged too early to stand for the deadline.
  * - `cancelled` — the caller gave up before the deadline. Also no verdict.
  */
 export type UnmetUiWaitCause = "unmet" | "unreadable" | "cancelled";
@@ -169,6 +170,17 @@ const conditionCompleted = {
   text: "UI element matched expected text",
 } as const;
 
+// A timed-out wait returns `success: false` rather than throwing, so the
+// completion line — not `failedMsg` — is what the user reads for it. Every
+// shape `cause` distinguishes needs its own, or the distinction stops at the
+// JSON.
+const conditionUnmet = {
+  exists: "UI element never appeared",
+  visible: "UI element never became visible",
+  hidden: "UI element never became hidden",
+  text: "UI element never matched expected text",
+} as const;
+
 interface WaitResult {
   success: boolean;
   elapsed: number;
@@ -201,6 +213,15 @@ const DARK_TAIL_TOLERANCE_INTERVALS = 2;
  * deadline straddle still reads as the blip it is.
  */
 const DARK_TAIL_TOLERANCE_MAX_MS = 2000;
+
+/**
+ * How far the last trusted read may lie behind the loop's exit and still be
+ * taken to describe it. The caller's own interval sets it, because the interval
+ * is the blindness the caller already accepted between looks.
+ */
+function darkTailToleranceMs(pollIntervalMs: number): number {
+  return Math.min(DARK_TAIL_TOLERANCE_INTERVALS * pollIntervalMs, DARK_TAIL_TOLERANCE_MAX_MS);
+}
 
 /**
  * How the loop's LAST fetch attempt ended, which is not a two-way question.
@@ -236,21 +257,21 @@ type FinalRead = "trusted" | "untrusted" | "unsettled";
  * be a whole interval old. `unmet` licenses a caller to rewrite or drop the
  * check (see the flow-authoring guidance), which a verdict that stale has not
  * earned.
+ *
+ * `endedAt` is passed rather than read here so the note beside this verdict
+ * quotes the same gap it was decided on.
  */
 function timeoutCause(
   condition: Params["condition"],
   lastTrustedReadAt: number | undefined,
   finalRead: FinalRead,
-  pollIntervalMs: number
+  pollIntervalMs: number,
+  endedAt: number
 ): UnmetUiWaitCause {
   if (lastTrustedReadAt === undefined) return "unreadable";
   if (finalRead === "untrusted" && condition === "hidden") return "unreadable";
-  const darkTailMs = Date.now() - lastTrustedReadAt;
-  const tolerance = Math.min(
-    DARK_TAIL_TOLERANCE_INTERVALS * pollIntervalMs,
-    DARK_TAIL_TOLERANCE_MAX_MS
-  );
-  return darkTailMs > tolerance ? "unreadable" : "unmet";
+  const darkTailMs = endedAt - lastTrustedReadAt;
+  return darkTailMs > darkTailToleranceMs(pollIntervalMs) ? "unreadable" : "unmet";
 }
 
 const capability: ToolCapability = {
@@ -302,38 +323,60 @@ function timeoutNote(
     pollIntervalMs: number;
     lastAttemptSettled: boolean;
     slowestFetchMs: number;
+    /** Gap from the last trusted read to the exit, when it is what made the
+     * verdict `unreadable`. */
+    staleReadMs?: number;
   }
 ): string {
-  if (fetchError !== undefined) {
-    // `lastError` carries the loop's OWN budget-expiry message when the deadline
-    // abandoned a fetch before any tree arrived, and calling that a failed fetch
-    // sends the reader after a source that was only slow. `lastAttemptSettled`
-    // (see poll-describe-tree) is what separates the two; the sibling tool draws
-    // the same line.
-    return budget.lastAttemptSettled
-      ? `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`
-      : `reading the tree did not finish within the ${budget.timeoutMs}ms budget, so no tree was ever ` +
-          `read and nothing judged the selector. Raise timeoutMs if the tree is merely large, or repair ` +
-          `the source if it has stopped answering altogether.`;
+  // `fetchError` is sticky: the loop clears it on a successful fetch but leaves
+  // it standing when the deadline abandons a later one, so it names the LAST
+  // fetch only when that fetch settled. Where it did not, `samples` says whether
+  // anything was read at all — and either way the failure itself is carried, not
+  // dropped for being out of position.
+  if (budget.lastAttemptSettled && fetchError !== undefined) {
+    return `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`;
   }
-  // One tree read inside the budget leaves the verdict below resting on that
-  // single sample, which can be the one taken before the element appeared. The
-  // selector diagnosis is still the most useful thing to report, so qualify it
-  // rather than replace it — but name the knob that applies. Lowering the sleep
-  // helps only when the sleep is what ran out: not when the deadline cut a fetch
-  // off (`lastAttemptSettled` false, see poll-describe-tree), and not when the
-  // one read that landed is over half the budget, since a second needs its
-  // length again plus the shortest sleep the schema takes.
-  const readCaveat =
-    samples < 2
-      ? budget.lastAttemptSettled &&
-        2 * budget.slowestFetchMs + MIN_POLL_INTERVAL_MS <= budget.timeoutMs
-        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — it took ` +
+  if (!budget.lastAttemptSettled && samples === 0) {
+    const earlier = fetchError === undefined ? "" : ` An earlier read failed: ${fetchError}.`;
+    return (
+      `reading the tree did not finish within the ${budget.timeoutMs}ms budget, so no tree was ever ` +
+      `read and nothing judged the selector.${earlier} Raise timeoutMs if the tree is merely large, ` +
+      `or repair the source if it has stopped answering altogether.`
+    );
+  }
+  // Trees were read; the diagnosis below is the useful thing to report, so what
+  // undermines it gets appended rather than replacing it. At most one caveat,
+  // most blind first:
+  //
+  // - one sample, which can be the read taken before the element appeared. Name
+  //   the knob that applies: lowering the sleep helps only when the sleep is
+  //   what ran out, not when the deadline cut a fetch off, and not when the
+  //   fetches ate over half the budget between them (a second sample needs the
+  //   slowest one's length again plus the shortest sleep the schema takes —
+  //   which is a bound on reads THIS size, not a promise the next costs as
+  //   much, so the remedy is offered rather than ruled out).
+  // - samples enough to compare, but the last one lies too far behind the
+  //   deadline to speak for it. Without this the note is word-for-word a
+  //   determinate miss, while `cause` says `unreadable`.
+  let readCaveat = "";
+  if (samples < 2) {
+    readCaveat =
+      budget.lastAttemptSettled &&
+      2 * budget.slowestFetchMs + MIN_POLL_INTERVAL_MS <= budget.timeoutMs
+        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — the slowest fetch took ` +
           `${budget.slowestFetchMs}ms, and pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a ` +
           `second — so this rests on that single sample; lower pollIntervalMs or raise timeoutMs)`
         : ` (only one tree read completed within the ${budget.timeoutMs}ms budget, so this rests on that ` +
-          `single sample — raise timeoutMs)`
-      : "";
+          `single sample — raise timeoutMs, or lower pollIntervalMs if reads that slow are the exception)`;
+  } else if (budget.staleReadMs !== undefined) {
+    readCaveat =
+      ` (the last tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
+      `screen after it, so this describes the screen then, not at the deadline; lower pollIntervalMs ` +
+      `(${budget.pollIntervalMs}ms))`;
+  }
+  // A fetch that failed before the deadline abandoned the final one: the window
+  // was part blind, which is half of why it looks the way it does below.
+  const droppedError = fetchError !== undefined ? ` (a tree read also failed: ${fetchError})` : "";
   const matches = lastTree ? findAll(lastTree, params.selector) : [];
   let base: string;
   switch (params.condition) {
@@ -361,7 +404,7 @@ function timeoutNote(
     default:
       base = "no element matched the selector before timeout";
   }
-  return appendDiagnostics(base + readCaveat, lastData);
+  return appendDiagnostics(base + readCaveat + droppedError, lastData);
 }
 
 // A factory (like `describe`) because the iOS / Android tree fetch resolves the
@@ -393,7 +436,14 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     interaction: {
       startedMsg: ({ params }) =>
         `Waiting for UI element to ${conditionDescription[params.condition]}`,
-      completedMsg: ({ params }) => conditionCompleted[params.condition],
+      completedMsg: ({ params, result }) =>
+        result.success
+          ? conditionCompleted[params.condition]
+          : result.cause === "cancelled"
+            ? "Wait for the UI element cancelled"
+            : result.cause === "unreadable"
+              ? `Could not judge whether the UI element would ${conditionDescription[params.condition]}`
+              : conditionUnmet[params.condition],
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for UI element: ${failureSignal.error_code}`,
     },
@@ -419,7 +469,8 @@ It polls the same accessibility / DOM tree as \`describe\`
 Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
 condition holding, which is not always a verdict on the condition: \`cause\` says which it was — \`unmet\` (the tree
 was read and the condition was false there), \`unreadable\` (no read that can speak for the screen at the deadline:
-the source never answered, went dark at the end, or the last good read is too far behind it — poll more often) or
+the source never answered, went dark at the end, or the last good read is too far behind it — the note names the
+knob, pollIntervalMs when the polling was sparse and timeoutMs when the reads were slow) or
 \`cancelled\` — and \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
 tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
     alwaysLoad: true,
@@ -507,9 +558,18 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             !isBlindRead(poll.lastData, everMatched)
           ? "trusted"
           : "untrusted";
+      const endedAt = Date.now();
+      const cause = timeoutCause(
+        params.condition,
+        lastTrustedReadAt,
+        finalRead,
+        pollIntervalMs,
+        endedAt
+      );
+      const darkTailMs = lastTrustedReadAt === undefined ? undefined : endedAt - lastTrustedReadAt;
       return {
         success: false,
-        elapsed: Date.now() - start,
+        elapsed: endedAt - start,
         note: timeoutNote(
           params,
           poll.lastData?.tree ?? null,
@@ -521,9 +581,13 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             pollIntervalMs,
             lastAttemptSettled: poll.lastAttemptSettled,
             slowestFetchMs: poll.slowestFetchMs,
+            staleReadMs:
+              darkTailMs !== undefined && darkTailMs > darkTailToleranceMs(pollIntervalMs)
+                ? darkTailMs
+                : undefined,
           }
         ),
-        cause: timeoutCause(params.condition, lastTrustedReadAt, finalRead, pollIntervalMs),
+        cause,
       };
     },
   };

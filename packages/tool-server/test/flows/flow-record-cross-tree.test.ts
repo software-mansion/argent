@@ -406,7 +406,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     const warning = warningOf(result, "blind");
-    expect(warning).toContain("without a trustworthy read of the UI tree");
+    expect(warning).toContain("no read that speaks for the screen there");
     expect(warning).toContain("UNKNOWN, not known-bad");
     // The note carries an error only where a fetch threw. An empty tree gives none.
     expect(warning).toContain("names the tree-source error where a fetch threw");
@@ -436,7 +436,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     const warning = warningOf(result, "carried");
-    expect(warning).toContain("without a trustworthy read of the UI tree");
+    expect(warning).toContain("no read that speaks for the screen there");
     expect(warning).toContain("UNKNOWN, not known-bad");
     expect(warning).not.toContain("the wait itself never held");
     // The control: the same note with no cause leaves `unmet` the only answer.
