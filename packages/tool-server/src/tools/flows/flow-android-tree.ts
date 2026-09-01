@@ -98,7 +98,7 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
  */
 function rectOverDescendants(node: ParsedXmlNode): PixelRect | null {
   let out: PixelRect | null = null;
-  const stack: ParsedXmlNode[] = childNodes(node).slice();
+  const stack: ParsedXmlNode[] = childNodes(node);
   while (stack.length > 0) {
     const n = stack.pop()!;
     if (isSystemChrome(n.attrs) || isNoisyUiAutomatorClass(n.attrs.class ?? "")) continue;
@@ -227,14 +227,13 @@ function projectAndroidNode(
     children: childNodes(node),
     // Off-screen text must not hoist, or an ancestor text assert would pass on
     // content the screen doesn't show. Any node with text is leaf-eligible (its
-    // label is non-empty), so `frame` was computed for it.
-    // The absorbed half contributes nothing of its own: its label is already on
-    // the surviving leaf, and shielding there would keep the page's text from
-    // reaching it.
-    ownText: frame && !absorbedHalf ? ownText : "",
+    // label is non-empty), so `frame` was computed for it — and never for an
+    // absorbed half, whose label is on the surviving leaf already.
+    ownText: frame ? ownText : "",
     leaf,
     // A password field shields even when it carries no id, so nothing from it
-    // bubbles into an ancestor's hoisted text.
+    // bubbles into an ancestor's hoisted text. An absorbed half never shields:
+    // it would keep the page's text from reaching the leaf that stands for it.
     shield: !absorbedHalf && (Boolean(identifier) || isPassword),
     // Scroll-clip inputs (see `flattenHoisting`): a scroller's raw bounds clip
     // its subtree, so a row scrolled out of view — but still on the device
@@ -307,7 +306,8 @@ function readAndroidTree(root: ParsedXmlNode): AndroidTreeContext {
     const { node, under } = stack.pop()!;
     if (under) ctx.inWebView.add(node);
     const kids = childNodes(node);
-    if (isUiAutomatorWebView(node.attrs.class ?? "")) {
+    const hostsWeb = isUiAutomatorWebView(node.attrs.class ?? "");
+    if (hostsWeb) {
       const webKids = kids.filter((c) => isUiAutomatorWebView(c.attrs.class ?? ""));
       const inner = webKids.length === 1 ? webKids[0]! : undefined;
       if (inner && kids.every((c) => c === inner || !yieldsLeaf(c))) {
@@ -315,8 +315,7 @@ function readAndroidTree(root: ParsedXmlNode): AndroidTreeContext {
         ctx.absorbedWebViewHalf.add(inner);
       }
     }
-    const childUnder = under || isUiAutomatorWebView(node.attrs.class ?? "");
-    for (const c of kids) stack.push({ node: c, under: childUnder });
+    for (const c of kids) stack.push({ node: c, under: under || hostsWeb });
   }
   return ctx;
 }
