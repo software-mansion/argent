@@ -92,14 +92,19 @@ export function makeAndroidImpl(
                 "have gone to the focus engine") +
             ". The probe " +
             "reads `pm list features` and `ro.build.characteristics`; a device still booting, or one " +
-            "under enough load to miss the 5s budget, answers neither. Check `list-devices` reports " +
-            "it in the `device` state and retry — or, if it IS a TV, drive the field with `tv-remote` " +
-            "and the app's own on-screen keyboard.",
+            "under enough load to miss the 5s budget, answers neither — and a device that is not in " +
+            "the `device` state at all (offline, unauthorized, gone) is never probed. Check " +
+            "`list-devices` reports it in the `device` state and retry — or, if it IS a TV, drive " +
+            "the field with `tv-remote` and the app's own on-screen keyboard.",
           {
             error_code: FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN,
             failure_stage: "keyboard_android_runtime_kind",
             failure_area: "tool_server",
-            error_kind: "timeout",
+            // Not "timeout": `getAndroidRuntimeKind` also answers undefined for
+            // a serial that is not in the `device` state — offline,
+            // unauthorized, gone — where no probe ran at all, let alone timed
+            // out. What every cause shares is that the answer was not found.
+            error_kind: "not_found",
             failure_command: "adb",
           }
         );

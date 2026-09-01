@@ -647,6 +647,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // refused `{ key: "backspace" }` used to be told the request would have
     // burst 200 delete keys, which is the other request's reason.
     expect(err?.message).toMatch(reason);
+    // Not "timeout": the same undefined comes back for a serial that is not in
+    // the `device` state, where no probe ran at all.
+    expect(getFailureSignal(err)?.error_kind).toBe("not_found");
     // Nothing reached the device.
     expect(adbShell).not.toHaveBeenCalled();
     // It re-probes once first: an indeterminate verdict is not cached, so a
