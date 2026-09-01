@@ -13,7 +13,7 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
-  subprocessFailureMetadata,
+  type FailureSignal,
 } from "@argent/registry";
 import { adbShell, shellQuote } from "./adb";
 import { InvalidToolInputError } from "./capability";
@@ -236,12 +236,17 @@ export async function injectAndroidClear(serial: string, signal?: AbortSignal): 
         failure_stage: "keyboard_clear_android_burst",
         failure_area: "tool_server",
         error_kind: getFailureSignal(err)?.error_kind ?? "subprocess",
-        // The spread, not a bare `failure_command`, exactly as the 24 other adb
-        // re-statements do it: hand-building the signal dropped
-        // `failure_exit_code` and `failure_signal`, so the SIGKILL from the 90s
-        // cap — the failure this budget exists to bound — was unrecoverable for
-        // every Android clear failure.
-        ...subprocessFailureMetadata(err, "adb"),
+        // Copied off `runAdb`'s OWN signal, not rebuilt from `err`. Every other
+        // adb re-statement in the repo hands `subprocessFailureMetadata` the raw
+        // `execFile` error; here `err` is already a `FailureError`, which keeps
+        // its `code`/`signal` behind a non-enumerable symbol rather than as own
+        // properties — so the spread recovered nothing and the SIGKILL from the
+        // 90s cap, the failure this budget exists to bound, stayed
+        // unrecoverable. Measured against a failing adb: `runAdb` reported
+        // `failure_exit_code: 1` and the spread yielded `{ failure_command }`
+        // alone.
+        failure_command: "adb",
+        ...subprocessMetadataOf(err),
       }
       // Deliberately NO `cause`: the message chain is rendered into agent
       // context, and the adb error quotes the whole `input keyevent` command
@@ -269,6 +274,23 @@ function reachedTheDevice(err: unknown): boolean {
   if (getFailureSignal(err)?.failure_spawn_code !== undefined) return false;
   const message = err instanceof Error ? err.message : String(err);
   return !ADB_NEVER_DELIVERED.test(message);
+}
+
+/**
+ * The subprocess half of an already-wrapped adb failure's signal, ready to
+ * spread over a re-statement. Empty for a failure that carries none.
+ */
+function subprocessMetadataOf(
+  err: unknown
+): Pick<FailureSignal, "failure_exit_code" | "failure_signal" | "failure_spawn_code"> {
+  const signal = getFailureSignal(err);
+  if (!signal) return {};
+  const { failure_exit_code, failure_signal, failure_spawn_code } = signal;
+  return {
+    ...(failure_exit_code === undefined ? {} : { failure_exit_code }),
+    ...(failure_signal === undefined ? {} : { failure_signal }),
+    ...(failure_spawn_code === undefined ? {} : { failure_spawn_code }),
+  };
 }
 
 /** The adb failure's own first line, without the 200-keycode command it quotes. */

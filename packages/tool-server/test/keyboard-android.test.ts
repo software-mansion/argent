@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Registry, FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import {
+  Registry,
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  subprocessFailureMetadata,
+  type DeviceInfo,
+} from "@argent/registry";
 
 // Capture the adb command strings instead of shelling out to a real device.
 // Keep `shellQuote` real (android-input relies on it) — only stub the transport
@@ -807,14 +814,25 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("keeps the subprocess telemetry every other adb re-statement keeps", async () => {
-    // The signal was hand-built with only `failure_command: "adb"`, dropping the
-    // `...subprocessFailureMetadata(err, "adb")` spread the 24 other adb sites
-    // use — so `failure_exit_code` and `failure_signal` were unrecoverable for
-    // every Android clear failure, including the SIGKILL from the 90s cap that
-    // this budget exists to bound.
+    // `failure_exit_code` and `failure_signal` must survive the re-statement,
+    // including the SIGKILL from the 90s cap that this budget exists to bound.
+    //
+    // The rejection is shaped as PRODUCTION shapes it: `adbShell` goes through
+    // `runAdb`, which throws an already-wrapped `FailureError` carrying its
+    // signal behind a symbol. A raw `execFile` error here would let a
+    // re-statement that reads own `.code` / `.signal` properties pass, and
+    // against the real adb that re-statement recovers nothing.
     adbShell.mockClear();
-    const killed = Object.assign(new Error("adb: killed"), { code: null, signal: "SIGKILL" });
-    adbShell.mockRejectedValueOnce(killed);
+    const raw = Object.assign(new Error("adb: killed"), { code: null, signal: "SIGKILL" });
+    adbShell.mockRejectedValueOnce(
+      new FailureError("adb -s emulator-5554 shell input keyevent … failed: adb: killed", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+        ...subprocessFailureMetadata(raw, "adb"),
+      })
+    );
     const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
       () => undefined,
       (e: unknown) => e as Error
