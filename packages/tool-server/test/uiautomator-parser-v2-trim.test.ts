@@ -761,6 +761,27 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(all.find((n) => n.role === "ScrollView")?.scrollHidden).toBe(1);
   });
 
+  it("keeps the hidden-child count through the duplicate-wrapper collapse", () => {
+    // The third way a counting node disappears: a clickable row whose only
+    // surviving child is a clickable node at the same bounds is the same tap
+    // target twice, so the row collapses into the child. A second child of the
+    // row that the scroller's clip hid takes its count with it unless the
+    // collapse hands it up — the most ordinary list row there is.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.ScrollView" bounds="[0,375][1080,875]" scrollable="true">
+    <node class="android.view.ViewGroup" resource-id="row" clickable="true" bounds="[0,387][1080,500]">
+      <node class="android.widget.Button" bounds="[0,387][1080,500]" clickable="true" text="Buy"/>
+      <node class="android.widget.TextView" bounds="[0,1400][1080,1500]" text="Below the fold"/>
+    </node>
+  </node>
+</hierarchy>`;
+    const all = flatten(parseUiAutomatorDump(xml, 1080, 2400));
+    expect(all.find((n) => n.label === "Buy")?.clickable).toBe(true);
+    expect(all.some((n) => n.label === "Below the fold")).toBe(false);
+    expect(all.find((n) => n.role === "ScrollView")?.scrollHidden).toBe(1);
+  });
+
   it("keeps the hidden-child count when the node that counted has no survivors", () => {
     // The other way a counting node disappears: its own box is unusable and the
     // clip hid every child it had, so the "invisible and nothing left" guard
