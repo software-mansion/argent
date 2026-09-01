@@ -601,18 +601,44 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   });
 
   it("keeps a control an app adds beside the web content", () => {
-    // Only an only-child pair merges. A WebView that publishes a control of its
-    // own alongside the web root is not a doubled host, and both nodes stay.
+    // A WebView that publishes a control of its own alongside the web root is
+    // not a doubled host: the control is something a selector can address, so
+    // both halves stay. The count has to be exact — a control whose class name
+    // merely contains "webview" is a `role: WebView` leaf in its own right, and
+    // it would hide the merged half behind a "more than one" test.
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.webkit.WebView" package="com.acme.app" bounds="[0,0][1080,1920]">
     <node index="0" class="android.webkit.WebView" package="com.acme.app" text="Login Page" bounds="[0,0][1084,1922]" />
-    <node index="1" class="com.acme.player.MyWebViewOverlay" package="com.acme.app" resource-id="com.acme:id/player" content-desc="Video player" clickable="true" bounds="[0,20][200,140]" />
+    <node index="1" class="com.acme.player.PlayerOverlay" package="com.acme.app" resource-id="com.acme:id/player" content-desc="Video player" clickable="true" bounds="[0,20][200,140]" />
   </node>
 </hierarchy>`;
     const flow = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
-    expect(findAll(flow, { role: "WebView" }).length).toBeGreaterThan(1);
+    expect(findAll(flow, { role: "WebView" })).toHaveLength(2);
     expect(findAll(flow, { identifier: "com.acme:id/player" })).toHaveLength(1);
+  });
+
+  // The role cannot tell the host's own landmark apart from a control an app
+  // adds under a `*WebView*` class name — `deriveUiAutomatorRole` maps every
+  // such name to "WebView". Folding that control into the landmark would delete
+  // a tappable element and move its id onto the whole page. The describe trim
+  // has the same case pinned.
+  it("keeps a control merely named like a WebView out of the merge", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.webkit.WebView" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="com.acme.player.MyWebViewOverlay" package="com.acme.app" resource-id="com.acme:id/player" content-desc="Video player" clickable="true" bounds="[0,20][200,140]" />
+  </node>
+</hierarchy>`;
+    const flow = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const player = findAll(flow, { identifier: "com.acme:id/player" });
+    expect(player).toHaveLength(1);
+    expect(player[0]!.label).toBe("Video player");
+    expect(player[0]!.clickable).toBe(true);
+    // The host keeps its own anonymous leaf and never adopts the control's id.
+    const host = findAll(flow, { role: "WebView" }).filter((n) => !n.identifier);
+    expect(host).toHaveLength(1);
+    expect(host[0]!.label).toBeUndefined();
   });
 
   // The other half of describe's degenerate-box handling. A node whose own box
