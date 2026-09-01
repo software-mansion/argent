@@ -244,3 +244,60 @@ describe("create-flow directive-answer docs", () => {
     }
   });
 });
+
+/**
+ * The `script` account in the flow-execute description is the only agent-facing
+ * statement of what the step needs and where its path points, so the two claims
+ * an author acts on are pinned here rather than left to prose review.
+ */
+describe("create-flow script docs", () => {
+  const description = (): string => {
+    const { description: text } = createRunFlowTool({} as unknown as Registry);
+    expect(text, "flow-execute no longer declares a description").toBeDefined();
+    return text!;
+  };
+
+  it("names every step that still resolves a device beside a deviceless script", () => {
+    // `run` and `when` are the two whose own body can be nothing but scripts
+    // and that resolve one anyway — `run` because the fragment is read at run
+    // time, `when` because the guard reads the device itself. A platform-gated
+    // seed is the natural next thing to write after this sentence, and on a
+    // host with no device of that platform the whole run is refused.
+    for (const kind of ["run", "when"]) {
+      expect(description(), kind).toMatch(
+        new RegExp(`a script-only flow runs with nothing booted[^.]*\`${kind}\``)
+      );
+    }
+  });
+
+  it("shows a script path that reaches the directory scripts really live in", () => {
+    // A path relative to the flow FILE, so a saved flow anchors in
+    // `.argent/flows/`. `scripts/seed.mjs` there names
+    // `.argent/flows/scripts/seed.mjs`, which is two directories from where the
+    // reference page and the skills put a script.
+    expect(description()).toContain("script: { path: ../../scripts/seed.mjs");
+  });
+
+  it("lists a script path among what a flow_path run re-anchors", () => {
+    // `project_root` still names the script's working directory either way; it
+    // is the RESOLUTION that moves to the YAML, and a `script:` path is the
+    // third thing that moves with it.
+    const schema = zodObjectToJsonSchema(
+      createRunFlowTool({} as unknown as Registry).zodSchema!
+    ) as { properties: Record<string, { description?: string }> };
+    const projectRoot = schema.properties.project_root?.description;
+    expect(projectRoot, "`project_root` no longer describes itself").toBeDefined();
+    expect(projectRoot!).toMatch(/with flow_path[^.]*script:/);
+  });
+
+  it("lets the chromium hoist follow every step a leading launch can sit behind", () => {
+    // The same set `precedesLeadingLaunch` admits. A flow that seeds a backend
+    // before it launches is exactly the shape this PR added, and it boots its
+    // own instance like any other leading launch.
+    for (const kind of ["run:", "echo:", "script:"]) {
+      expect(description(), kind).toMatch(
+        new RegExp(`following a leading[^.]*\`${kind.replace(":", ":")}\``)
+      );
+    }
+  });
+});
