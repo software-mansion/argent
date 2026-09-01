@@ -163,12 +163,11 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
 // (`UnsupportedOperationError`, the same shape a TV `key` gets); a page with
 // nothing editable focused is a caller mistake whose repair is one `gesture-tap`
 // (`InvalidToolInputError`). Both map to HTTP 400, so only the code separates
-// them in telemetry — an agent that retried a Vega clear forever and one that
+// them in telemetry — an agent that retried a refused `key` forever and one that
 // forgot to focus the field must not land in the same bucket.
 describe("keyboard `clear` — refusal taxonomy", () => {
   const APPLE_TV: DeviceInfo = { id: "TV-UDID", platform: "ios", kind: "simulator" };
   const ANDROID_TV: DeviceInfo = { id: "emulator-5554", platform: "android", kind: "emulator" };
-  const VEGA: DeviceInfo = { id: "vega-serial", platform: "vega", kind: "vvd" };
 
   /** Assert the error is the capability refusal, carrying its telemetry code. */
   async function expectUnsupported(p: Promise<unknown>): Promise<Error> {
@@ -188,32 +187,29 @@ describe("keyboard `clear` — refusal taxonomy", () => {
   it.each([
     ["Apple TV", APPLE_TV],
     ["Android TV", ANDROID_TV],
-  ])("%s: clear → capability refusal, before the TV service is resolved", async (_l, device) => {
-    // `resolveTvApi` is NOT stubbed in this file, so a backend that fell through
-    // to the daemon would try to spawn it and fail with something else — which
-    // is itself the observation that the rejection came first.
-    const err = await expectUnsupported(
-      typeTv({} as Registry, device, { udid: device.id, clear: true })
-    );
-    // The remedy has to be TV-shaped: there is no `clear` on a TV, and the way a
-    // person empties a field there is the app's own on-screen keyboard.
-    expect(err.message).toMatch(/`clear` is not supported on a TV target/);
-    expect(err.message).toMatch(/tv-remote/);
-  });
+  ])(
+    "%s: named key → capability refusal, before the TV service is resolved",
+    async (_l, device) => {
+      // `resolveTvApi` is NOT stubbed in this file, so a backend that fell through
+      // to the daemon would try to spawn it and fail with something else — which
+      // is itself the observation that the rejection came first.
+      const err = await expectUnsupported(
+        typeTv({} as Registry, device, { udid: device.id, key: "enter" })
+      );
+      // The remedy has to be TV-shaped: a named key is navigation there, and
+      // `tv-remote` is what owns it.
+      expect(err.message).toMatch(/named keys are not supported on a TV target/);
+      expect(err.message).toMatch(/tv-remote/);
+    }
+  );
 
-  it("vega: clear → capability refusal naming the on-screen keyboard", async () => {
-    const err = await expectUnsupported(vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA));
-    expect(err.message).toMatch(/`clear` is not supported on Vega/);
-  });
-
-  it("vega: that refusal is not gated behind an adb preflight", () => {
-    // `requires` is preflighted by `dispatchByPlatform` BEFORE the handler runs,
-    // so on a host without adb a Vega `clear` answered 424 "install adb"
-    // instead of the documented UnsupportedOperationError — a caller told to
-    // install a binary for a capability that will never exist. The check moved
-    // into the handler, below the refusal; keyboard-vega-adb-preflight.test.ts
-    // pins both halves against a missing adb.
-    expect(vegaImpl.requires ?? []).not.toContain("adb");
+  it("vega: clear is served, and its adb dependency is declared", () => {
+    // The refusal this file used to pin is gone: `inputd-cli` does carry a
+    // delete burst (utils/vega-input.ts `injectVegaClear`). With every shape
+    // this backend serves now injecting over adb, the dependency goes back on
+    // `requires`, where `dispatchByPlatform` preflights it into a 424 install
+    // hint — keyboard-vega-adb-preflight.test.ts pins that for all three.
+    expect(vegaImpl.requires ?? []).toContain("adb");
   });
 
   it("chromium: nothing editable focused → 400 + KEYBOARD_CLEAR_NO_EDITABLE_FOCUS", async () => {

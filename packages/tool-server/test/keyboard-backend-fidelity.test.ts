@@ -18,6 +18,7 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/vega-input")>()),
   injectVegaText: vi.fn(async () => {}),
   injectVegaNamedKey: vi.fn(async () => {}),
+  injectVegaClear: vi.fn(async () => {}),
 }));
 
 // Both ios branches probe the runtime kind by shelling out; stub them so the
@@ -40,7 +41,7 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   getSimulatorRuntimeKind,
 }));
 
-import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { injectVegaClear, injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { makeIosImpl, makeIosRemoteImpl } from "../src/tools/keyboard/platforms/ios";
 
 const IOS_SIM: DeviceInfo = { id: "TEST-UDID", platform: "ios", kind: "simulator" };
@@ -437,18 +438,52 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   // none, and the kind probe was pinned non-TV everywhere — so hoisting
   // `params.clear === true` above the probe would have aimed the 400-event burst
   // at a tvOS simulator with the whole suite green. (The route itself is
-  // correct: on a real tvOS 26.5 simulator `clear` and `key` are both refused
-  // with TOOL_CAPABILITY_UNSUPPORTED_OPERATION while `text` types.)
+  // correct: on a real tvOS 26.5 simulator a `clear` empties the focused field
+  // through the injected HID daemon — 250 characters -> 50 in 8.8s — while
+  // `key` is refused with TOOL_CAPABILITY_UNSUPPORTED_OPERATION and `text`
+  // types.)
   describe("ios — the local Apple TV route", () => {
     const APPLE_TV: DeviceInfo = { id: "TVOS-UDID", platform: "ios", kind: "simulator" };
 
-    it("refuses a clear on a tvOS simulator instead of bursting at it", async () => {
+    it("sends a tvOS clear to the TV daemon, not to simulator-server", async () => {
+      // The routing is the whole guard. `clearSimulatorServer` resolves the
+      // simulator-server blueprint for the udid it is given, which for a tvOS
+      // one answers nothing while still reporting `{ keys: 200, cleared: true }`
+      // — so a clear that reached the HID recorder here would be the bug, and
+      // the empty `events` is what says it did not.
       getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
       const { events, api } = hidRecorder();
-      await expect(
-        makeIosImpl(registryWith(api)).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV)
-      ).rejects.toBeInstanceOf(UnsupportedOperationError);
+      const clear = vi.fn(async () => 200);
+      // `includes`, not `startsWith`: `resolveDevice` classifies this fixture's
+      // id by shape, so the TV ref it builds is `AndroidTvControl:…` here and
+      // `TvControl:…` for a real tvOS UUID. Either way it is the TV service, and
+      // anything else must fall to the HID recorder so a wrong route shows up as
+      // events.
+      const result = await makeIosImpl({
+        resolveService: vi.fn(async (urn: string) => (urn.includes("TvControl") ? { clear } : api)),
+      } as never).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV);
+
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ typed: "", keys: 200, cleared: true });
       expect(events).toEqual([]);
+    });
+
+    it("hands the request's abort through to the tvOS burst", async () => {
+      // The tvOS burst reads the signal between its 200 socket writes, so a
+      // dropped `options?.signal` at THIS call site leaves a cancelled call
+      // driving the device for the rest of the burst — with `keyboard-tv.test.ts`
+      // (which calls `typeTv` directly) still green.
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { api } = hidRecorder();
+      const clear = vi.fn(async (_signal?: AbortSignal) => 200);
+      const controller = new AbortController();
+      await makeIosImpl({
+        resolveService: vi.fn(async (urn: string) => (urn.includes("TvControl") ? { clear } : api)),
+      } as never).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV, {
+        signal: controller.signal,
+      });
+
+      expect(clear).toHaveBeenCalledWith(controller.signal);
     });
 
     it("refuses a named key on one too", async () => {
@@ -489,6 +524,9 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         );
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
       expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_ios_runtime_kind");
+      // The message tells a LOCAL caller the retry is worth making: once the
+      // listing answers, the clear runs on either kind.
+      expect(err?.message).toMatch(/the clear then works on either kind/);
       expect(events).toEqual([]);
     });
 
@@ -584,19 +622,50 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(events).toEqual([]);
     });
 
-    it("refuses a clear on a REMOTE tvOS simulator instead of bursting at it", async () => {
-      // A remote tvOS sim is `ios-remote` by udid shape exactly as a local one is
-      // `ios`, so without the probe a remote Apple TV took the 400-event burst —
-      // the one thing platforms/tv.ts documents as unsupported on a TV.
+    it("refuses a named key on a REMOTE tvOS simulator, and not with the local wording", async () => {
+      // The other shape that reaches this branch. Nothing pinned it, so a
+      // fall-through to `runSimulatorServer` was green: a remote Apple TV would
+      // then take an Enter over the phone HID transport and report `{ keys: 1 }`.
       getRemoteSimulatorRuntimeKind.mockResolvedValueOnce("tv");
       const { events, api } = hidRecorder();
-      await expect(
-        makeIosRemoteImpl(registryWith(api)).handler(
-          {},
-          { udid: IOS_REMOTE.id, clear: true },
-          IOS_REMOTE
-        )
-      ).rejects.toBeInstanceOf(UnsupportedOperationError);
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, key: "enter" }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+      expect(err).toBeInstanceOf(UnsupportedOperationError);
+      expect(err?.message).toMatch(/`key` and `clear` are not supported on a REMOTE Apple TV/);
+      // NOT the local TV backend's wording. That one sends the caller to
+      // `tv-remote`, which does not declare `appleRemote` and so refuses this
+      // device too — advice that cannot be followed.
+      expect(err?.message).not.toMatch(/move focus with `tv-remote`/);
+      expect(err?.message).toMatch(/`tv-remote` cannot reach it either/);
+      expect(events).toEqual([]);
+    });
+
+    it("refuses a clear on a REMOTE tvOS simulator instead of bursting at it", async () => {
+      // A remote tvOS sim is `ios-remote` by udid shape exactly as a local one is
+      // `ios`, so without the probe a remote Apple TV took the 400-event burst
+      // meant for an iPhone.
+      //
+      // A LOCAL Apple TV now clears, and this one still cannot: the burst rides
+      // the tvOS HID daemon, a host process holding a client against a device in
+      // THIS machine's CoreSimulator set, and a sim-remote UDID is not one.
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { events, api } = hidRecorder();
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(err).toBeInstanceOf(UnsupportedOperationError);
+      // The message has to separate this refusal from the local route that
+      // works, and name a target that CAN serve the request.
+      expect(err?.message).toMatch(/not supported on a REMOTE Apple TV/);
+      expect(err?.message).toMatch(/LOCAL Apple TV simulator/);
       expect(events).toEqual([]);
     });
 
@@ -613,6 +682,12 @@ describe("keyboard backends — emit exactly the action they were given", () => 
           (e: unknown) => e as Error
         );
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      // Both impls share this message, and only one of them can promise a clear
+      // once the kind is known — a remote Apple TV refuses it outright. Left
+      // static, the retry this text prescribes walks a remote caller into that
+      // second failure.
+      expect(err?.message).toMatch(/a remote Apple TV does not support `clear` at all/);
+      expect(err?.message).not.toMatch(/works on either kind/);
       expect(events).toEqual([]);
     });
 
@@ -827,17 +902,31 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(injectVegaNamedKey).not.toHaveBeenCalled();
     });
 
-    it("rejects `clear` outright, injecting nothing", async () => {
-      // Vega has no measured delete transport: `inputd-cli` may be able to send
-      // KEY_BACKSPACE, but nothing has verified it on a VVD, and a clear that
-      // silently removes one character is worse than a refusal. Pinned here
-      // rather than only in the taxonomy file so the "injects nothing" half is
-      // observable on the same recorder the positive controls use.
-      await expect(
-        vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA)
-      ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    it("clears through the delete burst, typing and pressing nothing", async () => {
+      // The two neighbouring injectors are the point: `clear` shares a backend
+      // with them, and a branch that fell through would `send_text` an empty
+      // string or press a key. `keys` is the 200 presses issued, as on the other
+      // key-injecting backends — the field is never read back, so no
+      // `clearVerified`.
+      const result = await vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA);
+
+      expect(result).toEqual({ typed: "", keys: 200, cleared: true });
+      expect(injectVegaClear).toHaveBeenCalledTimes(1);
       expect(injectVegaText).not.toHaveBeenCalled();
       expect(injectVegaNamedKey).not.toHaveBeenCalled();
+    });
+
+    it("hands the request's abort down to the burst", async () => {
+      // `injectVegaClear` reads the signal to tell "cancelled before the send"
+      // — where it can prove the field is untouched — from a burst that may have
+      // half-emptied it. A backend that dropped the signal makes that
+      // distinction unreachable, and nothing else in the file would notice.
+      const controller = new AbortController();
+      await vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA, {
+        signal: controller.signal,
+      });
+
+      expect(vi.mocked(injectVegaClear).mock.calls.at(-1)?.[0]).toBe(controller.signal);
     });
 
     it("forwards the key it was given to the injector, not a hardcoded one", async () => {

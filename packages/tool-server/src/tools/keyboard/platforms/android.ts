@@ -51,15 +51,17 @@ async function typeAndroidPhone(
 // collapses "not a TV" and "could not tell" into `false`. `readRuntimeKind`
 // (utils/adb.ts) answers undefined when `pm list features` does not come back
 // within its 5s budget and `ro.build.characteristics` carries no `tv` token —
-// which is exactly what the Google ATV emulator reports (`emulator`). A first
-// probe that times out mid-boot or under load therefore used to aim the 200-key
-// burst at a TV, the one thing platforms/tv.ts exists to refuse, and `undefined`
-// is not cached so every call is exposed to it.
+// which is exactly what the Google ATV emulator reports (`emulator`).
 //
-// `text` is unaffected either way: on Android TV `TvControlApi.type` IS
-// `adb shell input text` (../../../blueprints/android-tv-control.ts), the same
-// channel the phone path uses. Only `key` and `clear` are refused on a TV, so
-// only they need the kind to be known.
+// Only `key` needs the answer, and only it re-probes. Everything else this
+// backend does is the SAME command on both kinds: `TvControlApi.type` IS
+// `adb shell input text` and `TvControlApi.clear` IS `injectAndroidClear`
+// (../../../blueprints/android-tv-control.ts), the very calls the phone path
+// below makes. So an unknown kind falls through to the phone path and still
+// sends exactly what a TV would have received — where refusing the clear, as
+// platforms/ios.ts still must, would only deny a request that cannot go wrong.
+// A named key is different: it is navigation on a TV, which `tv-remote` owns,
+// and pressing it at the focus engine is not what the caller asked for.
 export function makeAndroidImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
@@ -69,33 +71,26 @@ export function makeAndroidImpl(
     // `dispatchByPlatform`'s 424 install hint instead of from inside the probe.
     requires: ["adb"],
     handler: async (_services, params, device, options) => {
-      const needsKind = params.clear === true || params.key !== undefined;
+      const needsKind = params.key !== undefined;
       let kind = await getAndroidRuntimeKind(device.id);
-      // One re-probe, and only for the two shapes that need the answer: an
+      // One re-probe, and only for the shape that needs the answer: an
       // indeterminate verdict is never cached, so this is a real second read and
       // a probe that timed out under a load spike usually resolves here.
       if (kind === undefined && needsKind) kind = await getAndroidRuntimeKind(device.id);
-      if (kind === "tv") return typeTv(registry, device, params);
+      if (kind === "tv") return typeTv(registry, device, params, options?.signal);
       if (kind === undefined && needsKind) {
         throw new FailureError(
           `whether ${device.id} is a phone/tablet or an Android TV could not be determined, and ` +
-            (params.clear === true ? "`clear`" : "`key`") +
-            " means different things on the two — nothing was sent. It is refused rather than " +
-            "guessed: " +
-            // The reason is templated with the field name above it. Left static,
-            // a refused `{ key: "enter" }` was told the request would have burst
-            // 200 delete keys, which is a different request's justification.
-            (params.clear === true
-              ? `on a TV this would have burst ${CLEAR_KEY_PAIRS * 2} delete keys at the ` +
-                "focus engine"
-              : "a named key is navigation on a TV, which `tv-remote` owns, so this press would " +
-                "have gone to the focus engine") +
-            ". The probe " +
+            "`key` means different things on the two — nothing was pressed. It is refused rather " +
+            "than guessed: a named key is navigation on a TV, which `tv-remote` owns, so this " +
+            "press would have gone to the focus engine. The probe " +
             "reads `pm list features` and `ro.build.characteristics`; a device still booting, or one " +
             "under enough load to miss the 5s budget, answers neither — and a device that is not in " +
             "the `device` state at all (offline, unauthorized, gone) is never probed. Check " +
-            "`list-devices` reports it in the `device` state and retry — or, if it IS a TV, drive " +
-            "the field with `tv-remote` and the app's own on-screen keyboard.",
+            "`list-devices` reports it in the `device` state and retry — or, if it IS a TV, move " +
+            "focus with `tv-remote` instead. A `clear` needs none of this: it is the same " +
+            `${CLEAR_KEY_PAIRS * 2}-key \`adb shell input keyevent\` burst on both kinds, so it ` +
+            "runs whatever the probe says.",
           {
             error_code: FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN,
             failure_stage: "keyboard_android_runtime_kind",

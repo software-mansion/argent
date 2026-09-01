@@ -288,14 +288,36 @@ describe("keyboard classifications — the android clear path, through execute()
   });
 
   it("classifies an unreadable form factor as KEYBOARD_TARGET_KIND_UNKNOWN", async () => {
-    // `clear` means different things on a phone and on a TV, so an indeterminate
-    // probe is refused rather than guessed — and nothing reaches the device.
+    // `key` means different things on a phone and on a TV — navigation there,
+    // which `tv-remote` owns — so an indeterminate probe is refused rather than
+    // guessed, and nothing reaches the device.
+    //
+    // `key`, not `clear`: the clear is the SAME `adb shell input keyevent` burst
+    // on both kinds, so it no longer needs the answer and no longer refuses. It
+    // is the sibling case below that keeps this file covering the android clear
+    // path.
     vi.mocked(getAndroidRuntimeKind).mockResolvedValue(undefined);
+    expectCode(
+      await captureError(
+        createKeyboardTool(registry).execute({}, { udid: device.id, key: "backspace" })
+      ),
+      FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN
+    );
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValue("mobile");
+  });
+
+  it("still classifies a failed clear when the form factor is unreadable", async () => {
+    // The clear falls through to the phone path on an indeterminate probe, so
+    // its failures must keep their own code rather than becoming a kind refusal.
+    vi.mocked(getAndroidRuntimeKind).mockResolvedValue(undefined);
+    vi.mocked(adbShell).mockRejectedValueOnce(
+      Object.assign(new Error("adb: killed by signal"), { signal: "SIGKILL" })
+    );
     expectCode(
       await captureError(
         createKeyboardTool(registry).execute({}, { udid: device.id, clear: true })
       ),
-      FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN
+      FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED
     );
     vi.mocked(getAndroidRuntimeKind).mockResolvedValue("mobile");
   });

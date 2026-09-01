@@ -6,6 +6,7 @@ import { parse as parseIni } from "ini";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   subprocessFailureMetadata,
   type FailureSignal,
 } from "@argent/registry";
@@ -124,6 +125,29 @@ function describeAdbFailure(args: string[], err: unknown): Error {
   };
   return new FailureError(formatSubprocessFailure("adb", args, err), signal);
 }
+
+/**
+ * Whether an `adb` failure could have reached the guest at all.
+ *
+ * These are the adb CLIENT's own refusals, printed before any command is
+ * delivered — so nothing was injected and the device is untouched. Everything
+ * else (a non-zero exit from the command itself, a timeout, a budget's SIGKILL)
+ * may have done some of its work before it stopped.
+ *
+ * It lives here rather than beside either caller because it classifies
+ * `describeAdbFailure`'s own output: the delete bursts in ./android-input.ts and
+ * ./vega-input.ts both have to tell "the field may be half empty" from "the
+ * field is untouched", and a copy in each would drift.
+ */
+export function adbDeliveredCommand(err: unknown): boolean {
+  // A spawn failure means the adb binary itself never ran.
+  if (getFailureSignal(err)?.failure_spawn_code !== undefined) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return !ADB_NEVER_DELIVERED.test(message);
+}
+
+const ADB_NEVER_DELIVERED =
+  /device '[^']*' not found|device offline|device unauthorized|no devices\/emulators found|more than one device|device still (?:connecting|authorizing)/i;
 
 /**
  * `timeoutMs` bounds a hung child; `signal` cancels a live one. They answer

@@ -190,6 +190,52 @@ describe("android-tv-control — describe", () => {
   });
 });
 
+describe("android-tv-control — clear", () => {
+  it("bursts the delete keys through the phone path's own injector", async () => {
+    // The whole implementation is "call `injectAndroidClear` with this serial",
+    // and that is the point: on Android TV the input channel IS
+    // `adb shell input`, so the burst rides the transport `type` above already
+    // uses rather than a TV-specific one. Asserted at the adb boundary so a
+    // reimplementation that hand-rolled its own keycodes would show up.
+    const api = await makeApi();
+    mockShell.mockClear();
+    const keys = await api.clear();
+
+    expect(keys).toBe(200);
+    const [serial, command] = mockShell.mock.calls[0] as [string, string];
+    expect(serial).toBe(SERIAL);
+    // 100 (KEYCODE_DEL, KEYCODE_FORWARD_DEL) pairs, one invocation.
+    expect(mockShell).toHaveBeenCalledTimes(1);
+    expect(command.startsWith("input keyevent ")).toBe(true);
+    const codes = command.slice("input keyevent ".length).split(" ");
+    expect(codes).toHaveLength(200);
+    expect(new Set(codes)).toEqual(new Set(["67", "112"]));
+    // A clear must never type: `input text` is what `type` uses.
+    expect(command).not.toContain("input text");
+  });
+
+  it("hands the request's abort down to adb", async () => {
+    // The burst runs under a 90s budget; without the signal an abandoned call
+    // blocks for all of it and nothing kills the adb child.
+    const api = await makeApi();
+    mockShell.mockClear();
+    const controller = new AbortController();
+    await api.clear(controller.signal);
+
+    const opts = mockShell.mock.calls[0]![2] as { signal?: AbortSignal };
+    expect(opts.signal).toBe(controller.signal);
+  });
+
+  it("reports the full count, because the burst cannot be stopped partway", async () => {
+    // One `input keyevent` carries all 200 injections, so there is no partial
+    // count this backend could measure — it either resolves whole or throws.
+    // A short number here would make `typeTv` drop `cleared` for a burst that
+    // actually landed.
+    const api = await makeApi();
+    await expect(api.clear()).resolves.toBe(200);
+  });
+});
+
 describe("android-tv-control — recycleAx is a no-op", () => {
   it("resolves without touching adb", async () => {
     const api = await makeApi();

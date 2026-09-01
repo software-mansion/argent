@@ -10,7 +10,8 @@
 #   - screenshot         → `adb emu screenrecord` (PNG written host-side)
 #   - tv-remote          → `adb shell inputd-cli` button injection
 #   - describe           → `adb forward` + on-device automation toolkit
-#   - keyboard           → `adb shell inputd-cli send_text`
+#   - keyboard           → `adb shell inputd-cli send_text` (text) and
+#                          `inputd-cli series button_press` (the clear burst)
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
@@ -271,25 +272,24 @@ else
   fail "keyboard did not report injected keys (keys='${keys}')"
 fi
 
-# `clear` is refused on Vega: the delete burst the other platforms send has no
-# measured `inputd-cli` equivalent, and a clear that silently removes one
-# character is worse than a refusal. Own curl, not post_tool: `-f` swallows the
-# 400 body, and the body is what carries the capability code.
-clear_resp="$(curl -sS -m 60 -w '\n%{http_code}' -X POST "${TOOLS_URL}/tools/keyboard" \
-  -H 'Content-Type: application/json' \
-  -d "$(printf '{"udid":"%s","clear":true}' "$SERIAL")" 2>/dev/null)"
-clear_code="$(printf '%s' "$clear_resp" | tail -n 1)"
+# `clear` sends 200 KEY_BACKSPACE presses through the same `inputd-cli` channel.
+# No focused field is needed here either: what this gates is that the burst
+# reaches the device and the tool reports the presses it issued. The field-level
+# proof (250 characters -> 50 against a focused TextInput) is not something CI
+# can set up without an app fixture, so it stays a manual E2E result.
+clear_resp="$(post_tool keyboard "$(printf '{"udid":"%s","clear":true}' "$SERIAL")")" || clear_resp=""
+clear_keys="$(jget "$clear_resp" keys)"
+clear_flag="$(jget "$clear_resp" cleared)"
 echo "clear response: ${clear_resp:0:200}"
-# The code alone is not enough: TOOL_CAPABILITY_UNSUPPORTED_OPERATION is what
-# EVERY capability refusal returns, so a regression making `keyboard` wholly
-# unsupported on Vega would pass it. The message names this refusal in
-# particular (platforms/vega.ts), so match on both.
-if [ "$clear_code" = "400" ] &&
-   printf '%s' "$clear_resp" | grep -q "TOOL_CAPABILITY_UNSUPPORTED_OPERATION" &&
-   printf '%s' "$clear_resp" | grep -q "clear\` is not supported on Vega"; then
-  echo "OK: keyboard clear refused on Vega as an unsupported operation"
+# `keys` alone is not enough: it is 200 whatever the burst did. `cleared` is the
+# structural claim the tool makes, and `clearVerified` must NOT appear — nothing
+# reads the field back on Vega, and a backend that started claiming otherwise
+# would be telling callers the field is proven empty.
+if [ "$clear_keys" = "200" ] && [ "$clear_flag" = "True" ] &&
+   ! printf '%s' "$clear_resp" | grep -q "clearVerified"; then
+  echo "OK: keyboard clear issued 200 presses via inputd-cli, reported as SENT"
 else
-  fail "keyboard clear should be refused on Vega with its own message (http='${clear_code}')"
+  fail "keyboard clear should report 200 sent presses and no clearVerified (keys='${clear_keys}' cleared='${clear_flag}')"
 fi
 endg
 

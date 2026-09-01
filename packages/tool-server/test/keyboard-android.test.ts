@@ -43,8 +43,9 @@ const { typeTv } = vi.hoisted(() => ({
     async (
       _registry: unknown,
       _device: unknown,
-      _params: Record<string, unknown>
-    ): Promise<{ typed: string; keys: number }> => ({ typed: "TV", keys: 0 })
+      _params: Record<string, unknown>,
+      _signal?: AbortSignal
+    ): Promise<{ typed: string; keys: number; cleared?: true }> => ({ typed: "TV", keys: 0 })
   ),
 }));
 vi.mock("../src/tools/keyboard/platforms/tv", () => ({ typeTv }));
@@ -621,27 +622,26 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell.mock.calls.map((c) => c[1].split(" ")[1])).toEqual(["keyevent"]);
   });
 
-  it.each([
-    ["clear", { clear: true }, /burst 200 delete keys/],
-    ["key", { key: "backspace" }, /a named key is navigation on a TV/],
-  ])("refuses %s when the form factor could not be determined", async (_label, extra, reason) => {
+  it("refuses a named key when the form factor could not be determined", async () => {
     // `readRuntimeKind` answers undefined when `pm list features` misses its 5s
     // budget and `ro.build.characteristics` carries no `tv` token — which is
     // what the Google ATV emulator reports (`emulator`). Collapsed to `false` by
-    // `isAndroidTv`, that aimed the 200-key burst at a TV, the one thing
-    // platforms/tv.ts exists to refuse, and `undefined` is never cached so every
-    // call was exposed.
+    // `isAndroidTv`, that sent a named key at a TV's focus engine, which
+    // `tv-remote` owns and platforms/tv.ts exists to refuse, and `undefined` is
+    // never cached so every call was exposed.
     adbShell.mockClear();
     getAndroidRuntimeKind.mockResolvedValue(undefined);
-    const err = await impl.handler({}, { udid: SERIAL, ...extra } as KeyboardParams, phone).then(
-      () => undefined,
-      (e: unknown) => e as Error
-    );
+    const err = await impl
+      .handler({}, { udid: SERIAL, key: "backspace" } as KeyboardParams, phone)
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
-    // The justification is templated with the field name, not only the name: a
-    // refused `{ key: "backspace" }` used to be told the request would have
-    // burst 200 delete keys, which is the other request's reason.
-    expect(err?.message).toMatch(reason);
+    expect(err?.message).toMatch(/a named key is navigation on a TV/);
+    // And it says why the sibling shape needs none of this, so a caller reading
+    // the refusal does not conclude a `clear` is blocked too.
+    expect(err?.message).toMatch(/A `clear` needs none of this/);
     // Not "timeout": the same undefined comes back for a serial that is not in
     // the `device` state, where no probe ran at all.
     expect(getFailureSignal(err)?.error_kind).toBe("not_found");
@@ -653,29 +653,79 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     getAndroidRuntimeKind.mockResolvedValue("mobile");
   });
 
+  it("still clears when the form factor could not be determined", async () => {
+    // The clear used to be refused here for the reason the named key still is.
+    // It no longer needs the answer: `TvControlApi.clear` on Android TV IS
+    // `injectAndroidClear` against the same serial, so the phone path this falls
+    // through to sends the very command a TV would have received — and a
+    // refusal would only deny a request that cannot go wrong.
+    adbShell.mockClear();
+    getAndroidRuntimeKind.mockResolvedValue(undefined);
+    const res = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+    expect(adbShell.mock.calls.map((c) => c[1].split(" ")[1])).toEqual(["keyevent"]);
+    // And no re-probe was paid for a shape that does not need the answer.
+    expect(getAndroidRuntimeKind).toHaveBeenCalledTimes(1);
+    getAndroidRuntimeKind.mockResolvedValue("mobile");
+  });
+
   it("acts on the RE-PROBE's answer when the first probe could not tell", async () => {
     // The retry exists to be believed. `void getAndroidRuntimeKind(...)` —
     // discarding its answer and refusing anyway — passes every "undefined twice"
-    // case, and no test used to let the second probe resolve.
+    // case, and no test used to let the second probe resolve. `key` is the shape
+    // that re-probes now, so it is the one that can observe this.
     adbShell.mockClear();
     getAndroidRuntimeKind.mockResolvedValueOnce(undefined).mockResolvedValueOnce("mobile");
-    const res = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
-    expect(res).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+    const res = await impl.handler({}, { udid: SERIAL, key: "backspace" } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "backspace", keys: 1 });
     expect(adbShell).toHaveBeenCalledTimes(1);
     expect(getAndroidRuntimeKind).toHaveBeenCalledTimes(2);
   });
 
   it("routes to the TV backend when the RE-PROBE says TV", async () => {
     // The other half of believing it: a first probe that missed its budget on a
-    // real Android TV must still end in the refusal, not in a 200-key burst.
+    // real Android TV must still end at the TV backend, not at the phone one.
     adbShell.mockClear();
     typeTv.mockClear();
     typeTv.mockResolvedValueOnce({ typed: "", keys: 0 });
     getAndroidRuntimeKind.mockResolvedValueOnce(undefined).mockResolvedValueOnce("tv");
-    await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
+    await impl.handler({}, { udid: SERIAL, key: "backspace" } as KeyboardParams, phone);
     expect(typeTv).toHaveBeenCalledTimes(1);
+    expect(typeTv.mock.calls[0]![2]).toMatchObject({ key: "backspace" });
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("hands the request's abort to the TV backend too", async () => {
+    // The clear on a TV is a 200-key burst that reads the signal between keys
+    // (Apple TV) or kills the adb client with it (Android TV) — and both are
+    // reached through `typeTv`. Deleting `options?.signal` from this call site
+    // makes every TV clear un-abortable while `keyboard-tv.test.ts`, which calls
+    // `typeTv` directly, stays green.
+    typeTv.mockClear();
+    typeTv.mockResolvedValueOnce({ typed: "", keys: 200, cleared: true });
+    getAndroidRuntimeKind.mockResolvedValue("tv");
+    const controller = new AbortController();
+    await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone, {
+      signal: controller.signal,
+    });
+    expect(typeTv.mock.calls[0]![3]).toBe(controller.signal);
+    getAndroidRuntimeKind.mockResolvedValue("mobile");
+  });
+
+  it("routes a clear on a KNOWN TV to the TV backend, not to the phone path", async () => {
+    // Both paths issue the same `adb shell input keyevent`, so the routing is
+    // invisible in what reaches the device — but it decides which service is
+    // resolved, and the TV one re-checks leanback before it injects. A clear
+    // that took the phone path on a known TV would skip that check.
+    adbShell.mockClear();
+    typeTv.mockClear();
+    typeTv.mockResolvedValueOnce({ typed: "", keys: 200, cleared: true });
+    getAndroidRuntimeKind.mockResolvedValue("tv");
+    const res = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone);
+    expect(res).toEqual({ typed: "", keys: 200, cleared: true });
     expect(typeTv.mock.calls[0]![2]).toMatchObject({ clear: true });
     expect(adbShell).not.toHaveBeenCalled();
+    getAndroidRuntimeKind.mockResolvedValue("mobile");
   });
 
   it("still types `text` when the form factor could not be determined", async () => {

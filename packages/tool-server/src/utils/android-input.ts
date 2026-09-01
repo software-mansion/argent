@@ -15,7 +15,7 @@ import {
   getFailureSignal,
   type FailureSignal,
 } from "@argent/registry";
-import { adbShell, shellQuote } from "./adb";
+import { adbDeliveredCommand, adbShell, shellQuote } from "./adb";
 import { InvalidToolInputError } from "./capability";
 import { CLEAR_KEY_PAIRS } from "../tools/keyboard/key-codes";
 
@@ -213,7 +213,10 @@ export async function injectAndroidClear(serial: string, signal?: AbortSignal): 
     // exit 1), and the leading sentence is the authoritative one — an agent
     // that believes it re-reads a field that never changed, with a `describe`
     // that fails on the same dead device.
-    const delivered = !cancelledBeforeSend && reachedTheDevice(err);
+    // `adbDeliveredCommand` (./adb.ts) is the shared classifier: the adb CLIENT
+    // rejects an unreachable device before it delivers anything, and the Vega
+    // burst has to tell the same two cases apart.
+    const delivered = !cancelledBeforeSend && adbDeliveredCommand(err);
     throw new FailureError(
       (delivered
         ? `the clear burst did not finish on ${serial}, and the focused field may be PARTIALLY ` +
@@ -256,24 +259,6 @@ export async function injectAndroidClear(serial: string, signal?: AbortSignal): 
       // the exit code and signal recoverable.
     );
   }
-}
-
-/**
- * Whether the burst could have reached the guest at all.
- *
- * These are the adb CLIENT's own refusals, printed before any command is
- * delivered — so nothing was injected and the field is untouched. Everything
- * else (a non-zero exit from `input` itself, a timeout, the 90s cap's SIGKILL)
- * may have injected some of the 200 keys before it stopped.
- */
-const ADB_NEVER_DELIVERED =
-  /device '[^']*' not found|device offline|device unauthorized|no devices\/emulators found|more than one device|device still (?:connecting|authorizing)/i;
-
-function reachedTheDevice(err: unknown): boolean {
-  // A spawn failure means the adb binary itself never ran.
-  if (getFailureSignal(err)?.failure_spawn_code !== undefined) return false;
-  const message = err instanceof Error ? err.message : String(err);
-  return !ADB_NEVER_DELIVERED.test(message);
 }
 
 /**

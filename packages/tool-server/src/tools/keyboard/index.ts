@@ -58,15 +58,17 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Set to true to empty the focused text field. Tap the field first — the clear goes wherever keyboard focus is, and " +
-        "give that tap at least 500ms to land before the clear: `run-sequence` waits only 100ms between steps and checks " +
-        "no focus, so on iOS and Android a burst that arrives early deletes from the PREVIOUSLY focused element and still " +
-        "reports success. " +
+      "Set to true to empty the focused text field. Focus the field first — the clear goes wherever keyboard focus is, so " +
+        "tap it, or move focus to it with `tv-remote` on a TV or Vega — and give that at least 500ms to land before the " +
+        "clear: `run-sequence` waits only 100ms between steps and checks no focus, so on every key-injecting backend a " +
+        "burst that arrives early deletes from the PREVIOUSLY focused element and still reports success. " +
         "Cannot be combined with `text` or `key` in one call — one call per action; to replace a value, put " +
         '`{ clear: true }` then `{ text: "new value" }` in one `run-sequence`. ' +
-        "iOS and Android send 100 backspaces interleaved with 100 forward-deletes, so the caret can sit anywhere in the " +
-        "field and a multi-line one empties too; on those two a field holding more than 100 characters on either side of " +
-        "the caret keeps the remainder — call `clear` again. Neither reads the field back, so there the result reports " +
+        "iOS, Android, Apple TV and Android TV send 100 backspaces interleaved with 100 forward-deletes, so the caret " +
+        "can sit anywhere in the field and a multi-line one empties too; there a field holding more than 100 characters " +
+        "on either side of the caret keeps the remainder — call `clear` again. Vega sends 200 backspaces instead, " +
+        "because it has no forward delete: there the burst reaches 200 characters BEFORE the caret and none after it. " +
+        "None of those five reads the field back, so the result reports " +
         "what was SENT, not what the field now holds: `keys` is 200, the key presses issued. " +
         "Chromium instead selects the focused editable, deletes the selection (no length limit) and then reads the " +
         "field back: `clearVerified: true` is added when that read found it empty, and it is the one structural way to " +
@@ -77,7 +79,9 @@ const zodSchema = z.object({
         "fails when nothing editable has focus (tap the field first), on a field no select-and-delete can empty (a " +
         'date/time input — press `key: "backspace"` on one of those instead — or a readonly, disabled or non-text one), ' +
         "and when a rich-text editor restores the value it just deleted. " +
-        "Not supported on TV targets (Apple TV / Android TV) or Vega. `false` means the same as omitting it."
+        "The one target that refuses it is a REMOTE Apple TV (an `ios-remote` tvOS UDID), which no argent TV tool " +
+        "reaches: the tvOS daemons drive a simulator in the tool-server host's own CoreSimulator set. `false` means " +
+        "the same as omitting it."
     ),
   delayMs: z
     .number()
@@ -157,12 +161,12 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     },
     description: `Type text, press a special key, or clear the focused text field on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text, replace what a field already holds, or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number, cleared?: true, clearVerified?: true }. \`cleared\` means the clear was SENT on iOS/Android and the delete was ACCEPTED on Chromium; \`clearVerified\` is added only where the field was then read back empty, so branch on that rather than on \`keys\`. Fails if more than one of text, key and clear is given in one call (rejected before anything is sent), if an unsupported key name is provided, if clear finds nothing editable focused on Chromium, or if the device's input backend is not reachable.
+Returns { typed: string, keys: number, cleared?: true, clearVerified?: true }. \`cleared\` means the clear was SENT on every key-injecting backend (iOS, Android, Apple TV, Android TV, Vega) and the delete was ACCEPTED on Chromium; \`clearVerified\` is added only where the field was then read back empty, so branch on that rather than on \`keys\`. Fails if more than one of text, key and clear is given in one call (rejected before anything is sent), if an unsupported key name is provided, if clear finds nothing editable focused on Chromium, or if the device's input backend is not reachable.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
-- clear: empties the focused text field. Tap the field first — it goes wherever keyboard focus is — and let that tap settle for ~500ms before the clear, because \`run-sequence\` waits only 100ms between steps and no backend checks focus. iOS and Android send 100 backspaces interleaved with 100 forward-deletes, so the caret can be anywhere and multi-line fields empty too; there, a field holding more than 100 characters on either side of the caret keeps the remainder — call clear again. Those two read nothing back: the result says what was sent, not what the field now holds (\`keys\` is 200, the key presses issued) and carries no \`clearVerified\`, so assert the field or its consequence if you need proof. Chromium instead selects the focused editable, deletes the selection (no length limit) and reads the field back, adding \`clearVerified: true\` when that read found it empty (absent only when the field could not be read back at all), with \`keys\` 0; it fails if nothing editable has focus, if the field cannot be cleared this way (a date/time input — press key: "backspace" on one of those — or a readonly, disabled or non-text one), or if a rich-text editor restored the value it just deleted. NOT supported on TV targets or Vega. Prefer it over pressing backspace in a loop, and over typing over a filled field: appending to a value the app remembered is a data bug, not a slow path.
-On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
+- clear: empties the focused text field. Focus the field first — it goes wherever keyboard focus is (tap it, or move focus to it with \`tv-remote\` on a TV or Vega) — and let that settle for ~500ms before the clear, because \`run-sequence\` waits only 100ms between steps and no backend checks focus. iOS, Android, Apple TV and Android TV send 100 backspaces interleaved with 100 forward-deletes, so the caret can be anywhere and multi-line fields empty too; there, a field holding more than 100 characters on either side of the caret keeps the remainder — call clear again. Vega sends 200 backspaces instead (it has no forward delete), so it reaches 200 characters BEFORE the caret and none after it. None of those five reads anything back: the result says what was sent, not what the field now holds (\`keys\` is 200, the key presses issued) and carries no \`clearVerified\`, so assert the field or its consequence if you need proof. Chromium instead selects the focused editable, deletes the selection (no length limit) and reads the field back, adding \`clearVerified: true\` when that read found it empty (absent only when the field could not be read back at all), with \`keys\` 0; it fails if nothing editable has focus, if the field cannot be cleared this way (a date/time input — press key: "backspace" on one of those — or a readonly, disabled or non-text one), or if a rich-text editor restored the value it just deleted. Refused only on a REMOTE Apple TV, which no argent TV tool reaches — its daemons drive a LOCAL simulator only. Prefer it over pressing backspace in a loop, and over typing over a filled field: appending to a value the app remembered is a data bug, not a slow path.
+On a TV target (runtimeKind 'tv') \`text\` and \`clear\` apply and \`key\` does not — focus a text field first (with \`tv-remote\`), then type into it or empty it (injected HID keyboard on Apple TV, \`adb input\` on Android TV).
 One call does one action: pass text, key OR clear, never two of them. \`text\` and \`key\` count by presence (so { text: "", key: "enter" } is rejected too) while \`clear\` counts only when true, so { clear: false } never collides. To do two in a row, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } to type and submit, or { clear: true } then { text: "hello" } to replace a value — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
@@ -221,11 +225,9 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
             '`keyboard` steps in one `run-sequence`: { text: "hello" } followed by ' +
             '{ key: "enter" } to type and submit, or { clear: true } followed by ' +
             '{ text: "hello" } to replace a value. On a TV target (Apple TV / Android TV) ' +
-            "neither `key` nor `clear` is supported at all — type with `text` and move focus " +
-            "with `tv-remote` (up/down/left/right/select). On Vega, `key` works but `clear` " +
-            "does not, so the `{ clear }` half of that split is rejected outright there: empty " +
-            "the field with the app's own on-screen keyboard, driven with `tv-remote`, then " +
-            "type." +
+            "`key` is not supported at all — move focus with `tv-remote` " +
+            "(up/down/left/right/select) instead, and split into `text` and `clear` steps only. " +
+            "`clear` works on every target except a REMOTE Apple TV, which refuses `key` too." +
             // The split above prescribes a `key`, and this request's `key` names
             // none — so following it literally sends a `{ key: "enter" }` the
             // caller never asked for, whose retry then fails with
@@ -251,9 +253,9 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
                   ? 'a separate { key: "enter" } call carries no placeholder — its screenshot is ' +
                     "taken after the key lands and can capture the still-visible secret."
                   : "a separate { clear: true } call carries none either, so its screenshot is " +
-                    "taken — and on iOS and Android the burst is bounded at 100 characters per " +
-                    "side of the caret, so a field that held a longer secret is captured with " +
-                    "the remainder still in it.")
+                    "taken — and every key-injecting backend bounds the burst at 200 presses, so " +
+                    "a field that held a longer secret is captured with the remainder still in " +
+                    "it.")
               : ""),
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,

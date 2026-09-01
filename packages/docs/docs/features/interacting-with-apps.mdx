@@ -37,7 +37,7 @@ The agent opens an app by its bundle id or package name. The agent does not tap 
 
 The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
-The agent also clears a text field that already holds a value. The agent clears the field, then types the new value. Thus the agent replaces a value instead of adding to it. On a mobile target, the agent removes the text before the cursor and the text after it. Thus a field with many lines also becomes empty. On Chromium, the agent selects the field and deletes the selection, then reads the field again to make sure it is empty.
+The agent also clears a text field that already holds a value. The agent clears the field, then types the new value. Thus the agent replaces a value instead of adding to it. On a mobile target, on Apple TV and on Android TV, the agent removes the text before the cursor and the text after it. Thus a field with many lines also becomes empty. On Vega the agent removes only the text before the cursor, because the platform has no forward delete. On Chromium, the agent selects the field and deletes the selection, then reads the field again to make sure it is empty.
 
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
 
@@ -84,8 +84,9 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
-- On mobile targets, the clear action removes up to 100 characters on each side of the cursor. A field with more characters on one side of the cursor keeps the remainder, and the agent clears it again. On Chromium there is no limit.
-- On Chromium, the agent reads the field again after the clear, so it knows that the field is empty. On mobile targets the agent knows only what it sent, so it reads the field itself when it needs proof.
-- The clear action is not available on TV targets and Vega. There the agent uses the on-screen keyboard of the app.
+- On mobile targets, Apple TV and Android TV, the clear action removes up to 100 characters on each side of the cursor. A field with more characters on one side of the cursor keeps the remainder, and the agent clears it again. On Chromium there is no limit.
+- On Vega the clear action removes up to 200 characters before the cursor and none after it, because the platform has no forward delete.
+- On Chromium, the agent reads the field again after the clear, so it knows that the field is empty. On the other targets the agent knows only what it sent, so it reads the field itself when it needs proof.
+- On a remote Apple TV the clear action is not available, because the TV tools drive a simulator on the machine that runs Argent. There the agent uses a local Apple TV simulator, or the on-screen keyboard of the app.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

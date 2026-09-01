@@ -49,9 +49,10 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/vega-input")>()),
   injectVegaText: vi.fn(async () => {}),
   injectVegaNamedKey: vi.fn(async () => {}),
+  injectVegaClear: vi.fn(async () => {}),
 }));
 
-import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { injectVegaClear, injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 
@@ -111,14 +112,16 @@ const BACKENDS = [
   {
     platform: "vega",
     udid: "amazon-4a27df03c9777152",
+    // The clear counts as an injection too: a rejected combined call must not
+    // burst delete keys either, and without it the "injecting nothing" half of
+    // the two rejections below is blind to the one shape they are about.
     injections: () =>
-      vi.mocked(injectVegaText).mock.calls.length + vi.mocked(injectVegaNamedKey).mock.calls.length,
+      vi.mocked(injectVegaText).mock.calls.length +
+      vi.mocked(injectVegaNamedKey).mock.calls.length +
+      vi.mocked(injectVegaClear).mock.calls.length,
     pressedBackspace: () =>
       vi.mocked(injectVegaNamedKey).mock.calls.some((c) => c[0] === "backspace"),
-    // Vega rejects `clear` outright (platforms/vega.ts), so it has no positive
-    // control to run — the rejection itself is pinned in
-    // keyboard-error-taxonomy.test.ts.
-    clears: false,
+    clears: true,
   },
 ];
 
@@ -391,19 +394,25 @@ describe("keyboard — the burst size an agent is told about", () => {
       expect(text, label).toContain(`${pairs} backspaces`);
       expect(text, label).toContain(`${pairs} forward-deletes`);
       expect(text, label).toContain(total);
+      // Vega is the one backend with no forward delete, so its burst is the
+      // DOUBLE — a third number off the same constant, and the one a caller
+      // would otherwise read as the per-side bound.
+      expect(text, label).toContain(`${total} backspaces`);
     }
   });
 });
 
 describe("keyboard — the exclusivity message's platform caveats", () => {
-  it("names Vega, whose `clear` half of the prescribed split is rejected outright", () => {
+  it("keeps the `key` caveat, and no longer talks a caller out of the clear", () => {
     // The message prescribes splitting into `{ clear: true }` then `{ text }`,
-    // and its caveat named only Apple TV / Android TV — so on a Vega VVD the
-    // caller followed it into a step `platforms/vega.ts` refuses. `clear`'s own
-    // `.describe()` already gets this right.
+    // and used to add that a TV or a Vega VVD rejects the `clear` half — which
+    // would now send a caller to the app's on-screen keyboard for a burst that
+    // works. `key` is the half that IS still refused on a TV, and following the
+    // split with one there is a retry that cannot succeed, so that caveat stays.
     return combinedError({ clear: true, text: "hello" }).then((err) => {
-      expect(err.message).toMatch(/On Vega/);
-      expect(err.message).toMatch(/`clear` does not/);
+      expect(err.message).toMatch(/`key` is not supported at all/);
+      expect(err.message).toMatch(/`clear` works on every target except a REMOTE Apple TV/);
+      expect(err.message).not.toMatch(/On Vega/);
     });
   });
 });
@@ -636,8 +645,10 @@ describe("keyboard — how the constraint reaches a client", () => {
     const description = clear.description!;
     // The exclusivity rule, restated here as on the other two.
     expect(description).toMatch(/Cannot be combined with `text` or `key`/);
-    // Focus is the precondition, and it is the caller's job.
-    expect(description).toMatch(/Tap the field first/);
+    // Focus is the precondition, and it is the caller's job — including on the
+    // targets where it is not a tap.
+    expect(description).toMatch(/Focus the field first/);
+    expect(description).toMatch(/tv-remote/);
     // The mobile bound: a longer field keeps its remainder, and the repair is a
     // second call — not "it failed".
     expect(description).toMatch(/100 backspaces/);
@@ -645,9 +656,11 @@ describe("keyboard — how the constraint reaches a client", () => {
     // The two backends answer `cleared` on different evidence, which decides
     // whether a caller has to assert the field itself.
     expect(description).toMatch(/read the field back|reads the field back/i);
-    // Where it does not work at all.
-    expect(description).toMatch(/Not supported on TV targets/);
-    expect(description).toMatch(/Vega/);
+    // The one target that refuses it, named as narrowly as it actually is: a
+    // caveat still saying "TV targets" would talk a caller out of a clear that
+    // works on every local Apple TV and Android TV.
+    expect(description).toMatch(/REMOTE Apple TV/);
+    expect(description).not.toMatch(/Not supported on TV targets/);
     // `false` is legal and inert — the shape the guard admits.
     expect(description).toMatch(/`false` means the same as omitting it/);
   });

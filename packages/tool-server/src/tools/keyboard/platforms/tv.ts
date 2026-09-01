@@ -1,14 +1,19 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { UnsupportedOperationError } from "../../../utils/capability";
 import { resolveTvApi } from "../../tv/tv-service";
+import { CLEAR_KEY_PAIRS } from "../key-codes";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
-// Shared by the ios (Apple TV) and android (Android TV) branches. Named keys are
-// navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
+// Shared by the ios (Apple TV) and android (Android TV) branches, and reached
+// only for a target the TV backend can actually drive — which a sim-remote one
+// is not, so `platforms/ios.ts` refuses those before they get here rather than
+// resolving a service that cannot exist. Named keys are navigation on a TV,
+// which belongs to `tv-remote`, so they are rejected.
 export async function typeTv(
   registry: Registry,
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  signal?: AbortSignal
 ): Promise<KeyboardResult> {
   if (params.key) {
     throw new UnsupportedOperationError(
@@ -19,24 +24,24 @@ export async function typeTv(
     );
   }
   if (params.clear === true) {
-    // Text reaches a TV through the focus daemon's typing channel (`api.type`),
-    // and `TvControlApi` exposes no delete verb at all — so there is nothing
-    // here to send a clear through, on either backend.
+    // Both TV backends send the same burst the phone ones do —
+    // `CLEAR_KEY_PAIRS` backspaces interleaved with as many forward-deletes —
+    // over the channel each already types through: the injected HID daemon on
+    // Apple TV (`blueprints/tv-control.ts`), `adb shell input keyevent` on
+    // Android TV (`blueprints/android-tv-control.ts`, the same command the
+    // phone path issues).
     //
-    // That is a gap in the API, not a property of the transport, and the two
-    // backends differ underneath: on Android TV `api.type` IS `adb shell input`
-    // (../../../blueprints/android-tv-control.ts), the same channel and the same
-    // view `injectAndroidClear`'s burst would ride, so a clear there is
-    // implementable; on Apple TV the channel is the injected tvOS daemon.
-    // Neither is measured on a TV, and a clear that half-empties a field is
-    // worse than a refusal, so both are refused until one is.
-    throw new UnsupportedOperationError(
-      "keyboard",
-      device,
-      "`clear` is not supported on a TV target — empty the field with the app's " +
-        "on-screen keyboard, driven with `tv-remote` (move focus to its delete key " +
-        "and press select)"
-    );
+    // Nothing is read back on either — a TV exposes no field value through
+    // these channels — so `cleared` reports the burst as SENT and no
+    // `clearVerified` is added, exactly as on iOS and Android.
+    const api = await resolveTvApi(registry, device.id);
+    const keys = await api.clear(signal);
+    // A burst the caller abandoned reports what it actually sent and drops
+    // `cleared`: the field is emptied by however many keys got through, which
+    // is the one state `cleared` must not be claimed for. Same rule as
+    // ../simulator-server-keys.ts.
+    if (keys < CLEAR_KEY_PAIRS * 2) return { typed: "", keys };
+    return { typed: "", keys, cleared: true };
   }
   const text = params.text ?? "";
   if (text) {

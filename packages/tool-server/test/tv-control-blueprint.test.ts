@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
-import type { DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 
 // The Apple TV blueprint's respawn coalescing (`axRespawn` single-flight,
 // unlink-and-rebind, exit-during-respawn) is the most concurrency-sensitive code
@@ -39,7 +39,10 @@ const h = vi.hoisted(() => {
     return i >= 0 ? args[i + 1] : undefined;
   }
 
-  return { liveSockets, execFileCalls, killedProcs, unlinked, socketArg, state };
+  // Every line written to a socket, tagged by its path, so a test can read back
+  // what a burst actually sent — the clear's 200 keys are otherwise invisible.
+  const sent: Array<{ path: string; line: string }> = [];
+  return { liveSockets, execFileCalls, killedProcs, unlinked, socketArg, state, sent };
 });
 
 class FakeProc extends EventEmitter {
@@ -110,6 +113,7 @@ vi.mock("node:net", async () => {
     };
     sock.destroy = () => {};
     sock.write = (line: string) => {
+      h.sent.push({ path, line: line.trim() });
       // `describe` expects a JSON body; navigate/type tolerate an empty reply.
       const reply = line.startsWith("describe")
         ? JSON.stringify({
@@ -177,6 +181,7 @@ beforeEach(() => {
   h.execFileCalls.length = 0;
   h.killedProcs.length = 0;
   h.unlinked.length = 0;
+  h.sent.length = 0;
   h.state.failHidSpawn = false;
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
@@ -402,5 +407,105 @@ describe("tvControlBlueprint — target validation", () => {
     await expect(buildService()).rejects.toThrow(/no available simulator/);
     // The no-match throw is before the warm call, so nothing is cached.
     expect(cacheSimulatorRuntimeKindMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tvControlBlueprint — clear()", () => {
+  /** The command lines written to the HID socket, in order. */
+  function hidLines(): string[] {
+    return h.sent.filter((s) => s.path.includes("-hid-")).map((s) => s.line);
+  }
+
+  it("writes CLEAR_KEY_PAIRS backspace/forward-delete pairs over the HID socket", async () => {
+    const instance = await buildService();
+    h.sent.length = 0;
+    const keys = await instance.api.clear();
+
+    expect(keys).toBe(200);
+    const lines = hidLines();
+    expect(lines).toHaveLength(200);
+    // Interleaved, not 100 of one then 100 of the other: the caret sits wherever
+    // focus left it, and alternating is what makes its position stop mattering.
+    // 42 = HID Keyboard DELETE (backspace), 76 = Keyboard DELETE Forward — both
+    // written as literals, not read out of the map under test.
+    expect(lines.slice(0, 4)).toEqual(["key 42", "key 76", "key 42", "key 76"]);
+    expect(lines.filter((l) => l === "key 42")).toHaveLength(100);
+    expect(lines.filter((l) => l === "key 76")).toHaveLength(100);
+    // `key`, not `key_down`/`key_up`: the daemon's own 40ms hold is what makes
+    // the events land. Driven as separate down/up commands the burst finishes in
+    // 0.01s and only 83-95 of the 200 keys reach the field (measured on a tvOS
+    // 26.5 simulator over three runs).
+    expect(lines.some((l) => l.startsWith("key_"))).toBe(false);
+    // And nothing was typed, or sent to the ax daemon.
+    expect(h.sent.filter((s) => s.path.includes("-ax-"))).toEqual([]);
+  });
+
+  it("settles after a full burst, and not after an abandoned one", async () => {
+    // The daemon's Indigo send is fire-and-forget, so the last keys are still in
+    // flight when the burst returns and the tool's auto-screenshot would race
+    // them. Timed rather than mocked, for the reason the iOS twin gives: with a
+    // fake clock a settle of zero passes. An abandoned burst has no screenshot
+    // left to protect, so it must NOT pay the wait.
+    const instance = await buildService();
+
+    const t0 = Date.now();
+    await instance.api.clear();
+    const settled = Date.now() - t0;
+
+    const controller = new AbortController();
+    controller.abort();
+    const t1 = Date.now();
+    await instance.api.clear(controller.signal);
+    const abandoned = Date.now() - t1;
+
+    expect(settled).toBeGreaterThanOrEqual(250);
+    expect(abandoned).toBeLessThan(100);
+  });
+
+  it("stops on the request's abort and reports the short count", async () => {
+    // `typeTv` turns a short count into a result WITHOUT `cleared`: the field is
+    // emptied by however many keys got through, which is the one state the claim
+    // must not be made for. A burst that ignored the signal would keep driving
+    // the device after the caller had gone.
+    const instance = await buildService();
+    h.sent.length = 0;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 0);
+
+    const keys = await instance.api.clear(controller.signal);
+
+    expect(keys).toBeLessThan(200);
+    expect(hidLines()).toHaveLength(keys);
+  });
+
+  it("sends nothing at all when the signal is already aborted", async () => {
+    const instance = await buildService();
+    h.sent.length = 0;
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(instance.api.clear(controller.signal)).resolves.toBe(0);
+    expect(hidLines()).toEqual([]);
+  });
+
+  it("reports a burst the daemon stopped accepting as possibly PARTIAL, with the count", async () => {
+    // The burst is not atomic, so a caller told only "the socket is gone" reads
+    // that as "nothing happened" and types over a field that is now shorter. The
+    // count is what makes the re-read actionable.
+    const instance = await buildService();
+    h.sent.length = 0;
+    // Kill the socket a few keys in: the connect then errors, exactly as it
+    // would if the daemon had exited mid-burst.
+    const hid = [...h.liveSockets].find((p) => p.includes("-hid-"))!;
+    setTimeout(() => h.liveSockets.delete(hid), 0);
+
+    const err = await instance.api.clear().then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(err?.message).toMatch(/may be PARTIALLY\s+emptied/);
+    expect(err?.message).toMatch(new RegExp(`${hidLines().length} of the 200 delete keys`));
   });
 });

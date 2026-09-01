@@ -11,11 +11,17 @@ export const SHIFT_KEYCODE = 225;
 // The `key` vocabulary is NOT uniform on this point across backends, and adding
 // a name for 76 would have to be decided for all of them at once: `delete` is
 // backspace on iOS (above) and on Android (../../utils/android-input.ts, KEYCODE_DEL
-// 67), but the FORWARD delete on chromium (./chromium-keys.ts, VK 46) and on
-// Vega (../../utils/vega-input.ts, KEY_DELETE). With the caret between `b` and
-// `c` in `abc`, `key: "delete"` therefore leaves `ac` on the first two and `ab`
-// on the last two. That divergence predates the clear burst and is unchanged by
-// it; it is recorded here because this is where the next name would be added.
+// 67), but the FORWARD delete on chromium (./chromium-keys.ts, VK 46). With the
+// caret between `b` and `c` in `abc`, `key: "delete"` therefore leaves `ac` on
+// the first two and `ab` on the last. That divergence predates the clear burst
+// and is unchanged by it; it is recorded here because this is where the next
+// name would be added.
+//
+// Vega maps `delete` to KEY_DELETE (../../utils/vega-input.ts), which READS like
+// the chromium case and is not: measured on an OS 1.1 VVD, KEY_DELETE deletes
+// BACKWARD, so `key: "delete"` leaves `ac` there too. That is why the Vega clear
+// burst sends backspaces alone — there is no forward delete on the platform for
+// it to interleave.
 export const FORWARD_DELETE_KEYCODE = 76;
 
 // `clear` sends this many (backspace, forward-delete) pairs — 200 key events —
@@ -30,10 +36,17 @@ export const FORWARD_DELETE_KEYCODE = 76;
 // three calls on a real simulator. `argent-device-interact/SKILL.md` states it
 // that way to callers.
 //
-// Shared by the two key-injecting backends (../../utils/android-input.ts and
-// ./simulator-server-keys.ts) so the contract stated in the tool description
-// holds identically on both. Chromium clears through the DOM instead and does
-// not use it.
+// Shared by every key-injecting backend — ../../utils/android-input.ts (phones,
+// tablets and Android TV), ./simulator-server-keys.ts (iPhone/iPad simulators),
+// ../../blueprints/tv-control.ts (Apple TV) and ../../utils/vega-input.ts
+// (Vega) — so every one of them sends the same NUMBER of keys, which is what the
+// tool description's `keys: 200` promises. Chromium clears through the DOM
+// instead and does not use it.
+//
+// Vega is the one place the "on each side" reading does not apply: it has no
+// forward delete (see the note on FORWARD_DELETE_KEYCODE above), so its burst is
+// `CLEAR_KEY_PAIRS * 2` backspaces and covers 200 characters before the caret
+// and none after it.
 export const CLEAR_KEY_PAIRS = 100;
 
 const SYMBOL_KEYCODES: Record<string, number> = {

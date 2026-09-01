@@ -9,7 +9,8 @@ export interface KeyboardParams {
   /**
    * Empty the focused text field. Only `true` acts — `false` reads as absent,
    * like an omitted parameter — and it is rejected alongside `text` / `key` in
-   * ./index.ts. Not valid on TV or Vega targets.
+   * ./index.ts. Served on every platform; the one target that refuses it is a
+   * REMOTE Apple TV (platforms/ios.ts), whose HID daemon is host-local.
    */
   clear?: boolean;
   delayMs?: number;
@@ -23,9 +24,10 @@ export interface KeyboardResult {
    * backend — read `clearVerified` to tell them apart rather than inferring it
    * from `keys`, which is documented as the count of key presses issued.
    *
-   * On iOS and Android it reports that the burst was SENT: nothing is read back
-   * (a cleared field may have held a secret, and the key transports cannot read
-   * one anyway), and a field longer than the burst keeps its remainder.
+   * On every key-injecting backend — iOS, Android, Apple TV, Android TV and
+   * Vega — it reports that the burst was SENT: nothing is read back (a cleared
+   * field may have held a secret, and the key transports cannot read one
+   * anyway), and a field longer than the burst keeps its remainder.
    * On Chromium it reports that the delete was ACCEPTED.
    */
   cleared?: true;
