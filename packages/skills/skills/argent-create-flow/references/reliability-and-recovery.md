@@ -143,7 +143,7 @@ Starting again under the same name truncates the YAML. Copy any working prefix b
 | Tap lost during motion        | Fixed wait     | `idle` after destination identity         |
 | Toast absorbs tap             | Retry          | Verified overlay dismissal                |
 | `hidden` never established    | Longer timeout | Same-selector `visible`, action, `hidden` |
-| Typed value is wrong          | Retype         | Assert the committed value                |
+| Typed value is wrong          | Retype over it | Clear the field, retype, assert the value |
 
 State the added proof before rerunning.
 

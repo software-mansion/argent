@@ -30,7 +30,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`. Pass `momentum: false` when the swipe should decelerate before ending for a precise movement.
-4. **Tap a text field before typing**, then use `keyboard` to enter text.
+4. **Tap a text field before typing**, then use `keyboard` to enter text. Where the field can already hold a value, clear it first: `keyboard` `{ "clear": true }` between the tap and the text (§ 5).
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
 6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
@@ -360,7 +360,7 @@ Scroll down three times:
 }
 ```
 
-Type into a focused field and submit. This is the only way to mix text and a key, because one `keyboard` call cannot carry both:
+Type into a focused field and submit. This is the only way to combine two of them, because one `keyboard` call carries `text`, `key` or `clear`, never two:
 
 ```json
 {
