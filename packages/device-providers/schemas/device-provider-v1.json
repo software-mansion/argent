@@ -20,7 +20,15 @@
       "type": "string",
       "maxLength": 2048,
       "pattern": "^https?://",
-      "format": "uri"
+      "format": "uri",
+      "description": "A page for a person to open. Never fetched by Argent."
+    },
+    "simulatorServerUrl": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^http://",
+      "format": "uri",
+      "description": "An endpoint on the provider's own simulator-server. http:// only: the binary serves plaintext on a local port it picks at startup, and Argent opens /ws on the same host, so the WebSocket has to know its scheme up front."
     },
     "capability": {
       "type": "string",
@@ -93,7 +101,7 @@
           "items": {
             "$ref": "#/$defs/providerDevice"
           },
-          "description": "The devices on offer right now. Required \u2014 an empty array is the correct way to say 'I am running but have nothing booted', and is meaningfully different from omitting the field (which is malformed). Republish whenever a device starts or stops."
+          "description": "The devices on offer right now. Required — an empty array is the correct way to say 'I am running but have nothing booted', and is meaningfully different from omitting the field (which is malformed). Republish whenever a device starts or stops."
         }
       }
     },
@@ -107,7 +115,7 @@
         },
         "platform": {
           "enum": ["android", "ios"],
-          "description": "Must agree with what nativeId's shape implies, or Argent rejects the device \u2014 classification stays single-sourced."
+          "description": "Must agree with what nativeId's shape implies, or Argent rejects the device — classification stays single-sourced."
         },
         "kind": {
           "enum": ["device", "emulator", "simulator"]
@@ -133,14 +141,14 @@
         },
         "simulatorServer": {
           "type": "object",
-          "description": "Required when the 'simulator-server' capability is declared. Argent probes apiUrl during discovery as its liveness signal \u2014 a device whose server is not listening is dropped from list-devices.",
+          "description": "Required when the 'simulator-server' capability is declared. Argent probes apiUrl during discovery as its liveness signal — a device whose server is not listening is dropped from list-devices.",
           "required": ["apiUrl", "streamUrl"],
           "properties": {
             "apiUrl": {
-              "$ref": "#/$defs/httpUrl"
+              "$ref": "#/$defs/simulatorServerUrl"
             },
             "streamUrl": {
-              "$ref": "#/$defs/httpUrl"
+              "$ref": "#/$defs/simulatorServerUrl"
             },
             "version": {
               "type": "string",

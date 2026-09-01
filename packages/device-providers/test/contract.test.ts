@@ -154,6 +154,36 @@ describe("provider schemas", () => {
     expect(parsed.success).toBe(false);
   });
 
+  /**
+   * Narrower than `supportUrl`, which is a page for a person and keeps
+   * `https:`. The simulator-server serves plaintext on a local port and the
+   * consumer opens `/ws` on the same host, where a WebSocket has to choose its
+   * scheme up front. Accepting `https:` would promise a `wss:` endpoint nothing
+   * serves and the failure would surface as an unreachable simulator rather
+   * than as the malformed descriptor it is.
+   */
+  it.each([
+    [
+      "apiUrl",
+      { apiUrl: "https://127.0.0.1:52001", streamUrl: "http://127.0.0.1:52001/stream.mjpeg" },
+    ],
+    [
+      "streamUrl",
+      { apiUrl: "http://127.0.0.1:52001", streamUrl: "https://127.0.0.1:52001/stream.mjpeg" },
+    ],
+  ])("rejects an https %s, though supportUrl still takes one", (_label, simulatorServer) => {
+    expect(providerDeviceSchema.safeParse(iosDevice({ simulatorServer })).success).toBe(false);
+    expect(
+      providerRecordSchema.safeParse({
+        devices: [],
+        id: "acme",
+        name: "Acme IDE",
+        schemaVersion: 1,
+        supportUrl: "https://example.invalid/issues",
+      }).success
+    ).toBe(true);
+  });
+
   it("rejects a deviceSet on a non-iOS device", () => {
     const parsed = providerDeviceSchema.safeParse(
       androidDevice({ deviceSet: "/tmp/acme/Devices" })

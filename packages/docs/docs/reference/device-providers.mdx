@@ -40,6 +40,8 @@ A provider writes one JSON file into `~/.argent/providers/`. The file lists the 
 }
 ```
 
+`apiUrl` and `streamUrl` must start with `http://`. The simulator-server sends plaintext on a local port. Argent also opens `/ws` on the same host and a WebSocket selects its scheme before it connects. `supportUrl` is a page for a person, thus it accepts `https://`.
+
 Argent reads the file again on every tool call. Argent keeps no cache. Thus a new grant, a smaller grant, or a withdrawal takes effect immediately.
 
 Argent writes one line to `stderr` and reports no external device if the file is absent, damaged or stale. A provider cannot make Argent fail.

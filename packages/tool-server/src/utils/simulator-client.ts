@@ -124,6 +124,12 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ) {
     return existing;
   }
+  /**
+   * `ws:` unconditionally, because `apiUrl` is `http:` unconditionally.
+   * Argent's own spawn path reads it off the binary's `api_ready` line and the
+   * provider contract refuses any other scheme, so there is no `https:` apiUrl
+   * to mistake for a `wss:` endpoint that nothing serves.
+   */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
   const conn: Connection = { ws, pending: new Map() };

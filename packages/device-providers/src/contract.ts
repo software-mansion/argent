@@ -199,7 +199,11 @@ export const ALLOWED_SIM_SERVER_ENDPOINTS = [
   "/ws",
 ] as const;
 
-const httpUrl = z
+/**
+ * A page for a person to open. `supportUrl` is the only one and it is never
+ * fetched.
+ */
+const webUrl = z
   .string()
   .max(2048)
   .refine((value) => {
@@ -210,6 +214,31 @@ const httpUrl = z
       return false;
     }
   }, "must be an http(s) URL");
+
+/**
+ * An endpoint on the provider's own simulator-server.
+ *
+ * `http:` only and deliberately narrower than {@linkcode webUrl}. The
+ * simulator-server serves plaintext on a port it picks at startup. Both Argent
+ * and every provider read that port off the binary's own `api_ready` line,
+ * which prints an `http://` URL. Nothing in the chain terminates TLS.
+ *
+ * The consumer also opens `/ws` on this host and a WebSocket has to pick its
+ * scheme up front. Accepting `https:` here would promise a `wss:` endpoint that
+ * nothing serves, so the connection would fail with a message about the
+ * simulator being down. Refusing it at publish time says what is actually
+ * wrong.
+ */
+const simulatorServerUrl = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      return new URL(value).protocol === "http:";
+    } catch {
+      return false;
+    }
+  }, "must be an http:// URL — the simulator-server serves plaintext on a local port");
 
 const webSocketUrl = z
   .string()
@@ -261,8 +290,8 @@ const nativeDevtoolsSchema = z.object({
 });
 
 const simulatorServerSchema = z.object({
-  apiUrl: httpUrl,
-  streamUrl: httpUrl,
+  apiUrl: simulatorServerUrl,
+  streamUrl: simulatorServerUrl,
   /**
    * Informational. Argent never branches on it and it exists so a version-skew
    * failure names the binary in its error message instead of being a mystery.
@@ -358,7 +387,7 @@ export const providerRecordSchema = z.object({
   /**
    * Where Argent points users when something attributed to this provider fails.
    */
-  supportUrl: httpUrl.optional(),
+  supportUrl: webUrl.optional(),
   /**
    * Optional project context, surfaced verbatim in `list-devices` so an agent
    * can prefer the device belonging to its own project. Argent does no
