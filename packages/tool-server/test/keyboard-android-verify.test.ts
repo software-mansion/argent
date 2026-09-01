@@ -1665,6 +1665,23 @@ describe("android keyboard read-back — cancellation", () => {
     ]);
   });
 
+  it("repairs to completion on a signal that never aborts", async () => {
+    const { registry } = registryServing(REPAIR_SCRIPT);
+    const res: KeyboardResult = await makeAndroidImpl(registry).handler(
+      {},
+      { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+      PHONE,
+      { signal: new AbortController().signal }
+    );
+    expect(res.verified).toBe(true);
+    expect(cmds()).toEqual([
+      "input text 'abcdefghijkl'",
+      "input keyevent 67 67 67 67 67 67 67 67",
+      "input text 'abcdefgh'",
+      "input text 'ijkl'",
+    ]);
+  });
+
   it("rejects rather than reporting a repair the caller gave up on at its last call", async () => {
     // An abort landing inside the final chunk is past every check the loops make,
     // so the outcome below it is reached with the caller already gone.
