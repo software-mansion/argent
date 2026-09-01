@@ -152,7 +152,13 @@ Example — tap, wait for the next screen's element, then tap it:
 If the await-ui-element condition is not met before its timeout, the sequence stops there and the
 following steps do NOT run — so the tap above only fires once "Continue" is actually on screen.
 
-Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
+A \`keyboard\` text step on an Android phone or tablet stops the sequence the same way when its
+read-back proves the text did not reach the field (\`verified: false\`), so the type-then-Enter
+shape above can halt with \`completed: 1\` and the field left un-submitted; the step's \`error\`
+carries the tool's note. An absent \`verified\` never stops it.
+
+Stops on the first error, an unmet await-ui-element condition, or a keyboard read-back that
+proved the typed text did not land — and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",

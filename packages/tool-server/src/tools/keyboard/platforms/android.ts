@@ -1,4 +1,4 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
+import type { DeviceInfo, InvokeToolOptions, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
 import { assertTypeableAndroidText, injectAndroidNamedKey } from "../../../utils/android-input";
@@ -19,7 +19,8 @@ import { typeTv } from "./tv";
 async function typeAndroidPhone(
   registry: Registry,
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  options?: InvokeToolOptions
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
   let verification: KeyboardVerification = {};
@@ -31,7 +32,9 @@ async function typeAndroidPhone(
     // cannot type has to be rejected ahead of that. `injectAndroidText` re-runs
     // the same pure check harmlessly.
     assertTypeableAndroidText(params.text);
-    verification = await typeAndroidTextVerified(registry, device, params.text);
+    // The signal, not just the text: the read-back's repair deletes before it
+    // retypes, and that must not start after the caller has gone away.
+    verification = await typeAndroidTextVerified(registry, device, params.text, options?.signal);
     // `assertTypeableAndroidText` above has already rejected any non-ASCII, so
     // every character here is a single codepoint and a single UTF-16 unit —
     // `.length` is the codepoint count (matching the tv / simulator-server
@@ -57,9 +60,9 @@ export function makeAndroidImpl(
     // either way), so declaring it makes a missing binary fail with
     // `dispatchByPlatform`'s 424 install hint instead of from inside the probe.
     requires: ["adb"],
-    handler: async (_services, params, device) =>
+    handler: async (_services, params, device, options) =>
       (await isAndroidTv(device.id))
         ? typeTv(registry, device, params)
-        : typeAndroidPhone(registry, device, params),
+        : typeAndroidPhone(registry, device, params, options),
   };
 }

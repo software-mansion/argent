@@ -81,7 +81,12 @@ run_phase() {
     "{\"udid\":\"$DEV\",\"text\":\"hello e2e\",\"key\":\"enter\"}"
   # The remedy that rejection prescribes. Each step dispatches through the same
   # keyboard tool, so `.completed` = 2 proves the guard did not fire on a step
-  # carrying only one of the two.
+  # carrying only one of the two. It also needs the Android read-back to stay
+  # quiet: a `verified: false` verdict halts the sequence at step 1 (see
+  # keyboard/platforms/android-verify.ts). Nothing editable holds focus on the
+  # launcher, which this phase is still on, so the read-back returns an ABSENT
+  # verdict and `.completed` is unaffected — but a `got '1'` here means the
+  # read-back, not the text/key guard.
   assert_field "$P" run-sequence keyboard-text-then-key \
     "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"keyboard\",\"args\":{\"text\":\"hello e2e\"}},{\"tool\":\"keyboard\",\"args\":{\"key\":\"enter\"}}]}" \
     '.completed' '2'

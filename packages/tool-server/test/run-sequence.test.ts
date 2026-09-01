@@ -258,10 +258,17 @@ describe("run-sequence", () => {
 
   it("continues past a keyboard step whose verification is absent or true", async () => {
     // Absent means "not checked" (every platform without a read-back), never
-    // failed — halting on it would break sequences everywhere else.
-    const registry = mockRegistry((id: string) =>
-      id === "keyboard" ? { typed: "hi", keys: 2 } : { typed: "hi", keys: 2, verified: true }
-    );
+    // failed — halting on it would break sequences everywhere else. `verified:
+    // true` must pass too, and BOTH arms have to be reachable: every step here is
+    // `tool: "keyboard"`, so keying the stub on the tool id alone would leave the
+    // `true` arm dead and the test would still pass with the gate widened to
+    // `verified !== undefined`. Keyed on the ARGS instead.
+    const registry = mockRegistry((id: string, args: unknown) => {
+      if (id !== "keyboard") return { tapped: true };
+      const { text } = args as { text?: string };
+      if (text === "verified") return { typed: text, keys: 8, verified: true };
+      return { typed: text ?? "enter", keys: 2 };
+    });
     const tool = createRunSequenceTool(registry);
 
     const result = await tool.execute(
@@ -270,7 +277,7 @@ describe("run-sequence", () => {
         udid: IOS,
         steps: [
           { tool: "keyboard", args: { text: "hi" } },
-          { tool: "keyboard", args: { text: "hi" } },
+          { tool: "keyboard", args: { text: "verified" } },
           { tool: "keyboard", args: { key: "enter" } },
         ],
       }
@@ -278,6 +285,11 @@ describe("run-sequence", () => {
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(3);
     expect(result.completed).toBe(3);
+    // Both arms really ran: an absent verdict and an explicit `true` one.
+    const verdicts = result.steps.map(
+      (s) => (s as { result?: { verified?: boolean } }).result?.verified
+    );
+    expect(verdicts).toEqual([undefined, true, undefined]);
   });
 
   it("forwards the request abort signal into each sub-tool invocation", async () => {

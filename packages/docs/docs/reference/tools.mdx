@@ -56,6 +56,31 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+### Typed text on Android
+
+On an Android phone or tablet, `keyboard` reads the field back after it types. Android
+injects the text as one key-event burst. A field that redraws on each keystroke drops part
+of that burst, and `adb` reports success. The read-back finds this.
+
+The result carries `verified`:
+
+| Value   | Meaning                                              |
+| ------- | ---------------------------------------------------- |
+| `true`  | Argent read the field back and found the text in it  |
+| `false` | Argent read the field back and the text is not in it |
+| absent  | Argent did not check. This is not a pass             |
+
+Before Argent reports `false`, it makes one repair: it deletes the characters it can prove
+are its own, then types the text again in small pieces. A `keyboard` call can therefore
+change the field by more than the text it adds. Argent leaves the field alone when it
+cannot prove which characters are its own.
+
+`verified` is absent on every other platform, and on Android when the check cannot
+conclude. The `note` field gives the reason.
+
+A `false` verdict stops a `run-sequence` at that step. It also fails a flow `type` step
+and a flow `tool: keyboard` step. An absent `verified` stops nothing.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

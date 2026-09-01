@@ -115,7 +115,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
 | `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
-| `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
+| `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`. See [Typed text](#typed-text)   |
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
 | `rotate`     | `{ on: <selector>, by }`                                           | Two-finger rotation in degrees, clockwise positive. This is a gesture, not the device orientation |
@@ -133,6 +133,18 @@ Each step contains one directive. A failed directive stops the flow.
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
+
+### Typed text
+
+On an Android phone or tablet, the tool-server reads the field back after a `type` step.
+The step fails when the read-back proves that the text is not in the field. The reason
+gives the counts and the probable cause. Argent does not press the Enter for a failed
+step. Argent makes one repair before it fails a step: it deletes the characters that it
+can prove are its own, then types the text again in small pieces.
+
+The step passes when the read-back cannot conclude, and on every other platform. A step
+that passes is therefore not a proof that the text arrived. See the [tools
+reference](/docs/reference/tools#typed-text-on-android).
 
 ### Launch map
 

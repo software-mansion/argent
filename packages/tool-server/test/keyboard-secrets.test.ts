@@ -338,13 +338,18 @@ describe("keyboard tool with secret placeholders", () => {
     expect(dispatchKeyEvent).not.toHaveBeenCalled();
   });
 
-  it("hands a backend's advisory note through unaltered", async () => {
+  it("hands a backend's advisory note through unsubstituted, behind a read-back warning", async () => {
     // The note is deliberately not substituted over. Every note the Android
     // read-back writes is value-free by construction — counts and structural
     // facts, pinned on the real path in keyboard-android-verify.test.ts — so a
     // substitution here could only rewrite prose that never held the value. It
     // could not close the gap either: a dropped-character read-back holds a
     // PARTIAL secret, and whole-value replacement never matches one.
+    //
+    // What IS added is a prefix, because the notes close by telling the agent to
+    // read the field with `describe`, and `describe` redacts only a node the app
+    // marks `password` — so following that advice hands back a secret typed into
+    // an ordinary field.
     vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
     androidNote.value = "the field holds 4 characters where 7 were typed";
     const tool = createKeyboardTool(registryWith({}));
@@ -354,11 +359,32 @@ describe("keyboard tool with secret placeholders", () => {
       { udid: ANDROID_SERIAL, text: "{{secret:APP_PASSWORD}}" }
     );
 
-    expect(result.note).toBe("the field holds 4 characters where 7 were typed");
+    expect(result.note).toBe(
+      "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` " +
+        "this field to inspect it: unless the app marks the field as a password field, both hand " +
+        "the plaintext back. Submit or navigate away first, then verify the resulting screen. " +
+        "Disregard any advice below to read this field back. " +
+        "the field holds 4 characters where 7 were typed"
+    );
+    // The warning comes FIRST, so it is read before the advice it overrides.
+    expect(result.note?.indexOf("do NOT `describe`")).toBeLessThan(
+      result.note!.indexOf("the field holds 4")
+    );
     // The verdict itself still reaches the caller.
     expect(result.verified).toBe(false);
     // And the placeholder, never the value, is what the result echoes.
     expect(JSON.stringify(result)).not.toContain("hunter2");
+  });
+
+  it("adds no read-back warning when the call carried no placeholder", async () => {
+    // The warning is about a resolved secret, not about typing: a plain call must
+    // keep the backend's note byte for byte.
+    androidNote.value = "the field holds 4 characters where 7 were typed";
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "plain text" });
+
+    expect(result.note).toBe("the field holds 4 characters where 7 were typed");
   });
 
   it("does not let a short secret rewrite the words of a note", async () => {
@@ -374,7 +400,7 @@ describe("keyboard tool with secret placeholders", () => {
 
     const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "{{secret:W}}" });
 
-    expect(result.note).toBe(
+    expect(result.note).toContain(
       "read the field back with a full `uiautomator dump` before relying on it"
     );
     expect(result.note).not.toContain("{{secret:W}}");
@@ -387,7 +413,9 @@ describe("keyboard tool with secret placeholders", () => {
 
     const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "{{secret:PIN}}" });
 
-    expect(result.note).toBe("12 characters were typed and the field now holds 4 in total");
+    expect(result.note).toContain("12 characters were typed and the field now holds 4 in total");
+    // ...and the prefix carries no substituted value either.
+    expect(result.note).not.toContain("{{secret:PIN}}");
   });
 
   it("leaves a note-less android result without a `note` key", async () => {

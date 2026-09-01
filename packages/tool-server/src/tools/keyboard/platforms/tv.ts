@@ -5,8 +5,6 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 // Shared by the ios (Apple TV) and android (Android TV) branches. Named keys are
 // navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
-// Shared by the ios (Apple TV) and android (Android TV) branches. Named keys are
-// navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
 //
 // No read-back verification here, unlike the Android phone / tablet path (see
 // platforms/android-verify.ts). Android TV shares that path's `adb input text`

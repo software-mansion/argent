@@ -1244,6 +1244,11 @@ an instance the run already owns for that same app is killed first (its exit awa
 replacement can't lose the race against its single-instance lock. Instances the runner still owns at
 run end are torn down then. A launch declaring no id for the run's platform is an error, not a cue to
 switch platforms. Every step hard-stops the flow on failure; later steps are reported as skipped.
+A \`type\` step presses Enter after the text unless \`submit: false\`; on an Android phone or tablet the
+\`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
+(\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
+\`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
+that could not conclude — passes.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved

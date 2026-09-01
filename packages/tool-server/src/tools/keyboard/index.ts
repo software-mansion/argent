@@ -78,6 +78,23 @@ export function isUnlandedKeyboardTextResult(
   return (result as { verified?: unknown }).verified === false;
 }
 
+/**
+ * Prefixed onto a read-back note when the call typed a resolved `{{secret:…}}`.
+ *
+ * Most of the notes `platforms/android-verify.ts` returns close by telling the
+ * agent to read the field back with `describe`. For a credential that is a
+ * plaintext leak: `describe`'s Android parser redacts a node only where the app
+ * sets `password="true"`, so a secret in an ordinary field comes back as that
+ * element's label. This layer is the only one that knows a placeholder was
+ * resolved, and the warning goes first so it is read before the advice it
+ * overrides.
+ */
+const SECRET_READ_BACK_WARNING =
+  "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` this " +
+  "field to inspect it: unless the app marks the field as a password field, both hand the " +
+  "plaintext back. Submit or navigate away first, then verify the resulting screen. Disregard " +
+  "any advice below to read this field back. ";
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -148,6 +165,13 @@ On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field f
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    // A long string's chunked repair (one `adb shell input` per 8 characters,
+    // each paying its own `app_process` spawn) outruns the MCP adapter's 30 s
+    // fetch timeout, which cancels nothing: it replays the IDENTICAL POST up to
+    // five times against the same still-running server, and this tool is not
+    // idempotent, so each replay types the whole string again on top of what the
+    // abandoned call left.
+    longRunning: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
     services: () => ({}),
@@ -231,6 +255,9 @@ One call does one action: pass text OR key, never both. To type and then press a
           ...result,
           // Echo the placeholder form, never the resolved value.
           typed: params.text,
+          // The note's own closing advice is unsafe for a secret; correct it
+          // rather than emit it. See SECRET_READ_BACK_WARNING.
+          ...(result.note === undefined ? {} : { note: SECRET_READ_BACK_WARNING + result.note }),
           // The note is NOT scrubbed, deliberately. The Android backend reads the
           // field back off the screen, so on this path it has held the plaintext,
           // and every note it writes is value-free by construction — counts and

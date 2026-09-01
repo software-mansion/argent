@@ -28,6 +28,7 @@ import {
   unmetUiWaitCause,
   type UnmetUiWaitCause,
 } from "../await-ui-element";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { stepAnchor, summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -373,6 +374,25 @@ const CANCELLED_WAIT_WARNING =
   "— `await-ui-element` reports a cancelled wait as success:false, and the step was written to " +
   "the flow anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
+
+/**
+ * `keyboard` reports an Android read-back failure by returning
+ * `{ verified: false }` rather than throwing — the same shape as
+ * {@link UNMET_WAIT_WARNING}'s `success: false` — so the recorder writes the step
+ * and `flow-run` then FAILS it at replay. Without this the author is told the
+ * step was saved and nothing else.
+ */
+const UNLANDED_KEYBOARD_WARNING =
+  "recorded, but the text did not reach the field — on an Android phone or tablet `keyboard` " +
+  "reads the field back and reports a mismatch by returning verified:false instead of failing, " +
+  "so the step was written to the flow anyway. At replay that verdict FAILS the step and stops " +
+  "the run there (and a `type:` step skips its Enter), so fix the typing before you rely on this " +
+  "flow: read `toolResult.note` for what the field holds and whether anything was retyped, then " +
+  "re-record the step. Delete the bad step after `flow-finish-recording` rather than " +
+  "mid-recording: against a remote client the in-memory copy is authoritative and the next " +
+  "append writes the step straight back, and in host mode the recorder re-reads the file before " +
+  "each append, so an edit that renumbers the steps costs the finish the verdicts it would " +
+  "otherwise carry";
 
 function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
@@ -1230,7 +1250,7 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
       //
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
-      let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
+      let waitWarning: { warning: string; kind: "conversion" | "wait" | "typed" } | undefined;
       if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
         if (isUnmetUiWaitResult(params.command, toolResult)) {
           waitWarning = {
@@ -1241,6 +1261,10 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
           const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
           if (probed) waitWarning = { warning: probed, kind: "conversion" };
         }
+      } else if (isUnlandedKeyboardTextResult(params.command, toolResult)) {
+        // Same gap, different tool: a verdict reported in the result rather than
+        // thrown records green and replays red. See UNLANDED_KEYBOARD_WARNING.
+        waitWarning = { warning: UNLANDED_KEYBOARD_WARNING, kind: "typed" };
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a

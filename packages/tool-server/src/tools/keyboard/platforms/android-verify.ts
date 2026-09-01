@@ -32,24 +32,38 @@ import type { KeyboardVerification } from "../types";
  * synthesise a KeyEvent burst through a KeyCharacterMap and are not exposed to
  * this failure.
  *
- * Cost, and why it is not gated on anything: two `getHierarchy` calls over the
- * helper's already-open socket, each a 500 ms settle plus the tree walk. Measured
- * on the same emulator, screen and string, typing 76 characters into the Settings
- * search box costs 1.6-1.8 s unverified and 1.9-3.4 s verified. The FIRST typed
- * string on a device also pays for the helper itself — `adb install -t` of the
- * helper APK plus an `am instrument` spawn, bounded by that blueprint's 30 s ready
- * timeout, measured at 6.1 s including the install and 1.8 s when only the spawn
- * was needed. It is the same helper `describe` resolves, so an agent that has
- * described this device has already paid it. That is real
- * latency on a hot path (the flow `type` directive routes through this tool), and
- * it is still the right default, because the corruption is a property of the
- * *field*, not of the text: QA saw one sentence land perfectly in one field and
- * corrupt in another on the same screen at the same moment, and a field that
- * re-renders per keystroke can lose a single character. A length threshold or an
- * opt-in flag would make the guarantee depend on a magic number and leave the
- * silent-success bug reachable on everything under it. What IS gated is the
- * transport: when the android-devtools helper cannot be resolved, the only
- * remaining read-back is `uiautomator dump`, a fresh shell-out with no
+ * Cost, and why it is not gated on anything. A call that verifies and needs no
+ * repair costs TWO `getHierarchy` calls over the helper's already-open socket,
+ * each a 500 ms settle plus the tree walk: measured on the same emulator, screen
+ * and string, typing 76 characters into the Settings search box costs 1.6-1.8 s
+ * unverified and 1.9-3.4 s verified. A call that REPAIRS costs a third
+ * `getHierarchy` plus the repair itself, which then dominates everything else:
+ * `ceil(len / REPAIR_CHUNK_CHARS)` `input text` calls and
+ * `ceil(deletions / DELETE_KEYCODES_PER_CALL)` `input keyevent` calls, each
+ * paying its own `app_process` spawn, plus the inter-chunk pauses — 30 adb calls
+ * for a 200-character repair and 86 for a 600-character one, which at the
+ * ~200-400 ms per call quoted on `REPAIR_CHUNK_CHARS` is 10-16 s and 26-43 s
+ * respectively. The tool declares `longRunning` for that reason: past ~30 s the
+ * MCP adapter would abandon the request and replay it, and this tool is not
+ * idempotent (see `../index.ts`).
+ *
+ * The FIRST typed string on a device also pays for the helper itself — an
+ * `adb install -t` of the helper APK, which runs before the spawn and on its own
+ * budget rather than inside that blueprint's 30 s READY timeout, plus an
+ * `am instrument` spawn which is what that timeout bounds — measured at 6.1 s
+ * including the install and 1.8 s when only the spawn was needed. It is the same
+ * helper `describe` resolves, so an agent that has described this device has
+ * already paid it.
+ *
+ * That is real latency on a hot path (the flow `type` directive routes through
+ * this tool), and it is still the right default, because the corruption is a
+ * property of the *field*, not of the text: QA saw one sentence land perfectly in
+ * one field and corrupt in another on the same screen at the same moment, and a
+ * field that re-renders per keystroke can lose a single character. A length
+ * threshold or an opt-in flag would make the guarantee depend on a magic number
+ * and leave the silent-success bug reachable on everything under it. What IS
+ * gated is the transport: when the android-devtools helper cannot be resolved,
+ * the only remaining read-back is `uiautomator dump`, a fresh shell-out with no
  * persistent connection to amortise — so verification is skipped and said to be
  * skipped, rather than charging a locked-down device (exactly the device where
  * `adb install -t` is blocked) two dumps per typed string.
@@ -135,17 +149,24 @@ interface FocusedField {
 }
 
 /**
- * The focused editable view in a uiautomator-schema hierarchy, or null when
- * nothing editable holds input focus. Walked in document order and takes the
- * first match: a capture spanning several windows (the helper walks every
- * interactive window it is given — see `captureMode` / `windowCount` on
- * `HierarchyResult`) can carry a stale `focused="true"` in a background window
- * behind the one actually taking input.
+ * What holds input focus in a uiautomator-schema hierarchy.
+ *
+ * `field` is the focused view this check can read back; `focusedClass` is the
+ * class of the FIRST focused view of any kind, which is what separates "nothing
+ * has focus" from "something has focus that `EDITABLE_CLASS_RE` does not cover".
+ * They need different notes: the advice for the first is "tap the field", which
+ * for the second is advice for a screen this is not.
+ *
+ * Walked in document order and takes the first match: a capture spanning several
+ * windows (the helper walks every interactive window it is given — see
+ * `captureMode` / `windowCount` on `HierarchyResult`) can carry a stale
+ * `focused="true"` in a background window behind the one actually taking input.
  */
-export function findFocusedTextField(xml: string): FocusedField | null {
+function findFocused(xml: string): { field: FocusedField | null; focusedClass: string | null } {
   const root = parseUiAutomatorXml(xml);
-  if (!root) return null;
+  if (!root) return { field: null, focusedClass: null };
   const stack = [root];
+  let focusedClass: string | null = null;
   while (stack.length > 0) {
     const node = stack.pop()!;
     // Push children in reverse so they pop back in document order.
@@ -153,17 +174,26 @@ export function findFocusedTextField(xml: string): FocusedField | null {
     const attrs = node.attrs;
     if (!attrIsTrue(attrs, "focused")) continue;
     const className = attrs.class ?? "";
+    if (focusedClass === null) focusedClass = className;
     if (!EDITABLE_CLASS_RE.test(className)) continue;
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     return {
-      text: attrs.text ?? "",
-      resourceId: attrs["resource-id"] ?? "",
-      className,
-      origin: rect ? `${rect.x},${rect.y}` : "",
-      password: attrIsTrue(attrs, "password"),
+      field: {
+        text: attrs.text ?? "",
+        resourceId: attrs["resource-id"] ?? "",
+        className,
+        origin: rect ? `${rect.x},${rect.y}` : "",
+        password: attrIsTrue(attrs, "password"),
+      },
+      focusedClass,
     };
   }
-  return null;
+  return { field: null, focusedClass };
+}
+
+/** The focused editable view, or null when none of the focused views is one. */
+export function findFocusedTextField(xml: string): FocusedField | null {
+  return findFocused(xml).field;
 }
 
 /**
@@ -235,7 +265,10 @@ function beforeSurvived(before: string, after: string): boolean {
  *    the baseline read was the hint (see `FocusedField.text`) — and equally a
  *    selection that `input text` replaced.
  *
- * Ambiguous shapes, reported as `indeterminate` and never repaired:
+ * Ambiguous shapes, reported as `indeterminate` and never repaired. Every one of
+ * them is a reading that BOTH a correct injection and a partial landing produce,
+ * so the repair — which would delete and retype on top of a field that may
+ * already be right — must not run:
  *
  *  - The field did not change at all and already contains `text`: a correct type
  *    into a field that held the same value is indistinguishable from an injection
@@ -247,20 +280,70 @@ function beforeSurvived(before: string, after: string): boolean {
  *    "100" — so a correct type into an empty field can land here. Declining is
  *    still the only sound answer: nothing in the two readings distinguishes it
  *    from the partial landing.
+ *  - The whole of `text` sits where replacing a SELECTION would have put it —
+ *    `after` is `before` with one run cut out and `text` dropped in its place
+ *    (`replacedSelection`). `input text` replaces the selection, so a field
+ *    reading "aa bb" with "aa" double-tapped and "aaa" typed correctly ends at
+ *    "aaa bb" (measured, Pixel-class API 35): the text is entirely present, and
+ *    the field is `text.length` minus the selection longer rather than
+ *    `text.length` longer. `not-landed` is the dangerous answer here, not merely
+ *    a wrong one — it sends the reading to the repair, which takes the growth for
+ *    this call's whole contribution, deletes too few, retypes onto the residue
+ *    and leaves "aaaaa bb", a doubling shaped precisely to satisfy the *inserted*
+ *    branch above and so reported as success. `landed` is unavailable too: a
+ *    partial landing into content that happens to hold those characters produces
+ *    the same reading.
+ *  - Every character of `text` is present in order among characters the field
+ *    added of its own (`isSubsequence(text, after)` while `text` is NOT there
+ *    contiguously). That is what a field which REFORMATS what it is given does —
+ *    "5551234567" typed into Contacts' Phone box reads back "(555) 123-4567" —
+ *    and a dropped key-event burst cannot manufacture it, because dropping only
+ *    ever removes characters. A `not-landed` here is a hard step failure across
+ *    the three gates on a value that landed exactly as asked, which every phone,
+ *    card, date and currency field would meet. Requiring `text` NOT to be there
+ *    contiguously is what keeps a doubled injection ("abc" typed into an empty
+ *    field reading back "abcabc") a failure: no single injection explains the
+ *    text appearing twice, whereas separators between its characters are the
+ *    field's own work.
  *
  * Known limitation, reported as `not-landed`: a selection replaced with a
  * *shorter* string shrinks the field, which reads as a failure — unless the
- * selection covered the whole field, where the result is exactly `text` and the
- * *replaced* shape above accepts it. `plannedUndoDeletions` still refuses every
- * shrinking shape, so the cost is a false alarm in the note, never the field's
- * content.
+ * whole of `text` is still recoverable, where the two clauses above accept it as
+ * ambiguous. `plannedUndoDeletions` still refuses every shrinking shape, so the
+ * cost is a false alarm in the note, never the field's content.
  */
 export function classifyTypedText(before: string, after: string, text: string): TypedTextVerdict {
   if (after.includes(text) && after.length === before.length + text.length) return "landed";
   if (after === text && after !== before && !beforeSurvived(before, after)) return "landed";
   if (after === before && after.includes(text)) return "indeterminate";
   if (after === text && beforeSurvived(before, after)) return "indeterminate";
+  if (replacedSelection(before, after, text)) return "indeterminate";
+  if (!after.includes(text) && isSubsequence(text, after)) return "indeterminate";
   return "not-landed";
+}
+
+/**
+ * Whether `after` is `before` with one (possibly empty) run replaced by the whole
+ * of `text` — the reading `input text` produces when the field had a selection.
+ *
+ * Checked against `before` rather than guessed from the lengths: an occurrence of
+ * `text` in `after` only counts when what surrounds it is a prefix and a suffix
+ * of `before`, which is what rules the reading out for a plain dropped burst
+ * whose residue happens to contain the text. "abc" typed into a field reading
+ * "abc" and landing "abcac" has an occurrence at 0, but "abc" does not end "ac",
+ * so no selection explains it and the repair still runs.
+ */
+function replacedSelection(before: string, after: string, text: string): boolean {
+  // A selection can only be removed, never added, so `after` can never be longer
+  // than the field plus everything we typed.
+  if (after.length > before.length + text.length) return false;
+  for (let i = 0; i + text.length <= after.length; i++) {
+    if (!after.startsWith(text, i)) continue;
+    if (before.startsWith(after.slice(0, i)) && before.endsWith(after.slice(i + text.length))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -281,7 +364,8 @@ export function classifyTypedText(before: string, after: string, text: string): 
  *     `after` by deleting one contiguous run of `added` characters (the common
  *     prefix and common suffix together cover `before`). Then `added`
  *     backspaces restore `before` exactly. Bounded by `text.length` — we can
- *     never have added more characters than we asked to type.
+ *     never have added more characters than we asked to type — and by the run
+ *     being typeable, see `undoRunIsTypeable`.
  *  B. Every character in the field is accounted for by this injection: `after`
  *     is a subsequence of `text`. Dropped-keystroke corruption only ever
  *     deletes events, never reorders or invents them, so a field holding only a
@@ -310,7 +394,11 @@ export function classifyTypedText(before: string, after: string, text: string): 
  */
 export function plannedUndoDeletions(before: string, after: string, text: string): number | null {
   const added = after.length - before.length;
-  const grewByOneRun = added >= 0 && added <= text.length && coversByEdges(before, after, added);
+  const grewByOneRun =
+    added >= 0 &&
+    added <= text.length &&
+    coversByEdges(before, after, added) &&
+    undoRunIsTypeable(before, after, added);
   const allOurs = isSubsequence(after, text);
   if (grewByOneRun && allOurs) {
     // Both proofs apply. They agree only when they name the same deletion
@@ -322,6 +410,39 @@ export function plannedUndoDeletions(before: string, after: string, text: string
   if (grewByOneRun) return added;
   if (allOurs) return after.length;
   return null;
+}
+
+/**
+ * Whether every character `added` backspaces could remove is one this call could
+ * have typed.
+ *
+ * `assertTypeableAndroidText` restricts `text` to printable ASCII, so anything
+ * else in the deleted run was put there by the FIELD, and it breaks the
+ * arithmetic as well as the attribution: `KEYCODE_DEL` deletes a whole grapheme
+ * cluster (`BaseKeyListener.getOffsetForBackspaceKey` handles surrogate pairs,
+ * combining marks, keycap and ZWJ sequences) while `added` counts UTF-16 code
+ * units. A field that rewrites ":)" into an emoji reads back two units for one
+ * grapheme, so two presses are issued and the second takes a character the user
+ * typed.
+ *
+ * Only the run the deletion can touch is checked, not the whole field: the run
+ * sits somewhere in `[before.length - suffix, prefix + added)` where prefix and
+ * suffix are the maximal common edges, so an ASCII insertion into a field that
+ * already holds an accented name still repairs.
+ */
+function undoRunIsTypeable(before: string, after: string, added: number): boolean {
+  let prefix = 0;
+  while (prefix < before.length && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < before.length &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  const from = Math.max(0, before.length - suffix);
+  const to = Math.min(after.length, prefix + added);
+  return !/[^\x20-\x7e]/.test(after.slice(from, to));
 }
 
 /**
@@ -399,6 +520,23 @@ const NO_FOCUSED_FIELD_NOTE =
   "the characters may have gone nowhere. Tap the field first (or check `describe` for a focused " +
   "text field), then type.";
 
+// Something HAS focus; it is just not a view this check can read back. Reported
+// apart from the note above, whose "tap the field first" would send the agent to
+// re-tap a field that already had focus — the same distinction the truncated
+// capture draws. `EDITABLE_CLASS_RE` cannot enumerate every focus-taking editor:
+// a widget with its own `onCreateInputConnection` (a PIN or OTP box, a
+// canvas-drawn editor) or a `WebView` that does not expose its inputs as nodes
+// reaches here.
+function unrecognisedFocusNote(className: string): string {
+  return (
+    `${UNVERIFIED_PREFIX}: the view holding input focus (\`${className}\`) is not one this check ` +
+    "can read back — its class is neither an `EditText` nor an `AutoComplete` subclass, which a " +
+    "custom editor or a `WebView` that does not expose its inputs can be. Focus was NOT the " +
+    "problem, so do not re-tap the field; the text was typed and may well have landed. Read the " +
+    "field with `describe` to confirm."
+  );
+}
+
 // Same situation, but the capture hit its node cap, so "nothing had focus" is not
 // a conclusion the read supports — a dense screen can truncate before the walk
 // reaches the field. Saying "tap the field first" here would send the agent to
@@ -447,6 +585,19 @@ const TRUNCATED_AFTER_BASE =
   "was truncated before the field could be found again. This says nothing about whether the text " +
   "landed — read the field with `describe` to confirm.";
 
+// The field masks its input NOW though it did not when the text was typed — a
+// `TextInputLayout` reveal toggle flipped back, or a PIN field that masks after
+// its first character. It reads back as bullets, so the comparison could not
+// work; and the baseline read declines a masked field for a second reason that
+// applies just as much here, that a credential must not be read back to be
+// compared at all (see `FocusedField.password`). Checked on BOTH reads, or the
+// contract holds on only one of them.
+const MASKED_AFTER_BASE =
+  `${UNVERIFIED_PREFIX}: the focused field masks its input now, though it did not when the text ` +
+  "was typed — a password reveal toggle, or a field that masks once it holds something. It reads " +
+  "back as bullets rather than characters, so there is nothing to compare, and reading a " +
+  "credential back to compare it is what typing a `{{secret:…}}` placeholder exists to avoid.";
+
 /**
  * Close a blocked read-back with what the call did to the field.
  *
@@ -465,15 +616,34 @@ function blockedNote(base: string, retyped: boolean): string {
   );
 }
 
-// The observation is consistent with success AND with total failure (see
-// `classifyTypedText`). Retyping here is what would double the text, so the only
-// safe move is to say so.
+// The observation is consistent with success AND with failure (see
+// `classifyTypedText`, which enumerates the four shapes that reach here). Acting
+// on it is what would double the text or overwrite a field that is already
+// right, so the only safe move is to say so.
+const INDETERMINATE_BASE =
+  `${UNVERIFIED_PREFIX}: what the field holds is equally consistent with the text having landed ` +
+  "and with it having been dropped — it did not change and already contained the text, or it now " +
+  "reads exactly as the text while its previous value could have been part of the result, or it " +
+  "holds the whole of the text with the rest of its content around it (what replacing a selected " +
+  "word looks like), or it holds every character typed, in order, among characters of its own " +
+  "(what a field that reformats a phone or card number does).";
+
 const INDETERMINATE_NOTE =
-  `${UNVERIFIED_PREFIX}: the field's contents are equally consistent with the text having landed ` +
-  "and with it having been dropped — it either did not change at all and already matched, or it " +
-  "now reads exactly as the typed text while its previous value could have been part of the " +
-  "result. Nothing was retyped, because doing so on this evidence risks entering the text twice. " +
-  "Read the field with `describe` to confirm.";
+  `${INDETERMINATE_BASE} Nothing was retyped, because doing so on this evidence risks entering ` +
+  "the text twice or overwriting a value that is already correct. Read the field with `describe` " +
+  "to confirm.";
+
+// The same verdict reached AFTER the repair ran. It must not be collapsed into
+// `verified: false` the way the pre-repair site is not: a repair that restored
+// the field lands here (hint `https://` under `https://example.com`, the burst
+// dropping the `:`), and reporting that as a failure — over prose telling the
+// caller to send a value the field accepts — states the opposite of what
+// happened. The field WAS modified beyond the original typing, which is why this
+// does not reuse the sentence above.
+const INDETERMINATE_AFTER_REPAIR_NOTE =
+  `${INDETERMINATE_BASE} The characters this call could attribute to itself had already been ` +
+  "deleted and retyped in smaller chunks, so the field has been modified beyond the original " +
+  "typing. Read the field with `describe` to confirm.";
 
 /**
  * Two causes produce this, and the read-back cannot tell them apart, so the note
@@ -513,6 +683,22 @@ function repairFailedNote(deleted: number): string {
     "removed, before the retype failed to reach the device. " +
     "The field may now hold less than it did before this call. Read it with `describe` and " +
     "retype from a known state."
+  );
+}
+
+// A repair that WORKED still changed the field beyond what the caller asked for:
+// it backspaced the characters it could attribute to this call and retyped them
+// in chunks. Those presses are app-visible events — a search box re-queries on
+// each one, a recipients field drops the previous chip on a backspace at
+// position 0, an OTP box steps focus back a slot — and every OTHER post-repair
+// outcome says the field was modified. This is the one that actually did it.
+function repairedNote(deleted: number): string {
+  return (
+    "The typed text is in the field, but not from the first attempt: Android's key-event burst " +
+    `did not deliver it, so ${deleted} character${deleted === 1 ? "" : "s"} ` +
+    `${deleted === 1 ? "was" : "were"} deleted and the text was retyped in smaller chunks. Those ` +
+    "backspaces reached the app as key events, so the field has been modified beyond the original " +
+    "typing and anything watching it saw the intermediate states."
   );
 }
 
@@ -556,12 +742,12 @@ const READ_MAX_NODES = 12_000;
 
 async function readFocusedField(
   devtools: AndroidDevtoolsApi
-): Promise<{ field: FocusedField | null; truncated: boolean }> {
+): Promise<{ field: FocusedField | null; focusedClass: string | null; truncated: boolean }> {
   const { xml, truncated } = await devtools.getHierarchy({
     clearCache: true,
     maxNodes: READ_MAX_NODES,
   });
-  return { field: findFocusedTextField(xml), truncated };
+  return { ...findFocused(xml), truncated };
 }
 
 /**
@@ -587,7 +773,8 @@ async function readFocusedField(
 export async function typeAndroidTextVerified(
   registry: Registry,
   device: DeviceInfo,
-  text: string
+  text: string,
+  signal?: AbortSignal
 ): Promise<KeyboardVerification> {
   const serial = device.id;
   const devtools = await resolveDevtools(registry, device);
@@ -597,16 +784,29 @@ export async function typeAndroidTextVerified(
   }
 
   let before: FocusedField | null;
+  let beforeFocusedClass: string | null;
   let beforeTruncated: boolean;
   try {
-    ({ field: before, truncated: beforeTruncated } = await readFocusedField(devtools));
+    ({
+      field: before,
+      focusedClass: beforeFocusedClass,
+      truncated: beforeTruncated,
+    } = await readFocusedField(devtools));
   } catch {
     await injectAndroidText(serial, text);
     return { note: blockedNote(READ_FAILED_BASE, false) };
   }
   if (!before) {
     await injectAndroidText(serial, text);
-    return { note: beforeTruncated ? TRUNCATED_READ_NOTE : NO_FOCUSED_FIELD_NOTE };
+    if (beforeTruncated) return { note: TRUNCATED_READ_NOTE };
+    // Something has focus, just not something readable: saying "tap the field
+    // first" would be advice for a screen this is not.
+    return {
+      note:
+        beforeFocusedClass === null
+          ? NO_FOCUSED_FIELD_NOTE
+          : unrecognisedFocusNote(beforeFocusedClass),
+    };
   }
   if (before.password) {
     await injectAndroidText(serial, text);
@@ -625,6 +825,14 @@ export async function typeAndroidTextVerified(
   if (deletions === null) {
     return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };
   }
+  // The repair is the one destructive sequence on this path — it deletes before
+  // it retypes — so it must not START once the caller has given up: nothing is
+  // waiting for the retyped field, and the MCP adapter replays a call it
+  // abandoned. Checked HERE and not between the two halves, where bailing would
+  // itself be the corruption the `catch` below reports.
+  if (signal?.aborted) {
+    return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };
+  }
 
   try {
     await deleteTrailing(serial, deletions);
@@ -638,9 +846,10 @@ export async function typeAndroidTextVerified(
 
   const repaired = await readAfter(devtools, before, true);
   if (repaired.blocked) return repaired.blocked;
-  if (classifyTypedText(before.text, repaired.field.text, text) === "landed") {
-    return { verified: true };
-  }
+  const repairedVerdict = classifyTypedText(before.text, repaired.field.text, text);
+  if (repairedVerdict === "landed") return { verified: true, note: repairedNote(deletions) };
+  // Not collapsed into `verified: false`: see INDETERMINATE_AFTER_REPAIR_NOTE.
+  if (repairedVerdict === "indeterminate") return { note: INDETERMINATE_AFTER_REPAIR_NOTE };
   return { verified: false, note: mismatchNote(text.length, repaired.field.text.length, true) };
 }
 
@@ -673,6 +882,12 @@ async function readAfter(
   }
   if (!isSameField(before, field)) {
     return { blocked: { note: blockedNote(FOCUS_MOVED_BASE, retyped) } };
+  }
+  // The baseline read declines a masked field; so must this one, or the contract
+  // holds on only one of the two and a field that starts masking mid-typing gets
+  // its bullets compared as content and its credential backspaced and re-injected.
+  if (field.password) {
+    return { blocked: { note: blockedNote(MASKED_AFTER_BASE, retyped) } };
   }
   return { field };
 }

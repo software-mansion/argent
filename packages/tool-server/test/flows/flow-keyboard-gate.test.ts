@@ -95,6 +95,18 @@ describe("a raw tool: keyboard step the read-back failed", () => {
     expect(gate.reason).toContain("holds 3 characters where 11 were expected");
     expect(run.steps[1].status).toBe("skip");
     expect(run.ok).toBe(false);
+    // The fail branch echoes what a passing raw step echoes — the result, the
+    // args it ran with and the output hint — so a report reader can see WHAT was
+    // typed and what came back without re-running anything. Unasserted, the
+    // branch could drop any of them and stay green.
+    expect(gate.result).toEqual({ typed: "hello world", keys: 11, verified: false, note });
+    expect(gate.args).toMatchObject({ text: "hello world" });
+    const passing = (await runGated("unlanded-control", { typed: "hi", keys: 2 })).run.steps[0];
+    expect(
+      Object.keys(gate)
+        .filter((k) => k !== "reason")
+        .sort()
+    ).toEqual(Object.keys(passing).sort());
   });
 
   it("passes when the read-back verified the text", async () => {

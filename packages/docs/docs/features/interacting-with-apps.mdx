@@ -37,6 +37,12 @@ The agent opens an app by its bundle id or package name. The agent does not tap 
 
 The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
+On an Android phone or tablet, Argent reads the field back after it types. Android injects
+the text as one burst of key events. A field that redraws on each keystroke drops part of
+that burst, and the device still reports success. Argent finds this, retries once in small
+pieces, and tells the agent what the field holds. See the [tools
+reference](/docs/reference/tools#typed-text-on-android).
+
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
 
 ## Permissions
