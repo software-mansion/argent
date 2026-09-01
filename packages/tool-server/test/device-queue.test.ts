@@ -6,6 +6,14 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
+// `paste`'s iOS impl declares `requires: ["xcrun"]`, which `dispatchByPlatform`
+// preflights before the handler runs — so without this the queue assertions
+// below fail on any host with no Xcode command-line tools, Linux CI included.
+vi.mock("../src/utils/check-deps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
+  ensureDeps: vi.fn(async () => {}),
+}));
+
 import { serializedPerDevice } from "../src/utils/device-serial";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { createPasteTool } from "../src/tools/paste";
