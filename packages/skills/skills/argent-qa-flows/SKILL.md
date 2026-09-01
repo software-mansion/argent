@@ -25,7 +25,13 @@ A QA flow is complete only when:
        args: { clear: true }
      - tool: keyboard
        args: { text: "new@example.com" }
+     - tool: keyboard
+       args: { key: enter }
      ```
+
+     The last step replaces the Enter that `type:` sends: `type:` submits unless it carries
+     `submit: false`, and a `tool: keyboard` step does not, so a replacement without it fills the
+     field and never submits. Drop that step where the original `type:` carried `submit: false`.
 
      Write them as YAML, not as the compact `tool: keyboard { clear: true }` form: a `tool:` step carries its arguments on an `args:` line of its own, and `parseFlow` rejects the compact one outright ("Nested mappings are not allowed in compact mappings"). The wait is load-bearing: raw `tool:` steps take no settle, and on iOS and Android a clear that lands before focus empties the previously focused element and still reports success. Not available on Vega, Apple TV or Android TV — there, empty the field with the app's own on-screen keyboard, driven by `tool: tv-remote`.
 

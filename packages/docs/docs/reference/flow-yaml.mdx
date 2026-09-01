@@ -130,7 +130,7 @@ Each step contains one directive. A failed directive stops the flow.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
-`type` always appends: it focuses the element and types, and it has no clear form. Into a field that already holds a value — one the app remembered, or one an earlier run of the same flow left — that splices the new characters into the old one, and the flow replays that wrong value on every run. Where the field can arrive non-empty, write the three steps by hand instead:
+`type` always appends: it focuses the element and types, and it has no clear form. Into a field that already holds a value — one the app remembered, or one an earlier run of the same flow left — that splices the new characters into the old one, and the flow replays that wrong value on every run. Where the field can arrive non-empty, write the steps by hand instead:
 
 ```yaml
 - tap: { id: email }
@@ -139,7 +139,13 @@ Each step contains one directive. A failed directive stops the flow.
   args: { clear: true }
 - tool: keyboard
   args: { text: "new@example.com" }
+- tool: keyboard
+  args: { key: enter }
 ```
+
+The last step replaces the Enter that `type` sends. `type` presses Enter unless it carries
+`submit: false`. A `tool: keyboard` step never does, so a replacement without that step fills the
+field and never submits it. Drop the step where the original `type` carried `submit: false`.
 
 The `wait:` is load-bearing: raw `tool:` steps take no settle, and a clear that arrives before focus lands empties the previously focused element and still reports success. On iOS and Android the burst clears up to 100 characters on each side of the cursor, so a longer field needs a second `clear` step; on Chromium there is no limit and the result carries `clearVerified` when the field was read back empty.
 
