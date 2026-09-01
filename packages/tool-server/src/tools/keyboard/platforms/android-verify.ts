@@ -532,15 +532,37 @@ function subsequenceScan(candidate: string, source: string): { matched: boolean;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Re-inject `text` in small chunks — a different cadence, not a blind repeat. */
-async function injectInChunks(serial: string, text: string): Promise<void> {
+async function injectInChunks(serial: string, text: string, signal?: AbortSignal): Promise<void> {
   for (let i = 0; i < text.length; i += REPAIR_CHUNK_CHARS) {
     if (i > 0) await sleep(REPAIR_CHUNK_DELAY_MS);
+    abortRepair(signal, `${i} of ${text.length} characters retyped`);
     await injectAndroidText(serial, text.slice(i, i + REPAIR_CHUNK_CHARS));
   }
 }
 
-async function deleteTrailing(serial: string, count: number): Promise<void> {
+/**
+ * Stop a repair the caller has given up on, the way `gesture-swipe`'s frame loop
+ * does and for the same reason: a 600-character repair is half a minute of adb
+ * calls, and the dropped socket that cancels it is exactly what makes the MCP
+ * adapter re-POST the identical body — so a repair that keeps typing interleaves
+ * its chunks with the replay's. Reports its progress because the field is left
+ * part-way through a delete and a retype.
+ */
+function abortRepair(signal: AbortSignal | undefined, progress: string): void {
+  if (signal?.aborted) throw repairAbortError(`${progress}, the field is part-way repaired`);
+}
+
+/** Named `AbortError` because that is the name every caller keys on. */
+function repairAbortError(detail: string, cause?: unknown): Error {
+  const err = new Error(`keyboard repair aborted - ${detail}`);
+  err.name = "AbortError";
+  if (cause !== undefined) err.cause = cause;
+  return err;
+}
+
+async function deleteTrailing(serial: string, count: number, signal?: AbortSignal): Promise<void> {
   for (let remaining = count; remaining > 0; remaining -= DELETE_KEYCODES_PER_CALL) {
+    abortRepair(signal, `${count - remaining} of ${count} backspaces sent`);
     await injectAndroidKeycodeRepeated(
       serial,
       KEYCODE_BACKSPACE,
@@ -874,9 +896,9 @@ async function readFocusedField(
  * explaining why the check could not conclude. Two things do throw: errors from
  * the injection the call is actually FOR — a failed `input text` is a real
  * failure, not a verification problem — and a cancelled `signal`, which is
- * consulted where nothing has been typed yet, before the destructive repair
- * starts, and before every verdict — a run the caller gave up on is owed a skip,
- * not a finding about the app.
+ * consulted where nothing has been typed yet, between the repair's device calls,
+ * and before every verdict — a run the caller gave up on is owed a skip, not a
+ * finding about the app.
  */
 export async function typeAndroidTextVerified(
   registry: Registry,
@@ -956,7 +978,10 @@ async function verifyAgainstDevtools(
   // both flow gates read a rejection as the uniform aborted skip (`run-sequence`,
   // which has no skip, records it as that step's error). So the signal is re-read
   // before each outcome — the burst, the repair and the reads between them are
-  // all long enough to be given up on.
+  // all long enough to be given up on. This one also stands in for the repair
+  // below, which must not START once the caller has gone: it deletes before it
+  // retypes, and the MCP adapter replays a call it abandoned. Nothing between the
+  // two awaits, so a second check there could not see anything this one missed.
   signal?.throwIfAborted();
   if (after.blocked) return after.blocked;
   const verdict = classifyTypedText(before.text, after.field.text, text);
@@ -967,24 +992,25 @@ async function verifyAgainstDevtools(
   if (deletions === null) {
     return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };
   }
-  // The repair is the one destructive sequence on this path — it deletes before
-  // it retypes — so it must not START once the caller has given up: nothing is
-  // waiting for the retyped field, and the MCP adapter replays a call it
-  // abandoned. Not re-read inside the loops below: once the delete has run,
-  // finishing the retype leaves the field in a better state than abandoning it
-  // half-restored.
-  signal?.throwIfAborted();
-
   let repairFailed = false;
   try {
-    await deleteTrailing(serial, deletions);
-    await injectInChunks(serial, text);
-  } catch {
+    await deleteTrailing(serial, deletions, signal);
+    await injectInChunks(serial, text, signal);
+  } catch (err) {
+    // A repair that stopped because the caller did is a cancellation, not a
+    // transport failure: `repairFailedNote` describes the field to a caller, and
+    // this one is gone. As in gesture-drag, an adb failure that coincides with the
+    // cancel rides along as the abort's `cause` rather than replacing it — a
+    // cancelled call is exactly when the device connection can be going away.
+    if (signal?.aborted) {
+      throw err instanceof Error && err.name === "AbortError"
+        ? err
+        : repairAbortError("the device call failed as the caller gave up", err);
+    }
     repairFailed = true;
   }
-  // The repair spends tens of seconds on the device without consulting the
-  // signal, which makes it the widest window in the call for the caller to give
-  // up in.
+  // Covers an abort that landed after the last chunk, which the loops above
+  // cannot see.
   signal?.throwIfAborted();
   if (repairFailed) {
     // The undo runs before the retype, so a failure between them can leave the

@@ -1636,11 +1636,13 @@ describe("android keyboard read-back — cancellation", () => {
     }
   });
 
-  it("rejects rather than reporting a verdict when the caller gives up mid-repair", async () => {
-    // The repair runs for tens of seconds and does not watch the signal, so the
-    // caller can be gone by the time it ends. Returning a verdict then records a
-    // typing failure ABOUT THE APP for a run that was cancelled — all three gates
-    // read `verified: false` that way — where a rejection is the aborted skip.
+  it("stops retyping at the next chunk once the caller gives up mid-repair", async () => {
+    // A 600-character repair is half a minute of adb calls, and the dropped socket
+    // that cancels it is what makes the adapter re-POST the same body, so a repair
+    // that runs to the end interleaves its chunks with the replay's. It also
+    // REJECTS: returning a verdict records a typing failure ABOUT THE APP for a run
+    // that was cancelled — all three gates read `verified: false` that way — where
+    // a rejection is the aborted skip.
     const controller = new AbortController();
     const { registry } = registryServing(REPAIR_SCRIPT);
     adbShell.mockImplementation(async (_serial: string, cmd: string) => {
@@ -1655,28 +1657,21 @@ describe("android keyboard read-back — cancellation", () => {
         PHONE,
         { signal: controller.signal }
       )
-    ).rejects.toThrow(/abort/i);
-    // The repair itself is finished: abandoning it between the delete and the
-    // retype would leave the field holding less than the call found it.
+    ).rejects.toThrow(/part-way repaired/);
     expect(cmds()).toEqual([
       "input text 'abcdefghijkl'",
       "input keyevent 67 67 67 67 67 67 67 67",
       "input text 'abcdefgh'",
-      "input text 'ijkl'",
     ]);
   });
 
-  it("rejects rather than reporting a broken repair once the caller has gone", async () => {
-    // The same rule where the repair itself failed: `repairFailedNote` describes
-    // a field left worse than the call found it, which the gates still read as a
-    // verdict on the app rather than as the cancellation it followed.
+  it("rejects rather than reporting a repair the caller gave up on at its last call", async () => {
+    // An abort landing inside the final chunk is past every check the loops make,
+    // so the outcome below it is reached with the caller already gone.
     const controller = new AbortController();
-    const { registry } = registryServing(REPAIR_SCRIPT);
+    const { registry, getHierarchy } = registryServing(REPAIR_SCRIPT);
     adbShell.mockImplementation(async (_serial: string, cmd: string) => {
-      if (cmd === "input text 'abcdefgh'") {
-        controller.abort();
-        throw new Error("adb: device offline");
-      }
+      if (cmd === "input text 'ijkl'") controller.abort();
       return "";
     });
 
@@ -1688,6 +1683,146 @@ describe("android keyboard read-back — cancellation", () => {
         { signal: controller.signal }
       )
     ).rejects.toThrow(/abort/i);
+    expect(cmds()).toEqual([
+      "input text 'abcdefghijkl'",
+      "input keyevent 67 67 67 67 67 67 67 67",
+      "input text 'abcdefgh'",
+      "input text 'ijkl'",
+    ]);
+    // And no confirming read: it is a second full hierarchy dump for an answer
+    // nobody is waiting for.
+    expect(getHierarchy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects rather than reporting a repaired field once the caller has gone", async () => {
+    // The read that confirms the repair is another whole hierarchy dump. Reporting
+    // `verified: true` out of it tells a cancelled flow its step passed.
+    const controller = new AbortController();
+    let served = 0;
+    const registry = {
+      resolveService: vi.fn(async () => ({
+        getHierarchy: vi.fn(async () => {
+          const xml = REPAIR_SCRIPT[served++]!;
+          if (served === 3) controller.abort(); // the read that confirms the repair
+          return { xml, captureMode: "active-window", windowCount: 1, nodeCount: 2, elapsedMs: 1 };
+        }),
+        ping: vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" })),
+      })),
+    } as unknown as Registry;
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+        PHONE,
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow(/abort/i);
+  });
+
+  it("stops deleting at the next batch once the caller gives up mid-undo", async () => {
+    // The delete is the same shape of loop as the retype — one adb call per 8
+    // characters — so it needs the same check: 600 characters of undo is 75 calls
+    // the caller is no longer waiting for.
+    const controller = new AbortController();
+    const text = "abcdefghij".repeat(12);
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: `XY${text.slice(0, 100)}` }), // 100 of 120 landed
+    ]);
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd.startsWith("input keyevent")) controller.abort();
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler({}, { udid: SERIAL, text } as KeyboardParams, PHONE, {
+        signal: controller.signal,
+      })
+    ).rejects.toThrow(/part-way repaired/);
+    // 100 backspaces is two calls at 64 keycodes each; the second never goes out,
+    // and no retype follows it.
+    expect(cmds()).toEqual([
+      `input text '${text}'`,
+      `input keyevent ${Array(64).fill(67).join(" ")}`,
+    ]);
+  });
+
+  it("rejects instead of reporting the typing landed when the caller gave up during the burst", async () => {
+    // The burst is one adb call per %-terminated segment and the read after it is
+    // a whole hierarchy dump, so the caller can be gone by the time the text is
+    // confirmed. `verified: true` for a cancelled run tells a flow the step passed
+    // and lets it press its submit Enter on a field nobody asked for.
+    const controller = new AbortController();
+    const { registry } = registryServing([hierarchy({ text: "XY" }), hierarchy({ text: "XYabc" })]);
+    adbShell.mockImplementation(async () => {
+      controller.abort();
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abc" } as KeyboardParams,
+        PHONE,
+        {
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toThrow(/abort/i);
+  });
+
+  it("types nothing at all when the caller has already gone and the helper is unavailable", async () => {
+    // The branch that gives up on verification still types, so it needs the same
+    // check as the verified path: without it a cancelled call types the whole
+    // string into whatever holds focus by now and reports a note nobody reads.
+    const registry = {
+      resolveService: vi.fn(async () => {
+        throw new Error("adb install -t rejected");
+      }),
+    } as unknown as Registry;
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abc" } as KeyboardParams,
+        PHONE,
+        {
+          signal: AbortSignal.abort(),
+        }
+      )
+    ).rejects.toThrow(/abort/i);
+    expect(cmds()).toEqual([]);
+  });
+
+  it("rejects rather than reporting a broken repair once the caller has gone", async () => {
+    // The same rule where the repair itself failed: `repairFailedNote` describes
+    // a field left worse than the call found it to a caller that is no longer
+    // there, and the gates read the note as a verdict on the app rather than as
+    // the cancellation it followed.
+    const controller = new AbortController();
+    const { registry } = registryServing(REPAIR_SCRIPT);
+    adbShell.mockImplementation(async (_serial: string, cmd: string) => {
+      if (cmd === "input text 'abcdefgh'") {
+        controller.abort();
+        throw new Error("adb: device offline");
+      }
+      return "";
+    });
+
+    const promise = makeAndroidImpl(registry).handler(
+      {},
+      { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+      PHONE,
+      { signal: controller.signal }
+    );
+    await expect(promise).rejects.toThrow(/abort/i);
+    // The adb failure rides along as the abort's cause rather than replacing it:
+    // the cancel is the reportable fact, and losing the device error would hide
+    // why the field was left part-way repaired.
+    await expect(promise).rejects.toMatchObject({
+      name: "AbortError",
+      cause: expect.objectContaining({ message: "adb: device offline" }),
+    });
   });
 
   it("keeps the helper socket alive across a repair longer than its read timeout", async () => {

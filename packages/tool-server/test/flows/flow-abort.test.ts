@@ -416,6 +416,47 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("keyboard");
   });
 
+  it("presses no submitting Enter when the run is cancelled inside the keyboard call", async () => {
+    const controller = new AbortController();
+    // On an Android phone the keyboard call reads the field back and can repair
+    // it, holding the call for tens of seconds — so the cancel lands inside a
+    // call that still RESOLVES, and its result has no `verified`, which is the
+    // value that passes the read-back gate. Nothing below it would stop the Enter.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "email",
+          focused: true,
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+    const registry = {
+      invokeTool: vi.fn(async (id: string, params: Record<string, unknown>) => {
+        calls.push(id === "keyboard" ? `keyboard:${"key" in params ? "enter" : "text"}` : id);
+        if (id === "list-devices") return { devices: [] };
+        if (id === "keyboard") controller.abort();
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+
+    await writeFlow("cancelled-mid-keyboard", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = await run("cancelled-mid-keyboard", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    // The text went out before the cancel; the Enter that submits it must not.
+    expect(calls).toContain("keyboard:text");
+    expect(calls).not.toContain("keyboard:enter");
+  });
+
   it("attributes abort skips inside a fragment to the fragment, not the root", async () => {
     const controller = new AbortController();
     // The fragment's tap polls for a target that never appears; the run is
