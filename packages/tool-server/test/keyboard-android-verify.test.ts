@@ -133,7 +133,7 @@ describe("findFocusedTextField", () => {
       text: "hello",
       resourceId: FIELD_RID,
       className: "android.widget.EditText",
-      origin: "126,149",
+      bounds: { x: 126, y: 149, w: 954, h: 126 },
       password: false,
       idShared: false,
     });
@@ -360,8 +360,8 @@ describe("plannedUndoDeletions", () => {
   it("plans a zero-deletion repair over a non-ASCII baseline", () => {
     // No reading can hand a character the FIELD put there to `KEYCODE_DEL`, whose
     // delete is grapheme-sized: a landed run is a subsequence of `text`, which is
-    // printable ASCII. So a localized hint needs no scan of its own to be safe —
-    // here nothing is deleted at all, and the text is simply retyped.
+    // printable ASCII. A localized hint is therefore safe without a scan of its
+    // own — here nothing is deleted at all, and the text is simply retyped.
     expect(plannedUndoDeletions("José", "José", "argent")).toBe(0);
   });
 
@@ -447,11 +447,11 @@ describe("plannedUndoDeletions", () => {
   });
 
   it("scans `text` only as far as the run it matches, so a big field still answers", () => {
-    // Every offset of this field matches its empty run against `text`, and a
-    // scan that read to the end of `text` regardless made the search
-    // O(field x text): 12.9 s measured on this input, all of it synchronous on
-    // the tool-server's only thread — and, once the budget charges what a scan
-    // really reads, a refusal where the answer is plain.
+    // Every offset of this field matches its empty run against `text`. A scan
+    // that read to the end of `text` regardless turns the search into
+    // O(field x text) — 12.9 s on this input, synchronous on the tool-server's
+    // only thread — and, charged honestly, exhausts the budget instead, which
+    // refuses a repair whose answer is plain.
     const field = "1234567890".repeat(20_000);
     const text = "abcdefghij".repeat(2_000);
     const started = Date.now();
@@ -774,6 +774,49 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     });
   });
 
+  it("still repairs a shared-id field that moved but still covers where it was", async () => {
+    // A list row carries its layout's id, so the position test decides it — and
+    // opening the keyboard scrolls the row while it is plainly the same one.
+    // Overlap, not equality: a row that moved less than its own height is the row
+    // that was typed into, and demanding an exact origin would lose every repair
+    // on a screen that scrolls.
+    const row = (text: string, bounds: string) =>
+      hierarchy({ text, rid: FIELD_RID, bounds, alsoFocused: { rid: FIELD_RID } });
+    const { registry } = registryServing([
+      row("XY", "[126,900][1080,1026]"),
+      row("XYabcdefgh", "[126,860][1080,986]"),
+      row("XYabcdefghijkl", "[126,860][1080,986]"),
+    ]);
+    await expect(type(registry, "abcdefghijkl")).resolves.toMatchObject({ verified: true });
+  });
+
+  it("declines when only ONE of the two reads can see the id is shared", async () => {
+    // The captures need not agree: a recycled row scrolls its twin out of the
+    // tree, and the read that sees one copy would call the id an identity on its
+    // own. Both directions, because either read alone deciding is enough to
+    // retype into the wrong field.
+    const shared = (text: string) =>
+      hierarchy({
+        text,
+        rid: FIELD_RID,
+        bounds: "[126,149][1080,275]",
+        alsoFocused: { rid: FIELD_RID },
+      });
+    const alone = (text: string) =>
+      hierarchy({ text, rid: FIELD_RID, bounds: "[126,900][1080,1026]" });
+    for (const reads of [
+      [shared(""), alone("abcdefgh")],
+      [alone(""), shared("abcdefgh")],
+    ]) {
+      adbShell.mockClear();
+      const { registry } = registryServing(reads);
+      const res = await type(registry, "abcdefghijkl");
+      expect(res.verified).toBeUndefined();
+      expect(res.note).toMatch(/no longer the one the text was typed into/);
+      expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+    }
+  });
+
   it("does not mistake the SAME field for another when typing resizes it", async () => {
     // Typing into the Settings search box moved its right edge from 1080 to 933
     // with the origin unchanged (measured, API 34). Identity must survive that, or
@@ -887,6 +930,24 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     return { resolveService: vi.fn(async () => ({ getHierarchy, ping })) } as unknown as Registry;
   }
 
+  it("does not treat an id as unique when the capture was truncated", async () => {
+    // The helper writes nodes in document order and stops at the cap, so the view
+    // that shares the id may be one it never reached. Trusting the id there is
+    // the OTP bug again on any screen dense enough to truncate.
+    const registry = registryServingReads([
+      { xml: hierarchy({ text: "", bounds: "[126,149][1080,275]" }), truncated: true },
+      { xml: hierarchy({ text: "abcd", bounds: "[126,900][1080,1026]" }) },
+    ]);
+    const res = await makeAndroidImpl(registry).handler(
+      {},
+      { udid: SERIAL, text: "abcdefghijkl" } as KeyboardParams,
+      PHONE
+    );
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no longer the one the text was typed into/);
+    expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+  });
+
   it("reports a truncated read-BACK as unknown, not as a focus change", async () => {
     // Same evidence the baseline read has a dedicated note for. Blaming focus
     // movement here invents a second field and tells the agent the text may be
@@ -925,7 +986,8 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // There is nothing of ours to remove, so the retry must retype with zero
     // backspaces — deleting here would eat the field's own content. No character
     // of the hint is one this call typed, so no selection explains the reading
-    // and the count is proven (see the test below for the price of that rule).
+    // and the count is proven ("gives up the retry on an unchanged field that
+    // could have held what landed" is the price of that rule).
     const unchanged = hierarchy({ text: "Enter number" });
     const { registry } = registryServing([unchanged, unchanged, unchanged]);
 
@@ -1065,7 +1127,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toMatch(/anything from less than it did before this call to a truncated copy/);
   });
 
-  it("says what a repair with nothing to delete did, on every outcome", async () => {
+  it("says what a repair with nothing to delete did — repaired, blocked, failed", async () => {
     // The module's headline shape: a field that took none of the burst has
     // nothing of ours to remove, so the retype runs with zero backspaces. Every
     // note that follows one must say that rather than assert deletions — the

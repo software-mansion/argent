@@ -155,7 +155,7 @@ describe("android-input — injection", () => {
     // `toUpperCase()` is the only direction that was red.
     //
     // `typed` echoes `params.text` rather than reading the device
-    // (`typeAndroid`'s return), so a case regression answers
+    // (`typeAndroidPhone`'s return), so a case regression answers
     // `{ typed: "Passw0rd!", keys: 9 }` while the field holds `passw0rd!` —
     // success to every consumer, android-only, and exactly where case-sensitive
     // login fields and `{{secret:…}}` injection land.

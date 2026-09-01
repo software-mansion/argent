@@ -32,8 +32,8 @@ import type { KeyboardVerification } from "../types";
  * KeyEvent burst through a KeyCharacterMap and are not exposed to the failure at
  * all. Android TV IS exposed — `blueprints/android-tv-control.ts` reaches the
  * same `injectAndroidText` — but it types one space-free word per call, and its
- * backend is shared with Apple TV, which cannot read a field back at all: see
- * the scoping comment in `tv.ts`.
+ * backend is shared with Apple TV, whose describe reports a focused element with
+ * no identity to match it by: see the scoping comment in `tv.ts`.
  *
  * Cost, and why it is not gated on anything. A call that verifies and needs no
  * repair costs TWO `getHierarchy` calls over the helper's already-open socket,
@@ -135,15 +135,16 @@ interface FocusedField {
    */
   resourceId: string;
   /**
-   * Whether another editable view in the same capture carries that same
-   * `resource-id`, which makes it a layout id rather than this field's identity.
-   * See `isSameField`.
+   * Whether the `resource-id` fails to identify this field: another editable view
+   * in the same capture carries it, which makes it a layout id, or the capture was
+   * truncated and cannot show that it is unique. Only read for a field that has an
+   * id at all. See `isSameField`.
    */
   idShared: boolean;
   /** The field's `class`. See `isSameField`. */
   className: string;
-  /** `"x,y"` of the field's bounds, or `""` when they do not parse. See `isSameField`. */
-  origin: string;
+  /** The field's bounds, or null when they do not parse. See `isSameField`. */
+  bounds: { x: number; y: number; w: number; h: number } | null;
   /**
    * Whether the focused field masks its input. Two independent reasons to skip
    * the read-back rather than one:
@@ -203,7 +204,7 @@ function findFocused(xml: string): { field: FocusedField | null; focusedClass: s
       text: attrs.text ?? "",
       resourceId,
       className,
-      origin: rect ? `${rect.x},${rect.y}` : "",
+      bounds: rect,
       password: attrIsTrue(attrs, "password"),
       idShared: false,
     };
@@ -233,27 +234,39 @@ export function findFocusedTextField(xml: string): FocusedField | null {
  * `testID` (see `flows/flow-android-tree.ts`), and it does not change when the
  * field moves. An id is NOT an identity when the capture holds several editable
  * views behind it: `getViewIdResourceName` reports the id of the layout, so six
- * `<include>`d or recycled OTP boxes all read `…:id/otp_digit`, and matching on
- * that alone let an auto-advancing form pass box 2 off as box 1 — the repair
- * then backspaced and retyped into the box the caller never targeted and called
- * it verified. Position is the fallback for those and for a field with no id at
- * all — every untagged `TextInput` and Compose `TextField` dumps
+ * `<include>`d or recycled OTP boxes all read `…:id/otp_digit`. Matching on that
+ * alone passes box 2 off as box 1 in an auto-advancing form, which puts the
+ * repair's backspaces and retype into the box the caller never targeted and
+ * reports it verified. Position is the fallback for those and for a field with no
+ * id at all — every untagged `TextInput` and Compose `TextField` dumps
  * `resource-id=""`.
  *
- * Position is a fallback and not the primary because typing MOVES fields. The
- * bounds ORIGIN survives the growth that makes the full bounds useless — typing
- * into the Settings search box moved its right edge from 1080 to 933 with the
- * origin unchanged (measured, API 34) — but not every kind: a bottom-anchored
- * chat composer grows UPWARD as its text wraps to a second line, so its origin
- * rises while it is plainly the same field. An untagged field that does that
+ * Position is a fallback and not the primary because typing MOVES fields: it is
+ * an OVERLAP test rather than an equality one, the same predicate and the same
+ * reason as `flows/flow-actions.ts`'s `framesOverlap` ("keyboard avoidance
+ * routinely scrolls the field away from where it was tapped"). Typing into the
+ * Settings search box moved its right edge from 1080 to 933 (measured, API 34)
+ * and a bottom-anchored chat composer grows UPWARD as its text wraps, and both
+ * still cover their old rectangle; two boxes of a form never cover each other's.
+ * A field that moves clear of where it was — a list scrolled by more than a row —
  * reads as a focus change, which declines the repair and reports the field as
- * unmatched rather than as verified — which is why the note names both causes.
+ * unmatched rather than as verified.
+ *
+ * Known limitation: duplicate ids are only visible where the capture holds both
+ * views. Two screens, or two pages of a pager, that reuse one layout show one
+ * view each, so nothing marks the id as shared and the position test never runs.
  */
 function isSameField(a: FocusedField, b: FocusedField): boolean {
   if (a.className !== b.className) return false;
   if (a.resourceId !== b.resourceId) return false;
   if (a.resourceId !== "" && !a.idShared && !b.idShared) return true;
-  return a.origin === b.origin;
+  return boundsOverlap(a.bounds, b.bounds);
+}
+
+/** Whether two parsed bounds share any pixel. Unparseable bounds identify nothing. */
+function boundsOverlap(a: FocusedField["bounds"], b: FocusedField["bounds"]): boolean {
+  if (!a || !b) return false;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 /**
@@ -316,9 +329,8 @@ function beforeSurvived(before: string, after: string): boolean {
  *    the field is `text.length` minus the selection longer rather than
  *    `text.length` longer. `not-landed` is wrong here in the
  *    expensive direction: the text is entirely present, so it would fail the step
- *    over a field holding exactly what was asked for (and hand the reading to a
- *    planner that refuses it, so the report would blame the app for a selection
- *    the agent replaced). `landed` is unavailable too: a
+ *    over a field holding exactly what was asked for. `landed` is unavailable
+ *    too: a
  *    partial landing into content that happens to hold those characters produces
  *    the same reading.
  *  - Every character of `text` is present in order among characters the field
@@ -411,8 +423,8 @@ function replacedSelection(before: string, after: string, text: string): boolean
  * "Smith" selected, `text: "John Smithe"`, the final character dropped, reads
  * "John John Smith", where deleting the growth takes the user's own word.
  *
- * Two properties fall out of the model rather than needing guards of their own.
- * `landed` is a subsequence of `text`, which `assertTypeableAndroidText`
+ * Two properties fall out of the model rather than needing guards. `landed` is a
+ * subsequence of `text`, which `assertTypeableAndroidText`
  * restricts to printable ASCII, so a deleted run can never hold a character the
  * FIELD put there — which matters because `KEYCODE_DEL` deletes a whole grapheme
  * cluster (`BaseKeyListener.getOffsetForBackspaceKey` handles surrogate pairs,
@@ -466,10 +478,11 @@ export function plannedUndoDeletions(before: string, after: string, text: string
 }
 
 /**
- * Work cap for the reading search, in characters of `text` read. Every offset of
- * the common prefix opens a candidate run and every run is matched against
- * `text`, so the search is O(field length × text length) on a field whose
- * characters keep those runs alive — synchronous CPU on the tool-server's only
+ * Work cap for the reading search, in characters of `text` read plus one per
+ * reading, so a search over readings that read nothing still ends. Every offset
+ * of the common prefix opens a reading per selection end, and every landed run is
+ * matched against `text`, so the search grows with the field length times the
+ * text length on a field whose characters keep those runs alive — synchronous CPU on the tool-server's only
  * thread, on a string a `describe` will happily hand back at 100 kB. Exhausting
  * the cap refuses the repair, which is the answer an ambiguous reading gets
  * anyway.
@@ -603,9 +616,8 @@ const READ_FAILED_REASON =
 
 // Distinct from a read failure: both reads succeeded and the field in focus
 // afterwards is not the one the text was typed into. Telling the agent to hunt
-// dropped characters would bury the actionable fact. Both causes are named
-// because the read cannot tell them apart for a field with no `resource-id` —
-// see `isSameField`.
+// dropped characters would bury the actionable fact. Every cause is named because
+// the read cannot tell them apart — see `isSameField`.
 const FOCUS_MOVED_REASON =
   "the focused field is no longer the one the text was typed into, so that " +
   "field could not be checked — either input focus moved to another field while the text was " +
@@ -722,7 +734,9 @@ function indeterminateAfterRepairNote(deleted: number): string {
  * burst lost characters on a field that re-renders per keystroke, the field
  * itself rejected or reformatted what arrived (a digits-only field, an input
  * mask, a maxLength — the dialer's number field silently drops every letter typed
- * into it), or the text replaced a selection with a shorter value. Retyping in
+ * into it), or PART of the text replaced a selection, which takes the selected
+ * run out of the field on top of whatever the burst dropped. A whole replacement
+ * never arrives here: `replacedSelection` calls that `indeterminate`. Retyping in
  * chunks fixes the first and neither of the others, which is why the advice
  * covers all three.
  */
@@ -737,8 +751,8 @@ function mismatchNote(typed: number, present: number, repaired: boolean): string
       : ", and the field could not be safely restored to retry, so nothing was retyped") +
     ". Either Android's key-event burst lost characters on a field that re-renders " +
     "per keystroke, or the field rejects or reformats what is typed into it (a " +
-    "digits-only field, an input mask, a maxLength) — or the text replaced a " +
-    "selection with a shorter value, which reads the same way. Read the field with " +
+    "digits-only field, an input mask, a maxLength) — or part of it replaced a " +
+    "selection, which removes the selected run as well. Read the field with " +
     "`describe` to see what it holds, then either type in shorter pieces or send a " +
     "value the field accepts."
   );
@@ -834,7 +848,11 @@ async function readFocusedField(
     clearCache: true,
     maxNodes: READ_MAX_NODES,
   });
-  return { ...findFocused(xml), truncated };
+  const found = findFocused(xml);
+  // A capture cut short cannot show an id to be unique: the helper writes nodes
+  // in document order, so the view that shares it may be one it never reached.
+  if (found.field && truncated) found.field.idShared = true;
+  return { ...found, truncated };
 }
 
 /**
@@ -933,12 +951,12 @@ async function verifyAgainstDevtools(
   await injectAndroidText(serial, text);
 
   const after = await readAfter(devtools, before, null);
-  // Every return past here is a finding ABOUT THE APP, and a caller that gave up
-  // is owed a skip instead: the three step gates key on `verified: false`, while
+  // Past here the call reports on the field, and a caller that gave up is owed a
+  // skip instead of a report: the three step gates key on `verified: false`, while
   // both flow gates read a rejection as the uniform aborted skip (`run-sequence`,
-  // which has no skip, records it as that step's error). So the signal is
-  // re-read before each verdict — the burst, the repair and the reads between
-  // them are all long enough to be given up on.
+  // which has no skip, records it as that step's error). So the signal is re-read
+  // before each outcome — the burst, the repair and the reads between them are
+  // all long enough to be given up on.
   signal?.throwIfAborted();
   if (after.blocked) return after.blocked;
   const verdict = classifyTypedText(before.text, after.field.text, text);
