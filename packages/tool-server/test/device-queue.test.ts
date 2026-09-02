@@ -90,6 +90,30 @@ describe("a queued call the caller abandoned", () => {
   });
 });
 
+describe("the queue's drop guard", () => {
+  it("keeps a THIRD task behind the second, not ahead of it", async () => {
+    // The map entry is dropped only when the finished task is still the tail.
+    // Drop it unconditionally and the second task's own entry goes with it, so
+    // a third call finds an empty map and runs BESIDE the second instead of
+    // after it. Every other case in this file queues exactly two tasks, which is
+    // one short of the shape that can see it.
+    const order: string[] = [];
+    const task = (tag: string) => async () => {
+      order.push(`${tag}:in`);
+      await sleep(20);
+      order.push(`${tag}:out`);
+    };
+    const first = serializedPerDevice(IOS_UDID, task("a"));
+    await sleep(1);
+    const second = serializedPerDevice(IOS_UDID, task("b"));
+    // `a` has settled and its drop has run; `b` is mid-flight and is the tail.
+    await first;
+    const third = serializedPerDevice(IOS_UDID, task("c"));
+    await Promise.all([second, third]);
+    expect(order).toEqual(["a:in", "a:out", "b:in", "b:out", "c:in", "c:out"]);
+  });
+});
+
 describe("one key per device, not per spelling of its id", () => {
   it("serializes two spellings of one Chromium target", async () => {
     // `parseChromiumCdpPort` reads both of these as port 9333, so they are one
