@@ -53,7 +53,7 @@ The file is plain text. You can commit the file, review the file in a pull reque
 
 You ask the agent to run a flow by its name. The agent replays each step in order on the connected device. When a step fails, Argent stops the flow. Argent reports the later steps as skipped. At the end, the agent receives a report with the result of each step.
 
-A flow also runs without an agent. The `argent flow run` command replays a flow from the terminal. The command prints the result of each step and exits with a status code. Thus a flow runs in a CI job or in a script. The command runs one flow, a flow file in a different location, or all flows in a directory.
+A flow also runs without an agent. The `argent flow run` command replays a flow from the terminal. The command prints the result of each step and exits with a status code. Thus a flow runs in a CI job or in a script. The command runs one flow, a flow file in a different location, all flows in a directory, or all saved flows when you pass no argument.
 
 ## Example instructions
 
