@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
@@ -21,6 +22,7 @@ import { createPasteTool } from "../src/tools/paste";
 
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0001";
 const OTHER_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0002";
+const ABANDON_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0003";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,6 +50,46 @@ const TYPED = "abcdefghij";
  * `clearVerified: true`, the OTHER session's textarea was emptied, and the field
  * the sequence tapped kept its value.
  */
+describe("a queued call the caller abandoned", () => {
+  it("does not reach the device when its turn comes", async () => {
+    // Without this the queue turned "an unstoppable write" into "a write into
+    // another session's field": measured on Chrome 152 with the client SIGKILLed
+    // 2.5s into a 12s wait, the text landed at t=16s in the field the session
+    // ahead had focused, and the server logged `toolCompleted keyboard (12107ms)`.
+    const controller = new AbortController();
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      ABANDON_UDID,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    // The queued task starts on a microtask, so `release` is only bound once it
+    // has actually run.
+    await sleep(2);
+    const task = vi.fn(async () => "written");
+    const abandoned = serializedPerDevice(ABANDON_UDID, task, controller.signal).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    controller.abort();
+    release();
+    await blocking;
+    const err = await abandoned;
+    expect(task).not.toHaveBeenCalled();
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_DEVICE_BUSY);
+    expect(getFailureSignal(err)?.failure_stage).toBe("device_queue_abandoned");
+  });
+
+  it("still runs a call whose signal never fired", async () => {
+    const controller = new AbortController();
+    const task = vi.fn(async () => "written");
+    await expect(serializedPerDevice(ABANDON_UDID, task, controller.signal)).resolves.toBe(
+      "written"
+    );
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("focus movers and an open hold", () => {
   it("waits out a hold on the same device", async () => {
     const order: string[] = [];

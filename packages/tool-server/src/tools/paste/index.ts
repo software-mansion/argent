@@ -64,14 +64,21 @@ Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is neve
       // event log and recorded sequences see only the placeholder) and before
       // the dispatch.
       const { text, secrets } = resolveSecretPlaceholders(params.text);
-      return serializedPerDevice(params.udid, async () => {
-        if (secrets.length === 0) return dispatch(services, params, options);
-        try {
-          return await dispatch(services, { ...params, text }, options);
-        } catch (err) {
-          throw redactSecretsFromError(err, secrets);
-        }
-      });
+      // The signal is the request's own abort: a paste whose client is already
+      // gone must not fill the clipboard and send Cmd+V when its turn finally
+      // comes, into whatever the session ahead of it left focused.
+      return serializedPerDevice(
+        params.udid,
+        async () => {
+          if (secrets.length === 0) return dispatch(services, params, options);
+          try {
+            return await dispatch(services, { ...params, text }, options);
+          } catch (err) {
+            throw redactSecretsFromError(err, secrets);
+          }
+        },
+        options?.signal
+      );
     },
   };
 }

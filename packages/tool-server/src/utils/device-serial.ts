@@ -79,15 +79,40 @@ function deviceBusyError(deviceId: string, waitedMs: number): FailureError {
   );
 }
 
-export function serializedPerDevice<T>(deviceId: string, task: () => Promise<T>): Promise<T> {
+export function serializedPerDevice<T>(
+  deviceId: string,
+  task: () => Promise<T>,
+  /**
+   * The request's own abort — the HTTP layer fires it when the client
+   * disconnects, and `run-sequence` and a flow run pass theirs down. Without it
+   * a call the caller had ALREADY given up on still ran when its turn came, into
+   * whatever held focus by then: measured on Chrome 152 with the client SIGKILLed
+   * 2.5s in, the write landed at t=16s in another session's field and the server
+   * logged `toolCompleted keyboard (12107ms)`.
+   */
+  signal?: AbortSignal
+): Promise<T> {
   if (heldByCaller.getStore()?.has(deviceId) === true) return task();
   const previous = deviceQueues.get(deviceId) ?? Promise.resolve();
   const queuedAt = Date.now();
-  // Checked when the turn comes rather than raced against a timer: giving up
-  // early would leave the task still chained and still due to run, which is the
-  // one outcome that must not happen — the point is that no write lands after
-  // the bound, not that the caller hears about it sooner.
+  // Both guards are checked when the turn comes rather than raced against a
+  // timer: giving up early would leave the task still chained and still due to
+  // run, which is the one outcome that must not happen — the point is that no
+  // write lands after the bound, not that the caller hears about it sooner.
   const guarded = async (): Promise<T> => {
+    if (signal?.aborted === true) {
+      throw new FailureError(
+        `the request was cancelled while it waited for ${deviceId}'s keyboard, so nothing was ` +
+          "typed, pressed or cleared and the device was not touched. Another session's call was " +
+          "ahead of this one in the queue.",
+        {
+          error_code: FAILURE_CODES.KEYBOARD_DEVICE_BUSY,
+          failure_stage: "device_queue_abandoned",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        }
+      );
+    }
     const waited = Date.now() - queuedAt;
     if (waited > DEVICE_QUEUE_MAX_WAIT_MS) throw deviceBusyError(deviceId, waited);
     return task();

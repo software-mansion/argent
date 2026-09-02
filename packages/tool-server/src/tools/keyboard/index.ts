@@ -323,20 +323,28 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
       // simulator against a 250-character field, `{ clear: true }` with
       // `{ text: "HELLO" }` 200ms behind it left `…aaaaaaaaaaLO`, with "HEL"
       // eaten by backspaces still in flight.
-      return serializedPerDevice(params.udid, async () => {
-        if (resolved === undefined || resolved.secrets.length === 0) {
-          return dispatch(services, params, options);
-        }
-        try {
-          const result = await dispatch(services, { ...params, text: resolved.text }, options);
-          // Echo the placeholder form, never the resolved value.
-          return { ...result, typed: resolved.placeholder };
-        } catch (err) {
-          // A backend error can quote its input (e.g. the Android `input text`
-          // command line) — scrub the resolved values before it propagates.
-          throw redactSecretsFromError(err, resolved.secrets);
-        }
-      });
+      // The signal is the request's own abort. A call whose client is already
+      // gone must not reach the device when its turn comes: by then the queue
+      // has run everything ahead of it, and the field it was aimed at is
+      // whatever the session ahead left focused.
+      return serializedPerDevice(
+        params.udid,
+        async () => {
+          if (resolved === undefined || resolved.secrets.length === 0) {
+            return dispatch(services, params, options);
+          }
+          try {
+            const result = await dispatch(services, { ...params, text: resolved.text }, options);
+            // Echo the placeholder form, never the resolved value.
+            return { ...result, typed: resolved.placeholder };
+          } catch (err) {
+            // A backend error can quote its input (e.g. the Android `input text`
+            // command line) — scrub the resolved values before it propagates.
+            throw redactSecretsFromError(err, resolved.secrets);
+          }
+        },
+        options?.signal
+      );
     },
   };
 }
