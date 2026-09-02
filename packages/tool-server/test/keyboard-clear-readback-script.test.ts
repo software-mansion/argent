@@ -197,6 +197,31 @@ describe("CLEAR_READBACK_SCRIPT — whether the value is the one that was aimed 
     expect(readback.changed).toBe(true);
   });
 
+  it("reads an editor's zero-width seed and its padding as the SAME value", () => {
+    // The equivalence class the signature exists to define, and the one shape
+    // its oracle cannot check on its own. Both script tests build the expected
+    // signature by eval-ing the exported `CONTENT_SIGNATURE_JS`, so a node
+    // compared against ITSELF agrees whatever that source says — deleting the
+    // end-trim and the zero-width strip left every case green. Two textually
+    // DIFFERENT nodes that must hash alike is what pins them.
+    //
+    // The production shape: a rich-text editor reseeds a zero-width space, or
+    // leaves trailing whitespace, into a field whose value is otherwise the one
+    // the clear was aimed at. Read as a change, it reports "the page rewrote the
+    // value" — that the caller's value is already destroyed — for a field
+    // nothing rewrote.
+    const before = signatureOf(editable("IMPORTANT DRAFT TEXT"));
+    const seeded = editable("\u200bIMPORTANT DRAFT TEXT  ");
+    const { readback } = run(seeded, { el: seeded, before });
+    expect(readback.changed).toBe(false);
+
+    // The control: interior text is part of the value, so a real edit is still
+    // a change. Without it, a signature that returned a constant would pass the
+    // assertion above.
+    const edited = editable("IMPORTANT DRAFTTEXT");
+    expect(run(edited, { el: edited, before }).readback.changed).toBe(true);
+  });
+
   it("claims no change when it did not read the target", () => {
     // `changed` is only meaningful about the element the clear ran against.
     expect(run(el("INPUT", { type: "text", value: "x" })).readback.changed).toBe(false);
