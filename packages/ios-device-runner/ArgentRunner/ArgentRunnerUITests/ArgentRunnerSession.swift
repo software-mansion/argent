@@ -115,7 +115,10 @@ final class ArgentRunnerSession: XCTestCase {
             dispatch: { [weak self] body, deliver in
                 self?.dispatch(body: body, deliver: deliver)
             },
-            onFinish: { [weak self] in self?.finish() }
+            onFinish: { [weak self] in self?.finish() },
+            onListenerFailure: { [weak self] description in
+                self?.abort(listenerFailure: description)
+            }
         )
 
         try server.start(port: port)
@@ -149,7 +152,8 @@ final class ArgentRunnerSession: XCTestCase {
     }
 
     /// Ends the session wait, fulfilling the shutdown expectation exactly
-    /// once. Reached from the shutdown reply and from a listener failure.
+    /// once. Reached from the shutdown reply; this is the clean end. A
+    /// listener failure goes through `abort(listenerFailure:)` instead.
     private func finish() {
         finishLock.lock()
         let expectation = done
@@ -157,6 +161,21 @@ final class ArgentRunnerSession: XCTestCase {
         finishLock.unlock()
 
         expectation?.fulfill()
+    }
+
+    /// Ends the session as a failed test after the listener failed. The
+    /// failure is recorded before the wait is released, so the xcresult and
+    /// the xcodebuild exit code carry the cause. Fulfilling the expectation
+    /// alone ended the session as a green test with exit code 0, and the host
+    /// could only report that xcodebuild exited before the runner became
+    /// ready, with the cause in one NSLog line. Recording hops to the main
+    /// thread, which the session wait keeps pumping, so it lands on the
+    /// running test the same way a command's failure does.
+    private func abort(listenerFailure description: String) {
+        DispatchQueue.main.async {
+            XCTFail("listener failed: \(description)")
+            self.finish()
+        }
     }
 
     // MARK: - Dispatch (transport queue)

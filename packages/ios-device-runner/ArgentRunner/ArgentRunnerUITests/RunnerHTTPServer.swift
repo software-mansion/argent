@@ -29,15 +29,21 @@ final class RunnerHTTPServer {
     private static let maxRequestBytes = 2 * 1024 * 1024
     private let queue = DispatchQueue(label: "argent.runner.transport")
     private let dispatch: (Data, @escaping (Reply) -> Void) -> Void
+    /// The clean end of the session, after a shutdown reply has been flushed.
     private let onFinish: () -> Void
+    /// The listener can no longer accept connections (the port is in use, the
+    /// interface is unavailable). Carries the failure description.
+    private let onListenerFailure: (String) -> Void
     private var listener: NWListener?
 
     init(
         dispatch: @escaping (Data, @escaping (Reply) -> Void) -> Void,
-        onFinish: @escaping () -> Void
+        onFinish: @escaping () -> Void,
+        onListenerFailure: @escaping (String) -> Void
     ) {
         self.dispatch = dispatch
         self.onFinish = onFinish
+        self.onListenerFailure = onListenerFailure
     }
 
     /// Starts listening on loopback, on the given port or a system-assigned
@@ -64,13 +70,13 @@ final class RunnerHTTPServer {
                     Int(self?.listener?.port?.rawValue ?? 0)
                 )
             case .failed(let error):
-                // A failed listener can never receive another command. End the
-                // session so the host observes an exit instead of a silent hang.
-                NSLog(
-                    "ARGENT_RUNNER_LISTENER_FAILED error=%@",
-                    String(describing: error)
-                )
-                self?.onFinish()
+                // A failed listener can never receive another command. Hand the
+                // failure to the session so it ends as a failed test, and the
+                // host observes a failing exit instead of a silent hang or a
+                // green run that never served.
+                let description = String(describing: error)
+                NSLog("ARGENT_RUNNER_LISTENER_FAILED error=%@", description)
+                self?.onListenerFailure(description)
             default:
                 break
             }
