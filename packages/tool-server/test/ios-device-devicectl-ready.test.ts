@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { ensureDeviceReady, IosDeviceControlError } from "../src/utils/ios-device/devicectl";
+import { ensureDeviceReady } from "../src/utils/ios-device/devicectl";
 
 const fake = vi.hoisted(() => ({ connectionProperties: {} as Record<string, string> }));
 
@@ -37,7 +37,7 @@ describe("ensureDeviceReady gates on the cable, not just the tunnel", () => {
       (caught: unknown) => caught
     );
 
-    expect(error).toBeInstanceOf(IosDeviceControlError);
+    expect((error as Error).name).toBe("IosDeviceControlError");
     expect((error as Error).message).toBe(
       "Device transport is localNetwork, not wired. " +
         "Hint: Connect the device by USB cable and unlock it, then retry."
@@ -59,7 +59,7 @@ describe("ensureDeviceReady gates on the cable, not just the tunnel", () => {
       (caught: unknown) => caught
     );
 
-    expect(error).toBeInstanceOf(IosDeviceControlError);
+    expect((error as Error).name).toBe("IosDeviceControlError");
     expect((error as Error).message).toBe(
       "Device tunnel is still connecting. " +
         "Hint: Keep the device unlocked and connected; retry in a few seconds."

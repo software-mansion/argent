@@ -41,7 +41,7 @@ interface IosPhysicalDevice {
   tunnelState: string | null;
 }
 
-export class IosDeviceControlError extends Error {
+class IosDeviceControlError extends Error {
   /** Callers may branch on this. The message already includes the same text. */
   readonly hint: string | null;
 
