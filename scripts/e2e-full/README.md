@@ -33,11 +33,14 @@ hard assertion failed (skips do not fail the run).
 | `validation`    | —                                           | for every tool: missing-required / bad-enum / bad-type rejection (deterministic, no hardware)                                             |
 | `android`       | Android emulator                            | happy-path of every touch/gesture/screenshot/app-lifecycle tool                                                                           |
 | `chromium`      | Electron (bundled optional dep) + a display | boots a generated Electron app; drives CDP tools (scroll/drag/tabs/cookies/storage)                                                       |
+| `ios`           | macOS + `--ios-udid` / `E2E_IOS_UDID`       | happy-path of the iOS simulator tier, including the keyboard clear burst and its forward-delete half                                      |
 | `rn`            | `~/dev/bluesky` + Android device            | debugger + react/native profiler + network chain against the real Bluesky app                                                             |
 
 Tiers auto-skip (with a recorded reason) when their prerequisites are missing, so
-a partial run still produces a meaningful report. iOS / tvOS / Vega tiers are
-intentionally out of scope.
+a partial run still produces a meaningful report. A skip does not fail the run,
+so read the `pass/fail/skip` line and the report before calling a release green:
+on macOS the `ios` tier is selected by default and skips itself unless you name a
+simulator. tvOS and Vega tiers are intentionally out of scope.
 
 ## Isolation
 
@@ -55,6 +58,12 @@ The device tiers need a booted device. Two ways:
   The booted serial is published to the RN tier, so it runs against the same device,
   and the emulator is shut down in the cleanup phase — after every tier that uses it,
   and on an aborted run too.
+
+The iOS tier needs a named simulator: `--ios-udid <UDID>` or `E2E_IOS_UDID=<UDID>`.
+It boots that device if it is not already running. It never picks a booted device
+for you — on a developer machine the first booted simulator is somebody else's,
+and this tier launches Settings on it, types, and presses Home. With no UDID the
+tier records one skip and the run stays green.
 
 The Chromium tier needs no device — it generates and boots its own Electron app.
 It requires `DISPLAY`; on a headless Linux box run the whole harness under
@@ -78,11 +87,12 @@ alone.
 
 ```
 --tgz PATH             tarball to test (default: newest swmansion-argent-*.tgz at repo root)
---phase a,b,c          subset of: install introspection validation android chromium rn
+--phase a,b,c          subset of: install introspection validation android ios chromium rn
 --skip-install         drive the unpacked bundle directly (offline phases only; skips `install`)
 --system               install to the REAL global prefix (dedicated release machine only)
 --android-serial S     use an already-booted Android device
 --android-avd NAME     boot this AVD via boot-device
+--ios-udid UDID        drive this iOS simulator (macOS only; the tier skips without it)
 --keep                 leave the sandbox dir for inspection
 ```
 
