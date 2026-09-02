@@ -1,5 +1,8 @@
 /**
- * Runs one trusted local JavaScript file in a fresh Node.js child process.
+ * Runs one trusted local script file — JavaScript or bash — in a fresh child
+ * process. The extension picks the interpreter; a `.mjs` is the runner's own
+ * Node, a `.sh` is the bash {@link resolveBashInterpreter} finds, and every
+ * control here applies to both unchanged.
  *
  * The child is a *reliability* boundary, not a security one: a script is as
  * trusted as a local npm script, and all the process buys is that an infinite
@@ -23,6 +26,7 @@ import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
 import { scrubSecretValues } from "../../../utils/secrets";
 import { sleep } from "../../../utils/timing";
+import { resolveBashInterpreter } from "./flow-script-interpreter";
 import {
   isTerminalResponse,
   parseScriptResponse,
@@ -70,6 +74,38 @@ const STDERR_WINDOW_CHARS = 256;
 const RUNNER_FILE = "flow-script-runner.mjs";
 
 const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
+
+const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
+const BASH_REASON_ENV = "ARGENT_REASON";
+
+/**
+ * One private directory per bash step, under `os.tmpdir()` — 0700 on POSIX
+ * through `mkdtemp`, the per-user `%TEMP%` on Windows. The prefix is what the
+ * first-use sweep below recognises as the executor's own.
+ */
+const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
+
+/**
+ * How long past its own time limit a step's exchange directory is still its
+ * own. The owner removes it in a `finally` at about `timeout` plus the settle,
+ * stop and force graces; the minute after that is room for a stall in the tool
+ * server's event loop of the kind `CHILD_DEADLINE_MARGIN_MS` exists for.
+ * Nothing waits on it but the collection of a directory whose server died.
+ */
+const EXCHANGE_LIFE_MARGIN_MS =
+  SETTLE_TIMEOUT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
+const EXCHANGE_OUTPUT_FILE = "output.json";
+const EXCHANGE_REASON_FILE = "reason.txt";
+
+/**
+ * The owner's account and nothing else, matching the 0700 `mkdtemp` directory
+ * around them. Ignored on Windows, where the directory inherits the ACL of
+ * `%TEMP%` — private per user in the ordinary case, and not under a tool server
+ * running as a service.
+ */
+const EXCHANGE_FILE_MODE = 0o600;
+
+const EXCHANGE_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * An allowlist rather than a denylist because what it must keep out — the
@@ -171,6 +207,13 @@ const RESERVED_ENV_NAMES: readonly string[] = [
   "NODE_OPTIONS",
   "ELECTRON_RUN_AS_NODE",
   RUNNER_ACTIVATION_ENV,
+  // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
+  // out and `$ARGENT_REASON` is where a failure reason comes from, so either
+  // one set by a caller would steer the runner's own protocol. Reserved
+  // whichever language the step runs — a flow-level map applies to every step
+  // — and set for bash only, since a `.mjs` has `output`.
+  BASH_OUTPUT_ENV,
+  BASH_REASON_ENV,
 ];
 
 /**
@@ -203,6 +246,7 @@ export interface FlowScriptSecret {
 
 export interface FlowScriptRequest {
   scriptPath: string;
+  interpreter?: "node" | "bash";
   output?: Record<string, unknown>;
   env?: Record<string, string>;
   timeoutMs?: number;
@@ -256,6 +300,22 @@ export interface FlowScriptExecutorOptions {
   maxTimeoutMs?: number;
   heapLimitMb?: number;
   queueWaitMs?: number;
+  /**
+   * Where a step's private exchange directory is made, and the root the
+   * first-use sweep reads. `os.tmpdir()` unless a caller says otherwise — one
+   * directory shared with every other argent on the machine, which is why the
+   * sweep has to read each directory's own bound rather than apply its own.
+   * A test passes a root of its own so that what it counts there is its own
+   * steps and not the machine's.
+   */
+  exchangeRoot?: string;
+  /**
+   * How long a process waits before it re-reads {@link exchangeRoot} for
+   * directories nobody owns any more. Defaults to
+   * {@link EXCHANGE_SWEEP_INTERVAL_MS}; a test shortens it so a second step can
+   * collect what the first one still had to leave alone.
+   */
+  exchangeSweepIntervalMs?: number;
 }
 
 interface ResolvedBounds {
@@ -269,6 +329,29 @@ interface QueueWaiter {
   refuse: (err: Error) => void;
   settled: boolean;
 }
+
+interface ExchangeFiles {
+  dir: string;
+  outputFile: string;
+  reasonFile: string;
+}
+
+type ChildRun = {
+  request: FlowScriptRequest;
+  bounds: ResolvedBounds;
+  notes: string[];
+  startedAt: number;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  runnerPath: string;
+  outputJson: string;
+  scriptPath: string;
+  timeoutMs: number;
+  stderrWatch: StderrSignalWatch;
+} & (
+  | { interpreter: "node" }
+  | { interpreter: "bash"; interpreterPath: string; exchange: ExchangeFiles }
+);
 
 class ScriptCancelledError extends Error {}
 
@@ -480,6 +563,79 @@ export class FlowScriptExecutor {
     // spelling of the same file would be a second module and the script would
     // run twice.
     const scriptPath = realPathOrSelf(path.resolve(cwd, request.scriptPath));
+    const interpreter = request.interpreter ?? "node";
+
+    let interpreterPath: string | undefined;
+    let exchange: ExchangeFiles | undefined;
+    if (interpreter === "bash") {
+      const found = await resolveBashInterpreter(request.projectRoot ?? request.flowDir);
+      if (!("path" in found)) {
+        return emptyResult(
+          { kind: "spawn", message: found.problem },
+          { notes, durationMs: Date.now() - startedAt }
+        );
+      }
+      interpreterPath = found.path;
+      try {
+        exchange = createExchange(
+          this.options.exchangeRoot ?? os.tmpdir(),
+          outputJson,
+          timeoutMs,
+          positive(this.options.exchangeSweepIntervalMs) ?? EXCHANGE_SWEEP_INTERVAL_MS
+        );
+      } catch (err) {
+        return emptyResult(
+          {
+            kind: "spawn",
+            message: `The script's private exchange directory could not be created: ${errorMessage(err)}`,
+          },
+          { notes, durationMs: Date.now() - startedAt }
+        );
+      }
+    }
+
+    const common = {
+      request,
+      bounds,
+      notes,
+      startedAt,
+      cwd,
+      env,
+      runnerPath,
+      outputJson,
+      scriptPath,
+      timeoutMs,
+      stderrWatch,
+    };
+    try {
+      // The signal again, because the bash block above is the only place this
+      // path suspends: the interpreter lookup is two spawns of its own, and a
+      // cancellation raised across them found the next check only AFTER the
+      // fork — so the script's first lines had already run. A `.mjs` step has
+      // no such gap, and this closes the one bash mode opened.
+      if (request.signal?.aborted) {
+        return emptyResult(
+          { kind: "cancelled", message: "The run was cancelled before the script started." },
+          { notes, durationMs: Date.now() - startedAt }
+        );
+      }
+      return await this.runChild(
+        interpreterPath && exchange
+          ? { ...common, interpreter: "bash", interpreterPath, exchange }
+          : { ...common, interpreter: "node" }
+      );
+    } finally {
+      // Every path — pass, fail, timeout, cancellation, a `fork` that threw —
+      // after the process tree is stopped and the pipes are destroyed. A
+      // removal that fails (Windows answers EBUSY while a surviving descendant
+      // holds a file) is a note, never a throw: `execute` owes its caller a
+      // verdict.
+      if (exchange) removeExchange(exchange, notes);
+    }
+  }
+
+  private async runChild(run: ChildRun): Promise<FlowScriptResult> {
+    const { request, bounds, notes, startedAt, cwd, env, scriptPath, timeoutMs, stderrWatch } = run;
 
     let child: ChildProcess;
     try {
@@ -492,15 +648,21 @@ export class FlowScriptExecutor {
         // which would carry a dev-mode parent's ts-node/vitest loaders and any
         // inspector flag into every script process.
         //
-        // The runner rides in as a preload, not as the entry module, so the
-        // *script* is what `process.argv[1]`/`require.main` name and an "am I
-        // the main module?" guard runs its body. Node awaits an `--import`
-        // module before the entry, which leaves room for the handshake.
-        execArgv: [
-          `--max-old-space-size=${bounds.heapLimitMb}`,
-          "--import",
-          pathToFileURL(runnerPath).href,
-        ],
+        // In node mode the runner rides in as a preload, not as the entry
+        // module, so the *script* is what `process.argv[1]`/`require.main` name
+        // and an "am I the main module?" guard runs its body. Node awaits an
+        // `--import` module before the entry, which leaves room for the
+        // handshake. In bash mode there is no JavaScript entry to preload in
+        // front of, so the runner IS the entry — its activation guard
+        // (`isMainThread` plus the flag in the environment) admits both.
+        execArgv:
+          run.interpreter === "bash"
+            ? [`--max-old-space-size=${bounds.heapLimitMb}`]
+            : [
+                `--max-old-space-size=${bounds.heapLimitMb}`,
+                "--import",
+                pathToFileURL(run.runnerPath).href,
+              ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own
         // read callback, and a line that is not JSON throws from there — which
@@ -522,7 +684,7 @@ export class FlowScriptExecutor {
         detached: process.platform !== "win32",
         windowsHide: process.platform === "win32",
       };
-      child = fork(scriptPath, [], forkOptions);
+      child = fork(run.interpreter === "bash" ? run.runnerPath : scriptPath, [], forkOptions);
     } catch (err) {
       return emptyResult(
         { kind: "spawn", message: `Could not start the script process: ${errorMessage(err)}` },
@@ -590,7 +752,7 @@ export class FlowScriptExecutor {
 
     child.on("message", (raw) => {
       if (terminal) return;
-      const message = parseScriptResponse(raw);
+      const message = parseScriptResponse(raw, run.interpreter);
       if (!message) {
         protocolProblem ??= `The script runner sent a message the executor does not recognise: ${describeUnknown(raw)}`;
         void stop();
@@ -610,13 +772,40 @@ export class FlowScriptExecutor {
     request.signal?.addEventListener("abort", onAbort, { once: true });
     if (request.signal?.aborted) onAbort();
 
-    const message: ScriptExecuteRequest = {
-      type: "execute",
-      scriptUrl: pathToFileURL(scriptPath).href,
-      outputJson,
-      deadlineMs: timeoutMs + CHILD_DEADLINE_MARGIN_MS,
-      maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
-    };
+    const message: ScriptExecuteRequest =
+      run.interpreter === "bash"
+        ? {
+            type: "execute",
+            interpreter: "bash",
+            interpreterPath: run.interpreterPath,
+            // Forward slashes on every platform. Git Bash takes `C:/…` both
+            // as an argument and in a redirection, and this is what gives `$0`
+            // a separator `dirname "${BASH_SOURCE[0]}"` can split on — a
+            // backslash is an ordinary character to `dirname`, which would
+            // answer `.` for every path. It is not about escaping: bash does no
+            // escape processing on the RESULT of a parameter expansion.
+            //
+            // These three strings, and no others. The environment the step
+            // forwards reaches bash as the host wrote it — `JAVA_HOME`,
+            // `LOCALAPPDATA`, `USERPROFILE` and the rest are `C:\…` there, and
+            // only `PATH`, `HOME`, `TMP`, `TEMP` and `TMPDIR` are converted, by
+            // the msys runtime rather than by anything here. `cwd` is left
+            // alone too: it goes to `CreateProcessW`, not to bash.
+            scriptPath: toForwardSlashes(scriptPath),
+            outputFile: toForwardSlashes(run.exchange.outputFile),
+            outputJson: run.outputJson,
+            reasonFile: toForwardSlashes(run.exchange.reasonFile),
+            deadlineMs: timeoutMs + CHILD_DEADLINE_MARGIN_MS,
+            maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
+          }
+        : {
+            type: "execute",
+            interpreter: "node",
+            scriptUrl: pathToFileURL(scriptPath).href,
+            outputJson: run.outputJson,
+            deadlineMs: timeoutMs + CHILD_DEADLINE_MARGIN_MS,
+            maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
+          };
     try {
       child.send(message, (err) => {
         if (!err) return;
@@ -913,15 +1102,32 @@ function memberPath(key: string): string {
 function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
   const scrubbed = scrubSecretValues(text, secrets);
   const omission = OMISSION_RE.exec(scrubbed);
-  if (!omission) return scrubbed;
-  const head = scrubbed.slice(0, omission.index);
+  const kept = omission ? null : REASON_KEPT_RE.exec(scrubbed);
+  const marker = omission ?? kept;
+  if (!marker) return scrubbed;
+  const head = scrubbed.slice(0, marker.index);
   const partial = partialSecretTail(head, secrets);
   if (partial === 0) return scrubbed;
-  const omitted = Number(omission[1]) + partial;
-  return `${head.slice(0, head.length - partial)}${omissionMarker(omitted)}`;
+  const shortened = head.slice(0, head.length - partial);
+  if (omission) return `${shortened}${omissionMarker(Number(omission[1]) + partial)}`;
+  return `${shortened}${kept![1]}${Number(kept![2]) - partial}${kept![3]}`;
 }
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
+
+/**
+ * The runner's own marker, for a `$ARGENT_REASON` it read only the head of. It
+ * counts what it KEPT rather than what it dropped: a bounded read cannot know
+ * how many characters the whole file holds, and the file's size is what it says
+ * instead. So the count moves the other way when a half of a secret is taken
+ * off the end above.
+ *
+ * In step with `readReasonFile` in `flow-script-runner.mjs`, which this file
+ * cannot import. A wording that drifts apart stops matching and the tail is
+ * left in place, which is why a real bash step is what pins the pair.
+ */
+const REASON_KEPT_RE =
+  /(… \[\$ARGENT_REASON holds [^\]]*; this report keeps the first )(\d+)( characters])$/;
 
 function omissionMarker(omitted: number): string {
   return `… [${omitted} more characters omitted]`;
@@ -1048,6 +1254,133 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
     throw new ScriptSetupError("invalid", "The flow output could not be encoded for the script.");
   }
   return encoded;
+}
+
+/**
+ * The document goes in, and the same file is what comes back out — which is
+ * what makes the merge rule in a later PR identical for both languages, and
+ * what lets a script that wants to ADD one key read what it was given first.
+ * `reason.txt` is created empty so a script can append to it without a test.
+ *
+ * Both files carry the document, and the document may hold values derived from
+ * a secret, so both are written 0600 rather than left to the umask. The barrier
+ * that holds is the 0700 `mkdtemp` directory around them, not the mode on the
+ * files: the docs teach writing a sibling and `mv`-ing it into place, and a
+ * `mv` replaces the inode — so the document Argent reads back carries the
+ * script's own umask, 0644 on an ordinary host.
+ *
+ * The directory carries the moment it stops being this step's own, in its own
+ * name: `$TMPDIR` is shared by every argent install on the host, and the sweep
+ * below is the only reader that has to tell a live directory from an abandoned
+ * one. A name is the one place a sweeping process can read the OWNER's bound
+ * rather than apply its own — an mtime can carry an age, and no age can express
+ * the bound another install's step was given.
+ *
+ * A directory that was made and could not be filled is removed here. The
+ * `finally` that owns the rest of its life is only reached with an exchange to
+ * remove, and a throw from either write leaves the caller without one.
+ */
+function createExchange(
+  root: string,
+  outputJson: string,
+  timeoutMs: number,
+  sweepIntervalMs: number
+): ExchangeFiles {
+  sweepStaleExchanges(root, sweepIntervalMs);
+  // Rounded UP to a whole millisecond, because the sweep below reads the stamp
+  // back with `/^(\d+)-/` and a `timeout: 30000.5` in a flow file is a positive
+  // finite number the parser keeps. A `.` in the name matches nothing there, so
+  // the directory would be passed over for good — and rounding up never shortens
+  // the bound the owner claimed.
+  const ownUntil = Math.ceil(Date.now() + timeoutMs + EXCHANGE_LIFE_MARGIN_MS);
+  const dir = fs.mkdtempSync(path.join(root, `${EXCHANGE_DIR_PREFIX}${ownUntil}-`));
+  try {
+    const outputFile = path.join(dir, EXCHANGE_OUTPUT_FILE);
+    const reasonFile = path.join(dir, EXCHANGE_REASON_FILE);
+    fs.writeFileSync(outputFile, outputJson, { encoding: "utf8", mode: EXCHANGE_FILE_MODE });
+    fs.writeFileSync(reasonFile, "", { mode: EXCHANGE_FILE_MODE });
+    return { dir, outputFile, reasonFile };
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
+  try {
+    fs.rmSync(exchange.dir, { recursive: true, force: true });
+  } catch (err) {
+    notes.push(
+      `The script's private directory ${exchange.dir} could not be removed ` +
+        `(${errorMessage(err)}); a later bash step sweeps it, once this step's ` +
+        `own time limit has passed.`
+    );
+  }
+}
+
+let sweptStaleExchangesAt = 0;
+
+/**
+ * The orphan case has an owner too. When the tool server dies mid-step the
+ * lifeline kills the runner and nobody reaches the directory — and the document
+ * in it may hold values derived from a secret. So a bash step sweeps the
+ * executor's own prefix, the way the test helper sweeps its fixture root.
+ *
+ * Throttled rather than done once. An abandoned directory is stamped with a
+ * moment in the FUTURE — its dead owner's whole time limit still ahead of it —
+ * so the first step of the next server reads it as live and passes over it. A
+ * process that then never looked again left that directory for good, which is
+ * not what a reader of this is promised. The interval is what keeps the cost a
+ * single `readdir` a minute rather than one per step.
+ *
+ * Each directory names the moment it stops being its own step's, and that is
+ * what decides. The bound has to come from the OWNER: `$TMPDIR` is shared by
+ * every argent install on the host, `scripts.maxTimeoutMs` is a per-install
+ * value, and applying this process's own to another's directory takes a live
+ * step's exchange out from under it — which fails a correct script, and blames
+ * the script for a file the host removed. So a name that carries no moment is
+ * left alone: nothing this executor has ever written looks like that, and an
+ * age is not a bound.
+ *
+ * The stamp is taken before the read, so a root this process cannot read costs
+ * one failed `readdir` a minute and not one per bash step.
+ */
+function sweepStaleExchanges(root: string, sweepIntervalMs: number): void {
+  const now = Date.now();
+  if (now - sweptStaleExchangesAt < sweepIntervalMs) return;
+  sweptStaleExchangesAt = now;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(EXCHANGE_DIR_PREFIX)) continue;
+    const ownUntil = exchangeOwnedUntil(entry);
+    if (ownUntil === undefined || ownUntil > now) continue;
+    try {
+      fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+    } catch {
+      // Raced with the step that owns it, or with another server's own sweep.
+    }
+  }
+}
+
+function exchangeOwnedUntil(entry: string): number | undefined {
+  const stamped = /^(\d+)-/.exec(entry.slice(EXCHANGE_DIR_PREFIX.length));
+  if (!stamped) return undefined;
+  const moment = Number(stamped[1]);
+  return Number.isSafeInteger(moment) ? moment : undefined;
+}
+
+/** Exported for the test that pins the sweep against a directory it planted. */
+export function exchangeDirPrefix(): string {
+  return EXCHANGE_DIR_PREFIX;
+}
+
+function toForwardSlashes(candidate: string): string {
+  return process.platform === "win32" ? candidate.replace(/\\/g, "/") : candidate;
 }
 
 function realPathOrSelf(candidate: string): string {

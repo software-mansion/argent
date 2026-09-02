@@ -32,6 +32,22 @@ on:
       - "packages/tool-server/src/utils/vega-cli.ts"
       - "packages/tool-server/src/utils/chromium-discovery.ts"
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
+      # A `.sh` script step is Windows-sensitive end to end: bash comes from Git
+      # for Windows rather than PATH, the watchdogs reach a descendant through
+      # `taskkill /t` where there is no process group, and the exchange files
+      # travel as `C:/…`.
+      - "packages/tool-server/src/tools/flows/script/flow-script-interpreter.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-executor.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-runner.mjs"
+      - "packages/tool-server/src/tools/flows/script/flow-script-watchdog-deadline.mjs"
+      - "packages/tool-server/src/tools/flows/script/flow-script-watchdog-lifeline.mjs"
+      # The rest of the `.sh` path. `flow-script-protocol.ts` carries the very
+      # request shape the Windows run rides on, so editing it alone must not
+      # leave this job unrun.
+      - "packages/tool-server/src/tools/flows/script/flow-script-protocol.ts"
+      - "packages/tool-server/src/tools/flows/flow-script-step.ts"
+      - "packages/tool-server/src/tools/flows/flow-utils.ts"
+      - "packages/tool-server/src/tools/flows/flow-add-script.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
       # The unit tests this job runs — editing one must re-run it here.
@@ -42,6 +58,13 @@ on:
       - "packages/tool-server/test/http-dep-gate.test.ts"
       - "packages/tool-server/test/stop-metro-netstat.test.ts"
       - "packages/tool-server/test/device-shutdown.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-interpreter.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-bash.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-bash-sweep.test.ts"
+      # The helpers those three import: editing one changes what this job runs
+      # without touching any file listed above it.
+      - "packages/tool-server/test/helpers/host-bash.ts"
+      - "packages/tool-server/test/helpers/flow-script-workspace.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
@@ -93,6 +116,9 @@ jobs:
           test/http-dep-gate.test.ts
           test/stop-metro-netstat.test.ts
           test/device-shutdown.test.ts
+          test/flows/script/flow-script-interpreter.test.ts
+          test/flows/script/flow-script-bash.test.ts
+          test/flows/script/flow-script-bash-sweep.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios

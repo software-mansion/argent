@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
-import type { FlowStep } from "./flow-utils";
+import { hasScriptExtension, scriptInterpreter, type FlowStep } from "./flow-utils";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
@@ -85,6 +85,19 @@ export async function runFlowScriptStep(
 
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
+    // Decided here from the CANONICAL path — the file the executor really runs —
+    // and passed explicitly: the executor runs what it is told and never
+    // inspects an extension. The spelling is not the same fact: a step written
+    // as `aliased.sh` can be a symlink to a `.mjs`, and reading the extension
+    // off the link would run JavaScript under bash and report exit code 127
+    // with a hint about a missing tool.
+    //
+    // A canonical path that carries NO extension is the one case the target
+    // cannot answer — `seed.sh -> ../tools/seed` is an ordinary way to name a
+    // script — and `scriptInterpreter` would fall through to its `node` default
+    // there. The step's own spelling is what stands in: the parser holds it to
+    // `SCRIPT_FILE_NAME_PATTERN`, so it always carries one of the two.
+    interpreter: scriptInterpreter(hasScriptExtension(canonical) ? canonical : target),
     output: {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,

@@ -303,3 +303,26 @@ describe("the recorder reports the verdict the runner will", () => {
     expect("signal" in executedRequest()).toBe(false);
   });
 });
+
+// The executor runs what it is told and never looks at an extension, so this is
+// the one place the language is decided for a step. Both routes to it — the
+// runner and the recorder — go through `runFlowScriptStep`, so pinning it here
+// pins it for both.
+describe("which interpreter the step asks the executor for", () => {
+  it.each([
+    ["seed.mjs", "node"],
+    ["seed.sh", "bash"],
+  ])("asks for %s to run under %s", async (file, interpreter) => {
+    await fs.writeFile(path.join(root, "scripts", file), "");
+    await fs.writeFile(
+      path.join(root, ".argent", "flows", "verdict.yaml"),
+      `steps:\n  - script: { path: ../../scripts/${file} }\n`,
+      "utf8"
+    );
+    executeMock.mockResolvedValue(outcome({ ok: true, output: {} }));
+
+    await runScript();
+
+    expect(executedRequest().interpreter).toBe(interpreter);
+  });
+});

@@ -64,14 +64,16 @@ async function withFakeRunner(source: string, extra: Partial<FlowScriptRequest> 
 
 describe("script response parsing", () => {
   it("accepts the three valid shapes", () => {
-    const started: ScriptResponse | null = parseScriptResponse({ type: "started" });
+    const started: ScriptResponse | null = parseScriptResponse({ type: "started" }, "node");
     expect(started).toEqual({ type: "started" });
-    expect(parseScriptResponse({ type: "result", outputJson: "{}" })).toEqual({
+    expect(parseScriptResponse({ type: "result", outputJson: "{}" }, "node")).toEqual({
       type: "result",
       outputJson: "{}",
     });
     const runtime: ScriptFailureType = "runtime";
-    expect(parseScriptResponse({ type: "failure", failureType: runtime, message: "x" })).toEqual({
+    expect(
+      parseScriptResponse({ type: "failure", failureType: runtime, message: "x" }, "node")
+    ).toEqual({
       type: "failure",
       failureType: runtime,
       message: "x",
@@ -80,12 +82,39 @@ describe("script response parsing", () => {
 
   it("carries a stack when there is one, and drops one that is not a string", () => {
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: "at y" })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: "at y" },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x", stack: "at y" });
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: 7 })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: 7 },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x" });
   });
+
+  it.each(["spawn", "signal"] as const)("accepts the bash-mode failure type %s", (failureType) => {
+    expect(parseScriptResponse({ type: "failure", failureType, message: "x" }, "bash")).toEqual({
+      type: "failure",
+      failureType,
+      message: "x",
+    });
+  });
+
+  // In node mode the script runs inside the runner with the protocol descriptor
+  // open, and a `spawn` failure is the one the step reports as "nothing ran, so
+  // there is nothing to clean up". A script that has already done its work must
+  // not be able to write that answer for itself.
+  it.each(["spawn", "signal"] as const)(
+    "refuses the bash-mode failure type %s in node mode",
+    (failureType) => {
+      expect(
+        parseScriptResponse({ type: "failure", failureType, message: "x" }, "node")
+      ).toBeNull();
+    }
+  );
 
   it.each([
     ["a non-object", "started"],
@@ -99,7 +128,8 @@ describe("script response parsing", () => {
       { type: "failure", failureType: "weird", message: "x" },
     ],
   ])("rejects %s", (_label, raw) => {
-    expect(parseScriptResponse(raw)).toBeNull();
+    expect(parseScriptResponse(raw, "node")).toBeNull();
+    expect(parseScriptResponse(raw, "bash")).toBeNull();
   });
 });
 
@@ -517,6 +547,42 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         maxOutputBytes: 1,
       },
     ],
+    // The protocol carries no version field, so an interpreter the runner does
+    // not know is malformed rather than a default.
+    [
+      "a request naming an interpreter the runner does not know",
+      {
+        type: "execute",
+        interpreter: "zsh",
+        scriptUrl: "file:///x",
+        outputJson: "{}",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no interpreter path",
+      {
+        type: "execute",
+        interpreter: "bash",
+        scriptPath: "/tmp/x.sh",
+        outputFile: "/tmp/o.json",
+        reasonFile: "/tmp/r.txt",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no exchange files",
+      {
+        type: "execute",
+        interpreter: "bash",
+        interpreterPath: "/bin/bash",
+        scriptPath: "/tmp/x.sh",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
   ])(
     "refuses %s, from the child's side of the protocol",
     async (_label, message) => {
@@ -538,6 +604,25 @@ describe("flow script runner — the watchdogs, driven directly", () => {
     },
     30_000
   );
+
+  // The loader resolves whichever runner sits beside the compiled executor, so
+  // a pre-2.7 parent — one that names no interpreter at all — really can reach
+  // this file. Its request means node, which is the shape every case above
+  // sends.
+  it("reads a request that names no interpreter as a node one", async () => {
+    const ws = workspace();
+    const script = ws.write("legacy.mjs", `output.ran = true;`);
+    const child = forkRunner(script, 20_000);
+    const result = await new Promise<{ outputJson?: string } | null>((resolve) => {
+      child.on("message", (raw) => {
+        const m = raw as { type?: string; outputJson?: string };
+        if (m.type === "result") resolve(m);
+      });
+      child.once("exit", () => resolve(null));
+    });
+
+    expect(result?.outputJson).toBe('{"ran":true}');
+  }, 30_000);
 
   it("obeys the first request and ignores a second", async () => {
     const ws = workspace();

@@ -31,7 +31,7 @@ const zodSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to the .mjs file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
+      'Path to the .mjs or .sh file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs". A .mjs runs under Node, a .sh under bash.'
     ),
   timeout: z
     .number()
@@ -129,7 +129,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
+  description: `Run a local .mjs or .sh file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a

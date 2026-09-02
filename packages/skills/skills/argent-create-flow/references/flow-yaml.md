@@ -15,6 +15,7 @@ Read this reference when polishing, composing, or manually reviewing a flow.
   - [Optional divergences](#optional-divergences)
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
+    - [Bash scripts](#bash-scripts)
   - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
   - [YAML safety](#yaml-safety)
 
@@ -231,21 +232,37 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
+Use a local `.mjs` or `.sh` script only when the user requests one. It needs no device. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
+The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js`.
+
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`path`** is relative to the flow file that contains the step. Include `.mjs` or `.sh` in lowercase, and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
+Argent runs the script from the project root, not from the directory of the script file. Thus `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`.
+
 If a script fails, check its changes before you retry.
+
+### Bash scripts
+
+- The exit code is the verdict. Exit 0 passes the step.
+- `$ARGENT_REASON` names an empty file for the failure text. Argent reads about 7000 characters of it after a non-zero exit, and puts them in the step's reason. A script that writes nothing there reports only its exit code.
+- Argent runs the file as `bash <file>`. The file needs no execute bit, and the `#!` line is a comment. The script gets no arguments, and its standard input is empty. Argent does not report what the script prints. Exit 126 means that bash cannot read the file, or that a command in the file is not executable.
+- Argent finds bash from `scripts.bash`, then from PATH, then from `/bin/bash` and `/usr/bin/bash`. On Windows, the fallback is the bash of Git for Windows, never the WSL launcher. A `scripts.bash` that is not a bash errors the step. macOS ships bash 3.2 at `/bin/bash`, so set `scripts.bash` to use bash 4 features.
+- `"$(dirname "${BASH_SOURCE[0]}")"` is the directory of the script file, which is not the working directory.
+- Commands resolve against the PATH of the tool-server, which it inherits from the program that started Argent, usually your editor. A command that is absent from that PATH exits 127. On Windows, the bash of Git for Windows puts its own directories first.
+- Check the file out with LF line endings, and add `*.sh text eol=lf` to `.gitattributes`. The usual CRLF symptom is `$'\r': command not found` and exit 127.
+- Argent stops the process group of the step when bash exits, so a background job dies with the step. A job survives only after `setsid`. Argent never stops a `setsid` job: it runs on after the flow ends, and you must stop it yourself. Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` also kills bash, and the step fails. Signal the pid of the job.
 
 ## Snapshots and standalone runs
 

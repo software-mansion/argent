@@ -1140,7 +1140,7 @@ function retiredArgReason(use: RetiredArgUse): string {
  * mid-run or guard-gated error cannot execute half the flow first. All three
  * anchor at the flow file's real directory, which an uploaded flow does not
  * have: a run: step's referenced files stayed on the client, a script step's
- * `.mjs` (and whatever it imports) stayed there too, and against a per-call temp
+ * own file (and whatever it imports) stayed there too, and against a per-call temp
  * materialization a plain snapshot can only fail (no baseline) while
  * updateBaselines writes PNGs no later run can find.
  */
@@ -1161,7 +1161,7 @@ function assertUploadSelfContained(flow: FlowFile): void {
     }
     if (step.kind === "script") {
       throw new FailureError(
-        `This flow uses a script step ("script: { path: ${step.path} }"), whose .mjs file lives ` +
+        `This flow uses a script step ("script: { path: ${step.path} }"), whose script file lives ` +
           `beside the flow's file on the CLIENT — an uploaded flow carries only its own YAML, so ` +
           `the script is not on this host and never could be. Use name + project_root with a ` +
           `co-located client and tool server for flows that run scripts.`,
@@ -1240,7 +1240,7 @@ diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped re
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
-runs only); \`script\` runs a local .mjs file in a fresh Node process for setup, cleanup, or any work a device step cannot do
+runs only); \`script\` runs a local script file for setup, cleanup, or any work a device step cannot do — a \`.mjs\` in a fresh Node process, a \`.sh\` under bash
 (\`script: { path: ../../scripts/seed.mjs, timeout?: <ms> }\` — always a map, never a bare path; the path
 is resolved against the flow file that names the step, exactly as a \`run\` target is, so a saved flow
 climbs out of .argent/flows/ to reach the project's own scripts/ directory. The step needs no device, so
