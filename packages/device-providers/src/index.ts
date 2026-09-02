@@ -28,6 +28,7 @@ export {
   isExternalDeviceUrn,
   isExternalId,
   makeExternalId,
+  nativeIdPlatform,
   parseExternalId,
   PROVIDER_ID_SHAPE,
   PROVIDER_SCHEMA_VERSION,

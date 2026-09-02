@@ -84,6 +84,20 @@ function parseArgs(argv: string[]): ParsedArgs {
     return next;
   };
 
+  /**
+   * `Number.parseInt` stops at the first character it cannot read, so it turns
+   * `12.5` into `12` and `1junk` into `1`. Both then pass an `isInteger` check
+   * as a number the user never asked for. Match the whole value first, so a
+   * typo is reported rather than silently rounded into something plausible.
+   */
+  const wholeInteger = (raw: string, flag: string): number => {
+    if (!/^[+-]?\d+$/.test(raw.trim())) {
+      throw new UsageError(`${flag} must be an integer, got "${raw}"`);
+    }
+
+    return Number.parseInt(raw, 10);
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
 
@@ -97,9 +111,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.file = valueOf(token, token === "--file" ? argv[++i] : undefined, "--file");
     } else if (token === "--pid" || token.startsWith("--pid=")) {
       const raw = valueOf(token, token === "--pid" ? argv[++i] : undefined, "--pid");
-      parsed.pid = Number.parseInt(raw, 10);
+      parsed.pid = wholeInteger(raw, "--pid");
 
-      if (!Number.isInteger(parsed.pid) || parsed.pid < 1) {
+      if (parsed.pid < 1) {
         throw new UsageError(`--pid must be a positive integer, got "${raw}"`);
       }
     } else if (token === "--schema-version" || token.startsWith("--schema-version=")) {
@@ -109,16 +123,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         "--schema-version"
       );
 
-      parsed.schemaVersion = Number.parseInt(raw, 10);
+      parsed.schemaVersion = wholeInteger(raw, "--schema-version");
     } else if (token.startsWith("-")) {
       throw new UsageError(`Unknown argument: "${token}"`);
     } else {
       parsed.operands.push(token);
     }
-  }
-
-  if (!Number.isInteger(parsed.schemaVersion)) {
-    throw new UsageError("--schema-version must be an integer");
   }
 
   return parsed;

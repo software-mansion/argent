@@ -206,6 +206,15 @@ export function descriptorFiles(): string[] {
  * Decide what platform a native id belongs to. Supplied by the caller because
  * the tool-server's classifier knows about device shapes this contract has no
  * business naming and Argent must have exactly one of them.
+ *
+ * Not [`nativeIdPlatform`](./contract.ts), which this package does own and not
+ * redundant with it. That answers which of the two platforms a descriptor may
+ * declare, so it has nowhere to put a Vega serial or a Chromium target and
+ * calls both `android`. This answers what an id is, so it can disagree with
+ * every platform the contract allows, which is the whole point at the one call
+ * site, where an id that is neither `ios` nor `android` must be refused rather
+ * than routed to `adb`. The two agree wherever both have an answer and
+ * `device-info.test.ts` holds them to it.
  */
 type ClassifyDevice = (nativeId: string) => string;
 

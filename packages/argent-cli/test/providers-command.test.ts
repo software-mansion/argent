@@ -175,6 +175,22 @@ describe("argent providers publish", () => {
   });
 
   /**
+   * `Number.parseInt` reads a leading run of digits and stops, so these used to
+   * be accepted as the number in front of the garbage: `--pid=12.5` recorded
+   * pid 12, and a bad `--schema-version` published as version 1.
+   */
+  it.each(["12.5", "12junk", "1e3", " 12 5"])(
+    "exits 2 for a --pid of %j rather than reading its numeric prefix",
+    async (value) => {
+      expect(await runProviders("publish", "--stdin", "--pid", value)).toBe(2);
+    }
+  );
+
+  it.each(["1junk", "1.0"])("exits 2 for a --schema-version of %j", async (value) => {
+    expect(await runProviders("publish", "--stdin", "--schema-version", value)).toBe(2);
+  });
+
+  /**
    * This replaces a provider's startup cleanup, so it must happen on publish.
    * The crashed window carries a different id from the one publishing now, ids
    * being unique per live instance, so what the two share is the vendor.
@@ -412,5 +428,40 @@ describe("argent providers check", () => {
 
     expect(await runProviders("check", "--file", source, "--json")).toBe(1);
     expect(stdout()).toContain("id:");
+  });
+
+  /**
+   * The tool-server classifies a native id by its shape and ignores a device
+   * whose declared platform disagrees, so a descriptor that passes the check
+   * and then shows no device is the one divergence this command exists to make
+   * impossible. Both directions, because a provider can get it wrong either
+   * way.
+   */
+  it.each([
+    ["ios", "emulator-5554", "an android serial"],
+    ["android", IOS_UDID, "an iOS udid"],
+  ])("exits 1 for a %s device whose nativeId is %s", async (platform, nativeId, shape) => {
+    const source = path.join(home, "mismatched.json");
+
+    fs.writeFileSync(
+      source,
+      JSON.stringify(
+        descriptor({
+          devices: [
+            {
+              capabilities: [],
+              kind: platform === "ios" ? "simulator" : "emulator",
+              name: "Device",
+              nativeId,
+              platform,
+              state: "Booted",
+            },
+          ],
+        })
+      )
+    );
+
+    expect(await runProviders("check", "--file", source, "--json")).toBe(1);
+    expect(stdout()).toContain(shape);
   });
 });

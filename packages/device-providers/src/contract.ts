@@ -66,6 +66,31 @@ export const PROVIDER_ID_SHAPE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  */
 const SAFE_NATIVE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
+/** iOS simulator UDID shape: 8-4-4-4-12 hex. */
+const IOS_UDID_SHAPE =
+  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+
+/**
+ * Which of the two platforms a descriptor may declare a native id belongs to,
+ * decided by shape alone.
+ *
+ * This is not a second classifier. The tool-server's `classifyDevice` knows
+ * about device shapes this contract has no business naming (remote simulators,
+ * Vega serials, Chromium targets) and it stays the one that decides those. It
+ * defers its final iOS-or-Android call to this, so the UDID shape is written
+ * down once.
+ *
+ * It lives here because `argent providers check` has to answer the same
+ * question the tool-server answers when it adopts a device and the CLI cannot
+ * reach into the tool-server for it. Without that, a descriptor pairing
+ * `platform: "ios"` with an adb serial passes the check and is then dropped at
+ * adoption, which is the one divergence `argent providers check` exists to
+ * make impossible.
+ */
+export function nativeIdPlatform(nativeId: string): "android" | "ios" {
+  return IOS_UDID_SHAPE.test(nativeId) ? "ios" : "android";
+}
+
 /**
  * True when `id` is an external-provider device id. Pure, no I/O.
  *

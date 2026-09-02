@@ -42,6 +42,8 @@ A provider writes one JSON file into `~/.argent/providers/`. The file lists the 
 
 `apiUrl` and `streamUrl` must start with `http://`. The simulator-server sends plaintext on a local port. Argent also opens `/ws` on the same host. A WebSocket selects its scheme before it connects, thus `https://` promises a `wss://` endpoint that nothing serves. `supportUrl` is a page for a person, thus it accepts `http://` and `https://`.
 
+`platform` must agree with the shape of `nativeId`. Argent reads the shape: an 8-4-4-4-12 hexadecimal id is `ios` and every other id is `android`. Argent ignores a device that declares the other platform, because an adb serial given to `xcrun` reaches nothing. `argent providers check` reports this as an error.
+
 Argent reads the file again on every tool call. Argent keeps no cache. Thus a new grant, a smaller grant, or a withdrawal takes effect immediately.
 
 Argent writes one line to `stderr` and reports no external device if the file is absent, damaged or stale. A provider cannot make Argent fail.

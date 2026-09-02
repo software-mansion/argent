@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import pc from "picocolors";
 import {
   EXTERNAL_CAPABILITIES,
+  nativeIdPlatform,
   type ProviderDevice,
   type ProviderRecordStrict,
   providerRecordSchema,
@@ -205,6 +206,26 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
           );
         }
       }
+    }
+
+    /**
+     * The tool-server classifies a native id by its shape and drops any device
+     * whose declared platform disagrees, because the alternative is handing an
+     * adb serial to `xcrun`. It says so on its own stderr, which nobody reading
+     * a CI log for this command ever sees, so the device would simply be absent
+     * with a green check behind it. Same question, asked where the provider
+     * author is looking.
+     */
+    const shape = nativeIdPlatform(device.nativeId);
+
+    if (shape !== device.platform) {
+      findings.push(
+        error(
+          `${label}: declares platform '${device.platform}' but its nativeId has the shape of ` +
+            `${shape === "ios" ? "an iOS udid" : "an android serial"}, so argent would ignore ` +
+            `this device entirely`
+        )
+      );
     }
 
     if (device.platform === "android" && device.capabilities.includes("simctl")) {

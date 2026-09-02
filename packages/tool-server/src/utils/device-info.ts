@@ -1,13 +1,16 @@
 import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
-import { EXTERNAL_PREFIX, externalNativeId } from "./external-devices";
+import { EXTERNAL_PREFIX, externalNativeId, nativeIdPlatform } from "./external-devices";
 
 /**
- * iOS simulator UDID shape: 8-4-4-4-12 hex. Everything here classifies by shape
- * because `xcrun simctl list` and `adb devices` are slow enough that listing on
- * every hot tool call would dominate its latency.
+ * Everything here classifies by shape because `xcrun simctl list` and `adb
+ * devices` are slow enough that listing on every hot tool call would dominate
+ * its latency.
+ *
+ * The iOS-or-Android half is {@linkcode nativeIdPlatform}, in the contract
+ * package, so `argent providers check` can ask the same question without a
+ * second copy of the UDID shape. The prefixes below stay here, they name device
+ * shapes the contract has no business knowing about.
  */
-const IOS_UDID_SHAPE =
-  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
 /**
  * Prefix on device ids that route through `sim-remote` to a remote iOS
@@ -50,7 +53,7 @@ export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
-  return IOS_UDID_SHAPE.test(udid) ? "ios" : "android";
+  return nativeIdPlatform(udid);
 }
 
 /**
