@@ -1684,7 +1684,7 @@ describe("argent flow run", () => {
   });
 
   // The --json-stream half of the same guard: streaming owns stdout, and the
-  // error record already carries the classification the verdict spells out.
+  // error record it ends on is the whole account of the failure.
   it.each([
     [
       "is rejected",
@@ -1956,24 +1956,38 @@ describe("argent flow run <dir>", () => {
 
   // One merged ledger: both runners print the verdict under the header and the
   // stderr detail after it, so `2>&1` on a batch reads like `2>&1` on one run.
-  it("prints a rejected flow's verdict ahead of the stderr detail", async () => {
-    toolsClientMock.callTool
-      .mockRejectedValueOnce(
-        new ToolInvocationError("flow file is not valid YAML", {
-          errorCode: "FLOW_FILE_INVALID",
-          errorKind: "validation",
-        })
-      )
-      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+  // Both branches that write to the two streams, since only one of them throws.
+  it.each([
+    [
+      "is rejected",
+      new ToolInvocationError("flow file is not valid YAML", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      }),
+      "  ✗ not run (invalid flow)",
+      "flow file is not valid YAML",
+    ],
+    [
+      "answers without a report",
+      { data: { flow: "a-login", notice: "prerequisite" } },
+      "  ✗ did not finish (no run report)",
+      '"a-login.yaml" did not produce a run report.',
+    ],
+  ])(
+    "prints the verdict of a flow that %s ahead of the stderr detail",
+    async (_case, outcome, verdict, detail) => {
+      if (outcome instanceof Error) toolsClientMock.callTool.mockRejectedValueOnce(outcome);
+      else toolsClientMock.callTool.mockResolvedValueOnce(outcome);
 
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+      await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
 
-    expect(merged.slice(0, 3)).toEqual([
-      ["out", "[1/2] a-login.yaml"],
-      ["out", "  ✗ not run (invalid flow)"],
-      ["err", "flow file is not valid YAML"],
-    ]);
-  });
+      expect(merged.slice(0, 3)).toEqual([
+        ["out", "[1/2] a-login.yaml"],
+        ["out", verdict],
+        ["err", detail],
+      ]);
+    }
+  );
 
   // The batch continuing past a rejection is the point of the feature, so the
   // entry that proves the verdict travels with the flow is a later one.
@@ -2074,7 +2088,14 @@ describe("argent flow run <dir>", () => {
     await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
 
     expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0])).toMatchObject({ ok: false, failed: 1, skipped: 1 });
+    const aggregate = JSON.parse(logs[0]) as { flows: unknown[] };
+    expect(aggregate).toMatchObject({ ok: false, failed: 1, skipped: 1 });
+    // No failure signal on this one: nothing threw, so there is none to carry.
+    expect(aggregate.flows[0]).toEqual({
+      path: "a-login.yaml",
+      status: "fail",
+      error: '"a-login.yaml" did not produce a run report.',
+    });
   });
 
   // A report the renderers cannot walk costs the batch twice over: the throw

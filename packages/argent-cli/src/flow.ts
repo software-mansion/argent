@@ -110,8 +110,9 @@ A directory run prints each flow's failing steps and warnings, then its outcome,
 then a final flow summary; --recursive walks subdirectories too (dot-directories
 and node_modules are skipped). A flow that fails its steps keeps the batch
 running, as does one the server rejects up front — an invalid file, or a device
-it cannot resolve. Any other failure stops the batch and counts the remaining
-flows skipped.
+it cannot resolve. A transport failure, a rejection of any other kind, or a
+reply that is not a report stops the batch and counts the remaining flows
+skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -134,8 +135,10 @@ Options (run):
                          instead (with a warning), so no flow's evidence is
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
-  --json                 Print the raw JSON report
-  --json-stream          Print progress and the final report as NDJSON (single flow only)
+  --json                 Print the flow's JSON report, or a directory run's JSON
+                         aggregate
+  --json-stream          Print each step and the outcome as NDJSON (single flow
+                         only, never with --json)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -1056,11 +1059,10 @@ interface BatchFlowResult {
 /**
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
  * steps and warnings, then its outcome (no live step lines), then a flow-level
- * summary; a flow
- * failing its steps — or one the tool-server rejects up front (a bad YAML, an
- * unparseable step, a device it cannot resolve) — lets the batch continue,
- * while anything else (a transport throw, a failure of any other kind, a result
- * that is not a report) stops it and counts the remaining flows skipped.
+ * summary; a flow failing its steps — or one the tool-server rejects up front
+ * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
+ * batch continue, while a transport throw, a rejection of any other kind, or a
+ * reply that is not a report stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
