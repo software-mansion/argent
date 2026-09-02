@@ -29,12 +29,13 @@ the runner sources, so a protocol change always ships with a rebuilt runner.
 
 `hint` is optional, phrased for the agent operating the device.
 
-A success envelope for an app-scoped command may additionally carry a
-top-level `reactivated: true`: the target app was alive but backgrounded, and
-the runner re-fronted it before executing: the foreground screen changed as
-a side effect of the command. The field is encoded only when true, so a
-command against an already-foreground target stays byte-identical on the
-wire.
+An envelope for an app-scoped command, ok or error, may additionally carry
+a top-level `reactivated: true`: the target app was alive but backgrounded,
+and the runner re-fronted it before executing: the foreground screen changed
+as a side effect of the command. An error envelope carries it too, because
+the re-front precedes the command: a tap that then failed still moved the
+screen. The field is encoded only when true, so a command against an
+already-foreground target stays byte-identical on the wire.
 
 A success envelope for a mutating command may additionally carry a top-level
 `warning: "…"`: the command succeeded, but the suppressed-issue counter (the

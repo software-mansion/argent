@@ -186,7 +186,9 @@ struct Envelope: Encodable {
     let data: AnyEncodable?
     let error: ErrorPayload?
     /// True only when the runner re-fronted a backgrounded target app before
-    /// executing the command (see `foregroundTarget`). nil is omitted from the
+    /// executing the command (see `foregroundTarget`), on ok and error
+    /// envelopes alike: the re-front precedes the command, so a command that
+    /// then failed changed the foreground screen too. nil is omitted from the
     /// encoded JSON.
     let reactivated: Bool?
     /// Advisory on an otherwise-ok reply: set when a mutating command succeeded

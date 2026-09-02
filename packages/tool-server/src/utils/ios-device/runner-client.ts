@@ -50,6 +50,14 @@ export interface RunnerResponseEnvelope {
   warning?: string;
 }
 
+/** Folded into a failure's message when its envelope carried `reactivated: true`. */
+const REACTIVATED_NOTE =
+  "The app was re-fronted before the command ran, so the foreground screen changed.";
+
+function appendSentence(message: string, sentence: string): string {
+  return `${message}${/[.!?]$/.test(message) ? "" : "."} ${sentence}`;
+}
+
 /**
  * A failure the runner reported in an `ok: false` envelope.
  * `retryable` is true only for `RUNNER_BUSY`.
@@ -59,9 +67,23 @@ export class RunnerCommandError extends Error {
   /** Callers may branch on this. The message already includes the same text. */
   readonly hint?: string;
   readonly retryable: boolean;
+  /**
+   * The runner re-fronted a backgrounded target before the command ran, and
+   * the command then failed: the foreground screen changed even though the
+   * action did not land. The message already says so.
+   */
+  readonly reactivated: boolean;
 
-  constructor(message: string, options: { code?: string; hint?: string } = {}) {
-    super(appendHintToMessage(message, options.hint));
+  constructor(
+    message: string,
+    options: { code?: string; hint?: string; reactivated?: boolean } = {}
+  ) {
+    super(
+      appendHintToMessage(
+        options.reactivated === true ? appendSentence(message, REACTIVATED_NOTE) : message,
+        options.hint
+      )
+    );
     this.name = "RunnerCommandError";
 
     if (options.code !== undefined) {
@@ -73,6 +95,7 @@ export class RunnerCommandError extends Error {
     }
 
     this.retryable = options.code === RUNNER_BUSY_ERROR_CODE;
+    this.reactivated = options.reactivated === true;
 
     // Classify the failure here. The runner wire code stays on `code`.
     withFailureSignal(this, {
@@ -301,6 +324,7 @@ function unwrapEnvelope(response: unknown): unknown {
   throw new RunnerCommandError(envelope.error?.message ?? "Runner command failed", {
     code: envelope.error?.code,
     hint: envelope.error?.hint,
+    reactivated: envelope.reactivated === true,
   });
 }
 

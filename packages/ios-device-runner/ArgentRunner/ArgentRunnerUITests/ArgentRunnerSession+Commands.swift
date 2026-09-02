@@ -30,25 +30,37 @@ extension ArgentRunnerSession {
         let failuresBefore = recordedFailureCount()
         let suppressedBefore = currentSuppressedIssueCount()
         var envelope: Envelope?
+        var reactivated = false
         // Stale accessibility elements throw NSExceptions. The guard turns
         // them into a failure envelope instead of a process crash.
         let exceptionDescription = ArgentExceptionGuard.runCatching {
-            envelope = self.performCommand(request)
+            envelope = self.performCommand(request, reactivated: &reactivated)
+        }
+
+        // A re-front happens before the command runs, so every reply shape
+        // reports it, failures included: the foreground screen changed whether
+        // or not the command then succeeded.
+        func stamped(_ reply: Envelope) -> Envelope {
+            reactivated ? reply.withReactivated() : reply
         }
 
         if let exceptionDescription {
-            return .failure(
-                .commandFailed,
-                exceptionDescription,
-                hint:
-                    "The target UI likely changed mid-command; re-observe the screen and retry."
+            return stamped(
+                .failure(
+                    .commandFailed,
+                    exceptionDescription,
+                    hint:
+                        "The target UI likely changed mid-command; re-observe the screen and retry."
+                )
             )
         }
 
         guard var result = envelope else {
-            return .failure(
-                .commandFailed,
-                "\(request.command.rawValue) produced no response"
+            return stamped(
+                .failure(
+                    .commandFailed,
+                    "\(request.command.rawValue) produced no response"
+                )
             )
         }
 
@@ -78,7 +90,7 @@ extension ArgentRunnerSession {
             )
         }
 
-        return result
+        return stamped(result)
     }
 
     /// XCTest's cumulative recorded-failure count for this session.
@@ -87,8 +99,13 @@ extension ArgentRunnerSession {
     }
 
     /// Runs one command: resolves and fronts the target app for app-scoped
-    /// commands, and handles device-scoped commands directly.
-    private func performCommand(_ request: CommandRequest) -> Envelope {
+    /// commands, and handles device-scoped commands directly. `reactivated`
+    /// is set as soon as the target has been re-fronted, before the command
+    /// runs, so the caller can stamp the reply whatever shape it ends up in.
+    private func performCommand(
+        _ request: CommandRequest,
+        reactivated: inout Bool
+    ) -> Envelope {
         if request.command.requiresAppBundleId {
             guard let bundleId = request.normalizedAppBundleId else {
                 return .failure(
@@ -106,10 +123,9 @@ extension ArgentRunnerSession {
             ) {
             case .unavailable(let envelope):
                 return envelope
-            case .ready(let app, let reactivated):
-                let result = performAppCommand(request, on: app)
-                return reactivated && result.ok
-                    ? result.withReactivated() : result
+            case .ready(let app, let didReactivate):
+                reactivated = didReactivate
+                return performAppCommand(request, on: app)
             }
         }
 

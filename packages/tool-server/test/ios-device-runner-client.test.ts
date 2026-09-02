@@ -182,6 +182,45 @@ describe("createRunnerClient", () => {
       expect(result).toBe(data);
     });
 
+    it("carries an error envelope's marker onto the RunnerCommandError and its message", async () => {
+      const { send } = createFakeSend([
+        {
+          ok: false,
+          error: { code: "COMMAND_FAILED", message: "stale element", hint: "run snapshot" },
+          reactivated: true,
+        } satisfies RunnerResponseEnvelope,
+      ]);
+      const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+      const error = await client
+        .run({ command: "tap", x: 1, y: 2 })
+        .catch((caught: unknown) => caught as RunnerCommandError);
+
+      // The re-front happened before the tap, so the foreground screen changed
+      // even though the tap did not land; the agent has to hear that on the
+      // failure path too, and only .message reaches it.
+      expect(error).toBeInstanceOf(RunnerCommandError);
+      expect((error as RunnerCommandError).reactivated).toBe(true);
+      expect((error as RunnerCommandError).message).toBe(
+        "stale element. The app was re-fronted before the command ran, so the foreground " +
+          "screen changed. Hint: run snapshot"
+      );
+    });
+
+    it("leaves reactivated false and the message untouched on an error envelope without it", async () => {
+      const { send } = createFakeSend([
+        { ok: false, error: { code: "COMMAND_FAILED", message: "stale element" } },
+      ]);
+      const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+      const error = await client
+        .run({ command: "tap", x: 1, y: 2 })
+        .catch((caught: unknown) => caught as RunnerCommandError);
+
+      expect((error as RunnerCommandError).reactivated).toBe(false);
+      expect((error as RunnerCommandError).message).toBe("stale element");
+    });
+
     it("resurfaces the marker from a journal-retained response", async () => {
       const { send } = createFakeSend([
         transportError(),
