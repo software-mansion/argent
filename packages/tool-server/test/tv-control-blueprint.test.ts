@@ -32,6 +32,13 @@ const h = vi.hoisted(() => {
     // binding or exiting — the case waitForSocket must surface fast.
     hidSpawnError: false,
     axConnectHook: null as null | (() => void),
+    // Fires after every HID write, with the running count. Lets a test stop the
+    // clear burst at a CHOSEN key rather than racing a 0ms timer: the only
+    // failing-burst case here armed its failure with `setTimeout(…, 0)`, which
+    // landed at 0 or 1 keys depending on the host, so no test ever produced a
+    // mid-burst partial and the count in the message was never observed at any
+    // intermediate value.
+    hidWriteHook: null as null | ((written: number) => void),
   };
 
   function socketArg(args: string[]): string | undefined {
@@ -114,6 +121,9 @@ vi.mock("node:net", async () => {
     sock.destroy = () => {};
     sock.write = (line: string) => {
       h.sent.push({ path, line: line.trim() });
+      if (path.includes("-hid-") && h.state.hidWriteHook) {
+        h.state.hidWriteHook(h.sent.filter((x) => x.path.includes("-hid-")).length);
+      }
       // `describe` expects a JSON body; navigate/type tolerate an empty reply.
       const reply = line.startsWith("describe")
         ? JSON.stringify({
@@ -134,6 +144,7 @@ vi.mock("node:net", async () => {
       if (path.includes("-ax-") && h.state.axConnectHook) {
         const hook = h.state.axConnectHook;
         h.state.axConnectHook = null;
+        h.state.hidWriteHook = null;
         hook();
       }
       if (h.liveSockets.has(path)) sock.emit("connect");
@@ -492,12 +503,19 @@ describe("tvControlBlueprint — clear()", () => {
     // The burst is not atomic, so a caller told only "the socket is gone" reads
     // that as "nothing happened" and types over a field that is now shorter. The
     // count is what makes the re-read actionable.
+    //
+    // Stopped at a CHOSEN key, not by a 0ms timer. The timer landed at 0 or 1
+    // keys depending on the host, so no case here ever produced a mid-burst
+    // partial: the `${keysSent}` interpolation, the `keysSent++`-after-await
+    // placement and the settle fold were unobserved at every intermediate value,
+    // and the expected count was read out of the same recorder production had
+    // just written to.
     const instance = await buildService();
     h.sent.length = 0;
-    // Kill the socket a few keys in: the connect then errors, exactly as it
-    // would if the daemon had exited mid-burst.
     const hid = [...h.liveSockets].find((p) => p.includes("-hid-"))!;
-    setTimeout(() => h.liveSockets.delete(hid), 0);
+    h.state.hidWriteHook = (written) => {
+      if (written === 7) h.liveSockets.delete(hid);
+    };
 
     const err = await instance.api.clear().then(
       () => undefined,
@@ -505,8 +523,13 @@ describe("tvControlBlueprint — clear()", () => {
     );
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_clear_tvos_burst");
     expect(err?.message).toMatch(/may be PARTIALLY\s+emptied/);
-    expect(err?.message).toMatch(new RegExp(`${hidLines().length} of the 200 delete keys`));
+    // The literal, not `hidLines().length`: both sides of that were outputs of
+    // the same run, and the unanchored regex it built was satisfied by 21, 101
+    // or 191 just as well.
+    expect(err?.message).toContain("7 of the 200 delete keys had been written");
+    expect(hidLines()).toHaveLength(7);
   });
 
   it("says the field is UNCHANGED when the daemon refused the connection", async () => {
