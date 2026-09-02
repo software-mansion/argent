@@ -654,6 +654,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let envSetup = false;
     let initFailure: NativeDevtoolsInitFailure | null = null;
     let inFlight: Promise<void> | null = null;
+    /**
+     * Set once {@linkcode NativeDevtoolsApi.withdrawEnv} starts, never cleared.
+     *
+     * Withdrawal happens because the simulator stopped being ours, so there is
+     * no state this service could go back to arming. Latching says that once,
+     * where clearing `envSetup` alone would leave every later `ensureEnv` free
+     * to put the injection back.
+     */
+    let envRetired = false;
 
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -674,6 +683,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // so the watcher's 10s poll cannot spawn an attempt per poll and inflate
     // `attempts`.
     const runEnsureEnv = (): Promise<void> => {
+      /**
+       * Withdrawal has begun or finished. Either way the endpoint variables
+       * this would write are the provider's now.
+       */
+      if (envRetired) return Promise.resolve();
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
@@ -973,6 +987,18 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       withdrawEnv: lentSocketPath
         ? () => Promise.resolve()
         : async () => {
+            /**
+             * Close the door before opening the other one. An `ensureEnv` that
+             * is still writing `DYLD_INSERT_LIBRARIES` and the endpoint
+             * variable would otherwise land after the withdrawal and re-arm the
+             * simulator we are handing back. Its success path sets `envSetup`
+             * too, so even the latch would agree it was armed. Retiring first
+             * stops the next attempt, awaiting the current one means there is
+             * nothing left in flight to undo our undo.
+             */
+            envRetired = true;
+            await inFlight?.catch(() => {});
+
             await host.withdrawNativeDevtoolsEnv(udid, endpoint);
             /**
              * Drop the latch too: what it recorded is no longer on the device,

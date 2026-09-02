@@ -17,6 +17,7 @@ import {
   assertExternalCapability,
   discoverProviders,
   disposeExternalDeviceServices,
+  enforceExternalDeviceGrant,
   externalNativeId,
   externalProviderId,
   externalProviderLabel,
@@ -33,7 +34,6 @@ import {
   type ProviderRecord,
   providerRecordSchema,
   providersDirectory,
-  revalidateExternalDevice,
 } from "../src/utils/external-devices";
 import { classifyDevice, resolveDevice } from "../src/utils/device-info";
 import { adbArgv } from "../src/utils/adb";
@@ -779,6 +779,14 @@ describe("revocation", () => {
     };
   }
 
+  /**
+   * The dispatch edge's gate, driven against a registry that holds nothing, for
+   * the cases that are only about the reading it takes.
+   */
+  function revalidate(id: string): Promise<{ reason?: string; stale: boolean }> {
+    return enforceExternalDeviceGrant(fakeRegistry([]), id);
+  }
+
   function rewrite(descriptorPath: string, devices: unknown[]): void {
     fs.writeFileSync(
       descriptorPath,
@@ -802,11 +810,11 @@ describe("revocation", () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
-    expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+    expect(await revalidate(deviceId)).toEqual({ stale: false });
 
     narrow(descriptorPath);
 
-    const result = revalidateExternalDevice(deviceId);
+    const result = await revalidate(deviceId);
     expect(result.stale).toBe(true);
     expect(result.reason).toMatch(/capabilities/);
   });
@@ -815,16 +823,16 @@ describe("revocation", () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
-    expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+    expect(await revalidate(deviceId)).toEqual({ stale: false });
     rewrite(descriptorPath, []);
-    expect(revalidateExternalDevice(deviceId)).toMatchObject({ stale: true });
+    expect(await revalidate(deviceId)).toMatchObject({ stale: true });
   });
 
   it("reports no staleness while nothing has changed", async () => {
     useDescriptors(await liveDescriptor());
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
     await lookupExternalDevice(deviceId);
-    expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+    expect(await revalidate(deviceId)).toEqual({ stale: false });
   });
 
   /**
@@ -847,12 +855,12 @@ describe("revocation", () => {
       const descriptorPath = await liveDescriptor();
       useDescriptors(descriptorPath);
       const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
-      expect(revalidateExternalDevice(deviceId)).toEqual({ stale: false });
+      expect(await revalidate(deviceId)).toEqual({ stale: false });
 
       narrow(descriptorPath);
       await read();
 
-      expect(revalidateExternalDevice(deviceId)).toMatchObject({ stale: true });
+      expect(await revalidate(deviceId)).toMatchObject({ stale: true });
     });
   });
 
@@ -865,17 +873,17 @@ describe("revocation", () => {
   it("carries the reading from an ext: dispatch over to the raw spelling", async () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
-    expect(revalidateExternalDevice(makeExternalId("acme-3f2a9c", IOS_UDID))).toEqual({
+    expect(await revalidate(makeExternalId("acme-3f2a9c", IOS_UDID))).toEqual({
       stale: false,
     });
 
     narrow(descriptorPath);
 
-    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
+    expect(await revalidate(IOS_UDID)).toMatchObject({ stale: true });
   });
 
-  it("is a no-op for a device argent booted itself", () => {
-    expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
+  it("is a no-op for a device argent booted itself", async () => {
+    expect(await revalidate(IOS_UDID)).toEqual({ stale: false });
   });
 
   /**
@@ -888,23 +896,23 @@ describe("revocation", () => {
   it("reports staleness for the raw udid the provider claims", async () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
-    expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
+    expect(await revalidate(IOS_UDID)).toEqual({ stale: false });
 
     const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
     descriptor.devices[0].capabilities = ["simulator-server"];
     fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
 
-    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
+    expect(await revalidate(IOS_UDID)).toMatchObject({ stale: true });
   });
 
   it("reports staleness for the raw udid when the device is withdrawn", async () => {
     const descriptorPath = await liveDescriptor();
     useDescriptors(descriptorPath);
-    expect(revalidateExternalDevice(IOS_UDID)).toEqual({ stale: false });
+    expect(await revalidate(IOS_UDID)).toEqual({ stale: false });
 
     rewrite(descriptorPath, []);
 
-    expect(revalidateExternalDevice(IOS_UDID)).toMatchObject({ stale: true });
+    expect(await revalidate(IOS_UDID)).toMatchObject({ stale: true });
   });
 
   /**
@@ -1021,6 +1029,106 @@ describe("revocation", () => {
     expect((await disposeExternalDeviceServices(registry, IOS_UDID)).sort()).toEqual(
       [`SimulatorServer:${deviceId}`, `SimulatorServer:${IOS_UDID}`].sort()
     );
+  });
+
+  /**
+   * The reading and the sweep are one step because they used to be two. With
+   * the baseline recorded first, a request arriving while the sweep was still
+   * working compared against the new grant, saw nothing had changed and
+   * dispatched into one of the very handles being swept, built under the
+   * grant the provider had just narrowed. The sweep is not a tidy-up running
+   * alongside the request, it is the enforcement point, so nothing may read
+   * past it while it runs.
+   */
+  describe("a dispatch arriving mid-sweep", () => {
+    /** A registry whose teardown blocks until the test lets it finish. */
+    function gatedRegistry(urns: string[]): {
+      attempted: string[];
+      disposeService: (urn: string) => Promise<void>;
+      getSnapshot: () => { services: ReadonlyMap<string, unknown> };
+      release: () => void;
+    } {
+      const attempted: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      return {
+        attempted,
+        disposeService: async (urn: string) => {
+          attempted.push(urn);
+          await gate;
+        },
+        getSnapshot: () => ({ services: new Map(urns.map((urn) => [urn, {}])) }),
+        release: () => release(),
+      };
+    }
+
+    /** Let every already-queued microtask and timer callback run. */
+    const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+    it("waits for the sweep instead of reading the baseline past it", async () => {
+      const descriptorPath = await liveDescriptor();
+      useDescriptors(descriptorPath);
+      const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+      const registry = gatedRegistry([`SimulatorServer:${deviceId}`]);
+
+      expect(await enforceExternalDeviceGrant(registry, deviceId)).toEqual({ stale: false });
+      narrow(descriptorPath);
+
+      const first = enforceExternalDeviceGrant(registry, deviceId);
+      const second = enforceExternalDeviceGrant(registry, deviceId);
+
+      let secondDone = false;
+      void second.then(() => {
+        secondDone = true;
+      });
+
+      await settle();
+
+      /**
+       * The gate is still shut, so the sweep has not finished. The second call
+       * must not have concluded anything yet. Least of all that the grant is
+       * unchanged.
+       */
+      expect(secondDone).toBe(false);
+      expect(registry.attempted).toEqual([`SimulatorServer:${deviceId}`]);
+
+      registry.release();
+
+      expect(await first).toMatchObject({ stale: true });
+
+      /**
+       * Answered from the baseline the first call committed, once the handles
+       * it was built to drop were gone. One sweep, not two.
+       */
+      expect(await second).toEqual({ stale: false });
+      expect(registry.attempted).toEqual([`SimulatorServer:${deviceId}`]);
+    });
+
+    /**
+     * A sweep that could not finish must not move the baseline either. The next
+     * dispatch has to see the same revocation and refuse again, rather than
+     * treat it as spent.
+     */
+    it("leaves the reading alone when the sweep fails", async () => {
+      const descriptorPath = await liveDescriptor();
+      useDescriptors(descriptorPath);
+      const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+      const wedged = `SimulatorServer:${deviceId}`;
+      const registry = fakeRegistry([wedged], [wedged]);
+
+      expect(await enforceExternalDeviceGrant(registry, deviceId)).toEqual({ stale: false });
+      narrow(descriptorPath);
+
+      await expect(enforceExternalDeviceGrant(registry, deviceId)).rejects.toThrow(
+        /will not tear down/
+      );
+      await expect(enforceExternalDeviceGrant(registry, deviceId)).rejects.toThrow(
+        /will not tear down/
+      );
+    });
   });
 });
 

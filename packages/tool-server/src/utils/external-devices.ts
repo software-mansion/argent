@@ -233,6 +233,7 @@ const PROBE_TIMEOUT_MS = 800;
 /** Test seam: forget the remembered capability sets used for revocation. */
 export function __resetExternalDeviceCacheForTesting(): void {
   lastSeenCapabilities.clear();
+  inFlightRevocations.clear();
 }
 
 /**
@@ -240,7 +241,7 @@ export function __resetExternalDeviceCacheForTesting(): void {
  * `classifyDevice` and joined to that provider.
  *
  * Deliberately does not touch the capability bookkeeping
- * {@linkcode revalidateExternalDevice} compares against. Refreshing it from
+ * {@linkcode enforceExternalDeviceGrant} compares against. Refreshing it from
  * every read is what a reader expects and it is exactly wrong. The baseline
  * has to be the grant a cached service was built under, so a plain read between
  * two dispatches (`list-devices`, a watcher tick, an argv builder resolving a
@@ -502,32 +503,81 @@ export function assertExternalCapabilitySync(
  * a withdrawn device invalidates a service the registry has cached and would
  * otherwise keep serving.
  *
- * Written only by {@linkcode revalidateExternalDevice}, which runs at the HTTP
- * edge immediately before the factory that builds those services. That is what
- * makes an entry mean "the reading the warm handle was built from" rather than
- * "the last thing anything happened to read".
+ * Written only by {@linkcode enforceExternalDeviceGrant}, which runs at the
+ * HTTP edge immediately before the factory that builds those services and only
+ * once that call has finished dropping the handles the old reading built. That
+ * is what makes an entry mean "the reading the warm handle was built from"
+ * rather than "the last thing anything happened to read".
  */
 const lastSeenCapabilities = new Map<string, string>();
+
+/**
+ * The sweep currently running for a device, keyed by every spelling it answers
+ * to, so a second dispatch can wait it out instead of racing it.
+ *
+ * @see {@linkcode enforceExternalDeviceGrant}
+ */
+const inFlightRevocations = new Map<string, Promise<unknown>>();
 
 function capabilityKey(capabilities: ReadonlySet<string>): string {
   return Array.from(capabilities).sort().join(",");
 }
 
 /**
- * Re-read an external device's descriptor and report whether anything a cached
- * service depends on has changed.
- *
- * `stale: true` means the caller must dispose the device's services before
- * dispatching, so the next call re-resolves against the provider's current
- * declaration instead of a warm handle from before the change.
+ * Record the reading a warm handle may now be built from, under every spelling
+ * at once. `undefined` means the device is gone, so there is no reading to
+ * keep.
+ */
+function rememberGrant(spellings: ReadonlySet<string>, current: string | undefined): void {
+  for (const spelling of spellings) {
+    if (current === undefined) lastSeenCapabilities.delete(spelling);
+    else lastSeenCapabilities.set(spelling, current);
+  }
+}
+
+/**
+ * Re-read an external device's descriptor and, if anything a cached service
+ * depends on has changed, drop those services before the caller dispatches.
  *
  * Reads the file every time, with no TTL. That is affordable because the file
  * is small and local (the same reasoning that lets the feature-flag layer
  * re-read `~/.argent/flags.json` per request) and it means a withdrawn device
  * or a narrowed capability set takes effect on the next tool call rather than
  * within a cache window.
+ *
+ * The reading and the sweep are one step, deliberately. They used to be two
+ * calls at the dispatch edge, which left the baseline recorded while the sweep
+ * was still running. A second request arriving in that window compared against
+ * the new reading, concluded nothing had changed and dispatched into a handle
+ * the sweep had not reached yet, built under the grant the provider had just
+ * taken back. So the baseline moves only once every handle is gone and a
+ * concurrent caller waits for the sweep rather than reading past it.
+ *
+ * Throws if the sweep could not finish, leaving the baseline where it was so
+ * the next call tries again rather than treating the revocation as spent.
  */
-export function revalidateExternalDevice(id: string): { reason?: string; stale: boolean } {
+export async function enforceExternalDeviceGrant(
+  registry: {
+    disposeService(urn: string): Promise<void>;
+    getSnapshot(): { services: ReadonlyMap<string, unknown> };
+  },
+  id: string
+): Promise<{ reason?: string; stale: boolean }> {
+  /*
+   * Whatever this device has in flight, under any of its names. Re-checked
+   * after each wait, since waiting is what lets another caller start one.
+   */
+  for (;;) {
+    const spellings = deviceSpellings(id, externalClaimForAnyId(id));
+
+    const running = [...spellings]
+      .map((spelling) => inFlightRevocations.get(spelling))
+      .find((sweep) => sweep !== undefined);
+
+    if (!running) break;
+    await running.catch(() => {});
+  }
+
   /**
    * Every spelling, read and written together, because a grant binds to the
    * device rather than to one of its names. A session that has only ever named
@@ -539,24 +589,32 @@ export function revalidateExternalDevice(id: string): { reason?: string; stale: 
   const previous = [...spellings]
     .map((spelling) => lastSeenCapabilities.get(spelling))
     .find((seen) => seen !== undefined);
+  const current = device ? capabilityKey(device.capabilities) : undefined;
 
-  if (!device) {
-    for (const spelling of spellings) lastSeenCapabilities.delete(spelling);
-
-    return previous === undefined
-      ? { stale: false }
-      : { reason: "the device is no longer offered by its provider", stale: true };
+  if (previous === undefined || previous === current) {
+    rememberGrant(spellings, current);
+    return { stale: false };
   }
 
-  const current = capabilityKey(device.capabilities);
+  const reason =
+    device === undefined
+      ? "the device is no longer offered by its provider"
+      : "its provider changed the capabilities it grants";
 
-  for (const spelling of spellings) lastSeenCapabilities.set(spelling, current);
+  const sweep = disposeExternalDeviceServices(registry, id);
+  for (const spelling of spellings) inFlightRevocations.set(spelling, sweep);
 
-  if (previous !== undefined && previous !== current) {
-    return { reason: "its provider changed the capabilities it grants", stale: true };
+  try {
+    await sweep;
+  } finally {
+    for (const spelling of spellings) {
+      if (inFlightRevocations.get(spelling) === sweep) inFlightRevocations.delete(spelling);
+    }
   }
 
-  return { stale: false };
+  rememberGrant(spellings, current);
+
+  return { reason, stale: true };
 }
 
 /**

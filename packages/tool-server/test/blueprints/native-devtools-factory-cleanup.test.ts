@@ -148,4 +148,82 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
 
     await instance.dispose();
   });
+
+  /**
+   * The watcher withdraws when a provider turns out to own the simulator, which
+   * can land while an `ensureEnv` started before the claim is still writing
+   * `DYLD_INSERT_LIBRARIES` and the endpoint variable. Undoing first and having
+   * that write land second re-arms the simulator we just handed over and the
+   * write's success path latches `envSetup`, so nothing afterwards would even
+   * report it as armed.
+   */
+  it("waits out an in-flight ensureEnv before withdrawing, and does not re-arm after", async () => {
+    /** Phase 1: fast failure, so the factory finishes with nothing armed. */
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd !== "xcrun") return { stdout: "", stderr: "" };
+      if (args.includes("getenv")) return { stdout: "", stderr: "" };
+      return new Error("simctl spawn failed: factory-init phase");
+    });
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+
+    /**
+     * Phase 2: the arming pass that is still in flight when the claim lands.
+     * Its first setenv hangs until the test releases it.
+     */
+    const verbs: string[] = [];
+    let releaseSetenv: (() => void) | null = null;
+
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd !== "xcrun") return { stdout: "", stderr: "" };
+
+      const verb = args.find((a) => a === "getenv" || a === "setenv" || a === "unsetenv");
+      if (verb !== undefined) verbs.push(verb);
+      if (verb === "getenv") return { stdout: "", stderr: "" };
+
+      if (verb === "setenv" && releaseSetenv === null) {
+        return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          releaseSetenv = () => resolve({ stdout: "", stderr: "" });
+        });
+      }
+
+      return { stdout: "", stderr: "" };
+    });
+
+    const arming = instance.api.ensureEnvReady();
+    await new Promise<void>((r) => setImmediate(r));
+    expect(releaseSetenv).not.toBeNull();
+
+    let withdrawn = false;
+    const withdrawal = instance.api.withdrawEnv().then(() => {
+      withdrawn = true;
+    });
+
+    await new Promise<void>((r) => setImmediate(r));
+
+    /**
+     * Nothing has come off the device yet. The withdrawal is behind the write
+     * it exists to undo.
+     */
+    expect(withdrawn).toBe(false);
+    expect(verbs).not.toContain("unsetenv");
+
+    releaseSetenv!();
+    await arming;
+    await withdrawal;
+
+    expect(verbs).toContain("unsetenv");
+    /**
+     * The arming pass succeeded and latched `envSetup`. The withdrawal ran
+     * after it, so the latch has to read false.
+     */
+    expect(instance.api.isEnvSetup()).toBe(false);
+
+    /** And the service stays retired: neither entry point may put it back. */
+    const settled = verbs.length;
+    await instance.api.ensureEnvReady();
+    await instance.api.reverifyEnv();
+    expect(verbs.length).toBe(settled);
+
+    await instance.dispose();
+  });
 });

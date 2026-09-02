@@ -41,11 +41,10 @@ import {
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
 import {
-  disposeExternalDeviceServices,
+  enforceExternalDeviceGrant,
   externalProviderLabel,
   externalSupportHint,
   isExternalId,
-  revalidateExternalDevice,
 } from "./utils/external-devices";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
@@ -798,40 +797,39 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // registry caches the resolved service, so a withdrawn or narrowed device
       // would keep working through a warm handle. Dropping the cached services
       // here makes the next resolve re-run the gates against the current grant.
-      // Uncached and synchronous (one small local file read, like the
-      // per-request feature-flag read above) so a change bites on the next
-      // call. Not gated on the `ext:` spelling, a provider's device is
-      // reachable by its raw udid or serial too and that spelling caches its
-      // own service. Skipping the check there let a narrowed or withdrawn grant
-      // keep being served from a warm handle.
+      // Uncached (one small local file read, like the per-request feature-flag
+      // read above) so a change bites on the next call. Not gated on the `ext:`
+      // spelling, a provider's device is reachable by its raw udid or serial
+      // too and that spelling caches its own service. Skipping the check there
+      // let a narrowed or withdrawn grant keep being served from a warm handle.
       if (deviceArg) {
-        const { reason, stale } = revalidateExternalDevice(deviceArg);
+        let revocation: { reason?: string; stale: boolean };
 
-        if (stale) {
-          try {
-            await disposeExternalDeviceServices(registry, deviceArg);
-          } catch (err) {
-            /**
-             * Fail closed. A handle that would not tear down is a handle that
-             * can still serve the grant the provider just took back and the
-             * next line would hand it the call. Refusing costs a retry, the
-             * alternative spends the revocation.
-             */
-            emitHttpFailure(
-              {
-                error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
-                failure_stage: "external_device_revocation",
-                failure_area: "http",
-                error_kind: "unknown",
-              },
-              parsedData
-            );
-            res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-            return;
-          }
+        try {
+          revocation = await enforceExternalDeviceGrant(registry, deviceArg);
+        } catch (err) {
+          /**
+           * Fail closed. A handle that would not tear down is a handle that
+           * can still serve the grant the provider just took back and the
+           * next line would hand it the call. Refusing costs a retry, the
+           * alternative spends the revocation.
+           */
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
+              failure_stage: "external_device_revocation",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
 
+        if (revocation.stale) {
           process.stderr.write(
-            `[device-providers] dropped cached services for ${deviceArg}: ${reason}\n`
+            `[device-providers] dropped cached services for ${deviceArg}: ${revocation.reason}\n`
           );
         }
       }

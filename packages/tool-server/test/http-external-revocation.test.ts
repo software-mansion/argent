@@ -15,16 +15,14 @@ import request from "supertest";
 import { Registry } from "@argent/registry";
 import { z } from "zod";
 
-const revalidateMock = vi.fn();
-const disposeMock = vi.fn();
+const enforceMock = vi.fn();
 
 vi.mock("../src/utils/external-devices", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/external-devices")>();
 
   return {
     ...actual,
-    disposeExternalDeviceServices: (...args: unknown[]) => disposeMock(...args),
-    revalidateExternalDevice: (...args: unknown[]) => revalidateMock(...args),
+    enforceExternalDeviceGrant: (...args: unknown[]) => enforceMock(...args),
   };
 });
 
@@ -54,13 +52,11 @@ function registryWithProbe(ran: { value: boolean }): Registry {
 
 describe("a revocation sweep that cannot finish stops the request", () => {
   beforeEach(() => {
-    revalidateMock.mockReset();
-    disposeMock.mockReset();
+    enforceMock.mockReset();
   });
 
   it("answers 500 and does not invoke the tool", async () => {
-    revalidateMock.mockReturnValue({ reason: "its provider changed what it grants", stale: true });
-    disposeMock.mockRejectedValue(new Error("SimulatorServer:ext:acme-3f2a9c:… (teardown wedged)"));
+    enforceMock.mockRejectedValue(new Error("SimulatorServer:ext:acme-3f2a9c:… (teardown wedged)"));
 
     const ran = { value: false };
     const { app } = createHttpApp(registryWithProbe(ran));
@@ -73,8 +69,7 @@ describe("a revocation sweep that cannot finish stops the request", () => {
   });
 
   it("records the failure under its own signal", async () => {
-    revalidateMock.mockReturnValue({ reason: "the device is no longer offered", stale: true });
-    disposeMock.mockRejectedValue(new Error("nope"));
+    enforceMock.mockRejectedValue(new Error("nope"));
 
     const recordFailure = vi.fn();
     const { app } = createHttpApp(registryWithProbe({ value: false }), { recordFailure });
@@ -96,8 +91,7 @@ describe("a revocation sweep that cannot finish stops the request", () => {
 
   /** The control. A sweep that completes hands the call on as it always did. */
   it("dispatches when the sweep completes", async () => {
-    revalidateMock.mockReturnValue({ reason: "its provider changed what it grants", stale: true });
-    disposeMock.mockResolvedValue([`SimulatorServer:${DEVICE_ID}`]);
+    enforceMock.mockResolvedValue({ reason: "its provider changed what it grants", stale: true });
 
     const ran = { value: false };
     const { app } = createHttpApp(registryWithProbe(ran));
@@ -108,17 +102,22 @@ describe("a revocation sweep that cannot finish stops the request", () => {
     expect(ran.value).toBe(true);
   });
 
-  /** Nothing stale means nothing to sweep, so the gate stays out of the way. */
-  it("does not sweep at all when the grant is unchanged", async () => {
-    revalidateMock.mockReturnValue({ stale: false });
+  /** Nothing stale means nothing was dropped, so the gate stays quiet. */
+  it("says nothing when the grant is unchanged", async () => {
+    enforceMock.mockResolvedValue({ stale: false });
+    const written = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const ran = { value: false };
-    const { app } = createHttpApp(registryWithProbe(ran));
+    try {
+      const ran = { value: false };
+      const { app } = createHttpApp(registryWithProbe(ran));
 
-    const res = await request(app).post("/tools/probe").send({ device_id: DEVICE_ID });
+      const res = await request(app).post("/tools/probe").send({ device_id: DEVICE_ID });
 
-    expect(res.status).toBe(200);
-    expect(ran.value).toBe(true);
-    expect(disposeMock).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(ran.value).toBe(true);
+      expect(written.mock.calls.flat().join("")).not.toMatch(/dropped cached services/);
+    } finally {
+      written.mockRestore();
+    }
   });
 });

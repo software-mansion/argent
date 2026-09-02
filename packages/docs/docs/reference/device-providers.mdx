@@ -101,6 +101,10 @@ Argent never starts, restarts or shuts down the device of a provider. `boot-devi
 
 Argent never removes the file of a provider. Argent uses only the endpoints that its own simulator-server build supplies.
 
+Argent examines the booted simulators and injects its own native agent into them. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
+
+Argent removes that injection when it reads the new descriptor. Argent removes only its own library and its own endpoint variable. Argent keeps the entries of a different application. Then Argent uses the socket of the provider, if the provider grants `native-devtools`.
+
 ## Commands
 
 | Command                             | Description                                                         |

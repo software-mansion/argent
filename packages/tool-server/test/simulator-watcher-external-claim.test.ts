@@ -225,6 +225,114 @@ describe("simulator-watcher against a provider's simulator", () => {
     expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
   });
 
+  /**
+   * The window the handoff exists for. A provider boots a simulator, arms its
+   * own injection and publishes the descriptor a moment later. A tick landing
+   * in between finds an unclaimed simulator and arms over it, pointing
+   * `NATIVE_DEVTOOLS_IOS_CDP_SOCKET` at our socket for the rest of the boot.
+   *
+   * Once the claim lands the environment is the provider's, whatever it
+   * granted. A granted claim then re-resolves into attach mode, where we borrow
+   * the provider's agent instead of running our own.
+   */
+  describe("a claim published after argent had already armed the simulator", () => {
+    /**
+     * The armed service the watcher is holding and the attaching one it should
+     * end up with. `resolveService` hands over the second once the descriptor
+     * is on disk, the way the factory would.
+     */
+    function makeHandoffRegistry(): {
+      armed: NativeDevtoolsApi & { withdrawEnv: ReturnType<typeof vi.fn> };
+      disposeService: ReturnType<typeof vi.fn>;
+      publish: (capabilities: string[]) => void;
+      registry: Registry;
+      resolveService: ReturnType<typeof vi.fn>;
+    } {
+      const withdrawEnv = vi.fn(async () => {});
+      const armed = { ...makeApi(), withdrawEnv };
+      const attaching = { ...makeApi(), armsEnv: false };
+      let published = false;
+
+      const disposeService = vi.fn(async () => {});
+      const resolveService = vi.fn(async () => (published ? attaching : armed));
+
+      return {
+        armed,
+        disposeService,
+        publish: (capabilities: string[]) => {
+          publishDescriptor({ capabilities });
+          published = true;
+        },
+        registry: { resolveService, disposeService } as unknown as Registry,
+        resolveService,
+      };
+    }
+
+    /** Run one more poll without waiting out the real ten seconds. */
+    async function nextTick(): Promise<void> {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("hands the environment back and re-resolves when the claim grants native-devtools", async () => {
+      const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      await vi.runOnlyPendingTimersAsync();
+      expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
+
+      publish(["simctl", "native-devtools"]);
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
+      expect(disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED_UDID}`);
+      /**
+       * Resolved again and it is the attaching service the watcher now holds.
+       */
+      expect(resolvedUdids(resolveService).filter((udid) => udid === CLAIMED_UDID)).toHaveLength(2);
+    });
+
+    it("hands the environment back and lets go when the claim withholds it", async () => {
+      const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      await vi.runOnlyPendingTimersAsync();
+
+      publish(["simctl", "ax-service"]);
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
+      expect(disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED_UDID}`);
+      /** Not ours any more, so it is not resolved a second time. */
+      expect(resolvedUdids(resolveService).filter((udid) => udid === CLAIMED_UDID)).toHaveLength(1);
+    });
+
+    /** Once handed over, later ticks leave the provider alone. */
+    it("does not withdraw again on the ticks after the handoff", async () => {
+      const { armed, publish, registry } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      await vi.runOnlyPendingTimersAsync();
+
+      publish(["simctl", "native-devtools"]);
+      await nextTick();
+      await nextTick();
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
+    });
+  });
+
   /** The claim is only as live as the process behind it. */
   it("ignores a claim whose provider process is gone", async () => {
     publishDescriptor({ capabilities: ["simctl"], pid: DEAD_PID });
