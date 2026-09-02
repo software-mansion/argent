@@ -40,13 +40,21 @@ function mockRegistry(truncated: boolean): Registry {
 }
 
 async function writeHiddenAssert(): Promise<void> {
+  await writeAssert({
+    kind: "assert",
+    condition: "hidden",
+    selector: { identifier: "cart-badge" },
+  });
+}
+
+async function writeAssert(step: Record<string, unknown>): Promise<void> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "gone.yaml"),
     serializeFlow({
       executionPrerequisite: "",
-      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "cart-badge" } }],
+      steps: [step as never],
     }),
     "utf8"
   );
@@ -75,6 +83,21 @@ describe("a partial Android capture in a flow", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => s.status)).toEqual(["fail"]);
+  });
+
+  it("still lets `assert { visible }` pass on it", async () => {
+    // The other side of the same flag: the walk can only have dropped content,
+    // so an element the capture DOES list is on screen. Refusing the match made
+    // one truncated read end the whole run.
+    await writeAssert({ kind: "assert", condition: "visible", selector: { text: "Header" } });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(true)).execute(
+        {},
+        { name: "gone", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
   });
 
   it("still lets it pass on a complete capture", async () => {

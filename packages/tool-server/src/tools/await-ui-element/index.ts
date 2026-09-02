@@ -199,9 +199,10 @@ const DARK_TAIL_TOLERANCE_MAX_MS = 2000;
 /**
  * How the loop's LAST fetch attempt ended, which is not a two-way question.
  *
- * - `trusted` — it settled, returned a tree, and the tree could be judged on.
- * - `untrusted` — it settled, and what came back cannot be judged: the fetch
- *   threw, or the tree was blind.
+ * - `trusted` — it settled, returned a tree, and the condition could be settled
+ *   NEGATIVELY on it, which is what a timeout concludes.
+ * - `untrusted` — it settled, and what came back cannot settle that: the fetch
+ *   threw, the tree was blind, or the source truncated its walk.
  * - `unsettled` — it never came back. The newest data is then the read BEFORE
  *   it, whose age is the only evidence there is.
  */
@@ -262,18 +263,36 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // the adapter flagged the read (`describeIos` returns an empty tree plus a hint /
 // should_restart instead of throwing), or when the selector matched on an earlier
 // poll and the tree has since gone blank mid-navigation.
-//
-// A PARTIAL tree is the same danger with a full-looking tree: the source stopped
-// at a walker budget, so an element it does not list may simply be past the cut.
-// The flag has to be read before the emptiness test — a truncated capture is
-// rarely empty. Two guards draw a negative conclusion from a describe read:
-// this one, and `waitForCondition` in `flow-actions`, which backs the flow
-// `await` and `assert { hidden }` directives. A rule changed here has to be
-// changed there too.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
-  if (data.truncated) return true;
   if (data.tree.children.length > 0) return false;
   return Boolean(data.hint || data.should_restart || everMatched);
+}
+
+// Whether a read can settle that an element is NOT there. A PARTIAL tree is the
+// empty tree's danger behind a full-looking one: the source stopped at a walker
+// budget, so an element it does not list may simply be past the cut. Truncation
+// only ever REMOVES content, so a match in what came back is exactly as
+// trustworthy as on a complete capture — absence is the only side in doubt.
+// That side is `hidden`'s whole answer, and the verdict every condition falls
+// to at the deadline; `exists`, `visible` and `text` resolve on a match and are
+// left alone. Two guards draw a negative conclusion from a describe read: this
+// one, and `waitForCondition` in `flow-actions`, which backs the flow `await`
+// and `assert { hidden }` directives. A rule changed here has to be changed
+// there too.
+function settlesAbsence(data: DescribeTreeData, everMatched: boolean): boolean {
+  return !isBlindRead(data, everMatched) && data.truncated !== true;
+}
+
+// `hidden` is the one condition whose TRUE answer states that something is not
+// there, so it is the one a partial capture cannot answer.
+function canResolveCondition(
+  condition: Params["condition"],
+  data: DescribeTreeData,
+  everMatched: boolean
+): boolean {
+  return condition === "hidden"
+    ? settlesAbsence(data, everMatched)
+    : !isBlindRead(data, everMatched);
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -440,9 +459,11 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = isBlindRead(data, everMatched);
-          if (!blind) lastTrustedReadAt = nowMs;
-          if (!blind && evaluateMatches(params, matches)) {
+          if (settlesAbsence(data, everMatched)) lastTrustedReadAt = nowMs;
+          if (
+            canResolveCondition(params.condition, data, everMatched) &&
+            evaluateMatches(params, matches)
+          ) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
             if (params.condition === "hidden" && !everMatched) {
               result.note =
@@ -466,7 +487,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
         ? "unsettled"
         : poll.lastError === undefined &&
             poll.lastData !== null &&
-            !isBlindRead(poll.lastData, everMatched)
+            settlesAbsence(poll.lastData, everMatched)
           ? "trusted"
           : "untrusted";
       return {

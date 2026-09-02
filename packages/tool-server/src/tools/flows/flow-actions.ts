@@ -1241,8 +1241,9 @@ async function runType(
  * trustworthy evidence for `hidden` (the only condition an empty tree satisfies)
  * when the adapter flagged the read as degraded or the selector had matched on
  * an earlier poll — a transient blank frame mid-navigation must not confirm the
- * element left. A tree the source truncated at its walker budget is blind in the
- * same way, whether or not it is empty.
+ * element left. A tree the source truncated at its walker budget cannot settle
+ * absence either, whether or not it is empty; what it does list still resolves
+ * the conditions that need a match.
  */
 async function waitForCondition(
   env: ActionEnv,
@@ -1274,17 +1275,20 @@ async function waitForCondition(
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      // A PARTIAL capture is blind too, and unlike the empty tree it looks
-      // complete: an element the source stopped short of is indistinguishable
-      // from one that left the screen.
-      const blind =
-        data.truncated === true ||
-        (data.tree.children.length === 0 &&
-          Boolean(data.hint || data.should_restart || everMatched));
-      if (!blind) lastTrustedReadAt = Date.now();
-      lastReadTrusted = !blind;
+      const blindEmpty =
+        data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
+      // A PARTIAL capture carries the empty tree's danger behind a full-looking
+      // one: an element the source stopped short of is indistinguishable from
+      // one that left the screen. It only ever REMOVES content, so a match in
+      // what came back is as trustworthy as on a complete capture — absence is
+      // the only side in doubt, which is `hidden`'s whole answer and the
+      // post-timeout verdict for every condition.
+      const settlesAbsence = !blindEmpty && data.truncated !== true;
+      if (settlesAbsence) lastTrustedReadAt = Date.now();
+      lastReadTrusted = settlesAbsence;
+      const canResolve = step.condition === "hidden" ? settlesAbsence : !blindEmpty;
       if (
-        !blind &&
+        canResolve &&
         evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
       ) {
         return { ok: true };

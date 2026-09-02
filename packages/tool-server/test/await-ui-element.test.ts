@@ -674,6 +674,60 @@ describe("await-ui-element tool", () => {
     expect(result.cause).toBe("unreadable");
   });
 
+  it("still resolves `visible` on a partial Android capture", async () => {
+    // Truncation removes content and never invents it, so an element the tree
+    // DOES list is on screen whether or not the walk finished. Blocking the
+    // match instead burned the whole timeout and reported a note that
+    // contradicted the tree it had just read.
+    const partial =
+      `<hierarchy rotation="0">` +
+      `<node text="Sign in" resource-id="com.demo:id/signin" class="android.widget.Button" clickable="true" bounds="[100,200][980,320]" />` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml: partial, truncated: true }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    for (const params of [
+      { condition: "visible" as const, selector: { text: "Sign in" } },
+      { condition: "exists" as const, selector: { text: "Sign in" } },
+      { condition: "text" as const, selector: { text: "Sign in" }, expectedText: "Sign in" },
+    ]) {
+      const result = await tool.execute(
+        {},
+        { udid: ANDROID_SERIAL, timeoutMs: 1000, pollIntervalMs: 10, ...params }
+      );
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("calls a partial Android capture unreadable when a positive wait times out", async () => {
+    // The element is genuinely absent from the tree — but the walk stopped, so
+    // it may be past the cut rather than off the screen. `unmet` would claim
+    // the condition was judged false.
+    const partial = `<hierarchy rotation="0"><node text="Header" class="android.widget.TextView" bounds="[0,0][1080,120]" /></hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml: partial, truncated: true }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "visible",
+        selector: { text: "Sign in" },
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.cause).toBe("unreadable");
+  });
+
   it("leaves a complete Android capture alone", async () => {
     // The control: an untruncated read still resolves `hidden` at once.
     const partial = `<hierarchy rotation="0"><node text="Header" class="android.widget.TextView" bounds="[0,0][1080,120]" /></hierarchy>`;
