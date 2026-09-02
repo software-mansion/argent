@@ -146,8 +146,9 @@ changed by more than the typed text. A step also fails when the repair ran and A
 not read the field again to confirm it. A step fails as well when the repair failed partway,
 because the repair deletes before it types.
 
-A raw `tool: keyboard` step fails on the same verdict. The flow recorder writes a typed
-step in that form, so a recorded flow carries the same gate.
+A raw `tool: keyboard` step fails on the same verdict, and so does a `tool: run-sequence`
+step that holds one. The flow recorder writes a typed step in the raw form, so a recorded
+flow carries the same gate.
 
 The step passes when the read-back cannot conclude, and on every other platform. A step
 that passes is therefore not a proof that the text arrived. The step report carries the
