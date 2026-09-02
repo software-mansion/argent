@@ -162,9 +162,9 @@ interface FocusedField {
    *  - It must not be relied on to work. That masking is the platform's default,
    *    not a guarantee this code can enforce, which is why
    *    `uiautomator-parser.ts` and `flows/flow-android-tree.ts` replace such a
-   *    field's text with `[password]` rather than passing on what they read. Comparing a credential we read back
-   *    would put the plaintext one refactor away from the result, against this
-   *    tool's whole `{{secret:…}}` contract.
+   *    field's text with `[password]` rather than passing on what they read.
+   *    Comparing a credential we read back would put the plaintext one refactor
+   *    away from the result, against this tool's whole `{{secret:…}}` contract.
    */
   password: boolean;
 }
@@ -178,18 +178,23 @@ interface FocusedField {
  * They need different notes: the advice for the first is "tap the field", which
  * for the second is advice for a screen this is not.
  *
- * Walked in document order and takes the first match. A capture spanning several
- * windows (the helper walks every interactive window it is given — see
- * `captureMode` / `windowCount` on `HierarchyResult`) can carry a stale
- * `focused="true"` in a background window, and the dump says nothing about which
- * window takes input, so the first match is a guess on such a capture.
+ * Walked in document order and takes the first match, with `multipleFocused` set
+ * when the capture held more than one. Android focus is per window, so a second
+ * one means the capture spans windows — see `readFocusedField`, which is where
+ * that is decided, since only the helper's `windowCount` separates it from a dump
+ * that reports two focused views inside one window.
  */
-function findFocused(xml: string): { field: FocusedField | null; focusedClass: string | null } {
+function findFocused(xml: string): {
+  field: FocusedField | null;
+  focusedClass: string | null;
+  multipleFocused: boolean;
+} {
   const root = parseUiAutomatorXml(xml);
-  if (!root) return { field: null, focusedClass: null };
+  if (!root) return { field: null, focusedClass: null, multipleFocused: false };
   const stack = [root];
   let focusedClass: string | null = null;
   let field: FocusedField | null = null;
+  let focusedEditables = 0;
   // Counted over the whole capture, not stopped at the field: an id several
   // editable views share is a layout id, which `isSameField` must not trust.
   const idCounts = new Map<string, number>();
@@ -203,9 +208,11 @@ function findFocused(xml: string): { field: FocusedField | null; focusedClass: s
     const resourceId = attrs["resource-id"] ?? "";
     if (editable && resourceId !== "")
       idCounts.set(resourceId, (idCounts.get(resourceId) ?? 0) + 1);
-    if (field !== null || !attrIsTrue(attrs, "focused")) continue;
+    if (!attrIsTrue(attrs, "focused")) continue;
     if (focusedClass === null) focusedClass = className;
     if (!editable) continue;
+    focusedEditables++;
+    if (field !== null) continue;
     const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
     field = {
       text: attrs.text ?? "",
@@ -217,7 +224,7 @@ function findFocused(xml: string): { field: FocusedField | null; focusedClass: s
     };
   }
   if (field !== null) field.idShared = (idCounts.get(field.resourceId) ?? 0) > 1;
-  return { field, focusedClass };
+  return { field, focusedClass, multipleFocused: focusedEditables > 1 };
 }
 
 /** The focused editable view, or null when none of the focused views is one. */
@@ -347,26 +354,27 @@ function beforeSurvived(before: string, after: string): boolean {
  *    reading "aa bb" with "aa" double-tapped and "aaa" typed correctly ends at
  *    "aaa bb" (measured, Pixel-class API 35): the text is entirely present, and
  *    the field is `text.length` minus the selection longer rather than
- *    `text.length` longer. `not-landed` is wrong here in the
- *    expensive direction: the text is entirely present, so it would fail the step
- *    over a field holding exactly what was asked for. `landed` is unavailable
- *    too: a
+ *    `text.length` longer. `not-landed` is wrong here in the expensive
+ *    direction: the text is entirely present, so it would fail the step over a
+ *    field holding exactly what was asked for. `landed` is unavailable too: a
  *    partial landing into content that happens to hold those characters produces
  *    the same reading.
  *  - Every character of `text` is present in order among characters the field
  *    added of its own (`isSubsequence(text, after)` while `text` is NOT there
  *    contiguously). That is what a field which REFORMATS what it is given does —
  *    "5551234567" typed into Contacts' Phone box reads back "(555) 123-4567" —
- *    and a dropped key-event burst cannot manufacture it out of an empty field,
- *    because dropping only ever removes characters — on a field that already held
- *    characters of its own it can (typing "123" into "1-3" and landing only "2"),
- *    which is why the reading is ambiguous rather than accepted. A `not-landed` here is a hard step failure across
- *    the three gates on a value that landed exactly as asked, which every phone,
- *    card, date and currency field would meet. Requiring `text` NOT to be there
- *    contiguously is what keeps a doubled injection ("abc" typed into an empty
- *    field reading back "abcabc") a failure: no single injection explains the
- *    text appearing twice, whereas separators between its characters are the
- *    field's own work.
+ *    and `not-landed` here is a hard step failure across the three gates on a
+ *    value that landed exactly as asked, which every phone, card, date and
+ *    currency field would meet. Ambiguous rather than accepted, because a
+ *    dropped burst reads this way too: on a field that already held characters
+ *    of its own by landing only some of the keys (typing "123" into "1-3" and
+ *    landing only "2"), and on an empty one through its hint, which uiautomator
+ *    reports as the field's text — a burst that landed NOTHING into a box
+ *    hinting "(555) 123-4567" reads back exactly what a correct "5551234567"
+ *    would. Requiring `text` NOT to be there contiguously is what keeps a
+ *    doubled injection ("abc" typed into an empty field reading back "abcabc")
+ *    a failure: no single injection explains the text appearing twice, whereas
+ *    separators between its characters are the field's own work.
  *
  * Known limitation, reported as `not-landed`: a selection replaced with a
  * *shorter* string shrinks the field, which reads as a failure — unless the
@@ -399,11 +407,30 @@ function replacedSelection(before: string, after: string, text: string): boolean
   // A selection can only be removed, never added, so `after` can never be longer
   // than the field plus everything we typed.
   if (after.length > before.length + text.length) return false;
-  for (let i = 0; i + text.length <= after.length; i++) {
-    if (!after.startsWith(text, i)) continue;
-    if (before.startsWith(after.slice(0, i)) && before.endsWith(after.slice(i + text.length))) {
-      return true;
-    }
+  // The two surrounding conditions are exactly the common edges of the two
+  // strings — `before` starts with `after[0, i)` iff `i` is inside the common
+  // prefix, and ends with `after[i + text.length, end)` iff that tail is inside
+  // the common suffix — so they bound the offsets worth testing instead of being
+  // re-checked at each one. Testing them per offset costs the field's length
+  // again for every occurrence of `text`, which is 14.5 s of synchronous CPU on a
+  // 200 kB field of one repeated word (measured), on the thread every other tool
+  // shares and with `longRunning` having removed the adapter's own bound.
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
+    prefix++;
+  }
+  let suffix = 0;
+  while (
+    suffix < before.length &&
+    suffix < after.length &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  const first = Math.max(0, after.length - text.length - suffix);
+  const last = Math.min(prefix, after.length - text.length);
+  for (let i = first; i <= last; i++) {
+    if (after.startsWith(text, i)) return true;
   }
   return false;
 }
@@ -688,6 +715,22 @@ const FOCUS_LOST_REASON =
   "no editable field held input focus once the text had been typed, so the " +
   "field it started in could not be checked. Read the screen with `describe` before continuing.";
 
+// Two editable views reporting focus at once. `adb input text` goes to the
+// window that really has it, and the dump does not say which that is, so the
+// field this walk picked may be a stale one in a background window — comparing it
+// reads a burst that landed elsewhere as a total failure, and the repair then
+// retypes the whole string into the field that DID receive it. Declining costs a
+// verdict on a screen with a dialog over it; guessing costs the field's contents.
+const CONTENDED_FOCUS_NOTE =
+  `${UNVERIFIED_PREFIX}: more than one editable view reported input focus, which is what an open ` +
+  "dialog over another window looks like, and the dump does not say which of them takes typing. " +
+  "The text was typed. Read the field with `describe` to see what it holds.";
+
+const CONTENDED_FOCUS_AFTER_REASON =
+  "more than one editable view reported input focus once the text had been " +
+  "typed, so the field it started in could not be told from another window's. Read the screen " +
+  "with `describe` before continuing.";
+
 // The read-back equivalent of TRUNCATED_READ_NOTE. A capture that stopped before
 // reaching the field proves nothing about focus, so it must not be reported as a
 // focus change — the same reason the baseline read distinguishes the two.
@@ -919,18 +962,25 @@ async function resolveDevtools(
  */
 const READ_MAX_NODES = 12_000;
 
-async function readFocusedField(
-  devtools: AndroidDevtoolsApi
-): Promise<{ field: FocusedField | null; focusedClass: string | null; truncated: boolean }> {
-  const { xml, truncated } = await devtools.getHierarchy({
+async function readFocusedField(devtools: AndroidDevtoolsApi): Promise<{
+  field: FocusedField | null;
+  focusedClass: string | null;
+  contended: boolean;
+  truncated: boolean;
+}> {
+  const { xml, truncated, windowCount } = await devtools.getHierarchy({
     clearCache: true,
     maxNodes: READ_MAX_NODES,
   });
-  const found = findFocused(xml);
+  const { multipleFocused, ...found } = findFocused(xml);
   // A capture cut short cannot show an id to be unique: the helper writes nodes
   // in document order, so the view that shares it may be one it never reached.
   if (found.field && truncated) found.field.idShared = true;
-  return { ...found, truncated };
+  // Two focused editable views across two windows: `adb input text` goes to the
+  // one whose window really takes input, and nothing in the dump says which that
+  // is. Inside ONE window Android focuses one view, so a second focused view
+  // there is the shape a recycled row's twin makes, which `isSameField` handles.
+  return { ...found, contended: multipleFocused && windowCount > 1, truncated };
 }
 
 /**
@@ -1009,7 +1059,16 @@ async function verifyAgainstDevtools(
     await injectAndroidText(serial, text);
     return { note: blockedNote(READ_FAILED_REASON, null) };
   }
-  const { field: before, focusedClass: beforeFocusedClass, truncated: beforeTruncated } = baseline;
+  const {
+    field: before,
+    focusedClass: beforeFocusedClass,
+    contended: beforeContended,
+    truncated: beforeTruncated,
+  } = baseline;
+  if (beforeContended) {
+    await injectAndroidText(serial, text);
+    return { note: CONTENDED_FOCUS_NOTE };
+  }
   if (!before) {
     await injectAndroidText(serial, text);
     if (beforeTruncated) return { note: TRUNCATED_READ_NOTE };
@@ -1122,12 +1181,14 @@ async function readAfter(
   });
 
   let field: FocusedField | null;
+  let contended: boolean;
   let truncated: boolean;
   try {
-    ({ field, truncated } = await readFocusedField(devtools));
+    ({ field, contended, truncated } = await readFocusedField(devtools));
   } catch {
     return blocked(READ_FAILED_REASON);
   }
+  if (contended) return blocked(CONTENDED_FOCUS_AFTER_REASON);
   if (!field) {
     // A truncated capture never reached the field, so "nothing has focus" is not
     // a conclusion it supports — the same distinction the baseline read draws.

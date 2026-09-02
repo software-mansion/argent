@@ -80,17 +80,23 @@ function hierarchy(
  * hierarchies — one per `getHierarchy` call — so a corrupted read-back can be
  * injected at a chosen point in the type/verify/repair sequence.
  */
-function registryServing(xmls: string[]): {
+function registryServing(
+  xmls: string[],
+  /** Windows per read, aligned with `xmls`; one window unless a case says otherwise. */
+  windowCounts: number[] = []
+): {
   registry: Registry;
   getHierarchy: ReturnType<typeof vi.fn>;
   ping: ReturnType<typeof vi.fn>;
 } {
   const queue = [...xmls];
+  const windows = [...windowCounts];
   const ping = vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" }));
   const getHierarchy = vi.fn(async (_opts?: unknown) => {
     const xml = queue.shift();
     if (xml === undefined) throw new Error("test: getHierarchy called more times than scripted");
-    return { xml, captureMode: "active-window", windowCount: 1, nodeCount: 2, elapsedMs: 1 };
+    const windowCount = windows.shift() ?? 1;
+    return { xml, captureMode: "active-window", windowCount, nodeCount: 2, elapsedMs: 1 };
   });
   return {
     registry: {
@@ -262,6 +268,20 @@ describe("classifyTypedText", () => {
     // insertion branch takes on its own — `beforeSurvived` is true of an empty
     // baseline, so it decides nothing here.
     expect(classifyTypedText("", "abcdef", "abcdef")).toBe("landed");
+  });
+
+  it("bounds the selection reading by the common edges, not by every occurrence", () => {
+    // `classifyTypedText`'s selection clause has no cap and does not need one,
+    // but only because the two surrounding conditions bound the offsets it
+    // tests. Re-checking them per occurrence costs the field's length again for
+    // each one: 14.5 s of synchronous CPU on this input, on the thread every
+    // other tool shares. The verdict itself is the point of the clause - a
+    // shrunk field whose text is still entirely present is not a failure.
+    const before = "ab ".repeat(70_000);
+    const after = before.slice(0, before.length - 1);
+    const started = Date.now();
+    expect(classifyTypedText(before, after, "ab")).toBe("indeterminate");
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
 
@@ -832,6 +852,43 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.verified).toBeUndefined();
     expect(res.note).toMatch(/no longer the one the text was typed into/);
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+  });
+
+  it("declines when a second window also reports a focused field", async () => {
+    // The corrupting shape this rules out: a dialog over an app, the app's own
+    // field still `focused="true"` in the window behind it and first in document
+    // order. `adb input text` reaches the dialog, so comparing the background
+    // field reads a landing as a total failure — and the repair then retypes the
+    // whole string into the dialog, which now holds it twice. Android focuses one
+    // view per window, so a second focused view with `windowCount: 2` is exactly
+    // that shape, and nothing in the dump says which window takes typing.
+    const bothFocused = hierarchy({
+      text: "stale",
+      alsoFocused: { text: "", rid: "com.example:id/dialog_field" },
+    });
+    const { registry, getHierarchy } = registryServing([bothFocused], [2]);
+    const res = await type(registry, "hello");
+    expect(cmds()).toEqual(["input text 'hello'"]);
+    expect(getHierarchy).toHaveBeenCalledTimes(1);
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toContain("more than one editable view reported input focus");
+  });
+
+  it("declines when the second window appears while the text is being typed", async () => {
+    // An autofill or a permission dialog can take focus mid-burst. The baseline
+    // read is clean, so the field was identified; the read after it cannot say
+    // which window the keystrokes reached, which is the same unknown.
+    const { registry } = registryServing(
+      [
+        hierarchy({ text: "XY" }),
+        hierarchy({ text: "XY", alsoFocused: { text: "", rid: "com.example:id/autofill" } }),
+      ],
+      [1, 2]
+    );
+    const res = await type(registry, "abcdefghijkl");
+    expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toContain("more than one editable view reported input focus once the text");
   });
 
   it("repairs a uniquely-id'd field that moved clear of where it was", async () => {
