@@ -4,7 +4,7 @@ import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 import { gestureTapTool } from "../src/tools/gesture-tap";
-import { gesturePinchTool } from "../src/tools/gesture-pinch";
+import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 
@@ -75,10 +75,10 @@ describe("run-sequence", () => {
       assertSupported("run-sequence", tool.capability, resolveDevice(HARMONY))
     ).not.toThrow();
 
-    // Real capabilities: gesture-tap supports HarmonyOS, gesture-pinch does not
-    // (`uitest uiInput` has no multi-touch verb).
+    // Real capabilities: gesture-tap supports HarmonyOS, gesture-rotate does not
+    // (`uinput -T -m` moves each contact along one straight line, never an arc).
     registry.getTool = vi.fn((id: string) =>
-      id === "gesture-tap" ? gestureTapTool : gesturePinchTool
+      id === "gesture-tap" ? gestureTapTool : gestureRotateTool
     );
 
     const result = await tool.execute!(
@@ -88,8 +88,8 @@ describe("run-sequence", () => {
         steps: [
           { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
           {
-            tool: "gesture-pinch",
-            args: { centerX: 0.5, centerY: 0.5, startDistance: 0.1, endDistance: 0.3 },
+            tool: "gesture-rotate",
+            args: { centerX: 0.5, centerY: 0.5, radius: 0.15, startAngle: 0, endAngle: 90 },
           },
           { tool: "gesture-tap", args: { x: 0.5, y: 0.6 } },
         ],

@@ -105,18 +105,22 @@ describe("describeHarmony", () => {
     expect(out).toContain("04:39");
   });
 
-  it("does not offer the agent a gesture this platform has no backend for", async () => {
-    // `gesture-pinch` declares no `harmony` capability, so it refuses the device
-    // — a header naming it costs the agent a round trip into a 400 with nothing
-    // to fall back to. The two it does name must stay named.
+  it("offers exactly the gestures this platform has a backend for", async () => {
+    // The header is where the agent picks its next call from, so it cuts both
+    // ways: a tool named here that the device's gate then refuses costs a round
+    // trip into a 400 with nothing to fall back to, and one left out costs the
+    // capability altogether. HarmonyOS reaches all three — tap and swipe over
+    // `uitest`, pinch over `uinput` — and neither of the two it cannot do.
     vi.mocked(harmonyDisplay).mockResolvedValue({ width: 1216, height: 2688, screenOn: true });
     vi.mocked(harmonyDumpLayout).mockResolvedValue(lockScreenDump());
 
     const { tree, source } = await describeHarmony(CONNECT_KEY);
     const out = formatDescribeTree(tree, { source });
 
-    expect(out).not.toContain("gesture-pinch");
-    expect(out).toContain("gesture-tap / gesture-swipe");
+    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
+    // The arc and the free-form event stream have no `uinput` expression.
+    expect(out).not.toContain("gesture-rotate");
+    expect(out).not.toContain("gesture-custom");
   });
 
   it("spends one budget across the panel read and the dump, not one apiece", async () => {

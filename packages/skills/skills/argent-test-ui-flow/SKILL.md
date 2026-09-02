@@ -5,7 +5,7 @@ description: Autonomously test an app UI (iOS, Android, or HarmonyOS) by running
 
 ## Platform-agnostic
 
-The interaction tool names are identical on iOS, Android and HarmonyOS — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, `harmony-<connectKey>` → HarmonyOS, adb serial → Android). HarmonyOS drives the tap / swipe / type / read loop; everything outside it is refused there — `gesture-pinch`, `gesture-rotate` and `gesture-custom` (one contact per call, so no pinch, no rotate, and no long-press), `gesture-drag`, `gesture-scroll`, `rotate`, and the JS / native inspectors `debugger-component-tree`, `debugger-evaluate`, `debugger-log-registry`, `native-describe-screen` and `view-network-logs`.
+The interaction tool names are identical on iOS, Android and HarmonyOS — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, `harmony-<connectKey>` → HarmonyOS, adb serial → Android). HarmonyOS drives the tap / swipe / pinch / type / read loop; everything outside it is refused there — `gesture-rotate` and `gesture-custom` (the device moves each contact along one straight line per call, so no arc and no long-press), `gesture-drag`, `gesture-scroll`, `rotate`, and the JS / native inspectors `debugger-component-tree`, `debugger-evaluate`, `debugger-log-registry`, `native-describe-screen` and `view-network-logs`.
 
 **Before testing, resolve which device to test on.** Call `list-devices` and follow `<device_selection_rule>`: prefer a running device on any platform;
 

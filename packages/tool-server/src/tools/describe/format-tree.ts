@@ -165,12 +165,12 @@ export interface FormatDescribeOptions {
  * tool the device's own gate then refuses costs a round trip and leaves nothing
  * to fall back on.
  *
- * Only the sources whose platform is not the touch default appear here.
- * HarmonyOS drives touch through `uitest uiInput`, which injects one contact at
- * a time; Chromium has no touch at all and gets the CDP-driven pair instead.
+ * Only the sources whose platform is not the touch default appear here, which
+ * is Chromium alone: it has no touch at all and gets the CDP-driven pair
+ * instead. HarmonyOS reaches every tool in the default — pinch included, over
+ * `uinput` rather than `uitest`.
  */
 const GESTURE_TOOLS_BY_SOURCE: Partial<Record<DescribeSource, string>> = {
-  "harmony-uitest": "gesture-tap / gesture-swipe",
   "cdp-dom": "gesture-tap / gesture-scroll / gesture-drag",
 };
 

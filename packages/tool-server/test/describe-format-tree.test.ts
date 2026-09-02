@@ -306,7 +306,7 @@ describe("formatDescribeTree", () => {
     const header = (source: DescribeSource) => formatDescribeTree(empty, { source }).split("\n")[3];
 
     expect(header("cdp-dom")).toContain("gesture-tap / gesture-scroll / gesture-drag");
-    expect(header("harmony-uitest")).toContain("gesture-tap / gesture-swipe,");
+    expect(header("harmony-uitest")).toContain("gesture-tap / gesture-swipe / gesture-pinch");
     expect(header("ax-service")).toContain("gesture-tap / gesture-swipe / gesture-pinch");
     expect(header("uiautomator")).toContain("gesture-tap / gesture-swipe / gesture-pinch");
   });

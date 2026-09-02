@@ -399,11 +399,11 @@ describe("pinch: gating", () => {
     expect(result.calls).toHaveLength(0);
   });
 
-  it("rejects pinch on HarmonyOS before it reaches a service it has no backend for", async () => {
-    // `gesture-pinch` declares no harmony capability, and a flow step goes
-    // through `invokeTool`, which does not run the capability gate — so without
-    // the upfront arm the run stops on the simulator-server blueprint's "does
-    // not support platform" line, which names nothing an author can change.
+  it("dispatches pinch on HarmonyOS — `uinput -T -m` moves both fingers in one call", async () => {
+    // The platform arm below refuses `rotate` on HarmonyOS, and once refused
+    // both they were one branch. A guard that still names `pinch` takes a
+    // gesture the platform can perform, and takes it silently: the step reports
+    // `fail` with authoring guidance rather than erroring.
     await writeFlow("pinch-harmony", {
       executionPrerequisite: "",
       steps: [{ kind: "pinch", scale: 2 }],
@@ -411,17 +411,15 @@ describe("pinch: gating", () => {
 
     const result = await run("pinch-harmony", "harmony-127.0.0.1:5555");
 
-    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/unsupported on HarmonyOS/);
-    expect(result.steps[0].reason).toMatch(/one contact at a time/);
-    // The authoring guidance, not a dispatch trace.
-    expect(result.steps[0].reason).not.toMatch(/does not support platform/);
-    expect(result.calls).toHaveLength(0);
+    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-pinch"]);
   });
 
-  it("rejects rotate on HarmonyOS for the same reason as pinch", async () => {
-    // The third arm of the same guard, and the one no other test reaches:
-    // `gesture-rotate` needs two contacts exactly as `gesture-pinch` does.
+  it("rejects rotate on HarmonyOS, naming the straight line rather than the missing contact", async () => {
+    // The arc is what the platform cannot do, not the second finger: `uinput
+    // -T -m` carries both contacts but only along one straight line each. A
+    // reason still blaming multi-touch sends an author looking for a workaround
+    // to a wall that moved.
     await writeFlow("rotate-harmony", {
       executionPrerequisite: "",
       steps: [{ kind: "rotate", by: 90 }],
@@ -431,7 +429,9 @@ describe("pinch: gating", () => {
 
     expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
     expect(result.steps[0].reason).toMatch(/unsupported on HarmonyOS/);
-    expect(result.steps[0].reason).toMatch(/one contact at a time/);
+    expect(result.steps[0].reason).toMatch(/straight line/);
+    expect(result.steps[0].reason).not.toMatch(/one contact at a time/);
+    // The authoring guidance, not a dispatch trace.
     expect(result.steps[0].reason).not.toMatch(/does not support platform/);
     expect(result.calls).toHaveLength(0);
   });

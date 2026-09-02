@@ -3,8 +3,10 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { hdcFileRecv, runHdcShell, shellQuote } from "./harmony-hdc";
 
 /**
- * Driver for `uitest`, the on-device binary that is HarmonyOS' entire UI
- * automation surface — `uiautomator`, `screencap` and `input` in one:
+ * Driver for the two on-device binaries argent injects through.
+ *
+ * `uitest` is HarmonyOS' UI automation surface — `uiautomator`, `screencap` and
+ * `input` in one:
  *
  *   uitest dumpLayout -p <path>                    the accessibility tree, as JSON
  *   uitest screenCap  -p <path>                    a PNG of the display
@@ -13,7 +15,17 @@ import { hdcFileRecv, runHdcShell, shellQuote } from "./harmony-hdc";
  *   uitest uiInput keyEvent <id|Back|Home|Power>   hardware keys
  *   uitest uiInput text|inputText                  typing
  *
- * Two measured properties of the tool shape everything here (hdc 3.2.0d /
+ * Every one of those verbs is single-contact. What `uitest` has no verb for at
+ * all is the second finger, and that is what `uinput` — the platform's lower
+ * level injector, `/system/bin/uinput`, root-owned but `0755` so `hdc`'s uid
+ * 2000 may run it — adds:
+ *
+ *   uinput -T -m <x1 y1 x2 y2>… [-k keep] [ms]     1-3 contacts, each along a line
+ *
+ * See {@link multiTouchArgs} for its argument shape and the measurements behind
+ * the way it is called.
+ *
+ * Two measured properties of `uitest` shape everything here (hdc 3.2.0d /
  * HarmonyOS 6.0.1, on a physical Mate 60):
  *
  * - **Its exit status is trustworthy, unlike its transport's.** `hdc` exits 0
@@ -40,7 +52,7 @@ import { hdcFileRecv, runHdcShell, shellQuote } from "./harmony-hdc";
  * in the binary, no QEMU passthrough in its CLI, `hdc` the only host-side
  * channel it ships. An Android phone is driven by a screen-sharing agent pushed
  * over adb, which HarmonyOS has no equivalent of. What is left either way is
- * `hdc`, reaching this same `uitest` one contact at a time, from Rust instead.
+ * `hdc`, reaching these same two binaries, from Rust instead.
  */
 
 /** Where on-device artifacts are staged before being copied to the host. */
@@ -366,6 +378,104 @@ function swipeArgs(
 }
 
 /**
+ * `uinput -T -m` refuses a move time outside this range, printing `total time
+ * is out of range:` / `1 <= total times <= 15000` and exiting 2 — measured at
+ * both ends on a HarmonyOS 6.1.1 emulator. Unlike the velocity `uitest` takes,
+ * the value is wall-clock milliseconds: 300 / 1500 / 5000 measured at 400 /
+ * 1600 / 5101ms end to end, so a caller's duration maps straight onto it.
+ */
+const HARMONY_MOVE_TIME_MIN = 1;
+const HARMONY_MOVE_TIME_MAX = 15_000;
+
+/** One contact's straight-line leg of a multi-touch move, in device pixels. */
+interface HarmonyFingerPath {
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+}
+
+/**
+ * `uinput -T -m x1 y1 x1' y1' [x2 y2 x2' y2' […]] [ms]` — every contact's start
+ * and end point, then the milliseconds the move takes, which the device spends
+ * interpolating all of them together.
+ *
+ * That togetherness is the whole reason a multi-contact gesture is one call:
+ * **contacts only coexist inside a single invocation.** Measured on a HarmonyOS
+ * 6.1.1 emulator against the launcher, whose two-finger pinch-in opens the
+ * home-screen editor — one call carrying both fingers opened it; the identical
+ * geometry split across two concurrent `uinput` processes, one parking a finger
+ * with `-k` while the other moved, did not.
+ *
+ * The straight line per contact is the shape of the primitive, not a
+ * simplification here: `-m` cannot be repeated within an invocation (a second
+ * one is `wrong number of parameters`), so a path with a bend in it has no
+ * expression at all — which is why pinch is reachable on this platform and an
+ * arc-shaped rotate is not.
+ */
+function multiTouchArgs(paths: HarmonyFingerPath[], durationMs: number): string {
+  const ms = Math.min(
+    HARMONY_MOVE_TIME_MAX,
+    Math.max(HARMONY_MOVE_TIME_MIN, Math.round(durationMs))
+  );
+  const points = paths.flatMap(({ from, to }) => [from.x, from.y, to.x, to.y]);
+  return `-T -m ${points.join(" ")} ${ms}`;
+}
+
+/** The argument echo `uinput -T -m` prints before it has validated any of it. */
+const UINPUT_ARGUMENT_ECHO = /^(startX:|fingerCount:|keepTimeMs:|smoothTimeMs:)/;
+
+/**
+ * The refusal out of whatever `uinput` printed, which on some builds is nothing
+ * at all — see {@link runUinputDirect}.
+ *
+ * Where there is output: it echoes the arguments it parsed *before* validating
+ * them, and follows an unrecognised option with its ~90-line usage block, so
+ * neither the first line nor the last is the diagnostic. Drop the echo, stop at
+ * the usage block, and keep the two lines that can remain — a range refusal
+ * puts the bound on the line after the message.
+ */
+function uinputDiagnostic(stdout: string): string {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim());
+  const usage = lines.findIndex((line) => line.startsWith("Usage: uinput"));
+  const body = (usage === -1 ? lines : lines.slice(0, usage)).filter(
+    (line) => line.length > 0 && !UINPUT_ARGUMENT_ECHO.test(line)
+  );
+  return body.slice(0, 2).join(" ") || "it printed no diagnostic";
+}
+
+/**
+ * Run one `uinput` command, throwing on a non-zero exit.
+ *
+ * The exit status is the whole signal, because the output is not portable: the
+ * same successful `-T -m` prints an argument echo and a boundary hint on a
+ * HarmonyOS 6.1.1 emulator and **nothing at all** on a 6.0.0.110 handset, whose
+ * `hdc` does not forward the remote command's stderr to the host either — so
+ * its refusals arrive as a bare exit code, with the diagnostic left on the
+ * device. Do not build a check on what this prints.
+ *
+ * The status does carry every refusal `-T -m` itself can produce, identically
+ * on both builds: 2 for a bad argument count or an out-of-range move time, 255
+ * for a negative coordinate.
+ *
+ * The failure carries `HARMONY_UITEST_FAILED`, the bucket for an on-device
+ * injector refusing an injection — the remedy an agent takes from it is the
+ * same for both binaries. `failure_stage` is what names which one ran.
+ */
+async function runUinputDirect(connectKey: string, args: string, timeoutMs: number): Promise<void> {
+  const { stdout, exitCode } = await runHdcShell(connectKey, `uinput ${args}`, timeoutMs);
+  if (exitCode === 0) return;
+  throw new FailureError(
+    `uinput ${args} failed on ${connectKey} (exit ${exitCode}): ${uinputDiagnostic(stdout)}`,
+    {
+      error_code: FAILURE_CODES.HARMONY_UITEST_FAILED,
+      failure_stage: "harmony_uinput",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "hdc",
+    }
+  );
+}
+
+/**
  * The injections one hold of this device's queue may put on the wire. Every leg
  * is charged what is left of the hold's shared deadline rather than a ceiling of
  * its own.
@@ -381,6 +491,14 @@ export interface UitestSlot {
   keyEvent(key: string): Promise<void>;
   /** Type into whatever currently holds focus, in one shot. */
   type(text: string): Promise<void>;
+  /**
+   * Move up to three contacts at once — the binary's own limit, a fourth being
+   * refused with `wrong number of parameters:20` — each along a straight line,
+   * over `durationMs` of wall clock. This is the platform's only multi-contact
+   * injection, and it comes from `uinput` rather than `uitest`, which has no
+   * verb that puts a second finger on the glass.
+   */
+  multiTouchMove(paths: HarmonyFingerPath[], durationMs: number): Promise<void>;
 }
 
 /**
@@ -426,6 +544,18 @@ export async function holdUitestQueue<T>(
       swipe: (command, from, to, velocity) => run(swipeArgs(command, from, to, velocity)),
       keyEvent: (key) => run(`uiInput keyEvent ${key}`),
       type: (text) => run(`uiInput text ${shellQuote(text)}`),
+      // `uinput` is a separate binary with no singleton of its own, so it is not
+      // the 20s kill this queue exists to prevent that puts it here — it is that
+      // an injection racing another tool's is the same interleaved-input mess on
+      // either binary. One queue per device covers both.
+      multiTouchMove: async (paths, durationMs) => {
+        const args = multiTouchArgs(paths, durationMs);
+        await runUinputDirect(
+          connectKey,
+          args,
+          remainingBudget(connectKey, deadline, "`uinput -T -m`")
+        );
+      },
     })
   );
 }
