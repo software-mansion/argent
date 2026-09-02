@@ -1,3 +1,4 @@
+import { once, type EventEmitter } from "node:events";
 import net from "node:net";
 import {
   buildUsbmuxPlistMessage,
@@ -169,60 +170,45 @@ async function connectToUsbmuxd(socketPath: string, deadline: Deadline): Promise
 
   requireTimeRemaining(timeoutMs, "connect to usbmuxd");
 
-  return await new Promise<net.Socket>((resolve, reject) => {
-    const socket = net.createConnection(socketPath);
-    let settled = false;
+  // `once` attaches its `connect` and `error` listeners synchronously, before
+  // the first await, so an early socket error settles the wait rather than
+  // surfacing as an unhandled `error` event.
+  const socket = net.createConnection(socketPath);
+  const abort = new AbortController();
+  const timer = setTimeout(() => {
+    abort.abort(
+      new IosDeviceTransportError("timeout", `Timed out connecting to usbmuxd at ${socketPath}`, {
+        retryable: true,
+      })
+    );
+  }, timeoutMs);
 
-    const timer = setTimeout(() => {
-      finish(
-        new IosDeviceTransportError("timeout", `Timed out connecting to usbmuxd at ${socketPath}`, {
-          retryable: true,
-        })
-      );
-    }, timeoutMs);
+  try {
+    await once(socket, "connect", { signal: abort.signal });
 
-    const onConnect = () => finish();
+    return socket;
+  } catch (error) {
+    socket.destroy();
 
-    const onError = (error: Error) =>
-      finish(
-        new IosDeviceTransportError("protocol", `Cannot reach usbmuxd at ${socketPath}`, {
-          retryable: false,
-          hint: USBMUXD_UNREACHABLE_HINT,
-          cause: error,
-        })
-      );
-
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timer);
-
-      socket.off("connect", onConnect);
-      socket.off("error", onError);
-
-      if (error) {
-        socket.destroy();
-        reject(error);
-      } else {
-        resolve(socket);
-      }
-    };
-
-    socket.once("connect", onConnect);
-    socket.once("error", onError);
-  });
+    throw (
+      abortReason(error) ??
+      new IosDeviceTransportError("protocol", `Cannot reach usbmuxd at ${socketPath}`, {
+        retryable: false,
+        hint: USBMUXD_UNREACHABLE_HINT,
+        cause: error,
+      })
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
- * The slice of net.Socket the packet writer touches.
+ * The slice of net.Socket the packet writer touches: a writable that emits
+ * `drain`, `error` and `close`.
  */
-interface UsbmuxWritableSocket {
+interface UsbmuxWritableSocket extends EventEmitter {
   write(data: Buffer): boolean;
-  once(event: "drain" | "error" | "close", listener: (error: Error) => void): unknown;
-  off(event: "drain" | "error" | "close", listener: (error: Error) => void): unknown;
 }
 
 /**
@@ -243,51 +229,46 @@ export async function writePacket(
     return;
   }
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
+  // The timer and a close both settle the drain wait through the abort signal,
+  // carrying the typed error as the reason. `once` detaches its own `drain` and
+  // `error` listeners however the wait settles, and the close listener goes in
+  // `finally`: this socket becomes the raw device pipe, so nothing may linger.
+  const abort = new AbortController();
+  const timer = setTimeout(() => {
+    abort.abort(
+      new IosDeviceTransportError("timeout", "Timed out writing usbmuxd request", {
+        retryable: true,
+      })
+    );
+  }, timeoutMs);
+  const onClose = () => {
+    abort.abort(
+      new IosDeviceTransportError("protocol", "usbmuxd closed the connection unexpectedly", {
+        retryable: false,
+      })
+    );
+  };
 
-    const timer = setTimeout(() => {
-      finish(
-        new IosDeviceTransportError("timeout", "Timed out writing usbmuxd request", {
-          retryable: true,
-        })
-      );
-    }, timeoutMs);
+  socket.once("close", onClose);
 
-    const onDrain = () => finish();
-    const onError = (error: Error) => finish(error);
+  try {
+    await once(socket, "drain", { signal: abort.signal });
+  } catch (error) {
+    throw abortReason(error) ?? error;
+  } finally {
+    clearTimeout(timer);
+    socket.off("close", onClose);
+  }
+}
 
-    const onClose = () =>
-      finish(
-        new IosDeviceTransportError("protocol", "usbmuxd closed the connection unexpectedly", {
-          retryable: false,
-        })
-      );
+/**
+ * The typed error an aborted `once` wait was settled with, when `error` is that
+ * abort; undefined for anything else, such as the socket's own `error`.
+ */
+function abortReason(error: unknown): IosDeviceTransportError | undefined {
+  const cause = error instanceof Error && error.name === "AbortError" ? error.cause : undefined;
 
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timer);
-
-      // Detach listeners once settled. This socket becomes the raw device pipe.
-      socket.off("drain", onDrain);
-      socket.off("error", onError);
-      socket.off("close", onClose);
-
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-
-    socket.once("drain", onDrain);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-  });
+  return cause instanceof IosDeviceTransportError ? cause : undefined;
 }
 
 /**
