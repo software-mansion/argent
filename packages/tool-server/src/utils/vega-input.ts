@@ -200,7 +200,14 @@ export async function injectVegaClear(signal?: AbortSignal): Promise<void> {
     `sz=$(inputd-cli get_screen_size 2>&1); printf '%s\\n' "$sz"; ` +
     `case "$sz" in *[0-9]*x*[0-9]*) ` +
     `out=$(inputd-cli series ${presses} 2>&1); ` +
-    `printf '${INJECTED_MARKER}=%s\\n' "$(printf '%s\\n' "$out" | grep -c '${INJECTED_LINE}')" ` +
+    `printf '${INJECTED_MARKER}=%s\\n' "$(printf '%s\\n' "$out" | grep -c '${INJECTED_LINE}')"; ` +
+    // The count cannot say WHY a press was refused, and that refusal is the one
+    // thing the `injected === 0` repair asks the operator to report. `$out` was
+    // consumed only by `grep -c` and never printed, so "Device output:" carried
+    // the screen size and the count the sentence already states. Everything that
+    // is not an "Injecting Button Press" line IS the diagnosis; capped
+    // on-device so a chatty build cannot push a wall of text back.
+    `printf '%s\\n' "$out" | grep -v '${INJECTED_LINE}' | head -c 400 ` +
     `;; esac`;
 
   // Resolved BEFORE the abort is sampled. `emulatorSerial` scans the process
@@ -275,7 +282,7 @@ export async function injectVegaClear(signal?: AbortSignal): Promise<void> {
           "presses, so the focused field may be PARTIALLY emptied. Read it back (`describe`) " +
           "before clearing or typing again. ") +
         "Device output: " +
-        out.trim().slice(0, 200),
+        (deviceDiagnosis(out) || "`inputd-cli series` printed nothing but its own press lines"),
       {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,
         failure_stage: "keyboard_clear_vega_injected",
@@ -285,6 +292,21 @@ export async function injectVegaClear(signal?: AbortSignal): Promise<void> {
       }
     );
   }
+}
+
+/**
+ * `inputd-cli series`'s own words, without the two lines already in the sentence
+ * above it — line 0 is the `get_screen_size` echo, and the marker line is the
+ * count.
+ */
+function deviceDiagnosis(out: string): string {
+  return out
+    .split("\n")
+    .slice(1)
+    .filter((line) => !line.includes(INJECTED_MARKER))
+    .join(" ")
+    .trim()
+    .slice(0, 200);
 }
 
 /**

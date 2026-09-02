@@ -266,6 +266,28 @@ describe("injectVegaClear — the delete burst", () => {
     expect(err.message).toMatch(/may be PARTIALLY emptied/);
   });
 
+  it("carries the device's OWN words back, not the count the sentence already gives", async () => {
+    // The `injected === 0` repair asks the operator to "report the device
+    // build", and "Device output:" was the only place a reason could travel.
+    // `$out` was consumed by `grep -c` and never printed, so what came back was
+    // the screen size and the count — the two things already in the sentence.
+    adbShell.mockResolvedValueOnce(
+      `${SIZE_OK}\nARGENT_VEGA_INJECTED=0\ninputd-cli: unknown option 'holdDuration'`
+    );
+    const err = await captureError(injectVegaClear());
+    expect(err.message).toMatch(/Device output: inputd-cli: unknown option 'holdDuration'/);
+    expect(err.message).not.toMatch(/Device output:.*ARGENT_VEGA_INJECTED/);
+    expect(err.message).not.toMatch(/Device output:.*1920 x 1080/);
+    // And the script has to ask for it: the count alone cannot say why.
+    expect(lastScript()).toContain("grep -v 'Injecting Button Press'");
+  });
+
+  it("says so when the device printed nothing but its own press lines", async () => {
+    adbShell.mockResolvedValueOnce(`${SIZE_OK}\nARGENT_VEGA_INJECTED=0`);
+    const err = await captureError(injectVegaClear());
+    expect(err.message).toMatch(/printed nothing but its own press lines/);
+  });
+
   it("fails when the count never came back at all", async () => {
     // A device whose shell dropped the marker line is not a cleared field
     // either, and the old code would have called it a success.
