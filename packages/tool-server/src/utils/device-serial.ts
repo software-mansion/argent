@@ -148,25 +148,29 @@ export function serializedPerDevice<T>(
 }
 
 /**
- * Hold one device's queue across a WHOLE batch of tool calls, not just the
- * queued ones inside it.
+ * Hold one device's queue across a RUN of tool calls, not just the queued ones
+ * inside it.
  *
- * The queue serializes `keyboard` and `paste`, and nothing else — a
- * `gesture-tap` never waits. So in the `[gesture-tap, keyboard { clear }]` recipe
- * the tap landed immediately while the clear queued behind whatever another
- * session was doing, for up to the 90s Android budget, and ANYTHING that moved
- * focus in that window (another tap, `launch-app`, `button`, `open-url`)
- * redirected the clear. Measured on Chrome 152 with a 20s `keyboard` call held by
- * a second session: the sequence tapped its own `<input>`, the second session
- * tapped a textarea four seconds later, and the clear emptied the TEXTAREA and
- * reported `completed: 2 of 2`, `cleared: true`, `clearVerified: true` — truthful
- * about an element, silent about which.
+ * The queue serializes `keyboard` and `paste` and nothing else, so in the
+ * `[gesture-tap, keyboard { clear }]` recipe the tap landed immediately while the
+ * clear queued behind whatever another session was doing, for up to the 90s
+ * Android budget — and anything that moved focus in that window redirected the
+ * clear. Measured on Chrome 152 with a 20s `keyboard` call held by a second
+ * session: the sequence tapped its own `<input>`, the second session tapped a
+ * textarea four seconds later, and the clear emptied the TEXTAREA and reported
+ * `completed: 2 of 2`, `cleared: true`, `clearVerified: true` — truthful about an
+ * element, silent about which.
  *
- * Holding the queue from the first step puts the caller's own focus tap inside
- * the critical section, so the pair replays in the order it was written. The
- * cost is that a batch which uses the keyboard holds the device's keyboard for
- * its whole duration; that is the same trade the queue already makes for one
- * long `keyboard` call, and it is bounded by the batch.
+ * Holding from the first step puts the caller's own focus tap inside the
+ * critical section, so the pair replays in the order it was written. Two things
+ * bound the cost, and both are load-bearing:
+ *
+ *   * The caller releases at its LAST queued step rather than at the end of its
+ *     batch (`tools/run-sequence`), because everything after that is another
+ *     session's wait for nothing.
+ *   * A focus move made OUTSIDE the hold waits it out (`awaitDeviceHold`), which
+ *     is what closes the window the docstring above describes — the queue alone
+ *     never covered a bare `gesture-tap`.
  */
 export function holdDeviceQueue<T>(deviceId: string, body: () => Promise<T>): Promise<T> {
   const key = deviceQueueKey(deviceId);
