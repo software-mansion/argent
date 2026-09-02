@@ -10,10 +10,10 @@ import { gestureScrollTool } from "../src/tools/gesture-scroll";
 // front with an actionable error; keyboard skips the guard because key events
 // bypass hit-testing and stay fast on hidden windows, and button never reaches
 // it — its capability omits chromium. In practice the guard is a backstop:
-// argent-spawned apps carry anti-throttling flags, and focus emulation pins
-// reported visibility to "visible" on every session that could apply it, so the
-// probe reads "hidden" only on an externally launched target whose runtime
-// could not — exactly where the stall is real.
+// focus emulation, applied to every session at connect, pins reported
+// visibility to "visible", so the probe reads "hidden" only where the runtime
+// refused it. The fakes below hard-code `visibility`, so what they pin is the
+// refusal, not the reading that provokes it.
 
 function fakeChromiumApi(visibility = "visible") {
   return {

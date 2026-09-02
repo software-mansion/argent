@@ -1196,11 +1196,12 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // The chromium equivalent: front the page so a backgrounded window doesn't
       // throttle rendering — wheel-event acks (scroll steps) stall on a throttled
       // compositor. Covers the instance the run starts on; a launch that boots
-      // one fronts it itself. Best-effort: bringToFront can focus a page but
-      // cannot unhide a minimized window — resolving the session applies focus
-      // emulation, which keeps input unthrottled even then, and
-      // gesture-tap/-drag/-scroll carry assertChromiumWindowVisible for sessions
-      // where it could not apply.
+      // one fronts it itself. Best-effort: whether bringToFront un-minimizes is
+      // runtime-dependent (measured: Chrome restores the window and unthrottles
+      // input, Electron leaves it minimized and hidden). Resolving the session
+      // applies focus emulation, which keeps input unthrottled even while
+      // minimized, and gesture-tap/-drag/-scroll carry
+      // assertChromiumWindowVisible for sessions where it could not apply.
       if (device?.platform === "chromium") await frontChromiumPage(registry, device);
 
       const state: ExecState = {

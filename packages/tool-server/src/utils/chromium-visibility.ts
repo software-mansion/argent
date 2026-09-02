@@ -8,7 +8,7 @@ import type { ChromiumCdpApi } from "../blueprints/chromium-cdp";
  * loop keeps working blind.
  *
  * Key events bypass hit-testing and stay fast on a hidden window — measured on
- * a minimized Electron window carrying neither mitigation below,
+ * a minimized Electron window with no focus emulation applied,
  * Input.dispatchKeyEvent 1–14ms against 5002–5005ms per mouse move — so the
  * `keyboard` tool deliberately does NOT use this guard, which
  * keyboard-chromium-unguarded.test.ts holds in place. The `button` tool never
@@ -17,14 +17,13 @@ import type { ChromiumCdpApi } from "../blueprints/chromium-cdp";
  * chromium-server's WebSocket `button` command emulates `Back` alone, as an
  * Alt+Left chord, and throws for every other button.
  *
- * It is a backstop, because two mitigations already cover the stall. Apps
- * argent spawns carry ANTI_THROTTLING_ARGS, which keep the compositor awake and
- * stop `visibilityState` flipping to "hidden" for as long as the app runs;
- * independently, while a CDP session is attached, primePageSession's focus
- * emulation pins reported visibility to "visible". The probe therefore reads
- * "hidden" only where both are absent — an externally launched target on a
- * runtime where emulation could not be applied — exactly where the stall is
- * real and un-minimizing is the fix.
+ * It is a backstop: primePageSession applies focus emulation to every session
+ * at connect, pinning reported visibility to "visible" and leaving input
+ * unthrottled even while the window is minimized, so the probe reads "hidden"
+ * only where the runtime refused it. Launch origin does not narrow that: an app
+ * carrying all three ANTI_THROTTLING_ARGS, minimized without emulation, still
+ * reads "hidden" and still costs ~5s per mouse event (measured on Electron 42
+ * and Chrome 152).
  *
  * A throw from the probe proves nothing about visibility, and there are two
  * shapes: a CDP rejection (mid-navigation teardown, or the client's 10s request

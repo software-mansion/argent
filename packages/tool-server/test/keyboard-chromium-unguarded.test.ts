@@ -8,17 +8,20 @@ import { assertSupported, UnsupportedOperationError } from "../src/utils/capabil
 // The mouse tools (gesture-tap/-drag/-scroll) refuse up front on a hidden
 // Chromium window because every mouse dispatch waits on compositor hit-testing.
 // Key events skip hit-testing and stay fast on the same window — measured on a
-// minimized Electron window carrying neither of the mitigations described on
-// assertChromiumWindowVisible, Input.dispatchKeyEvent returned in 1-14ms while
-// ten consecutive mouse moves cost 5002-5005ms each — so `keyboard` is
-// deliberately NOT guarded. These tests are what hold it that way: guarding
-// `keyboard` would make it refuse input that demonstrably works.
+// minimized Electron window with no focus emulation applied,
+// Input.dispatchKeyEvent returned in 1-14ms while ten consecutive mouse moves
+// cost 5002-5005ms each — so `keyboard` is deliberately NOT guarded. These
+// tests are what hold it that way: guarding `keyboard` would make it refuse
+// input that demonstrably works.
 //
 // The sibling `button` tool is exempt for a different reason, pinned below: it
-// declares no chromium capability, so the gate rejects a Chromium device and
-// `execute` never runs — there is no guard on its path to reach. A Chromium app
-// has no hardware buttons anyway; the chromium-server's WebSocket `button`
-// command emulates `Back` alone, as an Alt+Left chord, and throws for the rest.
+// declares no chromium capability, so there is no guard on its path to reach.
+// What enforces that varies: `assertSupported` runs at the HTTP edge and in
+// run-sequence's pre-flight, while a flow reaches `Registry.invokeTool`, which
+// skips it and fails earlier still, resolving `services()` against the
+// simulator-server factory. A Chromium app has no hardware buttons
+// anyway; the chromium-server's WebSocket `button` command emulates `Back`
+// alone, as an Alt+Left chord, and throws for the rest.
 
 const chromiumDevice = {
   id: "chromium-cdp-9222",
