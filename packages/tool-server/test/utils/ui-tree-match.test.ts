@@ -1667,3 +1667,34 @@ describe("after / next (sibling) scoping", () => {
     );
   });
 });
+
+describe("deriveSelector refuses a positional id", () => {
+  const at = (partial: Partial<DescribeNode>): DescribeNode =>
+    node({ frame: { x: 0, y: 0, width: 0.1, height: 0.1 }, ...partial });
+
+  // `…-selector-<n>` numbers an element by its slot among siblings, so it
+  // addresses a different control after any re-order or insertion. The skill's
+  // blocking audit rejects it, and it is the one shape that reached the flow
+  // file SILENTLY: an ambiguous or container-sized background match is warned
+  // about, but a positional id on a view behind a modal passes every check.
+  it("falls through to text rather than a positional id", () => {
+    expect(at({ identifier: "profilePager-selector-2", label: "Media" })).toBeTruthy();
+    expect(deriveSelector(at({ identifier: "profilePager-selector-2", label: "Media" }))).toEqual({
+      text: "Media",
+    });
+  });
+
+  it("keeps no selector at all when the positional id was the only anchor", () => {
+    expect(deriveSelector(at({ identifier: "tab-selector-0" }))).toBeNull();
+  });
+
+  it("leaves ordinary ids alone, including ones merely containing digits", () => {
+    expect(deriveSelector(at({ identifier: "bottomBarProfileBtn" }))).toEqual({
+      identifier: "bottomBarProfileBtn",
+    });
+    expect(deriveSelector(at({ identifier: "selector-2-row" }))).toEqual({
+      identifier: "selector-2-row",
+    });
+    expect(deriveSelector(at({ identifier: "post-2" }))).toEqual({ identifier: "post-2" });
+  });
+});

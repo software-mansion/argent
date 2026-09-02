@@ -1529,7 +1529,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       }
     );
 
-    expect(warningOf(result, "nested")).toBeUndefined();
+    // The step does carry a warning, but not a WAIT one: the sequence wraps a
+    // coordinate tap, so the recorder objects to the opaque step it had to
+    // write. Nothing in it speaks about the runner's tree, and `fetchCount`
+    // proves the nested wait was never probed against it.
+    const warning = warningOf(result, "nested") ?? "";
+    expect(warning).toContain("recorded as one opaque raw step");
+    expect(warning).not.toContain("RUNNER");
+    expect(warning).not.toContain("re-verified");
     expect(fetchCount).toBe(0);
     expect(result.toolResult).toMatchObject({ completed: 2, total: 2 });
   });
