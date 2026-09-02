@@ -116,6 +116,41 @@ describe("run-sequence — the device keyboard queue", () => {
     await blocking;
   });
 
+  it("answers a first-step request error without waiting for the queue", async () => {
+    // `resolveDevice` and the allow / capability checks read only the REQUEST,
+    // so a sequence that can run nothing at all has no reason to wait for a
+    // device queue. Measured behind another session's call, a malformed
+    // sequence came back in 3543ms where the same request with no queued step
+    // took 36ms. `keyboard/index.ts` keeps its own two guards above the queue
+    // for exactly this reason.
+    const { registry, calls } = makeMockRegistry();
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      IOS,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    await new Promise((r) => setTimeout(r, 2));
+
+    const result = await createRunSequenceTool(registry).execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "screenshot", args: {} },
+          { tool: "keyboard", args: { clear: true } },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(0);
+    const failed = result.steps[0];
+    expect(failed && "error" in failed && failed.error).toMatch(/not allowed/);
+    expect(calls).toEqual([]);
+
+    release();
+    await blocking;
+  });
+
   it("releases the queue after the LAST keyboard step, not at the end of the batch", async () => {
     // The hold exists to keep the focus tap and the write in one critical
     // section. Everything after the last write is another session's wait for

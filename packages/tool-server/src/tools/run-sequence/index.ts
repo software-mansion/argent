@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
@@ -204,6 +210,24 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
         if (DEVICE_QUEUE_TOOLS.has(step.tool)) lastQueued = index;
       });
 
+      // Request-shape errors answer above the hold. `resolveDevice` and the
+      // per-step allow/capability checks read only the REQUEST, so a sequence
+      // that can run nothing at all has no reason to wait for a device queue —
+      // measured behind another session's call, a malformed sequence came back
+      // in 3543ms where the same request with no queued step took 36ms.
+      // `keyboard/index.ts` keeps its own two guards above the queue for the
+      // same reason.
+      //
+      // Only the FIRST step is answered early, because a bad step further in
+      // still has real work before it: the loop below runs up to it and reports
+      // the partial batch, which is the documented behaviour.
+      const device = resolveDevice(udid);
+      const firstStepError = stepPreflightError(0, device);
+      if (firstStepError !== undefined) {
+        results.push(firstStepError);
+        return { completed: 0, total: steps.length, steps: results };
+      }
+
       if (lastQueued === -1) {
         await runSteps(0, steps.length);
       } else {
@@ -225,37 +249,44 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
         steps: results,
       };
 
+      /**
+       * Whether `steps[index]` can run at all, read off the REQUEST alone —
+       * `Registry.invokeTool` does not call `assertSupported` (only the HTTP
+       * layer does), so without this a mobile-only step like `button` on a
+       * Chromium device fails inside the simulator-server service factory
+       * instead of with a clean "not supported" error.
+       */
+      function stepPreflightError(index: number, resolved: DeviceInfo): StepResult | undefined {
+        const step = steps[index]!;
+        if (!ALLOWED_TOOLS.has(step.tool)) {
+          return {
+            tool: step.tool,
+            error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
+          };
+        }
+        const subTool = registry.getTool(step.tool);
+        if (subTool?.capability) {
+          try {
+            assertSupported(step.tool, subTool.capability, resolved);
+          } catch (err) {
+            if (err instanceof UnsupportedOperationError)
+              return { tool: step.tool, error: err.message };
+            throw err;
+          }
+        }
+        return undefined;
+      }
+
       /** Runs `steps[from..to)`. Answers whether the sequence must stop here. */
       async function runSteps(from: number, to: number): Promise<boolean> {
-        const device = resolveDevice(udid);
-
         for (let index = from; index < to; index++) {
           const step = steps[index]!;
           if (signal?.aborted) return true;
 
-          if (!ALLOWED_TOOLS.has(step.tool)) {
-            results.push({
-              tool: step.tool,
-              error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
-            });
+          const preflight = stepPreflightError(index, device);
+          if (preflight !== undefined) {
+            results.push(preflight);
             return true;
-          }
-
-          // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
-          // layer does), so pre-flight here: otherwise a mobile-only step like
-          // `button` on a Chromium device fails inside the simulator-server
-          // service factory instead of with a clean "not supported" error.
-          const subTool = registry.getTool(step.tool);
-          if (subTool?.capability) {
-            try {
-              assertSupported(step.tool, subTool.capability, device);
-            } catch (err) {
-              if (err instanceof UnsupportedOperationError) {
-                results.push({ tool: step.tool, error: err.message });
-                return true;
-              }
-              throw err;
-            }
           }
 
           const toolArgs = { ...step.args, udid };
