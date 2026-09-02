@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   createRunnerClient,
+  isRunnerWedgedError,
   RUNNER_COMMAND_TIMEOUT_MS,
   RunnerCommandError,
   waitForRunnerReady,
@@ -100,7 +101,6 @@ describe("createRunnerClient", () => {
     // only .message, so the guidance must live there.
     expect((error as RunnerCommandError).message).toBe("no such element. Hint: run snapshot");
     expect((error as RunnerCommandError).hint).toBe("run snapshot");
-    expect((error as RunnerCommandError).retryable).toBe(false);
   });
 
   it("does not fold the hint twice when the message already carries it", async () => {
@@ -123,18 +123,80 @@ describe("createRunnerClient", () => {
     expect((error as RunnerCommandError).message).toBe("no such element. Hint: run snapshot");
   });
 
-  it("classifies RUNNER_BUSY as retryable, the runner's explicit try-again verdict", async () => {
-    const { send } = createFakeSend([
-      { ok: false, error: { code: "RUNNER_BUSY", message: "busy" } satisfies RunnerResponseError },
-    ]);
-    const client = createRunnerClient({ udid: UDID, port: PORT, send });
+  describe("host hints for a busy or wedged runner", () => {
+    const BUSY_HINT =
+      "Wait a few seconds and retry; if snapshots keep failing on this screen, use " +
+      "screenshot as visual truth and interact by coordinates.";
+    const WEDGED_MESSAGE =
+      "The runner's main thread has been stuck in abandoned work for 130s and cannot " +
+      "recover on its own.";
+    const RECYCLE_HINT = `Run stop-simulator-server ${UDID} to recycle the runner, then retry the command.`;
 
-    const error = await client
-      .run({ command: "tap" })
-      .catch((caught: unknown) => caught as RunnerCommandError);
+    it("extends the RUNNER_BUSY hint with the tool that recycles the runner", async () => {
+      const { send } = createFakeSend([
+        {
+          ok: false,
+          error: { code: "RUNNER_BUSY", message: "busy", hint: BUSY_HINT },
+        } satisfies RunnerResponseEnvelope,
+      ]);
+      const client = createRunnerClient({ udid: UDID, port: PORT, send });
 
-    expect((error as RunnerCommandError).retryable).toBe(true);
-    expect((error as RunnerCommandError).message).toBe("busy");
+      const error = await client
+        .run({ command: "tap" })
+        .catch((caught: unknown) => caught as RunnerCommandError);
+
+      // The runner's own advice stays. What it cannot name is the host tool
+      // that ends a session, so that is appended here, where the udid is known.
+      const hint = `${BUSY_HINT} If it stays busy, run stop-simulator-server ${UDID} to recycle the runner.`;
+      expect((error as RunnerCommandError).hint).toBe(hint);
+      expect((error as RunnerCommandError).message).toBe(`busy. Hint: ${hint}`);
+      expect(isRunnerWedgedError(error)).toBe(false);
+    });
+
+    it("replaces the RUNNER_WEDGED hint, which only says to restart the session", async () => {
+      const { send } = createFakeSend([
+        {
+          ok: false,
+          error: {
+            code: "RUNNER_WEDGED",
+            message: WEDGED_MESSAGE,
+            hint: "Restart the runner session, then retry the command.",
+          } satisfies RunnerResponseError,
+        },
+      ]);
+      const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+      const error = await client
+        .run({ command: "tap" })
+        .catch((caught: unknown) => caught as RunnerCommandError);
+
+      expect(isRunnerWedgedError(error)).toBe(true);
+      expect((error as RunnerCommandError).hint).toBe(RECYCLE_HINT);
+      expect((error as RunnerCommandError).message).toBe(`${WEDGED_MESSAGE} Hint: ${RECYCLE_HINT}`);
+    });
+
+    it("maps the hint on a journaled failure the same way", async () => {
+      const { send } = createFakeSend([
+        transportError(),
+        {
+          ok: true,
+          data: {
+            state: "failed",
+            errorCode: "RUNNER_WEDGED",
+            errorMessage: "stuck",
+            errorHint: "Restart the runner session, then retry the command.",
+          },
+        },
+      ]);
+      const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+      const error = await client
+        .run({ command: "tap" })
+        .catch((caught: unknown) => caught as RunnerCommandError);
+
+      expect(isRunnerWedgedError(error)).toBe(true);
+      expect((error as RunnerCommandError).message).toBe(`stuck. Hint: ${RECYCLE_HINT}`);
+    });
   });
 
   it("stamps every RunnerCommandError with the runner-command failure signal", async () => {
@@ -485,7 +547,8 @@ describe("createRunnerClient", () => {
 
       expect(error).toBeInstanceOf(RunnerCommandError);
       expect((error as RunnerCommandError).code).toBe("RUNNER_BUSY");
-      expect((error as RunnerCommandError).retryable).toBe(true);
+      // A retained envelope gets the same host hint as a live one.
+      expect((error as RunnerCommandError).hint).toContain(`stop-simulator-server ${UDID}`);
     });
   });
 });

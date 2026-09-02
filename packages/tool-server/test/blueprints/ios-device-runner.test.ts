@@ -404,6 +404,20 @@ describe("ios-device-runner blueprint: dispose", () => {
 
     expect(killRunnerProcess).toHaveBeenCalledWith(child);
   });
+
+  it("kills a wedged runner that refuses the shutdown itself", async () => {
+    const { child, clientRun } = stubLaunch();
+    const instance = await callFactory();
+    // A wedged runner refuses every command at once, shutdown included, so
+    // the recycle recoverable() asks for is bounded by the shutdown window
+    // and ends in the kill either way.
+    clientRun.mockRejectedValueOnce(new RunnerCommandError("stuck", { code: "RUNNER_WEDGED" }));
+
+    await instance.dispose();
+
+    expect(clientRun).toHaveBeenCalledWith({ command: "shutdown" }, { timeoutMs: 3_000 });
+    expect(killRunnerProcess).toHaveBeenCalledWith(child);
+  });
 });
 
 describe("ios-device-runner blueprint: recoverable classification", () => {
@@ -423,8 +437,13 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     ).toBe(false);
     expect(recoverable(new Error("connect ECONNREFUSED 127.0.0.1:8080"))).toBe(false);
     expect(recoverable(new Error("the tunnel did not accept connection"))).toBe(false);
-    // A RunnerCommandError means the runner answered, so it is alive.
+    // A RunnerCommandError means the runner answered, so it is alive, with
+    // one exception: RUNNER_WEDGED is the runner's own verdict that its main
+    // thread is stuck past recovery, and only a fresh runner clears that.
+    // RUNNER_BUSY is the runner asking for a moment, not for a recycle.
     expect(recoverable(new RunnerCommandError("Element not found"))).toBe(false);
+    expect(recoverable(new RunnerCommandError("busy", { code: "RUNNER_BUSY" }))).toBe(false);
+    expect(recoverable(new RunnerCommandError("stuck", { code: "RUNNER_WEDGED" }))).toBe(true);
   });
 
   it("wraps the runner-not-ready failure with the cause, log path, and trust guidance", async () => {

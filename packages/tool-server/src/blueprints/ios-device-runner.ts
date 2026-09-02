@@ -28,6 +28,7 @@ import { isIosDeviceTransportError } from "../utils/ios-device/usbmux-protocol";
 import { readRunnerCrashSummary } from "../utils/ios-device/runner-crash";
 import {
   createRunnerClient,
+  isRunnerWedgedError,
   waitForRunnerReady,
   type RunnerClient,
 } from "../utils/ios-device/runner-client";
@@ -380,7 +381,11 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
     };
   },
   recoverable(error: unknown): boolean {
-    // Only a confirmed runner death. A live runner that answered, or a transport loss with a live child, is not recoverable here.
-    return isRunnerExitedError(error);
+    // A confirmed runner death, or a runner that answered only to report its
+    // main thread stuck past recovery: both need a fresh runner, so the
+    // registry disposes this one and retries the tool once. Any other answer
+    // from a live runner, or a transport loss with a live child, is not
+    // recoverable here.
+    return isRunnerExitedError(error) || isRunnerWedgedError(error);
   },
 };

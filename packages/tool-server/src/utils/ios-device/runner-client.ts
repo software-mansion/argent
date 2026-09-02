@@ -24,6 +24,7 @@ const RUNNER_READY_POLL_INTERVAL_MS = 250;
 const RUNNER_READY_PROBE_TIMEOUT_MS = 2_000;
 
 const RUNNER_BUSY_ERROR_CODE = "RUNNER_BUSY";
+const RUNNER_WEDGED_ERROR_CODE = "RUNNER_WEDGED";
 const COMMAND_TIMED_OUT_ERROR_CODE = "COMMAND_TIMED_OUT";
 const INVALID_RUNNER_RESPONSE_CODE = "INVALID_RUNNER_RESPONSE";
 
@@ -87,13 +88,11 @@ function appendSentence(message: string, sentence: string): string {
 
 /**
  * A failure the runner reported in an `ok: false` envelope.
- * `retryable` is true only for `RUNNER_BUSY`.
  */
 export class RunnerCommandError extends Error {
   readonly code?: string;
   /** Callers may branch on this. The message already includes the same text. */
   readonly hint?: string;
-  readonly retryable: boolean;
   /**
    * The runner re-fronted a backgrounded target before the command ran, and
    * the command then failed: the foreground screen changed even though the
@@ -121,7 +120,6 @@ export class RunnerCommandError extends Error {
       this.hint = options.hint;
     }
 
-    this.retryable = options.code === RUNNER_BUSY_ERROR_CODE;
     this.reactivated = options.reactivated === true;
 
     // Classify the failure here. The runner wire code stays on `code`.
@@ -131,6 +129,37 @@ export class RunnerCommandError extends Error {
       failure_area: "tool_server",
       error_kind: runnerCommandFailureKind(options.code),
     });
+  }
+}
+
+/**
+ * True for the runner's verdict that its main thread is stuck past recovery.
+ * Only a fresh runner clears it, so the blueprint recycles on it.
+ */
+export function isRunnerWedgedError(error: unknown): error is RunnerCommandError {
+  return error instanceof RunnerCommandError && error.code === RUNNER_WEDGED_ERROR_CODE;
+}
+
+/**
+ * The runner cannot name the host tool that recycles it, so its busy and
+ * wedged hints stop at "restart the session". Name stop-simulator-server
+ * here, where the udid is known. Every other hint passes through.
+ */
+function hostHint(
+  code: string | undefined,
+  hint: string | undefined,
+  udid: string
+): string | undefined {
+  switch (code) {
+    case RUNNER_WEDGED_ERROR_CODE:
+      return `Run stop-simulator-server ${udid} to recycle the runner, then retry the command.`;
+    case RUNNER_BUSY_ERROR_CODE:
+      return appendSentence(
+        hint ?? "Wait a few seconds and retry",
+        `If it stays busy, run stop-simulator-server ${udid} to recycle the runner.`
+      );
+    default:
+      return hint;
   }
 }
 
@@ -202,7 +231,7 @@ export function createRunnerClient(options: {
         readOnly,
       });
 
-      return unwrapEnvelope(response);
+      return unwrapEnvelope(response, options.udid);
     } catch (error) {
       if (!isIosDeviceTransportError(error)) {
         throw error;
@@ -244,7 +273,7 @@ export function createRunnerClient(options: {
         { timeoutMs: RUNNER_STATUS_RECOVERY_TIMEOUT_MS, readOnly: true }
       );
 
-      const data = unwrapEnvelope(response);
+      const data = unwrapEnvelope(response, options.udid);
 
       status = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
     } catch {
@@ -259,7 +288,7 @@ export function createRunnerClient(options: {
 
       // Retained JSON is the lost envelope. Unwrap it as the real outcome.
       if (retained && asEnvelope(retained)) {
-        return unwrapEnvelope(retained);
+        return unwrapEnvelope(retained, options.udid);
       }
 
       // Completed with no usable retained response. The effect happened. Surface the transport error.
@@ -267,13 +296,19 @@ export function createRunnerClient(options: {
     }
 
     if (state === "failed") {
+      const code = typeof status.errorCode === "string" ? status.errorCode : undefined;
+
       throw new RunnerCommandError(
         typeof status.errorMessage === "string"
           ? status.errorMessage
           : `Runner command "${String(command.command)}" failed`,
         {
-          code: typeof status.errorCode === "string" ? status.errorCode : undefined,
-          hint: typeof status.errorHint === "string" ? status.errorHint : undefined,
+          code,
+          hint: hostHint(
+            code,
+            typeof status.errorHint === "string" ? status.errorHint : undefined,
+            options.udid
+          ),
         }
       );
     }
@@ -346,7 +381,7 @@ function withCommandId(command: Record<string, unknown>): Record<string, unknown
   return { ...command, commandId: `argent-${randomUUID()}` };
 }
 
-function unwrapEnvelope(response: unknown): unknown {
+function unwrapEnvelope(response: unknown, udid: string): unknown {
   const envelope = asEnvelope(response);
 
   if (!envelope) {
@@ -361,7 +396,7 @@ function unwrapEnvelope(response: unknown): unknown {
 
   throw new RunnerCommandError(envelope.error?.message ?? "Runner command failed", {
     code: envelope.error?.code,
-    hint: envelope.error?.hint,
+    hint: hostHint(envelope.error?.code, envelope.error?.hint, udid),
     reactivated: envelope.reactivated === true,
   });
 }
