@@ -318,18 +318,24 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // full 100 deletions running, and now leaves 34.
       const { events, api } = hidRecorder();
       const controller = new AbortController();
-      const pending = clearSimulatorServer(registryWith(api), IOS_SIM, controller.signal);
+      const pending = clearSimulatorServer(registryWith(api), IOS_SIM, controller.signal).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
       await new Promise((r) => setTimeout(r, 25));
       controller.abort();
       const result = await pending;
 
       expect(events.length).toBeGreaterThan(0);
       expect(events.length).toBeLessThan(400);
-      // `keys` reports what was actually sent, and `cleared` is absent: the
-      // field is emptied by however many keys got through, which is exactly the
-      // state that claim must not be made for.
-      expect(result.keys).toBe(events.length / 2);
-      expect(result.cleared).toBeUndefined();
+      // A half-emptied field is a FAILURE, not a short success. Returning it
+      // filed the dangerous state as a completed step — `run-sequence` counts a
+      // returned step in `completed` — while the two adb backends already threw
+      // for the harmless "nothing was sent" case.
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(getFailureSignal(result)?.failure_stage).toBe("keyboard_clear_simulator_abandoned");
+      expect(result?.message).toMatch(/cancelled partway/);
+      expect(result?.message).toContain(`${events.length / 2} of the 200 delete keys`);
     });
 
     it("a burst the transport stops accepting is NOT reported as a clear", async () => {
@@ -584,15 +590,16 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       const controller = new AbortController();
       controller.abort();
       const { events, api } = hidRecorder();
-      const result = await makeIosImpl(registryWith(api)).handler(
-        {},
-        { udid: IOS_SIM.id, clear: true },
-        IOS_SIM,
-        { signal: controller.signal }
-      );
-      // An abandoned burst reports what it sent and drops `cleared`; a signal
-      // that never arrives sends all 200 keys and claims it.
-      expect(result).toEqual({ typed: "", keys: 0 });
+      const result = await makeIosImpl(registryWith(api))
+        .handler({}, { udid: IOS_SIM.id, clear: true }, IOS_SIM, { signal: controller.signal })
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      // An abandoned burst FAILS; a signal that never arrives sends all 200 keys
+      // and claims the clear.
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(result?.message).toContain("NO delete key was sent");
       expect(events).toEqual([]);
     });
 
@@ -727,13 +734,16 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       const controller = new AbortController();
       controller.abort();
       const { events, api } = hidRecorder();
-      const result = await makeIosRemoteImpl(registryWith(api)).handler(
-        {},
-        { udid: IOS_REMOTE.id, clear: true },
-        IOS_REMOTE,
-        { signal: controller.signal }
-      );
-      expect(result).toEqual({ typed: "", keys: 0 });
+      const result = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE, {
+          signal: controller.signal,
+        })
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(result?.message).toContain("NO delete key was sent");
       expect(events).toEqual([]);
     });
 

@@ -101,6 +101,46 @@ export const CLEAR_KEY_CADENCE_MS = 2;
 export const CLEAR_SETTLE_MS = 300;
 
 /**
+ * An abandoned burst is a FAILURE, not a short success.
+ *
+ * The iOS simulator and the Apple TV daemon are the two backends that can stop
+ * MID-burst, so a 200 here filed the dangerous half-emptied field as a COMPLETED
+ * step — `run-sequence` counts a returned step in `completed`, and a flow step
+ * with no verdict of its own passes on it — while the two adb backends throw for
+ * the harmless "nothing was sent" case (utils/android-input.ts,
+ * utils/vega-input.ts, `cancelledBeforeSend`). The split was inverted relative to
+ * the risk, and a partial clear was uncountable in telemetry on the only two
+ * backends that can produce one.
+ *
+ * Same two-sentence shape as those two, so all four now read alike.
+ */
+export function abandonedClearError(
+  deviceId: string,
+  keysSent: number,
+  stage: string
+): FailureError {
+  return new FailureError(
+    keysSent === 0
+      ? `the clear burst was cancelled before it was sent to ${deviceId}, so NO delete key was ` +
+          "sent and the focused field is unchanged. The request had already been aborted — the " +
+          "caller disconnected, or the run was cancelled — when the burst was due. Nothing needs " +
+          "to be read back."
+      : `the clear burst was cancelled partway on ${deviceId}, and the focused field may be ` +
+          `PARTIALLY emptied — ${keysSent} of the ${CLEAR_KEY_PAIRS * 2} delete keys had been ` +
+          "written one at a time when the request was aborted. Read the field back (`describe`) " +
+          "before clearing or typing again.",
+    {
+      error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      // Client-side cancellation matches no other FailureKind; the adb siblings
+      // land on whatever `describeAdbFailure` gave their ABORT_ERR.
+      error_kind: "unknown",
+    }
+  );
+}
+
+/**
  * Empty the focused text field over HID: `CLEAR_KEY_PAIRS` backspaces
  * interleaved with as many forward-deletes.
  *
@@ -175,11 +215,14 @@ export async function clearSimulatorServer(
       { cause: err instanceof Error ? err : undefined }
     );
   }
-  // A burst the caller abandoned reports what it actually sent, and drops
-  // `cleared`: the field is emptied by however many keys got through, which is
-  // exactly the state `cleared` must not be claimed for. No settle either —
-  // there is no auto-screenshot to protect once the request is gone.
-  if (keysSent < CLEAR_KEY_PAIRS * 2) return { typed: "", keys: keysSent };
+  // A burst the caller abandoned FAILS rather than returning a short success:
+  // a half-emptied field reported as a completed step is the shape `cleared`
+  // must not be claimed for, and `run-sequence` counts a returned step in
+  // `completed`. No settle either — there is no auto-screenshot to protect once
+  // the request is gone.
+  if (keysSent < CLEAR_KEY_PAIRS * 2) {
+    throw abandonedClearError(device.id, keysSent, "keyboard_clear_simulator_abandoned");
+  }
   await sleep(CLEAR_SETTLE_MS);
   // `keys` counts what was SENT — the field is never read back, so the result
   // says nothing about what it now holds. It IS now evidence that every key

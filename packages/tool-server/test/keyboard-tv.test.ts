@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { UnsupportedOperationError } from "../src/utils/capability";
 
@@ -105,18 +106,40 @@ describe("typeTv — the TV keyboard backend", () => {
     expect(clear).toHaveBeenCalledWith(controller.signal);
   });
 
-  it("drops `cleared` when the burst stopped short", async () => {
+  it("FAILS when the burst stopped short, rather than returning it", async () => {
     // A burst the caller abandoned leaves the field emptied by however many keys
     // got through — the one state `cleared` must not be claimed for, since the
-    // next step would type into a field it believes is empty. The short count is
-    // the only signal either backend has, so reporting it is load-bearing.
+    // next step would type into a field it believes is empty. Returning it filed
+    // that state as a COMPLETED step: `run-sequence` counts a returned step in
+    // `completed`, and a flow `tool:` step has no verdict of its own. The two
+    // adb backends already threw for the harmless "nothing was sent" case, so
+    // the split was inverted relative to the risk.
     const clear = vi.fn(async () => 42);
     resolveTvApi.mockResolvedValue({ type: vi.fn(), clear });
 
-    const result = await typeTv(registry, APPLE_TV, { udid: APPLE_TV.id, clear: true });
+    const err = await typeTv(registry, APPLE_TV, { udid: APPLE_TV.id, clear: true }).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
 
-    expect(result).toEqual({ typed: "", keys: 42 });
-    expect(result).not.toHaveProperty("cleared");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_clear_tv_abandoned");
+    expect(err?.message).toContain("42 of the 200 delete keys");
+    expect(err?.message).toMatch(/cancelled partway/);
+  });
+
+  it("says the field is UNCHANGED when the burst was cancelled before it started", async () => {
+    const clear = vi.fn(async () => 0);
+    resolveTvApi.mockResolvedValue({ type: vi.fn(), clear });
+
+    const err = await typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, clear: true }).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(err?.message).toContain("NO delete key was sent");
+    expect(err?.message).toContain("the focused field is unchanged");
+    expect(err?.message).not.toMatch(/PARTIALLY/);
   });
 
   it("treats `clear: false` as absent and still types", async () => {

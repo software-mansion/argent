@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import { UnsupportedOperationError } from "../../../utils/capability";
 import { resolveTvApi } from "../../tv/tv-service";
 import { CLEAR_KEY_PAIRS } from "../key-codes";
+import { abandonedClearError } from "../simulator-server-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
 // Shared by the ios (Apple TV) and android (Android TV) branches, and reached
@@ -36,11 +37,14 @@ export async function typeTv(
     // `clearVerified` is added, exactly as on iOS and Android.
     const api = await resolveTvApi(registry, device.id);
     const keys = await api.clear(signal);
-    // A burst the caller abandoned reports what it actually sent and drops
-    // `cleared`: the field is emptied by however many keys got through, which
-    // is the one state `cleared` must not be claimed for. Same rule as
-    // ../simulator-server-keys.ts.
-    if (keys < CLEAR_KEY_PAIRS * 2) return { typed: "", keys };
+    // A burst the caller abandoned FAILS rather than returning a short success,
+    // for the reason `abandonedClearError` gives: a half-emptied field reported
+    // as a completed step is the one state `cleared` must not be claimed for.
+    // Same rule as ../simulator-server-keys.ts, and the same wording the adb
+    // backends already use.
+    if (keys < CLEAR_KEY_PAIRS * 2) {
+      throw abandonedClearError(device.id, keys, "keyboard_clear_tv_abandoned");
+    }
     return { typed: "", keys, cleared: true };
   }
   const text = params.text ?? "";
