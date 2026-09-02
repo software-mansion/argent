@@ -256,6 +256,9 @@ describe("injectVegaClear — the delete burst", () => {
     expect(err.message).toMatch(/injected nothing/);
     expect(err.message).toMatch(/the focused field is unchanged/);
     expect(err.message).not.toMatch(/PARTIALLY/);
+    // A capability verdict: this device's `inputd-cli` does not accept the
+    // command, so retrying it is pointless.
+    expect(getFailureSignal(err)?.error_kind).toBe("unsupported");
   });
 
   it("fails when the device performed only SOME of them", async () => {
@@ -264,6 +267,10 @@ describe("injectVegaClear — the delete burst", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
     expect(err.message).toMatch(/137 of the 200/);
     expect(err.message).toMatch(/may be PARTIALLY emptied/);
+    // NOT "unsupported": this arm's own repair is "read it back and retry", the
+    // opposite of "stop trying on this device", and one bucket made them
+    // indistinguishable in telemetry.
+    expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
   });
 
   it("carries the device's OWN words back, not the count the sentence already gives", async () => {
@@ -294,6 +301,8 @@ describe("injectVegaClear — the delete burst", () => {
     adbShell.mockResolvedValueOnce(SIZE_OK);
     const err = await captureError(injectVegaClear());
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    // It shares the partial arm's wording, so it shares its kind too.
+    expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
   });
 
   it("reports a failed burst as possibly PARTIAL, keeping adb's own diagnosis", async () => {

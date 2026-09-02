@@ -287,7 +287,12 @@ export async function injectVegaClear(signal?: AbortSignal): Promise<void> {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,
         failure_stage: "keyboard_clear_vega_injected",
         failure_area: "tool_server",
-        error_kind: "unsupported",
+        // Only the WHOLESALE refusal is a capability verdict ("stop trying on
+        // this device"). A partial injection is the transient its own repair
+        // describes — read the field back and retry — and one bucket made the
+        // two indistinguishable in telemetry. A missing marker line falls to
+        // "subprocess" with the partial arm, whose wording it shares.
+        error_kind: injected === 0 ? "unsupported" : "subprocess",
         failure_command: "adb",
       }
     );
