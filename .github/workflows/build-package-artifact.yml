@@ -37,7 +37,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx tsc --build
+      - run: npm run build
 
       - run: npm run build -w @swmansion/argent
 
@@ -82,6 +82,12 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      # Flow `script` runner + watchdogs, flat in dist/ beside tool-server.cjs.
+      # flow-script-executor.ts resolves the runner there via __dirname, and the
+      # runner resolves both watchdogs against its own import.meta.url.
+      - run: test -f packages/argent/dist/flow-script-runner.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-lifeline.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-deadline.mjs
 
       - name: Pack npm package
         run: |

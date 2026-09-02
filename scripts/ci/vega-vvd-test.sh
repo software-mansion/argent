@@ -14,8 +14,10 @@
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
-# Prereq: the workspace is already built (`npm ci` + `tsc --build` on the runner,
-# bind-mounted in at /workspace), so `packages/tool-server/dist/index.js` exists.
+# Prereq: the workspace is already built (`npm ci` + `npm run build` on the
+# runner, bind-mounted in at /workspace), so `packages/tool-server/dist/index.js`
+# exists. `npm run build`, not a bare `tsc --build`: only the build script copies
+# the assets tsc never sees.
 #
 # NOT `set -e`: gated checks are captured for a per-tool summary, then we exit
 # non-zero if any failed.

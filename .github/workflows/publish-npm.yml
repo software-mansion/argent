@@ -130,7 +130,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx tsc --build
+      - run: npm run build
 
       # Sequenced after `npm ci` (the checked-out lockfile still matches the
       # original version at install time) and before the bundle build, which
@@ -209,6 +209,12 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      # Flow `script` runner + watchdogs, flat in dist/ beside tool-server.cjs.
+      # flow-script-executor.ts resolves the runner there via __dirname, and the
+      # runner resolves both watchdogs against its own import.meta.url.
+      - run: test -f packages/argent/dist/flow-script-runner.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-lifeline.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-deadline.mjs
 
       # The shipped CLI reads its version from package.json at runtime, so this
       # is exactly what `argent --version` prints after install.

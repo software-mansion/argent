@@ -53,6 +53,23 @@ export function asNumber(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
+export function asPositiveInteger(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
+}
+
+export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
+
+/**
+ * The smallest ceiling a flow `script` step can run under and still report on
+ * the script rather than on the host. The step starts a Node process before
+ * the script runs, and that start alone costs tens of milliseconds, so under
+ * this the same script passes or times out according to how busy the machine
+ * was. Floored rather than defaulted for the reason the heap limit is: the
+ * step that loses the race errors, and names neither this bound nor the value
+ * that caused it.
+ */
+export const MIN_SCRIPT_TIMEOUT_MS = 100;
+
 /** Accept an array of non-blank strings (blank entries dropped). */
 export function asStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -72,6 +89,7 @@ const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
   [asBoolean, "a boolean (true or false)"],
   [asString, "a non-empty string"],
   [asNumber, "a number"],
+  [asPositiveInteger, "a whole number greater than zero"],
   [asStringArray, "an array of strings"],
 ]);
 
@@ -147,6 +165,43 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // remote `argent link` tool-server it is the *client's* config that decides.
     merge: "prioritize-local",
     example: "~/Movies/argent",
+  },
+  // Global-scope only: a checked-in `.argent/config.json` must not raise the
+  // ceiling on how much of the machine a script step may occupy. `merge` is
+  // nominal here — the project scope of a global-only key is never read.
+  {
+    key: "scripts.maxTimeoutMs",
+    description:
+      "Upper bound, in milliseconds, on the time limit a flow `script` step may ask for " +
+      "(default 300000 — five minutes). Bounds how long one script can occupy the host. " +
+      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a Node process ` +
+      "before the script runs, so a smaller ceiling ends a script that did nothing wrong.",
+    scopes: ["global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value >= MIN_SCRIPT_TIMEOUT_MS ? value : undefined;
+    },
+    expected: `a whole number of milliseconds, at least ${MIN_SCRIPT_TIMEOUT_MS}`,
+    merge: "prioritize-global",
+    default: 5 * 60_000,
+    example: "300000",
+  },
+  {
+    key: "scripts.heapLimitMb",
+    description:
+      "Old-space heap limit, in MiB, given to each flow `script` process (default 512). " +
+      `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
+      "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
+      "V8's own startup before any script runs.",
+    scopes: ["global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value >= MIN_SCRIPT_HEAP_LIMIT_MB ? value : undefined;
+    },
+    expected: `a whole number of MiB, at least ${MIN_SCRIPT_HEAP_LIMIT_MB}`,
+    merge: "prioritize-global",
+    default: 512,
+    example: "512",
   },
 ] as const;
 

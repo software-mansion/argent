@@ -20,6 +20,9 @@ import {
 import {
   CONFIG_SCHEMA,
   describeExpectedValue,
+  getConfigDefinition,
+  MIN_SCRIPT_HEAP_LIMIT_MB,
+  MIN_SCRIPT_TIMEOUT_MS,
   type ConfigDefinition,
 } from "../src/config-schema.js";
 
@@ -119,9 +122,11 @@ describe("setConfigValue — validation", () => {
   });
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
-    // A settable, global-only definition supplied through the registry param
-    // (no shipped key is global-only any more, so a synthetic one isolates the
-    // scope check).
+    // A settable, global-only definition supplied through the registry param,
+    // so this checks the scope rule alone: a shipped global-only key — today
+    // `scripts.maxTimeoutMs` and `scripts.heapLimitMb`, covered further down —
+    // brings its own value parsing along, and would decide the case here on
+    // whichever rule refused first.
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -401,4 +406,47 @@ describe("deleteAtPath prunes only what it emptied", () => {
     expect(deleteAtPath(obj, "nope.missing")).toBe(false);
     expect(obj).toEqual({ ios: { deviceSet: "x" } });
   });
+});
+
+describe("flow script host bounds", () => {
+  it("refuses a heap limit too small for a Node process to start", () => {
+    expect(() => setConfigValue("scripts.heapLimitMb", 2, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.heapLimitMb", 16, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB, "global", opts())).toBe(
+      MIN_SCRIPT_HEAP_LIMIT_MB
+    );
+  });
+
+  it("refuses a ceiling the step spends on starting its own process", () => {
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 30, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 99, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS, "global", opts())).toBe(
+      MIN_SCRIPT_TIMEOUT_MS
+    );
+  });
+
+  it.each([
+    ["scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB],
+    ["scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS],
+  ])("says what %s wants when it refuses one", (key, min) => {
+    const def = getConfigDefinition(key)!;
+    expect(describeExpectedValue(def)).toContain(`at least ${min}`);
+  });
+
+  it.each(["scripts.maxTimeoutMs", "scripts.heapLimitMb"])(
+    "keeps %s out of project scope, so repository content cannot raise its own ceiling",
+    (key) => {
+      const def = getConfigDefinition(key)!;
+      expect(def.scopes).toEqual(["global"]);
+      expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
+    }
+  );
 });
