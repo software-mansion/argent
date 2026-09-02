@@ -47,6 +47,17 @@ vi.mock("../src/utils/ios-device-sets", () => ({
   deviceSetForUdid: (udid: string) => deviceSetForUdidMock(udid),
 }));
 
+// The MoQ transport an `ios-remote` device is driven over. Stubbed so the remote
+// branch of the factory runs without a sim-remote orchestrator.
+const sendControlMock = vi.fn(async (_payload: unknown) => {});
+vi.mock("../src/utils/moq-client", () => ({
+  openMoqClient: vi.fn(async () => ({
+    sendControl: (payload: unknown) => sendControlMock(payload),
+    close: vi.fn(async () => {}),
+    events: new EventEmitter(),
+  })),
+}));
+
 function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;
@@ -393,5 +404,71 @@ describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server
   it("does NOT recover on an unrelated error carrying no failure signal", async () => {
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
     expect(simulatorServerBlueprint.recoverable!(new Error("boom"))).toBe(false);
+  });
+});
+
+describe("simulatorServerBlueprint.factory — the remote MoQ key transport", () => {
+  const REMOTE: DeviceInfo = {
+    id: "AAAA1111-2222-3333-4444-555566667777",
+    platform: "ios-remote",
+    kind: "simulator",
+  };
+
+  async function remoteApi() {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const instance = await simulatorServerBlueprint.factory({} as never, REMOTE, {
+      device: REMOTE,
+    } as never);
+    return instance.api;
+  }
+
+  it("never leaves a control-frame rejection unhandled", async () => {
+    // `sendControl` used to be fired with a bare `void`, which attaches no
+    // handler at all — and index.ts's `unhandledRejection` listener
+    // `crashShutdown`s the WHOLE tool-server, one process shared by every agent
+    // session on the machine. A clear burst issues 400 of these calls.
+    sendControlMock.mockRejectedValue(new Error("MoQ control broadcast closed"));
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const api = await remoteApi();
+      api.pressKey("Down", 42);
+      // Two macrotask turns: enough for a rejection with no handler to be
+      // reported, and for the `.catch` to have run if there is one.
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      sendControlMock.mockReset();
+      sendControlMock.mockImplementation(async () => {});
+    }
+  });
+
+  it("refuses the next key once the control channel has failed", async () => {
+    // The remote analogue of the local branch's `pipeDead` guard. Without it the
+    // burst wrote 400 frames into a dead channel and still answered
+    // `{ keys: 200, cleared: true }` for a field nothing had touched.
+    sendControlMock.mockRejectedValueOnce(new Error("MoQ control broadcast closed"));
+    const api = await remoteApi();
+    api.pressKey("Down", 42);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(() => api.pressKey("Up", 42)).toThrowError(/no longer accepting key events/);
+    try {
+      api.pressKey("Up", 42);
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_SERVER_TERMINATED);
+    }
+  });
+
+  it("keeps pressing while the channel is healthy", async () => {
+    sendControlMock.mockClear();
+    const api = await remoteApi();
+    expect(() => {
+      api.pressKey("Down", 42);
+      api.pressKey("Up", 42);
+    }).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendControlMock).toHaveBeenCalledTimes(2);
   });
 });

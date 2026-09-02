@@ -94,11 +94,39 @@ async function buildRemoteInstance(
   // instead of silently dialing a nonexistent local port.
   const stubUrl = `moq+remote://${device.id}`;
 
+  // The remote analogue of the local branch's `pipeDead` guard below.
+  // `sendControl` resolves before the frame is acknowledged, so the first
+  // failure is only observable asynchronously — by which time the burst that
+  // caused it has already returned `cleared: true` for a field nothing touched.
+  let controlDead: Error | null = null;
+
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
     pressKey: (direction, keyCode) => {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+      if (controlDead !== null) {
+        throw new FailureError(
+          `the MoQ control channel for ${device.id} is no longer accepting key events, so this ` +
+            "key press and any that follow it in the same burst were NOT delivered. The device " +
+            "is fine; the remote transport is gone (a closed session, or a sim-remote " +
+            "orchestrator restart). Read the field back before typing or clearing again — it " +
+            "may hold whatever the keys that DID land left.",
+          {
+            error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+            failure_stage: "simulator_server_key_write",
+            failure_area: "tool_server",
+            error_kind: "network",
+          },
+          { cause: controlDead }
+        );
+      }
+      // `.catch`, not a bare `void`: an unhandled rejection here reaches
+      // index.ts's `unhandledRejection` handler, which `crashShutdown`s the
+      // WHOLE tool-server — one process shared by every agent session on the
+      // machine — and a clear burst issues 400 of these calls.
+      moq.sendControl(encodeKey({ action: direction, code: keyCode })).catch((err: unknown) => {
+        controlDead ??= err instanceof Error ? err : new Error(String(err));
+      });
     },
     transport,
   };
