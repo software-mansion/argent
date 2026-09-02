@@ -91,6 +91,13 @@ describe("typeTv — the TV keyboard backend", () => {
     expect(clear).toHaveBeenCalledTimes(1);
     expect(type).not.toHaveBeenCalled();
     expect(result).toEqual({ typed: "", keys: 200, cleared: true });
+    // The one thing that differs between the two rows. `typeTv` touches
+    // `device` exactly once on this path — to look up the service — so without
+    // this the second row was byte-equivalent to the first and could not fail
+    // unless the first did. Which backend that lookup then picks is
+    // `tv-service`'s own decision, mocked here.
+    expect(resolveTvApi).toHaveBeenCalledWith(registry, device.id);
+    expect(resolveTvApi).toHaveBeenCalledTimes(1);
   });
 
   it("hands the request's abort to the TV service's burst", async () => {
