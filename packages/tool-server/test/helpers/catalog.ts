@@ -35,8 +35,12 @@ export function advertisedSchema(def: ToolDefinition<any, any>): Record<string, 
   // Registered rather than derived by hand, so the result carries every rewrite
   // registration applies — the `udid` relaxation included. Deriving it directly
   // would return a schema no client ever sees.
+  //
+  // A copy, because `registerTool` writes `inputSchema` and
+  // `autoDeviceTargetParam` onto the definition it is handed, and callers pass
+  // the module-level tool singletons.
   const scratch = new Registry();
-  scratch.registerTool(def);
+  scratch.registerTool({ ...def });
   return scratch.getTool(def.id)?.inputSchema ?? null;
 }
 

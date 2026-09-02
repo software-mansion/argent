@@ -308,8 +308,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }
 
-      // Falls back to the server-resolved device so omitting `udid` — which the
-      // tools now invite — still gets the post-action screenshot and element tree.
+      // Falls back to the server-resolved device, so a call that omitted `udid`
+      // still gets the post-action screenshot and element tree.
       const udid = getUdidFromArgs(params.arguments) ?? device;
       const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
       const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);

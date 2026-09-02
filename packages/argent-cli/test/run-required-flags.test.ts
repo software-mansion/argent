@@ -198,8 +198,8 @@ describe("argent run input validation", () => {
   });
 
   describe("the server could not resolve the device the caller omitted", () => {
-    // `udid` is advertised optional now, so the local required-flag check no
-    // longer catches this and the server answers instead. It is still a rejected
+    // `udid` is advertised optional, so the local required-flag check does not
+    // catch this and the server answers instead. It is still a rejected
     // invocation — the fix is to pass the flag — so it has to land on the same
     // path, not on the runtime-failure one.
     const udidOptional = {

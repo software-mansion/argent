@@ -12,9 +12,9 @@ export const AUTO_DEVICE_TARGET_PROBE = "00000000-0000-4000-8000-000000000000";
 
 /**
  * Thrown when a caller omitted `udid` and the server cannot name one device for
- * it. The message always enumerates the devices, booted or not, because that
- * listing is the whole reason the caller would otherwise have had to run
- * `list-devices` first — and a shut-down one is what they most likely meant.
+ * it. The message carries the listing the caller would otherwise have had to run
+ * `list-devices` for: every device when none matched, since a shut-down one is
+ * what they most likely meant, and the candidates alone when several did.
  */
 export class AutoDeviceTargetError extends Error {
   constructor(message: string) {
@@ -37,10 +37,13 @@ export class AutoDeviceTargetError extends Error {
  *
  * It narrows by platform and kind only. A UDID does not say whether it belongs
  * to an iPhone or an Apple TV, and `capability` has no key to ask with, so a
- * lone booted Apple TV simulator IS a candidate for `gesture-tap` — which,
- * unlike `tv-remote` and `keyboard`, carries no call-time guard of its own. The
- * `runtimeKind` that `list-devices` reports per entry is the signal that would
- * settle it, and this resolver does not read it yet.
+ * lone booted Apple TV simulator IS a candidate for `gesture-tap`, and a lone
+ * booted iPhone IS one for `tv-remote`. What that costs is the tool's own
+ * business and differs per tool: `tv-remote`, `paste`, `shake` and
+ * `screen-recording-start` refuse the mismatch by name, `keyboard` types on the
+ * TV (only its named keys are refused), and the seven gesture tools carry no
+ * call-time guard at all. The `runtimeKind` that `list-devices` reports per
+ * entry is the signal that would settle it, and this resolver does not read it.
  */
 export async function resolveAutoDeviceTarget(
   registry: Registry,

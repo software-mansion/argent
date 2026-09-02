@@ -73,7 +73,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments. ' +
-        "Name the device even for a tool that advertises `udid` optional: a recorded step pins its own, rather than taking whichever is booted at replay."
+        "Name the device even for a tool that advertises `udid` optional: the step is recorded by running it, and this call resolves no device of its own."
     ),
   delayMs: z
     .number()

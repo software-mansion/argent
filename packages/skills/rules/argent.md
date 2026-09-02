@@ -55,11 +55,12 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 </tapping_rule>
 
 <device_selection_rule>
-Device tools take `udid` as an optional argument: omit it and the server acts on the one booted
-device that supports the tool. It refuses when none or several do, listing every device in the
-first case and only the candidates in the second. So call `list-devices` only when you need to
-CHOOSE - to boot something, or when the user named a platform or device and you have to find it.
-Prefer running devices.
+The interaction tools take `udid` as an optional argument: omit it and the server acts on the one
+booted device on a platform that tool declares. It refuses when none or several do, listing every
+device in the first case and only the candidates in the second. Three groups still need an id:
+`boot-device`, the `device_id` of the debugger and profiler tools, and a recorded flow step. So
+call `list-devices` when you need to CHOOSE - to boot something, when the user named a platform or
+device and you have to find it, or to name a device for one of those three. Prefer running devices.
 
 Decision order:
 
@@ -85,7 +86,8 @@ Decision order:
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
   naming the devices this session actually used. One tool-server is shared by every other agent using this
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
-  machine-wide cleanup.
+  machine-wide cleanup. If you never named a device - the server resolved it for you - call `list-devices`
+  here to get the ids to scope by.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.

@@ -9,7 +9,7 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 
 - A TV is **focus-driven, not touch-driven.** Drive every interaction with `describe` + `tv-remote` + `keyboard`; never use `gesture-*` / coordinate taps — they don't apply on any TV platform.
 - **Always `describe` before navigating** to find the live cursor and your target — never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
-- `udid` is an Apple TV simulator UDID or an Android TV / Vega `serial`, and it is optional: with one booted device that supports the tool the server resolves it. Pass it - from `list-devices` - when a phone or tablet is booted alongside the TV. Dispatch is automatic from the id; the same tools drive all three.
+- `udid` is an Apple TV simulator UDID or an Android TV / Vega `serial`, and it is optional: with one booted device on a platform the tool declares, the server resolves it. Pass it - from `list-devices` - when a phone or tablet is booted alongside the TV. Dispatch is automatic from the id; the same tools drive all three.
 
 ## The navigation loop
 

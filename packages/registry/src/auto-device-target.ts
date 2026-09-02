@@ -9,8 +9,8 @@ export const AUTO_DEVICE_TARGET_PARAM = "udid";
 
 /** Appended to the param's own description, so the model reads the rule per tool. */
 const AUTO_DEVICE_TARGET_HINT =
-  "Optional: omit it and the server runs against the one booted device this tool supports. " +
-  "Pass it to choose between several, or when the call is refused as ambiguous.";
+  "Optional: omit it and the server runs against the one booted device on a platform this tool " +
+  "declares. Pass it to choose between several, or when the call is refused as ambiguous.";
 
 /**
  * Rewrite a derived JSON Schema so `udid` reads as optional and says why, or

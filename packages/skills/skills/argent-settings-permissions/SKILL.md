@@ -62,7 +62,7 @@ One abstract permission can map to several concrete Android permissions; which o
 }
 ```
 
-- `udid` - target device (iOS simulator UDID, or Android serial). Optional: with one booted device that supports the tool the server resolves it. Pass it to pick one of several; `list-devices` shows what is booted. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` to get one.
+- `udid` - target device (iOS simulator UDID, or Android serial). Optional: with one booted device on a platform the tool declares, the server resolves it. Pass it to pick one of several; `list-devices` shows what is booted. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` to get one.
 - `action` - `grant` | `deny` | `reset`.
 - `permission` - one of the 11 names above.
 - `bundleId` - iOS bundle id or Android package name. **Required for every action**.

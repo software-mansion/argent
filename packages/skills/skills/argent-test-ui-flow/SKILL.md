@@ -7,7 +7,7 @@ description: Autonomously test an app UI (iOS or Android) by running interact-sc
 
 The interaction tool names are identical on iOS and Android — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, adb serial → Android).
 
-**Before testing, resolve which device to test on.** With one booted device that supports the tool, the tools resolve it themselves and you can omit `udid` entirely. Otherwise follow `<device_selection_rule>`, reading `list-devices` to choose: prefer a running device on any platform;
+**Before testing, resolve which device to test on.** With one booted device on the platform the tool declares, the tools resolve it themselves and you can omit `udid` entirely. Otherwise follow `<device_selection_rule>`, reading `list-devices` to choose: prefer a running device on any platform;
 
 Once a platform is chosen, the per-platform setup skill takes over:
 

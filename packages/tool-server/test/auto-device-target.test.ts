@@ -9,6 +9,8 @@ import { createRegistry } from "../src/utils/setup-registry";
 import { deviceEntryId, isBooted } from "../src/utils/booted-devices";
 import { AUTO_DEVICE_TARGET_PROBE } from "../src/utils/auto-device-target";
 import { DependencyMissingError } from "../src/utils/check-deps";
+import { advertisedSchema } from "./helpers/catalog";
+import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 
 const IPHONE = "6DBF83B4-0000-4000-8000-00000000AAAA";
 const ANDROID = "emulator-5554";
@@ -116,13 +118,19 @@ describe("the advertised schema relaxes `udid` while the zod schema keeps it", (
         }
       ).properties.udid.description
     ).toMatch(/^iOS Simulator UDID\. Optional/);
-    expect(schema.properties.udid.description).toMatch(/the one booted device this tool supports/);
+    expect(schema.properties.udid.description).toMatch(
+      /the one booted device on a platform this tool declares/
+    );
+    // Not "the device this tool supports": the filter reads the declared
+    // platform and kind, and cannot tell an Apple TV simulator from an iPhone.
+    expect(schema.properties.udid.description).not.toMatch(/this tool supports/);
   });
 
   it("still refuses a udid-less call that does not come through HTTP", async () => {
     // Flows and run-sequence dispatch through invokeTool, where the zod schema
-    // is authoritative. Relaxing them too would let a recorded step replay
-    // against whatever happens to be booted.
+    // is authoritative. A step is recorded by running it, so the authoring call
+    // needs a device of its own; the recorded YAML keeps none, and the runner
+    // rebinds whatever the replay resolves.
     const { registry } = harness([iphone()]);
     await expect(registry.invokeTool("poke", {})).rejects.toThrow(/Invalid params/);
   });
@@ -333,8 +341,10 @@ describe("which registered tools auto-target", () => {
   });
 
   it("never touches a `device_id` tool", () => {
-    // On the debugger/profiler tools that spelling is a Metro/CDP LOGICAL id,
-    // which `list-devices` does not report and a UDID cannot stand in for.
+    // Those tools address the session an earlier `debugger-connect` /
+    // `*-profiler-start` pinned, so the device to use is the one that call
+    // named, not whichever is booted now. The id itself is the same
+    // `list-devices` id — `debugger-connect`'s own description says so.
     const deviceIdTools = registeredTools().filter((def) =>
       Object.hasOwn((def.inputSchema as { properties?: object })?.properties ?? {}, "device_id")
     );
@@ -537,6 +547,23 @@ describe("the refusal names what it passed over", () => {
     const res = await request(app).post("/tools/poke").send({});
     expect(res.body.error).toMatch(/match the platforms `poke` declares/);
     expect(res.body.error).not.toMatch(/devices support/);
+  });
+});
+
+describe("reading the advertised schema does not rewrite the tool", () => {
+  it("leaves the module-level singleton untouched", () => {
+    // `registerTool` writes `inputSchema` and `autoDeviceTargetParam` onto the
+    // definition it is handed, and the helper's callers pass imported
+    // singletons — so registering one to read its schema back would relax the
+    // object every other test in the process shares.
+    const snapshot = () =>
+      JSON.stringify({
+        inputSchema: settingsPermissionsTool.inputSchema,
+        autoDeviceTargetParam: settingsPermissionsTool.autoDeviceTargetParam,
+      });
+    const before = snapshot();
+    advertisedSchema(settingsPermissionsTool);
+    expect(snapshot()).toBe(before);
   });
 });
 
@@ -860,8 +887,8 @@ describe("a malformed argument is reported as itself, not as an ambiguous device
     expect(res.body.message).not.toContain("ambiguous");
     expect(res.body.issues).toHaveLength(1);
     expect(res.body.issues[0].path).toEqual(["x"]);
-    // The pre-fix answer. Kept as an explicit negative because it is the whole
-    // defect: the caller retried with a udid to learn what was actually wrong.
+    // An explicit negative: answering about the device here would send the
+    // caller to retry with a udid before they could learn what was wrong.
     expect(res.body.error).not.toContain("ambiguous");
   });
 

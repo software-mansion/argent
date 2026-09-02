@@ -14,11 +14,11 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 The interaction tools name their target with a `udid`. The value is an iOS simulator UDID, an Android serial, a Vega serial, or a `chromium-cdp-<port>` id.
 
-The argument is optional. Argent acts on the one booted device that supports the tool when the caller leaves the argument out. A session with a single simulator needs no device id at all. This holds for the agent's tool calls and for the `argent run` command line.
+The argument is optional. Argent acts on the one booted device on a platform the tool declares when the caller leaves the argument out. A session with a single simulator needs no device id at all. This holds for the agent's tool calls and for the `argent run` command line.
 
-Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it supports. Only booted devices that pass that declaration are candidates. A Chromium tool still resolves when a phone is booted next to the browser, because the phone is not a candidate for it.
+Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it drives. Only booted devices that pass that declaration are candidates. A Chromium tool still resolves when a phone is booted next to the browser, because the phone is not a candidate for it. A tool that declares no platforms accepts every booted device.
 
-The declaration covers platform and device kind, but not form factor. An Apple TV simulator is an Apple simulator like any other. Name the device yourself when a TV and a phone are booted together.
+The declaration covers platform and device kind, but not form factor. An Apple TV simulator is an Apple simulator like any other. Name the device yourself when a TV and a phone are booted together. Argent does not check that the device suits the tool, only that the platform matches.
 
 The call fails when no candidate is booted, and when more than one is. The error lists every device when no candidate matched. The error lists the candidates when several matched. Name one of them in the next call.
 

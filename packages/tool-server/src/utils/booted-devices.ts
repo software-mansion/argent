@@ -4,9 +4,11 @@ import { LAUNCH_PLATFORMS } from "../tools/flows/flow-utils";
 
 /**
  * `list-devices` reports every {@link LAUNCH_PLATFORMS} entry plus `ios-remote`,
- * which has no launch path of its own. Spelling that out keeps the `default`
- * arm of {@link isBooted} live rather than looking like dead code to a reader
- * who trusts the union to be exhaustive.
+ * which has no launch path of its own.
+ *
+ * {@link isBooted} cases all five, so its `default` arm is unreachable for any
+ * value of this union — it is there for the entry this type does not describe,
+ * a platform added to `list-devices` and not here.
  */
 export type ListedPlatform = (typeof LAUNCH_PLATFORMS)[number] | "ios-remote";
 
@@ -18,14 +20,16 @@ export interface ListedDevice {
   platform: ListedPlatform;
   state?: string;
   udid?: string;
-  serial?: string;
+  // Nullable, not merely absent: a stopped VVD has no serial yet, and
+  // `list-devices` passes `VegaDevice` through verbatim.
+  serial?: string | null;
   id?: string;
 }
 
 export function deviceEntryId(d: ListedDevice): string | undefined {
   if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
   if (d.platform === "chromium") return d.id;
-  return d.serial; // android, vega
+  return d.serial ?? undefined; // android, vega
 }
 
 /**
@@ -54,7 +58,9 @@ export function isBooted(d: ListedDevice): boolean {
 }
 
 export function describeDevice(d: ListedDevice): string {
-  return `${deviceEntryId(d) ?? "?"} (${d.platform}${d.state ? `, ${d.state}` : ""})`;
+  // `||`, not `??`: an id key present but empty renders as nothing at all, and
+  // the entry reads as a stray `(ios, Booted)` in a sentence about ids.
+  return `${deviceEntryId(d) || "?"} (${d.platform}${d.state ? `, ${d.state}` : ""})`;
 }
 
 export async function listDevices(

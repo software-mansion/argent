@@ -1,6 +1,6 @@
 ---
 name: argent-android-emulator-setup
-description: Set up and connect to an Android emulator using argent MCP tools. Use when starting a new session on Android, booting an emulator, getting a device serial, or before any UI interaction task.
+description: Set up and connect to an Android emulator using argent MCP tools. Use when starting a new session on Android, booting an emulator, choosing between several devices, or before any UI interaction task.
 ---
 
 ## 1. Prerequisites
@@ -19,7 +19,7 @@ Verify with `adb version` and `emulator -list-avds`.
 
 ## 3. Using the device
 
-The unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. — take the Android serial as `udid`, and it is optional: omit it and the server uses the one ready device that supports the tool. Pass it to pick one of several. Dispatch is automatic based on the id shape. See `argent-device-interact` for platform-neutral interaction tooling and the Android-specific gotchas section at the bottom of that skill.
+The unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. — take the Android serial as `udid`, and it is optional: omit it and the server uses the one ready device on a platform the tool declares. Pass it to pick one of several. Dispatch is automatic based on the id shape. See `argent-device-interact` for platform-neutral interaction tooling and the Android-specific gotchas section at the bottom of that skill.
 
 ## 4. Notes
 
