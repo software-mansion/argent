@@ -1,6 +1,6 @@
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "./device-info";
-import { assertSupported } from "./capability";
+import { assertSupported, UnsupportedOperationError } from "./capability";
 import { describeDevice, deviceEntryId, isBooted, listDevices } from "./booted-devices";
 import type { SubInvokeContext } from "./sub-invoke";
 
@@ -57,8 +57,12 @@ export async function resolveAutoDeviceTarget(
     try {
       assertSupported(def.id, def.capability, resolveDevice(id));
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      // Only a declined device drops out of the pool. `capability.supports` is
+      // the tool's own code and can fail on its own account; swallowing that
+      // would answer an internal fault with "no booted device runs <tool>".
+      if (err instanceof UnsupportedOperationError) return false;
+      throw err;
     }
   });
 

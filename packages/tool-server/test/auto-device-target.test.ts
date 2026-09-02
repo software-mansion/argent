@@ -651,6 +651,33 @@ describe("the enumeration can fail on its own account", () => {
   });
 });
 
+describe("a capability refiner that throws is not read as a declined device", () => {
+  it('answers the refiner\'s own fault, not "no booted device runs"', async () => {
+    const { app, execute } = harness([iphone()], {
+      apple: { simulator: true },
+      supports: () => {
+        throw new Error("refiner exploded");
+      },
+    });
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).toContain("refiner exploded");
+    expect(JSON.stringify(res.body)).not.toContain("No booted device runs");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("still drops a device the refiner merely declines", async () => {
+    const { app } = harness([iphone(), android()], {
+      apple: { simulator: true },
+      android: { emulator: true },
+      supports: (device) => device.platform === "ios",
+    });
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ saw: IPHONE });
+  });
+});
+
 describe("no registered tool advertises a run-on udid description", () => {
   it("terminates the tool's own sentence before the hint", () => {
     const registry = createRegistry();
