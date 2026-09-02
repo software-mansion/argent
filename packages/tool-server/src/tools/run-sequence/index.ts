@@ -172,37 +172,73 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
-      // A sequence that uses the keyboard takes the device's keyboard queue for
-      // ALL of its steps, not just those steps. The queue holds `keyboard` and
-      // `paste` and nothing else, so the `[gesture-tap, keyboard { clear }]`
-      // recipe above landed its tap at once and then queued the clear behind
-      // another session's call — and whatever moved focus in between redirected
-      // it. Measured on Chrome 152: the clear emptied a textarea this sequence
-      // never addressed and still reported `completed: 2 of 2` with
-      // `clearVerified: true`. The steps' own `keyboard` / `paste` calls re-enter
-      // the hold rather than deadlocking on it.
-      return steps.some((step) => DEVICE_QUEUE_TOOLS.has(step.tool))
-        ? holdDeviceQueue(udid, runSteps)
-        : runSteps();
+      // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
+      // drops the MCP adapter's own fetch timeout — so honour the signal between
+      // steps and on the inter-step delay instead of running the rest of the
+      // sequence at the device.
+      const signal = ctx?.signal;
+      const results: StepResult[] = [];
 
-      async function runSteps() {
+      // A sequence that uses the keyboard takes the device's keyboard queue from
+      // its first step through its LAST `keyboard` / `paste` step. The queue
+      // holds those two tools and nothing else, so the
+      // `[gesture-tap, keyboard { clear }]` recipe above landed its tap at once
+      // and then queued the clear behind another session's call — and whatever
+      // moved focus in between redirected it. Measured on Chrome 152: the clear
+      // emptied a textarea this sequence never addressed and still reported
+      // `completed: 2 of 2` with `clearVerified: true`. The steps' own
+      // `keyboard` / `paste` calls re-enter the hold rather than deadlocking on
+      // it.
+      //
+      // It stops at the last queued step rather than at the end of the batch,
+      // because everything after it is another session's wait for nothing. A
+      // batch has no maximum length, `delayMs` has no maximum, and one
+      // `await-ui-element` step can add 120s — so a hold that ran to the end
+      // blocked every other session's `keyboard` and `paste` for all of it.
+      // Measured on Chrome 152 with `[keyboard { clear } delayMs 5000,
+      // gesture-tap delayMs 8000]`: a second session's `keyboard` waited 11.54s
+      // and typed into THIS sequence's field, where the same request behind a
+      // gesture-only sequence returned in 0.17s and typed into its own.
+      let lastQueued = -1;
+      steps.forEach((step, index) => {
+        if (DEVICE_QUEUE_TOOLS.has(step.tool)) lastQueued = index;
+      });
+
+      if (lastQueued === -1) {
+        await runSteps(0, steps.length);
+      } else {
+        const stopped = await holdDeviceQueue(udid, () => runSteps(0, lastQueued + 1));
+        // The last held step's own `delayMs` settles the step AFTER it, which
+        // runs outside the hold — so it is waited out there too, rather than
+        // held over.
+        if (!stopped && lastQueued + 1 < steps.length) {
+          const delay = steps[lastQueued]?.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
+          if (delay <= 0 || (await sleepOrAbort(delay, signal))) {
+            await runSteps(lastQueued + 1, steps.length);
+          }
+        }
+      }
+
+      return {
+        completed: results.filter((r) => "result" in r).length,
+        total: steps.length,
+        steps: results,
+      };
+
+      /** Runs `steps[from..to)`. Answers whether the sequence must stop here. */
+      async function runSteps(from: number, to: number): Promise<boolean> {
         const device = resolveDevice(udid);
-        const results: StepResult[] = [];
-        // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
-        // drops the MCP adapter's own fetch timeout — so honour the signal between
-        // steps and on the inter-step delay instead of running the rest of the
-        // sequence at the device.
-        const signal = ctx?.signal;
 
-        for (const step of steps) {
-          if (signal?.aborted) break;
+        for (let index = from; index < to; index++) {
+          const step = steps[index]!;
+          if (signal?.aborted) return true;
 
           if (!ALLOWED_TOOLS.has(step.tool)) {
             results.push({
               tool: step.tool,
               error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
             });
-            break;
+            return true;
           }
 
           // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
@@ -216,7 +252,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             } catch (err) {
               if (err instanceof UnsupportedOperationError) {
                 results.push({ tool: step.tool, error: err.message });
-                break;
+                return true;
               }
               throw err;
             }
@@ -232,7 +268,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
                 tool: step.tool,
                 error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
               });
-              break;
+              return true;
             }
             results.push({ tool: step.tool, result });
           } catch (err) {
@@ -247,18 +283,18 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
               tool: step.tool,
               error: reframed ?? (err instanceof Error ? err.message : String(err)),
             });
-            break;
+            return true;
           }
 
+          // The segment's last step keeps its delay only when the segment runs
+          // to the end of the batch: otherwise the caller above waits it out
+          // after releasing the hold.
+          const isSegmentTail = index === to - 1 && to < steps.length;
+          if (isSegmentTail) return false;
           const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
-          if (delay > 0 && !(await sleepOrAbort(delay, signal))) break;
+          if (delay > 0 && !(await sleepOrAbort(delay, signal))) return true;
         }
-
-        return {
-          completed: results.filter((r) => "result" in r).length,
-          total: steps.length,
-          steps: results,
-        };
+        return false;
       }
     },
   };

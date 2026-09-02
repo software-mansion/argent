@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
-import { serializedPerDevice } from "../src/utils/device-serial";
+import { DEVICE_QUEUE_MAX_WAIT_MS, serializedPerDevice } from "../src/utils/device-serial";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -114,6 +114,83 @@ describe("run-sequence — the device keyboard queue", () => {
 
     release();
     await blocking;
+  });
+
+  it("releases the queue after the LAST keyboard step, not at the end of the batch", async () => {
+    // The hold exists to keep the focus tap and the write in one critical
+    // section. Everything after the last write is another session's wait for
+    // nothing, and nothing bounds it: `steps` has no maximum, `delayMs` has no
+    // maximum, and an `await-ui-element` step can add 120s. Measured on
+    // Chrome 152 with `[keyboard { clear } delayMs 5000, gesture-tap
+    // delayMs 8000]`: a second session's `keyboard` waited 11.54s and typed
+    // into THIS sequence's field, where the same call behind a gesture-only
+    // sequence returned in 0.17s and typed into its own.
+    const { registry, calls } = makeMockRegistry();
+    let releaseTrailing = () => {};
+    const trailing = new Promise<void>((resolve) => (releaseTrailing = resolve));
+    registry.invokeTool = vi.fn(async (tool: string, args: Record<string, unknown>) => {
+      calls.push({ tool, args });
+      // The trailing gesture is still running when the queue is probed below.
+      if (tool === "gesture-tap") await trailing;
+      return { ok: true };
+    });
+
+    const sequence = createRunSequenceTool(registry).execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { clear: true }, delayMs: 0 },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+        ],
+      }
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.map((c) => c.tool)).toEqual(["keyboard", "gesture-tap"]);
+
+    // Another session's keyboard, sent while the sequence's trailing gesture is
+    // still in flight. It must not wait for that gesture.
+    let ranAt = 0;
+    const other = serializedPerDevice(IOS, async () => (ranAt = Date.now()));
+    await other;
+    expect(ranAt).toBeGreaterThan(0);
+    expect(calls.map((c) => c.tool)).toEqual(["keyboard", "gesture-tap"]);
+
+    releaseTrailing();
+    expect((await sequence).completed).toBe(2);
+  });
+
+  it("refuses to write after waiting past the queue budget, rather than writing blind", async () => {
+    // A wait is not free: the caller chose its field before it sent the call,
+    // and the session ahead of it may have moved focus since. Past the budget
+    // the write is not attempted at all — the alternative measured on Chrome 152
+    // was `{ typed: "BBB", keys: 3 }` returned as a success for text that landed
+    // in another session's field.
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      IOS,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    // The blocking task must already be running, so the clock below is read
+    // only by the call that queues behind it.
+    await new Promise((r) => setTimeout(r, 0));
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValueOnce(now); // queued at
+    clock.mockReturnValue(now + DEVICE_QUEUE_MAX_WAIT_MS + 1); // its turn comes
+    const task = vi.fn(async () => "written");
+    const late = serializedPerDevice(IOS, task).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    release();
+    await blocking;
+    const err = await late;
+    clock.mockRestore();
+    expect(task).not.toHaveBeenCalled();
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_DEVICE_BUSY);
+    expect(err?.message).toContain("was NOT sent to the device");
   });
 });
 

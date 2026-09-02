@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { FAILURE_CODES, FailureError } from "@argent/registry";
+
 /**
  * One queue per device for the tools that drive its keyboard.
  *
@@ -38,10 +40,59 @@ export const DEVICE_QUEUE_TOOLS: ReadonlySet<string> = new Set(["keyboard", "pas
  */
 const heldByCaller = new AsyncLocalStorage<ReadonlySet<string>>();
 
+/**
+ * How long a queued call may wait before its own request is stale.
+ *
+ * The queue makes a second session WAIT instead of interleaving, and a wait is
+ * not free: the caller chose its field before it sent the call, and everything
+ * ahead of it in the queue may have moved focus since. Measured on Chrome 152 —
+ * a `run-sequence` holding the queue while its own steps tapped a different
+ * field, and a second session's `keyboard { text: "BBB" }` behind it: the call
+ * waited 11.54s, returned `{ typed: "BBB", keys: 3 }`, and put BBB in the
+ * SEQUENCE's field while its own stayed empty. A plain success for a write that
+ * went somewhere else.
+ *
+ * So the wait is bounded and the write is not attempted past the bound. 30s is
+ * chosen against the queued work that is legitimately slow: 100 characters at
+ * the default 50ms cadence is 5s, an iOS clear burst is under 1s, a Chromium
+ * clear is two CDP round trips. It is under the 90s an Android clear may take,
+ * deliberately — nothing about a field's focus is still trustworthy 90 seconds
+ * after the caller looked at it.
+ */
+export const DEVICE_QUEUE_MAX_WAIT_MS = 30_000;
+
+function deviceBusyError(deviceId: string, waitedMs: number): FailureError {
+  return new FailureError(
+    `another session held ${deviceId}'s keyboard for ${Math.round(waitedMs / 1000)}s, so nothing ` +
+      "was typed, pressed or cleared — this call was NOT sent to the device. `keyboard` and " +
+      "`paste` are serialized per device because they both write to whatever holds keyboard " +
+      "focus, and the session ahead of this one may have moved that focus while this call " +
+      "waited: sending it now would write into ITS field and report success. Tap the field " +
+      "again (`gesture-tap`, or `tv-remote` on a TV), then retry. Keep the tap and the write in " +
+      "one `run-sequence` so they cannot be separated again.",
+    {
+      error_code: FAILURE_CODES.KEYBOARD_DEVICE_BUSY,
+      failure_stage: "device_queue_wait",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
 export function serializedPerDevice<T>(deviceId: string, task: () => Promise<T>): Promise<T> {
   if (heldByCaller.getStore()?.has(deviceId) === true) return task();
   const previous = deviceQueues.get(deviceId) ?? Promise.resolve();
-  const next = previous.then(task, task);
+  const queuedAt = Date.now();
+  // Checked when the turn comes rather than raced against a timer: giving up
+  // early would leave the task still chained and still due to run, which is the
+  // one outcome that must not happen — the point is that no write lands after
+  // the bound, not that the caller hears about it sooner.
+  const guarded = async (): Promise<T> => {
+    const waited = Date.now() - queuedAt;
+    if (waited > DEVICE_QUEUE_MAX_WAIT_MS) throw deviceBusyError(deviceId, waited);
+    return task();
+  };
+  const next = previous.then(guarded, guarded);
   deviceQueues.set(deviceId, next);
   const drop = () => {
     if (deviceQueues.get(deviceId) === next) deviceQueues.delete(deviceId);
