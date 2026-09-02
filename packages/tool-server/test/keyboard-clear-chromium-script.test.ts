@@ -745,6 +745,28 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
     expect(inside.commands).toEqual(["selectAll", "delete"]);
   });
 
+  it("puts the PAGE's range back when a contenteditable refuses the delete", () => {
+    // The only shape where the restore has real work: a contenteditable takes
+    // the select-all (which replaces the page's range), and a refused delete
+    // then has to undo it. Every `deleteAnswer: false` case here is an <input>,
+    // which takes `el.select()` instead and never reaches the select-all — so
+    // the restore was only ever observed as a call count, never as the range it
+    // put back.
+    //
+    // It also pins the ORDER: the page's ranges are cloned before the select-all
+    // replaces them. Clone after it and this restores the select-all's own
+    // range instead, which is the page-wide highlight the restore exists to
+    // remove.
+    const { outcome, selection, selectionsDropped } = run(
+      el("DIV", { isContentEditable: true, deleteAnswer: false })
+    );
+    expect(outcome.reason).toBe("delete-refused");
+    expect(selection()).toEqual([{ id: "page-selection" }]);
+    // Two: the script clears the page's range to scope the select-all to the
+    // host, and the restore clears that one again to put the page's back.
+    expect(selectionsDropped).toBe(2);
+  });
+
   it("touches nothing on a refusal that never selected", () => {
     // The other refusals return before the select-all, so there is no selection
     // to undo — and touching it there would disturb a selection the USER or a
