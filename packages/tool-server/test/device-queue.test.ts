@@ -90,6 +90,59 @@ describe("a queued call the caller abandoned", () => {
   });
 });
 
+describe("one key per device, not per spelling of its id", () => {
+  it("serializes two spellings of one Chromium target", async () => {
+    // `parseChromiumCdpPort` reads both of these as port 9333, so they are one
+    // browser — but the map keyed on the caller's raw string, so they got two
+    // queues and the serialization silently did nothing. Two concurrent
+    // `keyboard` calls spelled the two ways interleaved to `AAABABABABABABBB`
+    // instead of `AAAAAAAABBBBBBBB`.
+    const order: string[] = [];
+    const task = (tag: string) => async () => {
+      for (let i = 0; i < 4; i++) {
+        order.push(tag);
+        await sleep(2);
+      }
+    };
+    await Promise.all([
+      serializedPerDevice("chromium-cdp-9333", task("A")),
+      serializedPerDevice("chromium-cdp-09333", task("B")),
+    ]);
+    expect(order.join("")).toBe("AAAABBBB");
+  });
+
+  it("serializes an iOS UDID whatever its case", async () => {
+    const order: string[] = [];
+    const task = (tag: string) => async () => {
+      for (let i = 0; i < 4; i++) {
+        order.push(tag);
+        await sleep(2);
+      }
+    };
+    await Promise.all([
+      serializedPerDevice(IOS_UDID, task("A")),
+      serializedPerDevice(IOS_UDID.toLowerCase(), task("B")),
+    ]);
+    expect(order.join("")).toBe("AAAABBBB");
+  });
+
+  it("still keeps genuinely different devices apart", async () => {
+    // The normalisation must not collapse two targets into one queue.
+    const order: string[] = [];
+    const task = (tag: string) => async () => {
+      for (let i = 0; i < 3; i++) {
+        order.push(tag);
+        await sleep(2);
+      }
+    };
+    await Promise.all([
+      serializedPerDevice("chromium-cdp-9333", task("A")),
+      serializedPerDevice("chromium-cdp-9444", task("B")),
+    ]);
+    expect(order.join("")).not.toBe("AAABBB");
+  });
+});
+
 describe("focus movers and an open hold", () => {
   it("waits out a hold on the same device", async () => {
     const order: string[] = [];

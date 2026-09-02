@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 
+import { chromiumIdFromPort, parseChromiumCdpPort, resolveDevice } from "./device-info";
+
 /**
  * One queue per device for the tools that drive its keyboard.
  *
@@ -79,6 +81,24 @@ function deviceBusyError(deviceId: string, waitedMs: number): FailureError {
   );
 }
 
+/**
+ * One key per DEVICE, not per spelling of its id.
+ *
+ * The map used to key on the caller's raw string while every other consumer
+ * PARSES it, so two spellings of one target got two queues and the
+ * serialization silently did nothing: `chromium-cdp-09333` and
+ * `chromium-cdp-9333` are the same browser (`parseChromiumCdpPort` reads both
+ * as port 9333), and an iOS UDID is case-insensitive to the same degree. Two
+ * concurrent `keyboard` calls spelled the two ways interleaved to
+ * `AAABABABABABABBB` instead of `AAAAAAAABBBBBBBB`.
+ */
+function deviceQueueKey(deviceId: string): string {
+  const port = parseChromiumCdpPort(deviceId);
+  if (port !== null) return chromiumIdFromPort(port);
+  const platform = resolveDevice(deviceId).platform;
+  return platform === "ios" || platform === "ios-remote" ? deviceId.toUpperCase() : deviceId;
+}
+
 export function serializedPerDevice<T>(
   deviceId: string,
   task: () => Promise<T>,
@@ -92,8 +112,9 @@ export function serializedPerDevice<T>(
    */
   signal?: AbortSignal
 ): Promise<T> {
-  if (heldByCaller.getStore()?.has(deviceId) === true) return task();
-  const previous = deviceQueues.get(deviceId) ?? Promise.resolve();
+  const key = deviceQueueKey(deviceId);
+  if (heldByCaller.getStore()?.has(key) === true) return task();
+  const previous = deviceQueues.get(key) ?? Promise.resolve();
   const queuedAt = Date.now();
   // Both guards are checked when the turn comes rather than raced against a
   // timer: giving up early would leave the task still chained and still due to
@@ -118,9 +139,9 @@ export function serializedPerDevice<T>(
     return task();
   };
   const next = previous.then(guarded, guarded);
-  deviceQueues.set(deviceId, next);
+  deviceQueues.set(key, next);
   const drop = () => {
-    if (deviceQueues.get(deviceId) === next) deviceQueues.delete(deviceId);
+    if (deviceQueues.get(key) === next) deviceQueues.delete(key);
   };
   void next.then(drop, drop);
   return next;
@@ -148,15 +169,16 @@ export function serializedPerDevice<T>(
  * long `keyboard` call, and it is bounded by the batch.
  */
 export function holdDeviceQueue<T>(deviceId: string, body: () => Promise<T>): Promise<T> {
+  const key = deviceQueueKey(deviceId);
   const held = heldByCaller.getStore();
-  if (held?.has(deviceId) === true) return body();
+  if (held?.has(key) === true) return body();
   const nested = new Set(held ?? []);
-  nested.add(deviceId);
+  nested.add(key);
   return serializedPerDevice(deviceId, () => {
     const running = heldByCaller.run(nested, body);
-    activeHolds.set(deviceId, running);
+    activeHolds.set(key, running);
     const drop = () => {
-      if (activeHolds.get(deviceId) === running) activeHolds.delete(deviceId);
+      if (activeHolds.get(key) === running) activeHolds.delete(key);
     };
     void running.then(drop, drop);
     return running;
@@ -197,8 +219,9 @@ const activeHolds = new Map<string, Promise<unknown>>();
  * worse than one that lands late.
  */
 export function awaitDeviceHold(deviceId: string): Promise<void> {
-  if (heldByCaller.getStore()?.has(deviceId) === true) return Promise.resolve();
-  const hold = activeHolds.get(deviceId);
+  const key = deviceQueueKey(deviceId);
+  if (heldByCaller.getStore()?.has(key) === true) return Promise.resolve();
+  const hold = activeHolds.get(key);
   if (hold === undefined) return Promise.resolve();
   return new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, DEVICE_QUEUE_MAX_WAIT_MS);
