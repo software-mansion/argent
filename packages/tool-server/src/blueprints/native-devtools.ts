@@ -127,6 +127,16 @@ export const NON_INJECTABLE_RECOVERY = INJECTION_FREE_READERS + NON_INJECTABLE_N
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
 /**
+ * What a peer may call itself on the devtools socket. A superset of the
+ * `/^[A-Za-z_][A-Za-z0-9._-]*$/` that launch-app, restart-app, reinstall-app and
+ * settings-permissions validate their `bundleId` param against: an id this
+ * refuses never registers, and the injection-failed diagnosis then reads that
+ * silence as a dylib dyld never loaded. Digits lead here because a real bundle
+ * id may (`9gag.app`), where those four still reject one.
+ */
+const HANDSHAKE_BUNDLE_ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9.\-_]*$/;
+
+/**
  * Why an app has no live devtools connection — and so what, if anything,
  * restarting it would change.
  *
@@ -910,10 +920,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const server = net.createServer((socket) => {
       let bundleId: string | null = null;
+      // `destroy()` does not interrupt the frame loop: the reader splits a whole
+      // chunk and delivers every line in it, so without this latch a peer whose
+      // handshake was refused is admitted on the next line of the same write.
+      let refused = false;
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
-          // JSON.parse("null") succeeds, and a TypeError in this handler would
+          if (refused) return;
+          // JSON.parse("null") succeeds, and a TypeError anywhere below would
           // surface as an uncaughtException and crash the whole tool-server.
           if (parsed === null || typeof parsed !== "object") return;
           const msg = parsed as { type: string; payload: any };
@@ -932,8 +947,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               typeof requested !== "string" ||
               requested.length === 0 ||
               requested.length > 256 ||
-              !/^[A-Za-z0-9][A-Za-z0-9.\-_]*$/.test(requested)
+              !HANDSHAKE_BUNDLE_ID_PATTERN.test(requested)
             ) {
+              // Audible, because the diagnosis three functions away reads a
+              // missing registration as a dylib dyld never loaded.
+              process.stderr.write(
+                `[native-devtools] refused a handshake whose bundle id is not a plain identifier: ${JSON.stringify(
+                  typeof requested === "string" ? requested.slice(0, 64) : requested
+                )}\n`
+              );
+              refused = true;
               socket.destroy();
               return;
             }
@@ -963,8 +986,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             return;
           }
 
+          // Both branches below dereference the payload, and a frame without one
+          // is a TypeError the process-level handler turns into an exit.
+          const p = msg.payload;
+          if (p === null || typeof p !== "object") return;
+
           if (msg.type === "CDP") {
-            const p = msg.payload;
             // Unsolicited events have method but no id
             if (p.method && p.id === undefined) {
               const conn = connections.get(bundleId);
@@ -982,7 +1009,6 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           }
 
           if (msg.type === "ViewInspector") {
-            const p = msg.payload;
             const pending = pendingRpc.get(p.id);
             if (!pending) return;
             pendingRpc.delete(p.id);

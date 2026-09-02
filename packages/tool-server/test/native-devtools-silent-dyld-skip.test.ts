@@ -707,4 +707,88 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
       await instance.dispose();
     }
   });
+
+  it("holds that refusal against a valid id in the same write", async () => {
+    // `destroy()` ends the socket but not the frame loop already running over
+    // the chunk it arrived in, so the refused peer gets a second turn on the
+    // next line. Its cost is not just admission: it supersedes whatever socket
+    // holds that bundle id, and registering clears the relaunch record the
+    // terminal verdict is built from.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let attacker: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      const victim = await connectApp(api, "com.example.victim");
+      let victimClosed = false;
+      victim.once("close", () => {
+        victimClosed = true;
+      });
+
+      attacker = await new Promise<net.Socket>((resolve, reject) => {
+        const s = net.connect(api.socketPath);
+        s.once("connect", () => resolve(s));
+        s.once("error", reject);
+      });
+      attacker.write(
+        JSON.stringify({ type: "Control", payload: { bundleId: "not a bundle id" } }) +
+          "\n" +
+          JSON.stringify({ type: "Control", payload: { bundleId: "com.example.victim" } }) +
+          "\n"
+      );
+      for (let i = 0; i < 100 && !victimClosed; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      expect(api.listConnectedBundleIds()).toEqual(["com.example.victim"]);
+      expect(victimClosed, "the refused peer must not evict a registered app").toBe(false);
+      victim.destroy();
+    } finally {
+      attacker?.destroy();
+      await instance.dispose();
+    }
+  });
+
+  it("admits an id every app-restart tool would accept", async () => {
+    // The socket's refusal is silent, and the diagnosis reads a missing
+    // registration as a dylib dyld never loaded — so an id `restart-app` (the
+    // remedy this state prescribes) accepts must never be refused here.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      const socket = await connectApp(api, "_leading.underscore");
+      expect(api.listConnectedBundleIds()).toEqual(["_leading.underscore"]);
+      socket.destroy();
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it.each([
+    ["CDP", { type: "CDP" }],
+    ["ViewInspector", { type: "ViewInspector" }],
+  ])("survives a payload-less %s frame from a registered peer", async (_label, frame) => {
+    // Both post-handshake branches dereference `payload`. A TypeError here
+    // escapes to the process's uncaughtException handler, which crashShutdown
+    // turns into `process.exit(1)` — one frame would take the tool-server, and
+    // every agent sharing it, down.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    const caught: unknown[] = [];
+    const onUncaught = (err: unknown): void => {
+      caught.push(err);
+    };
+    process.on("uncaughtException", onUncaught);
+    let socket: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      socket = await connectApp(api, "com.example.peer");
+      socket.write(JSON.stringify(frame) + "\n");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(caught).toEqual([]);
+      expect(api.isConnected("com.example.peer")).toBe(true);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      socket?.destroy();
+      await instance.dispose();
+    }
+  });
 });
