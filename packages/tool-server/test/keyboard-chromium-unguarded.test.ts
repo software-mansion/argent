@@ -19,9 +19,9 @@ import { assertSupported, UnsupportedOperationError } from "../src/utils/capabil
 // What enforces that varies: `assertSupported` runs at the HTTP edge and in
 // run-sequence's pre-flight, while a flow reaches `Registry.invokeTool`, which
 // skips it and fails earlier still, resolving `services()` against the
-// simulator-server factory. A Chromium app has no hardware buttons
-// anyway; the chromium-server's WebSocket `button` command emulates `Back`
-// alone, as an Alt+Left chord, and throws for the rest.
+// simulator-server factory. A Chromium app has no hardware buttons anyway; the
+// chromium-server's WebSocket `button` command emulates `Back` alone, as an
+// Alt+Left chord, and throws for the rest.
 
 const chromiumDevice = {
   id: "chromium-cdp-9222",
