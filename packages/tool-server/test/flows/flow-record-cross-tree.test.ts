@@ -2139,15 +2139,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // ── Cancellation ─────────────────────────────────────────────────────────
 
   it("keeps the step when the run is cancelled during the re-probe", async () => {
-    // The mock ignores the signal, so the abort lands AFTER the recorded tool ran.
+    // The abort has to land in the re-probe — strictly AFTER the recorded tool
+    // ran. Throwing there discards the record of a step that already happened,
+    // which is the thing `captureRunTarget` refuses to do from the same
+    // position.
+    //
+    // Cancelling BEFORE the call would not reach that window: a request whose
+    // signal is already down never dispatches to the device at all, so there
+    // would be no executed step to keep and nothing about the re-probe would be
+    // under test. The mock puts the signal down as the recorded tool returns,
+    // which is the earliest moment that leaves a real step behind.
     await startRecording("cancel");
     const controller = new AbortController();
-    controller.abort();
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id !== "await-ui-element") throw new ToolNotFoundError(id);
+        controller.abort();
+        return { success: true, elapsed: 120 };
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
 
     const result = await recordWait(
       "cancel",
       { condition: "visible", selector: { text: "Continue" } },
-      { signal: controller.signal }
+      { registry, signal: controller.signal }
     );
 
     const warning = warningOf(result, "cancel");
