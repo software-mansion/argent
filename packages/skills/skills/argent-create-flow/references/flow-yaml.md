@@ -8,6 +8,7 @@ Read this reference when polishing, composing, or manually reviewing a flow.
     - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
     - [Relational scopes](#relational-scopes)
   - [Directives](#directives)
+    - [`swipe`](#swipe)
   - [Verification conditions](#verification-conditions)
   - [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
     - [`idle` readiness](#idle-readiness)
@@ -230,36 +231,21 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Local scripts
 
-A `script:` step runs a local `.mjs` file and uses no device. **Add one only when the user asks for a script in the prompt.**
+Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-Record the step live with `flow-add-script` rather than typing it in afterward. See [Live authoring](live-authoring.md#recorder-contract). `flow-add-script` refuses when the tool server does not share your file system, because the `.mjs` file stays on your machine. Then finish the recording, write the step into the YAML by hand, and replay it locally.
+Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
+- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-- **`path`** resolves against the directory of the flow file that **contains the step**. Thus a fragment finds the same script in each flow that composes it. Always write the extension, and match the letter case on disk. Argent refuses a mis-cased name on every platform. A case-sensitive checkout, for example Linux CI, cannot open the file.
-- **`timeout`** is a time in milliseconds. The default is 30000 and the minimum is 100. The host caps the value at five minutes by default. Argent clamps a larger value and names the clamp in the step's reason.
+If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
-Argent runs the script from the project root, not from the directory of the script file. Thus `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`.
-
-Argent gives the script an allowlist of names from your shell, not your full environment. The allowlist holds `PATH`, `HOME`, the identity, shell, locale, terminal, temporary-directory, cache and configuration names of the host, the Windows platform names, the proxy and TLS names, the Node, npm, Android, Java and Apple toolchain names, `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`. Argent removes every other name, such as `NODE_ENV` and `DATABASE_URL`, and its own token and port. Argent does not read a project `.env` file. There is no `env` key. Let the script read a secret or a URL from a file.
-
-Two names in the allowlist carry a credential. `SSH_AUTH_SOCK` reaches the SSH agent. An `npm_config_` name can hold a registry token. Run a script only when you trust it.
-
-A script returns a document through the `output` global. Assign it to `globalThis.output`, or set a key on the `output` object that Argent puts there. Argent ignores an `export default` value, and the step then passes with an empty document. The document must be a plain object of JSON-compatible data. `flow-add-script` reports it as `outputJson`. No flow step reads it yet.
-
-```js
-// scripts/seed-order.mjs
-globalThis.output = { orderId: "A-1001" };
-```
-
-The failure verdict names the side at fault: **failed** names the script, and **errored** names the host that ran it. A value in `output` that Argent cannot serialize is a **failed** step.
-
-On Chromium the leading `launch:` boots before step 1, so a `script:` above it runs while the app is already running.
+If a script fails, check its changes before you retry.
 
 ## Snapshots and standalone runs
 

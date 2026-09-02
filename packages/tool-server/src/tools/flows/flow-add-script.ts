@@ -26,25 +26,17 @@ import { summarizeStep } from "./flow-finish-recording";
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the flow being recorded — the one passed to flow-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording this script step belongs to."
-    ),
+  name: z.string().describe("Flow name passed to flow-start-recording."),
+  project_root: z.string().describe("Absolute project root passed to flow-start-recording."),
   path: z
     .string()
     .describe(
-      'The .mjs file to run, relative to the flow file being recorded (`<project_root>/.argent/flows/<name>.yaml`) — so a script at `<project_root>/scripts/seed-order.mjs` is "../../scripts/seed-order.mjs". Forward slashes, lowercase .mjs; `..` is allowed. Recorded verbatim as the step\'s `path`.'
+      'Path to the .mjs file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
     ),
   timeout: z
     .number()
     .optional()
-    .describe(
-      "Hard time limit for the script, in milliseconds (default 30000, minimum 100, capped by the host's `scripts.maxTimeoutMs`). Below the minimum the step would spend the limit starting its own Node process, so it is refused here rather than run. Recorded verbatim as the step's `timeout`, so the run here and the replay share one limit."
-    ),
+    .describe("Optional time limit in milliseconds. The default is 30000 and the minimum is 100."),
 });
 
 interface FlowAddScriptResult {
@@ -86,9 +78,7 @@ async function recordedStepCount(
   if (onDisk !== undefined) return { stepCount: onDisk };
   return {
     stepCount: session.flow.steps.length,
-    note:
-      `${session.filePath} could not be read and parsed, so the step count is from the last ` +
-      `valid in-memory snapshot rather than from the file.`,
+    note: `Could not verify stepCount from ${session.filePath}.`,
   };
 }
 
@@ -102,26 +92,18 @@ async function recordedStepCount(
 const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehind: string }> = {
   yes: {
     lead: "failed",
-    nextMove:
-      `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
-      `either make the re-run safe to repeat or clean up first, then call this again.`,
-    leftBehind:
-      `Whatever the script did before it stopped is still done: nothing was rolled back, so ` +
-      `clean up or make a re-run safe first.`,
+    nextMove: "Check or restore its changes before you retry.",
+    leftBehind: "Check or restore its changes.",
   },
   no: {
-    lead: "could not be run",
-    nextMove: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
-    leftBehind: `Nothing ran, so there is nothing to clean up — the reason above says what stopped it.`,
+    lead: "did not run",
+    nextMove: "Fix the reason before you retry.",
+    leftBehind: "Nothing ran.",
   },
   unknown: {
-    lead: "did not report a result",
-    nextMove:
-      `The runner failed around the script rather than inside it, so the script may never have ` +
-      `started — check the state it touches before you call this again.`,
-    leftBehind:
-      `The runner failed around the script rather than inside it, so the script may never have ` +
-      `started — check the state it touches.`,
+    lead: "may have run",
+    nextMove: "Check its changes before you retry.",
+    leftBehind: "Check its changes.",
   },
 };
 
@@ -147,12 +129,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). It runs the file the way a replay of THIS flow will. One divergence: the working directory is the ROOT run's \`project_root\`, so a flow in another project that composes this one with \`run:\` runs the script from that project's root, and a relative path the script reads or writes lands there instead.
-Use for work no device step can do: seed a database, write a fixture file, call an API, clean up after a run. Record it where it belongs in the walkthrough — a setup script goes BEFORE the restart-app it prepares for, because that is where it runs at replay.
-UNLIKE flow-add-step, a failure records NOTHING: the step is appended only when the script passes, because a failed script did not establish the state the rest of the recording would be walked against. Nothing the script did before it stopped is rolled back, and \`message\` says whether anything ran — clean up, or make the re-run safe, before calling again. A call that ends in a TRANSPORT error returns no \`message\` at all and may have run the script more than once.
-\`outputJson\` is the document the script returned; no flow step can reference it yet.
-Returns { message, status, stepCount, reason?, durationMs?, outputJson?, outputTruncated?, recorded?, savedTo? } — \`reason\` says what stopped a call that did not pass, \`outputTruncated\` says the 64 KiB render limit cut \`outputJson\`, which leaves a prefix that NO LONGER PARSES as JSON, and \`recorded\` and \`savedTo\` come back only on a pass.
-Refused when the recording's project root is not on this tool server's filesystem: the .mjs stays on the client, so there is nothing here to run.`,
+  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
@@ -169,12 +146,8 @@ Refused when the recording's project root is not on this tool server's filesyste
 
     if (session.persist !== "host") {
       throw new FailureError(
-        `Cannot record a script step for "${params.name}": this recording's project root is not ` +
-          `on the tool server's filesystem, so ${session.filePath} — and the .mjs file beside it ` +
-          `— exist only on your machine. There is nothing here to resolve "${params.path}" ` +
-          `against and nothing to run. Record against a tool server that shares your filesystem, ` +
-          `or finish the recording, add the \`script:\` step to the YAML by hand, and replay it ` +
-          `locally.`,
+        `Cannot access the script for flow "${params.name}". Finish the recording, add the ` +
+          `\`script:\` step to the YAML, and replay it locally.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_add_script_client_mode",
@@ -236,19 +209,14 @@ Refused when the recording's project root is not on this tool server's filesyste
       if (state !== "live") {
         const lost =
           state === "restarted"
-            ? `it was restarted while the script was running, so ${session.filePath} belongs to ` +
-              `another take now and this call cannot say what is in it`
-            : `it was finished (or dropped by the concurrent-recording cap) while the script was ` +
-              `running, so ${session.filePath} holds that finished take`;
+            ? `Recording "${params.name}" was replaced.`
+            : `Recording "${params.name}" ended.`;
         return {
           ...common,
           message:
-            `The script "${step.path}" ${lead}, and nothing was recorded — but recording ` +
-            `"${params.name}" in ${params.project_root} is no longer active either: ${lost}. ` +
-            `\`stepCount\` is this take's own last count, not a fresh read of the file. ` +
-            `${leftBehind} Re-record under a fresh name rather than restarting this one — ` +
-            `flow-start-recording truncates unconditionally, and on this key there is now ` +
-            `something to lose.`,
+            `Script "${step.path}" ${lead}; no step was recorded. ${lost} ${leftBehind} ` +
+            `Use a new flow name because flow-start-recording overwrites the existing file. ` +
+            `stepCount is from the ended recording.`,
           stepCount: session.flow.steps.length,
         };
       }
@@ -256,8 +224,8 @@ Refused when the recording's project root is not on this tool server's filesyste
       return {
         ...common,
         message:
-          `The script "${step.path}" ${lead} — nothing was recorded in "${params.name}", so the ` +
-          `flow is exactly as it was. ${nextMove}${note ? ` ${note}` : ""}`,
+          `Script "${step.path}" ${lead}; no step was recorded. ${nextMove}` +
+          (note ? ` ${note}` : ""),
         stepCount,
       };
     }
@@ -283,15 +251,10 @@ Refused when the recording's project root is not on this tool server's filesyste
           failure_area: "tool_server",
           error_kind: "unknown",
         },
-        `The script "${step.path}" ran and passed in ${result!.durationMs}ms and nothing it did ` +
-          `was rolled back, but ` +
+        `Script "${step.path}" passed, but the step was not recorded. ` +
           (refusedAnEarlierStep
-            ? `a step ALREADY in the flow file spells an output reference, so the append re-read ` +
-              `it and refused. The step named below is that one, not this script — remove the ` +
-              `reference from ${session.filePath} and the recording continues. This call's ` +
-              `output document is lost with this error. `
-            : `recording it failed — so the step is not in the flow, and its output document is ` +
-              `lost with this error. `) +
+            ? `Fix the existing step named below in ${session.filePath}. `
+            : "Check the script's changes before you retry. ") +
           `${err instanceof Error ? err.message : String(err)}`
       );
     }
@@ -299,17 +262,7 @@ Refused when the recording's project root is not on this tool server's filesyste
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message:
-        `Script step added to "${params.name}" flow — it ran here as a replay of this flow will; ` +
-        `composed into a flow under another project root with \`run:\`, it runs from that root. ` +
-        // A cut document is not merely short: it stops being JSON. Say so here
-        // rather than leave `outputTruncated` to contradict a sentence that
-        // otherwise reads as a whole-document guarantee.
-        (rendered?.outputTruncated
-          ? `\`outputJson\` is the first ${OUTPUT_RENDER_LIMIT_BYTES / 1024} KiB of what the ` +
-            `script returned — the rest was cut, so it no longer parses as JSON; `
-          : `\`outputJson\` is what the script returned; `) +
-        `no flow step can reference it yet.`,
+      message: `Added script step to "${params.name}" flow.`,
       ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),
