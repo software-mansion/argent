@@ -2,13 +2,16 @@
 
 One HTTP POST per command. The request body is a JSON object; the reply is a
 JSON **envelope**. Connections close after each exchange (`Connection:
-close`). The server listens on loopback on the port given by the
-`ARGENT_RUNNER_PORT` environment variable (forwarded by xcodebuild from
-`TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process; absent or `0`, the
-system assigns a port, which is how a session run straight from Xcode comes
-up), reachable through usbmux (USB cable only); the forwarded stream
-terminates on the device's loopback, so a loopback bind covers the whole
-transport.
+close`). The server listens on loopback on a system-assigned port and logs
+it once the listener is ready as `ARGENT_RUNNER_LISTENING port=N`; the
+tool-server reads that line from the xcodebuild launch log before it sends
+the first command, since nothing on the Mac can tell which device ports are
+free. Setting `ARGENT_RUNNER_PORT` in the runner's environment (xcodebuild
+forwards it from `TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process)
+pins the port instead; absent or `0` means system-assigned, which is also how
+a session run straight from Xcode comes up. The listener is reachable through
+usbmux (USB cable only); the forwarded stream terminates on the device's
+loopback, so a loopback bind covers the whole transport.
 
 The envelope is authoritative; the HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing

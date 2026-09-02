@@ -8,7 +8,6 @@ import {
   type ServiceEvents,
   type ServiceInstance,
 } from "@argent/registry";
-import { pickFreePort } from "../utils/free-port";
 import { ensureDeviceReady } from "../utils/ios-device/devicectl";
 import {
   ensureRunnerArtifact,
@@ -18,6 +17,7 @@ import {
   killStaleRunnersForDevice,
   launchRunner,
   resolveRunnerSigningConfig,
+  waitForRunnerListeningPort,
   type LaunchedRunner,
   type RunnerArtifact,
   type RunnerSigningConfig,
@@ -151,33 +151,23 @@ export function iosDeviceRunnerRef(device: DeviceInfo): {
   };
 }
 
-/** Startup budget for install, launch, and the first ready envelope. */
+/** Startup budget for install, launch, the runner's port line, and the first ready envelope. */
 const RUNNER_READY_TIMEOUT_MS = 120_000;
 
 /**
- * Launch the runner from a built artifact and wait for its first ready envelope.
- * On failure the child is killed and the error carries `runnerLogText` so the
- * caller can inspect the launch log.
+ * Launch the runner from a built artifact, read the port it bound from the
+ * launch log, and wait for its first ready envelope. On failure the child is
+ * killed and the error carries `runnerLogText` so the caller can inspect the
+ * launch log.
  */
 async function startRunner(
   udid: string,
   artifact: RunnerArtifact
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
-  const port = await pickFreePort();
-
   const launched = await launchRunner({
     udid,
     xctestrunPath: artifact.xctestrunPath,
     derivedDataPath: artifact.derivedDataPath,
-    port,
-  });
-
-  const sender = createUsbmuxCommandSender();
-
-  const client = createRunnerClient({
-    udid,
-    port,
-    send: sender.sendCommand,
   });
 
   // The factory exit listener is not attached yet. Race ready against exit so a dead child does not burn the full ready budget.
@@ -193,9 +183,27 @@ async function startRunner(
 
   launched.child.once("exit", onExit);
 
+  let client: RunnerClient;
+
   try {
+    const expiresAt = Date.now() + RUNNER_READY_TIMEOUT_MS;
+
+    // The runner binds a system-assigned loopback port on the device and logs it.
+    // Nothing on the Mac can pick that port, so the client waits for the line.
+    const port = await Promise.race([
+      waitForRunnerListeningPort(launched.logPath, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
+      exited,
+    ]);
+
+    client = createRunnerClient({
+      udid,
+      port,
+      send: createUsbmuxCommandSender().sendCommand,
+    });
+
+    // The rest of the same budget goes to the first envelope.
     await Promise.race([
-      waitForRunnerReady(client, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
+      waitForRunnerReady(client, { timeoutMs: Math.max(1, expiresAt - Date.now()) }),
       exited,
     ]);
   } catch (error) {

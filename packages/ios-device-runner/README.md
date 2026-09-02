@@ -39,11 +39,11 @@ build-for-testing` (signed with the user's team; see the environment
    variables below) into `~/.argent/ios-device-runner/derived`, stamped with
    a fingerprint of sources + Xcode + signing; a stamp mismatch (an Argent or
    Xcode update, a team change) rebuilds in place.
-2. Per session it launches `xcodebuild test-without-building` detached with
-   the session's port as `TEST_RUNNER_ARGENT_RUNNER_PORT` in the environment
-   (xcodebuild forwards `TEST_RUNNER_`-prefixed variables, prefix stripped,
-   into the runner process); testmanagerd installs and starts the runner on
-   the device.
+2. Per session it launches `xcodebuild test-without-building` detached;
+   testmanagerd installs and starts the runner on the device. The runner
+   binds a system-assigned loopback port and logs it as
+   `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
+   the launch log before it sends the first command.
 3. Commands travel as one HTTP POST per command over usbmux (USB cable
    only). `PROTOCOL.md` documents the contract.
 

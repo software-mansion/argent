@@ -15,6 +15,7 @@ import {
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
+  waitForRunnerListeningPort,
 } from "../../src/utils/ios-device/runner-build";
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
 
@@ -33,6 +34,7 @@ vi.mock("../../src/utils/ios-device/runner-build", () => ({
   killStaleRunnersForDevice: vi.fn(async () => {}),
   launchRunner: vi.fn(),
   resolveRunnerSigningConfig: vi.fn(async () => SIGNING_CONFIG),
+  waitForRunnerListeningPort: vi.fn(async () => RUNNER_PORT),
 }));
 
 const SIGNING_CONFIG = {
@@ -40,6 +42,8 @@ const SIGNING_CONFIG = {
   appBundleId: "com.argent.runner.tabcde12345",
   testBundleId: "com.argent.runner.tabcde12345.uitests",
 };
+/** The port the runner reports in its launch log; the device chooses it. */
+const RUNNER_PORT = 49923;
 vi.mock("../../src/utils/ios-device/runner-crash", () => ({
   readRunnerCrashSummary: vi.fn(async () => null),
 }));
@@ -325,6 +329,53 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
 
     expect(terminated).toHaveLength(1);
     expect(unhandled).toEqual([]);
+  });
+});
+
+describe("ios-device-runner blueprint: the runner's port", () => {
+  it("builds the client on the port the runner logged, once the log reports it", async () => {
+    stubLaunch();
+
+    await callFactory();
+
+    expect(waitForRunnerListeningPort).toHaveBeenCalledWith(LOG_PATH, { timeoutMs: 120_000 });
+    expect(createRunnerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ udid: DEVICE_UDID, port: RUNNER_PORT })
+    );
+    // No client can exist before the port is known.
+    expect(vi.mocked(createRunnerClient).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(waitForRunnerListeningPort).mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("short-circuits a child exit while the port line is still pending", async () => {
+    const { child } = stubLaunch();
+    vi.mocked(waitForRunnerListeningPort).mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("exit", 70));
+      return new Promise(() => {});
+    });
+
+    const thrown = (await rejectionOf(callFactory())) as Error;
+    expect(thrown.message).toContain("xcodebuild exited (code 70) before the runner became ready");
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+    expect(createRunnerClient).not.toHaveBeenCalled();
+    expect(killRunnerProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps a launch that never logs its port as the not-ready failure", async () => {
+    stubLaunch();
+    vi.mocked(waitForRunnerListeningPort).mockRejectedValueOnce(
+      new Error("the runner did not log a listening port within 120000ms")
+    );
+
+    const thrown = (await rejectionOf(callFactory())) as Error;
+    expect(thrown.message).toContain(
+      "The on-device runner did not become ready: the runner did not log a listening port " +
+        "within 120000ms."
+    );
+    expect(createRunnerClient).not.toHaveBeenCalled();
+    expect(waitForRunnerReady).not.toHaveBeenCalled();
+    expect(killRunnerProcess).toHaveBeenCalledTimes(1);
   });
 });
 

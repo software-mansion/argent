@@ -289,7 +289,7 @@ export async function waitForRunnerReady(
         return;
       }
 
-      // A non-envelope reply does not count. The port is reserved before the runner binds it.
+      // A non-envelope reply does not count. Only an envelope proves the runner answered.
       lastError = error;
     }
 

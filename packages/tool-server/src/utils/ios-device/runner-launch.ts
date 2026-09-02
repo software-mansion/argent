@@ -6,9 +6,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
+import { sleep } from "../timing";
 
 /**
- * Launch the built runner on a device and kill it again.
+ * Launch the built runner on a device, learn the port it bound, and kill it again.
  */
 
 function logsRoot(): string {
@@ -33,7 +34,6 @@ export async function launchRunner(opts: {
   udid: string;
   xctestrunPath: string;
   derivedDataPath: string;
-  port: number;
 }): Promise<LaunchedRunner> {
   const logDir = logsRoot();
   const resultsDir = resultsRoot();
@@ -81,8 +81,6 @@ export async function launchRunner(opts: {
     {
       detached: true,
       stdio: ["ignore", logFd, logFd],
-      // xcodebuild forwards TEST_RUNNER_* into the test process with the prefix stripped.
-      env: { ...process.env, TEST_RUNNER_ARGENT_RUNNER_PORT: String(opts.port) },
     }
   );
 
@@ -114,6 +112,38 @@ export async function launchRunner(opts: {
     logPath,
     resultBundlePath,
   };
+}
+
+/** The runner's NSLog line once its listener is ready, with the port it actually bound. */
+const LISTENING_LINE_RE = /ARGENT_RUNNER_LISTENING port=(\d+)/;
+const LISTENING_POLL_INTERVAL_MS = 250;
+
+/**
+ * Poll the launch log until the runner reports the loopback port it bound on
+ * the device. The port is the runner's to choose (a probe on the Mac cannot
+ * tell what is free on the phone), and the log is the only channel back
+ * before the first command.
+ */
+export async function waitForRunnerListeningPort(
+  logPath: string,
+  opts: { timeoutMs: number }
+): Promise<number> {
+  const expiresAt = Date.now() + opts.timeoutMs;
+
+  for (;;) {
+    const logText = await fsp.readFile(logPath, "utf8").catch(() => "");
+    const port = Number.parseInt(LISTENING_LINE_RE.exec(logText)?.[1] ?? "", 10);
+
+    if (port > 0) {
+      return port;
+    }
+
+    if (Date.now() >= expiresAt) {
+      throw new Error(`the runner did not log a listening port within ${opts.timeoutMs}ms`);
+    }
+
+    await sleep(LISTENING_POLL_INTERVAL_MS);
+  }
 }
 
 /** Kill a runner's whole process group (xcodebuild spawns helpers). */
