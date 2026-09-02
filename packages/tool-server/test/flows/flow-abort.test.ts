@@ -457,6 +457,50 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("keyboard:enter");
   });
 
+  it("reports a cancel that lands inside the submitting Enter as the same skip", async () => {
+    const controller = new AbortController();
+    // The Enter is a second `keyboard` call, and the tool rejects a cancel it
+    // sees before dispatching. Landing between the check and that call is the
+    // one window left, and it must read like every other cancellation: a skip,
+    // not a step error blaming the app for the caller's disconnect.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "email",
+          focused: true,
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+    const registry = {
+      invokeTool: vi.fn(async (id: string, params: Record<string, unknown>) => {
+        calls.push(id === "keyboard" ? `keyboard:${"key" in params ? "enter" : "text"}` : id);
+        if (id === "list-devices") return { devices: [] };
+        if (id === "keyboard" && "key" in params) {
+          // What `keyboard`'s own pre-dispatch `throwIfAborted()` does.
+          controller.abort();
+          throw Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+        }
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+
+    await writeFlow("cancelled-mid-enter", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = await run("cancelled-mid-enter", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.errored).toBe(0);
+    expect(calls).toContain("keyboard:enter");
+  });
+
   it("attributes abort skips inside a fragment to the fragment, not the root", async () => {
     const controller = new AbortController();
     // The fragment's tap polls for a target that never appears; the run is

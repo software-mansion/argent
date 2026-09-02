@@ -47,7 +47,7 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
-import { isUnlandedKeyboardTextResult } from "../keyboard";
+import { isUnlandedKeyboardTextResult, keyboardResultNote } from "../keyboard";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
@@ -199,9 +199,10 @@ export interface StepReport {
    * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited — and by a `type` step whose `keyboard` result carries a
+   * from one that waited — and by any step whose `keyboard` result carries a
    * note: the read-back could not conclude, or it repaired the field to get
-   * there, and a directive step has no `result` to carry that in.
+   * there. A directive step has no `result` to carry that in, and a raw `tool:`
+   * step's `result` is not rendered anywhere.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1250,9 +1251,10 @@ A \`type\` step presses Enter after the text unless \`submit: false\`; on an And
 \`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
 (\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
 \`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
-that could not conclude, before or after the repair — passes. Any passing \`keyboard\` result that
+that could not conclude, before or after the repair — passes. Any passing keyboard result that
 carries a note — the read-back could not conclude, or a repair got the text in — carries it as that
-step's warning, so neither is read as a plain verified pass.
+step's warning, in all three spellings (\`type\`, \`tool: keyboard\`, and a \`tool: run-sequence\` holding
+one), so none of them is read as a plain verified pass.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
@@ -2649,7 +2651,16 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        const note = rawStepKeyboardNote(step.name, result);
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(note ? { warning: note } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
@@ -2665,6 +2676,30 @@ async function execLeafStep(
     default:
       return { ...base, status: "error", reason: `unsupported step kind` };
   }
+}
+
+/**
+ * The read-back note a passing raw `tool:` step is handing back, in either
+ * spelling the recorder writes: the `keyboard` call itself, or a `run-sequence`
+ * holding one. A `type:` step gets this through `runType`; this spelling keeps
+ * the whole result, but nothing renders a step's `result` — the CLI prints the
+ * step line and its warning — so a repair that ran, or a read-back that could
+ * not conclude, would otherwise be an unqualified green in the spelling the
+ * recorder produces.
+ */
+function rawStepKeyboardNote(toolId: string, result: unknown): string | undefined {
+  if (toolId === "keyboard") return keyboardResultNote(result);
+  if (toolId !== "run-sequence" || typeof result !== "object" || result === null) return undefined;
+  const steps = (result as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return undefined;
+  const notes = steps
+    .filter(
+      (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null
+    )
+    .filter((entry) => entry.tool === "keyboard")
+    .map((entry) => keyboardResultNote(entry.result))
+    .filter((note): note is string => note !== undefined);
+  return notes.length > 0 ? notes.join(" ") : undefined;
 }
 
 function errMsg(err: unknown): string {

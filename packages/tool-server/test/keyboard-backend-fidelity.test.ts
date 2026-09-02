@@ -168,6 +168,31 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
     });
 
+    it("does not wait out the pacing delay once the caller cancels", async () => {
+      // `delayMs` has no ceiling and `longRunning` removed the adapter's bound,
+      // so every sleep in this loop is time a cancelled caller waits for: with
+      // plain sleeps a cancel on the first press was seen 2 x delayMs later.
+      const { api } = hidRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await expect(
+        typeSimulatorServer(
+          registryWith(aborting),
+          IOS_SIM,
+          { udid: IOS_SIM.id, text: "hi", delayMs: 3_000 },
+          controller.signal
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
+
     it("stops between keys through both iOS platform handlers too", async () => {
       // The loop check above is half the wiring: `makeIosImpl` and
       // `makeIosRemoteImpl` have to hand the backend `options.signal`. Calling
@@ -290,6 +315,29 @@ describe("keyboard backends — emit exactly the action they were given", () => 
 
       // The triple for "h" completes; nothing of "i" is dispatched.
       expect(events.map((e) => e.type)).toEqual(["keyDown", "char", "keyUp"]);
+    });
+
+    it("does not wait out the pacing delay once the caller cancels", async () => {
+      // The iOS twin's reason, on the backend that paces the same way.
+      const { api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await expect(
+        makeChromiumImpl(registryWith(aborting)).handler(
+          {},
+          { udid: CHROMIUM.id, text: "hi", delayMs: 3_000 },
+          CHROMIUM,
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(Date.now() - started).toBeLessThan(1_500);
     });
 
     it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {

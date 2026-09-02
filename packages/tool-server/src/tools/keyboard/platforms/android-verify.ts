@@ -578,7 +578,7 @@ function abortRepair(signal: AbortSignal | undefined, progress: string): void {
   if (signal?.aborted) throw repairAbortError(`${progress}, the field is part-way repaired`);
 }
 
-/** Named `AbortError` because `utils/format-error.ts` classifies a cancel by it. */
+/** Named `AbortError` as the gesture tools name theirs, and read back at the repair's catch. */
 function repairAbortError(detail: string, cause?: unknown): Error {
   const err = new Error(`keyboard repair aborted - ${detail}`);
   err.name = "AbortError";

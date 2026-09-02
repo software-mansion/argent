@@ -4,6 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
 import { InvalidToolInputError } from "../../utils/capability";
 import type { KeyboardParams, KeyboardResult } from "./types";
+import { sleepOrAbort } from "../../utils/timing";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,7 +27,9 @@ export async function typeSimulatorServer(
       await sleep(10);
     }
     api.pressKey("Down", keyCode);
-    await sleep(delay);
+    // Abortable as well: the "Up" below is sent either way, so a cancel shortens
+    // the hold rather than leaving a key down, and `delayMs` has no ceiling.
+    await sleepOrAbort(delay, signal);
     api.pressKey("Up", keyCode);
     if (withShift) {
       await sleep(10);
@@ -53,7 +56,9 @@ export async function typeSimulatorServer(
           error_kind: "unsupported",
         });
       await pressKeyCode(press.keyCode, press.withShift);
-      await sleep(delay);
+      // Abortable, so the check above runs at the cancel rather than `delayMs`
+      // later: `delayMs` has no ceiling and `longRunning` removed the adapter's.
+      await sleepOrAbort(delay, signal);
     }
   }
 

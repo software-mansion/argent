@@ -141,4 +141,65 @@ describe("a raw tool: keyboard step the read-back failed", () => {
     expect(run.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
     expect(run.ok).toBe(true);
   });
+
+  // A pass is not the whole verdict, and this is the spelling the recorder
+  // writes. Nothing renders a step's `result` — the CLI prints the step line and
+  // the warning under it — so without this a repair that backspaced the field, or
+  // a type nothing checked, is an unqualified green in a recorded flow.
+  it("warns when a passing result carries the read-back's note", async () => {
+    const note =
+      "The typed text is in the field, but not from the first attempt: Android's key-event burst " +
+      "did not deliver it, so 8 characters were deleted and the text was retyped in smaller chunks.";
+    const { run } = await runGated("repaired", {
+      typed: "hello world",
+      keys: 11,
+      verified: true,
+      note,
+    });
+
+    expect(run.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
+    expect(run.steps[0].warning).toBe(note);
+    expect(run.ok).toBe(true);
+  });
+
+  // The other spelling the keyboard description prescribes — typing a secret and
+  // submitting it in one `run-sequence`. The note is a step deeper, and a gate
+  // that only unwrapped the direct result would report this one green.
+  it("warns when the note is on a keyboard step inside a run-sequence", async () => {
+    const note =
+      "The typed text was not verified against the screen: the focused field masks its input.";
+    const flowFile = await writeFlow(
+      "sequenced",
+      `executionPrerequisite: ""
+steps:
+  - tool: run-sequence
+    args:
+      udid: 00000000-0000-0000-0000-0000000000ab
+      steps:
+        - tool: keyboard
+          args:
+            text: hunter2
+`
+    );
+    const registry = makeRegistry(async () => ({
+      completed: 1,
+      total: 1,
+      steps: [{ tool: "keyboard", result: { typed: "hunter2", keys: 7, note } }],
+    }));
+
+    const run = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        {
+          name: "sequenced",
+          project_root: PROJECT_ROOT,
+          flow_file: flowFile,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        }
+      )
+    );
+
+    expect(run.steps.map((s) => s.status)).toEqual(["pass"]);
+    expect(run.steps[0].warning).toBe(note);
+  });
 });

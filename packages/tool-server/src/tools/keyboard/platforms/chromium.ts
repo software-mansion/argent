@@ -4,6 +4,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
+import { sleepOrAbort } from "../../../utils/timing";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,7 +49,10 @@ async function runChromium(
         windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
       });
       keysPressed++;
-      await sleep(delay);
+      // Abortable for the same reason as the iOS loop's: `delayMs` has no ceiling
+      // and `longRunning` removed the adapter's, so a plain sleep is what a cancel
+      // would wait out before the check above sees it.
+      await sleepOrAbort(delay, signal);
     }
   }
 

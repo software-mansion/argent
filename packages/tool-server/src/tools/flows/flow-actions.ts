@@ -1541,13 +1541,20 @@ async function runType(
     // the TV kind that reaches here at all — an Apple TV stops at the focus tap
     // above, whose `gesture-tap` resolves simulator-server, which rejects a tvOS
     // UDID.)
-    await invokeOnDevice(env, "keyboard", { key: "enter" });
+    try {
+      await invokeOnDevice(env, "keyboard", { key: "enter" });
+    } catch (err) {
+      // The tool rejects a cancel that lands after the check above, and this
+      // call reads as an aborted skip for the same reason the text call does.
+      if (env.signal?.aborted) return ABORTED_OUTCOME;
+      throw err;
+    }
   }
   // A note on a passing result is the read-back reporting that it could not
-  // conclude, or that it repaired the field to get there. The raw `tool: keyboard`
-  // spelling of the same call keeps it in the step's `result`; a directive step
-  // carries no result, so without this an unverified type step and a verified one
-  // are indistinguishable in the report.
+  // conclude, or that it repaired the field to get there. A directive step carries
+  // no `result`, so without this an unverified type step and a verified one are
+  // indistinguishable in the report (`flow-run.ts` does the same for the raw
+  // `tool:` spellings, whose `result` nothing renders).
   const note = keyboardResultNote(typed);
   return note ? { ok: true, warning: note } : { ok: true };
 }
