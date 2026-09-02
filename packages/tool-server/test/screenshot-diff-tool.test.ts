@@ -5,7 +5,6 @@ import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
-import { REFUSED_CAPTURE_RETRY_SCALE } from "../src/utils/simulator-client";
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -170,12 +169,15 @@ describe("screenshotDiffTool", () => {
       captureScreenshot as never
     );
 
-    // Unscaled attempted first, then a retry at a scale of the tool's own —
-    // leaving it undefined would inherit ARGENT_SCREENSHOT_SCALE and diff a
-    // quarter-size capture, which is the resolution a diff exists to inspect.
+    // Unscaled attempted first, then a retry at a scale of the tool's own. The
+    // literal, not the constant: importing it would leave this green for any
+    // value it takes, including the ARGENT_SCREENSHOT_SCALE default (0.25) an
+    // omitted scale used to inherit, which is the resolution a diff exists to
+    // inspect. One part in a million below 1 is the whole margin — enough to
+    // reach the server's resizer, too little to move a dimension.
     expect(captureScreenshot).toHaveBeenCalledTimes(2);
     expect(captureScreenshot.mock.calls[0]![3]).toBe(1.0);
-    expect(captureScreenshot.mock.calls[1]![3]).toBe(REFUSED_CAPTURE_RETRY_SCALE);
+    expect(captureScreenshot.mock.calls[1]![3]).toBe(1 - 1e-6);
     const liveCaptures = (await fs.readdir(dir)).filter((name) =>
       /^current-[a-f0-9]{8}\.live\.png$/.test(name)
     );
@@ -202,6 +204,30 @@ describe("screenshotDiffTool", () => {
       )
     ).rejects.toThrow("device offline");
     expect(captureScreenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not re-request a capture the run was cancelled during", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-aborted-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
+    const controller = new AbortController();
+    // An aborted fetch rejects like any other network failure, so the retry
+    // that answers every failure would answer this one too — with a second
+    // capture on a signal that is already cancelled.
+    const captureScreenshot = vi.fn(async () => {
+      controller.abort();
+      throw new Error("The operation was aborted.");
+    });
+
+    await expect(
+      executeScreenshotDiffTool(
+        { simulatorServer: { apiUrl: "http://localhost:4949" } },
+        { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
+        { signal: controller.signal },
+        captureScreenshot as never
+      )
+    ).rejects.toThrow("The operation was aborted.");
+    expect(captureScreenshot).toHaveBeenCalledTimes(1);
   });
 
   it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {

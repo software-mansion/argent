@@ -147,6 +147,7 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
     updateBaselines: false,
     appIdentity: "/apps/app-a",
     seenKeys: new Map<string, string>(),
+    unscaledCaptureRefused: new Set<string>(),
     ...overrides,
   };
 }
@@ -721,10 +722,11 @@ describe("runSnapshot capture scale", () => {
       [env, "screenshot", { scale: 1.0, includeImageInContext: false }],
       [env, "screenshot", { scale: 1 - 1e-6, includeImageInContext: false }],
     ]);
-    // The retry comes back at the device's own resolution, so the baseline it
-    // writes is the file every other host writes, under the key they key it by
-    // — and the reason says nothing a caveat-free capture would not say.
-    expect(r.snapshotKey).toBe("home__ios-390x844");
+    // The recovered capture is adopted as any other is: no caveat in the
+    // reason, nothing to tell the step apart from one the device served first
+    // time. That the retry's own frame comes back full-size is a property of
+    // the scale asked for above, pinned against a server that honours it in
+    // flow-snapshot-capture-scale.test.ts — this mock returns one fixed image.
     expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
   });
 
@@ -740,10 +742,11 @@ describe("runSnapshot capture scale", () => {
     expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
   });
 
-  it("does not retry a capture failure that re-requesting cannot fix", async () => {
-    // The retry asks for the frame the first call already failed to get, so a
-    // cold frame stream or a dead backend answers it the same way. Retrying
-    // buys nothing and doubles the wait before the run is told.
+  it("does not retry a capture failure a scale cannot answer", async () => {
+    // A cold frame stream is the case that makes the point: `httpScreenshot`
+    // opens a first-frame window per call, so a second call WOULD wait again —
+    // and doubling how long a snapshot waits for a frame is not a decision for
+    // a fallback whose only lever is the scale.
     vi.mocked(invokeOnDevice).mockRejectedValueOnce(
       new Error("Screenshot failed: no image to export.")
     );
@@ -762,6 +765,45 @@ describe("runSnapshot capture scale", () => {
       "device not booted"
     );
     expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(2);
+  });
+
+  it("pays the refused capture once per device, not once per snapshot step", async () => {
+    // The refused attempt is a real `screenshot` failure — registry
+    // `toolFailed`, a `tool:fail` telemetry event, a line on stderr — so a
+    // flow with many snapshots would report a screenshot failure per step on a
+    // run that passes.
+    const shared = opts({ updateBaselines: true }).unscaledCaptureRefused;
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error(REFUSED));
+
+    await runSnapshot(env, opts({ updateBaselines: true, unscaledCaptureRefused: shared }));
+    await runSnapshot(
+      env,
+      opts({ updateBaselines: true, name: "cart", unscaledCaptureRefused: shared })
+    );
+
+    expect(vi.mocked(invokeOnDevice).mock.calls.map((c) => c[2])).toEqual([
+      { scale: 1.0, includeImageInContext: false },
+      { scale: 1 - 1e-6, includeImageInContext: false },
+      { scale: 1 - 1e-6, includeImageInContext: false },
+    ]);
+  });
+
+  it("re-proves the refusal on a device the run moved onto", async () => {
+    // The verdict is the device's: another device may well serve the frame.
+    const shared = opts({ updateBaselines: true }).unscaledCaptureRefused;
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error(REFUSED));
+
+    await runSnapshot(env, opts({ updateBaselines: true, unscaledCaptureRefused: shared }));
+    await runSnapshot(
+      { ...env, device: { platform: "ios", id: "SIM-2" } } as ActionEnv,
+      opts({ updateBaselines: true, unscaledCaptureRefused: shared })
+    );
+
+    expect(vi.mocked(invokeOnDevice).mock.calls.map((c) => c[2])).toEqual([
+      { scale: 1.0, includeImageInContext: false },
+      { scale: 1 - 1e-6, includeImageInContext: false },
+      { scale: 1.0, includeImageInContext: false },
+    ]);
   });
 
   it("skips, rather than erroring, when the run is cancelled before the retry", async () => {

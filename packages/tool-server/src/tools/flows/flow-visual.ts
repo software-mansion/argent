@@ -159,6 +159,12 @@ export async function runSnapshot(
     appIdentity: string;
     /** Run-scoped: the appIdentity each snapshot key was first captured from. */
     seenKeys: Map<string, string>;
+    /**
+     * Run-scoped: device ids already proven to refuse an unscaled capture.
+     * Proving it costs a real `screenshot` failure (see the capture below), so
+     * it is paid once per device instead of once per snapshot step.
+     */
+    unscaledCaptureRefused: Set<string>;
   }
 ): Promise<VisualOutcome> {
   // Settle so the capture is stable run-to-run rather than timed by a guess.
@@ -210,29 +216,48 @@ export async function runSnapshot(
   // where there is nothing to compare yet. The retry asks the same device for
   // the same pixels down the one code path that does not trip on it, so such a
   // device gates at its own resolution, on the baseline every other host writes.
-  // `screenshot-diff` retries at the same scale.
   //
-  // Only that refusal is retried: the retry re-requests the frame at the
-  // resolution that just failed, so anything else — an unreachable server, a
-  // frame stream that has not warmed up — fails identically a second time.
-  let shot: { image: ArtifactHandle };
-  try {
-    shot = (await invokeOnDevice(env, "screenshot", {
-      scale: 1.0,
+  // Only that refusal is retried, because the scale is the only thing the retry
+  // changes. Re-requesting would in fact give a cold frame stream a second
+  // first-frame window — `httpScreenshot` opens one per call — but doubling
+  // that wait is a decision about how long a snapshot waits for a frame, and
+  // not one a scale fallback should make on the side.
+  //
+  // Once a device has refused, later steps skip straight to the retry —
+  // the refused attempt is a real `screenshot` failure (registry `toolFailed`,
+  // a `tool:fail` telemetry event, a line on stderr), and a flow carrying N
+  // snapshots would otherwise report N of them on a run that passes.
+  const capture = async (scale: number): Promise<{ image: ArtifactHandle }> =>
+    (await invokeOnDevice(env, "screenshot", {
+      scale,
       includeImageInContext: false,
     })) as { image: ArtifactHandle };
+
+  let shot: { image: ArtifactHandle };
+  try {
+    if (opts.unscaledCaptureRefused.has(env.device.id)) {
+      shot = await capture(REFUSED_CAPTURE_RETRY_SCALE);
+    } else {
+      try {
+        shot = await capture(1.0);
+      } catch (err) {
+        if (!isPixelBufferSizeMismatch(err)) throw err;
+        opts.unscaledCaptureRefused.add(env.device.id);
+        // Nothing to re-request for a run already cancelled: the retry would
+        // dispatch a capture on an aborted signal and fail on the abort.
+        if (env.signal?.aborted) throw err;
+        shot = await capture(REFUSED_CAPTURE_RETRY_SCALE);
+      }
+    }
   } catch (err) {
-    if (!isPixelBufferSizeMismatch(err)) throw err;
-    // Same guard the settles above use: without it a run cancelled in this
-    // window dispatches a capture that aborts mid-fetch, and a throwing
-    // snapshot is an `error` step where every other cancelled step is a `skip`.
+    // Whatever a cancelled capture threw — an aborted fetch surfaces as an
+    // ordinary network failure, indistinguishable from a real one — the step is
+    // a `skip`, the way every other cancelled step reports, and not the one
+    // that reports `error`.
     if (env.signal?.aborted) {
       return { status: "skip", reason: "run aborted during snapshot capture" };
     }
-    shot = (await invokeOnDevice(env, "screenshot", {
-      scale: REFUSED_CAPTURE_RETRY_SCALE,
-      includeImageInContext: false,
-    })) as { image: ArtifactHandle };
+    throw err;
   }
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job

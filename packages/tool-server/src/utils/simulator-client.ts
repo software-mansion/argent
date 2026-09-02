@@ -40,15 +40,23 @@ const FIRST_FRAME_POLL_MS = 250;
 // frame at their head. The encoder wants exactly `w · h · 3` and reports the
 // two numbers. Every scale below 1 goes through the resizer instead, which
 // reads only as far as the frame.
+//
+// The wording belongs to the `png` crate rather than to any one emulator, so a
+// buffer that is the wrong length for another reason — a torn or half-resized
+// frame — reads as this too. Re-requesting is a fair answer to those as well,
+// so the match stays as wide as the crate's message and carries no platform
+// gate.
 const PIXEL_BUFFER_SIZE_MISMATCH = /wrong data size/i;
 
 /**
  * Whether a screenshot failure is the encoder rejecting the frame buffer's
  * length — the one capture failure a caller can answer by naming a scale.
  *
- * Matched on the server's message, not on the failure code: the code it arrives
- * with (`SIMULATOR_SCREENSHOT_FAILED`) is shared with every other in-band
- * capture error, the first-frame timeout included.
+ * Matched on the server's message, not on a failure code: no code identifies
+ * it. {@link httpScreenshot} formats the server's `error` field under
+ * `SIMULATOR_SCREENSHOT_FAILED` in band and under
+ * `SIMULATOR_HTTP_ERROR_RESPONSE` on a non-200, and both of those also carry
+ * capture failures no scale can answer — the first-frame timeout included.
  */
 export function isPixelBufferSizeMismatch(err: unknown): boolean {
   return err instanceof Error && PIXEL_BUFFER_SIZE_MISMATCH.test(err.message);

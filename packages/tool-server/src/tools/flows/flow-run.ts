@@ -911,6 +911,14 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   snapshotApps: Map<string, string>;
   /**
+   * Device ids proven in this run to refuse an unscaled capture — run-scoped
+   * memory for runSnapshot, which pays a failed `screenshot` invocation to
+   * learn it and would otherwise pay one per snapshot step. Keyed by device
+   * because the verdict is the device's: a run that moves onto another one has
+   * proven nothing about it.
+   */
+  unscaledCaptureRefused: Set<string>;
+  /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
    * suspect for every later lock-shaped boot failure, even after the run moves
@@ -1222,6 +1230,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         owned: resolved.booted ? [resolved.booted] : [],
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        unscaledCaptureRefused: new Set(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -2297,6 +2306,7 @@ async function execLeafStep(
           cropOn: step.cropOn,
           appIdentity: snapshotAppIdentity(state),
           seenKeys: state.snapshotApps,
+          unscaledCaptureRefused: state.unscaledCaptureRefused,
         });
         return {
           ...base,

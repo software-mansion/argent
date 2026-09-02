@@ -334,8 +334,16 @@ async function captureLiveInput(params: {
 }): Promise<string> {
   // Some Android emulators refuse the unscaled capture outright, taking the
   // whole baselinePath + captureCurrent flow with it. Re-requesting the same
-  // frame at a scale routes around the refusal without giving up any of it, so a
-  // diff on those devices still compares the pixels a diff is for.
+  // frame at a scale routes around the refusal without giving up any of it, so
+  // a diff on those devices still compares the pixels a diff is for. The scale
+  // is named rather than left off: an omitted one resolves to
+  // ARGENT_SCREENSHOT_SCALE (0.25 unset), a knob for how much detail the
+  // *agent* sees, and diffing quarter-size captures gives up the resolution a
+  // diff exists to inspect.
+  //
+  // The catch stays unconditional, unlike the flow snapshot's: it re-requests
+  // after any capture failure, as it did before the scale was pinned. What that
+  // costs a cold frame stream or a dead backend is #806, not this change.
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(
@@ -347,7 +355,11 @@ async function captureLiveInput(params: {
       params.captureScreenshot,
       params.peekFor?.(params.device)
     );
-  } catch {
+  } catch (err) {
+    // A cancelled run has nothing to re-request: the retry would dispatch a
+    // capture on an aborted signal and come back on the abort, one round trip
+    // later, with the same failure.
+    if (params.signal?.aborted) throw err;
     capture = await captureScreenshotUpright(
       params.api,
       params.device,

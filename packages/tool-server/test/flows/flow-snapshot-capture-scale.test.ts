@@ -20,6 +20,13 @@ import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 // at the serial below), and the simulator-server underneath. The server
 // stand-in replies at `fetch`, which needs no socket to bind, and sizes what it
 // returns the way the server does — `round(dimension × scale)`.
+//
+// That last part is a model of the binary, which is not in-tree (fetched by
+// scripts/download-simulator-server.sh from a rolling tag), so a build that
+// truncated instead of rounding would flip every Android snapshot key with
+// this suite still green. The real binary is held to it by the retry-scale
+// fidelity check in scripts/e2e/drive-device.sh, which captures twice on a
+// booted device and compares dimensions.
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-actions")>();
   return { ...actual, settleTree: vi.fn(async () => ({})) };
@@ -113,6 +120,7 @@ function opts(overrides: Record<string, unknown> = {}) {
     updateBaselines: false,
     appIdentity: "/apps/app-a",
     seenKeys: new Map<string, string>(),
+    unscaledCaptureRefused: new Set<string>(),
     ...overrides,
   } as Parameters<typeof runSnapshot>[1];
 }
