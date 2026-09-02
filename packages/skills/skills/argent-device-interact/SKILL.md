@@ -347,6 +347,8 @@ The `udid` is shared — do **not** include it in each step's `args`. Optional `
 
 Add an `await-ui-element` step to gate a later tap on a screen transition (e.g. tap → wait for the next screen's button → tap it). If its condition is **not** met before the timeout, the sequence stops at that step and the following steps do **not** run — so a mistimed tap can't fire against a screen that never settled.
 
+A sequence that contains a `keyboard` or `paste` step takes that device's keyboard from its first step through its **last** `keyboard` / `paste` step. Inside that span no other agent session's `keyboard` or `paste` runs, and any of theirs that can move focus — a tap, a gesture, `button`, `tv-remote`, `launch-app`, `restart-app`, `open-url` — waits it out. That is why the tap-clear-type recipe belongs in one sequence rather than in three calls. Steps after the last keyboard step run outside the hold. A gesture-only sequence takes no hold, and two bare calls take none either.
+
 ### Examples
 
 Scroll down three times:
