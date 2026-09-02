@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -77,17 +77,18 @@ async function spawnFakeServer(
 /** Does this platform's `ps` clip `-o command=` to $COLUMNS? procps-ng does;
  * BSD `ps` clips only to a terminal width, and the guard never hands `ps` a
  * terminal — so the width regression is unobservable on macOS. Probed against a
- * live pid through the guard's own binary and options rather than assumed from
- * `process.platform`. */
-function psClipsToColumns(pid: number, columns: number): boolean {
-  const width = (widen: string[]): number =>
-    execFileSync(launcher.PS_BIN, [...widen, "-p", String(pid), "-o", "command="], {
-      encoding: "utf8",
-      timeout: 2_000,
-      env: { ...process.env, COLUMNS: String(columns) },
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim().length;
-  return width([]) < width(["-ww"]);
+ * live pid through the guard's own reader (so a change to its flags reaches the
+ * probe) rather than assumed from `process.platform`. A `ps` that rejects the
+ * reader's flags cannot answer either way, which is the guard's own verdict
+ * too — report "does not clip" so the caller skips instead of erroring. */
+function psClipsToColumns(pid: number): boolean {
+  try {
+    return (
+      launcher.readProcessCommandLine(pid, []).length < launcher.readProcessCommandLine(pid).length
+    );
+  } catch {
+    return false;
+  }
 }
 
 function waitForExit(child: ChildProcess, timeoutMs = 8_000): Promise<boolean> {
@@ -164,7 +165,7 @@ describe("sweepDeadStateFiles", () => {
     try {
       // Skip rather than pass vacuously: where `ps` ignores $COLUMNS the
       // assertions below hold whether or not the guard passes `-ww`.
-      if (!psClipsToColumns(child.pid!, NARROW_COLUMNS)) ctx.skip();
+      if (!psClipsToColumns(child.pid!)) ctx.skip();
       await launcher.sweepDeadStateFiles();
       expect(await waitForExit(child)).toBe(true);
       expect(existsSync(file)).toBe(false);
@@ -202,8 +203,9 @@ describe("sweepDeadStateFiles", () => {
 
   // `-ww` hands the guard whole command lines, so the structural match is the
   // only thing standing between a look-alike and a SIGTERM. Both halves of it
-  // are pinned below, and each test records a bundle path that is NOT on disk —
-  // the sweep short-circuits on one that is, never reaching the guard.
+  // and the reach of its argument boundary are pinned below, and each test
+  // records a bundle path that is NOT on disk — the sweep short-circuits on one
+  // that is, never reaching the guard.
 
   it("does not signal a process that merely mentions the bundle path", async () => {
     const marker = join(TEST_HOME, "gone-install/dist/tool-server.cjs");
@@ -215,12 +217,13 @@ describe("sweepDeadStateFiles", () => {
     const file = writeRecord(marker, child.pid!);
     try {
       await launcher.sweepDeadStateFiles();
-      expect(await waitForExit(child, 1_000)).toBe(false);
+      // A signal is only ever sent after the record is unlinked, so a
+      // surviving record is itself "nothing was signalled".
       expect(existsSync(file)).toBe(true);
     } finally {
       child.kill("SIGKILL");
     }
-  }, 20_000);
+  });
 
   it("does not signal a different install whose bundle path ends with ours", async () => {
     // A second install nested under a longer prefix: its command line contains
@@ -235,8 +238,37 @@ describe("sweepDeadStateFiles", () => {
     const file = writeRecord(marker, child.pid!);
     try {
       await launcher.sweepDeadStateFiles();
-      expect(await waitForExit(child, 1_000)).toBe(false);
       expect(existsSync(file)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("signals a shell wrapper whose script embeds our launch line mid-argv", async () => {
+    // The match is a substring rule anchored at argument boundaries, so a
+    // command line that contains `<bundle> start` anywhere — here inside a
+    // `sh -c` script — reads as ours. Requiring it at argv[1] instead would
+    // stop identifying any launch that puts the bundle later (a `node --flag`,
+    // an `env` prefix, a supervisor's wrapper) and orphan that server, which is
+    // the outcome every fallback in this guard leans away from.
+    const marker = join(TEST_HOME, "wrapped-install/dist/tool-server.cjs");
+    expect(existsSync(marker)).toBe(false);
+    // `node <marker> start` fails instantly (no such module) with its output
+    // discarded, leaving the shell parked in `sleep` with the argv intact.
+    const child = spawn(
+      "/bin/sh",
+      ["-c", `echo ready; node ${marker} start >/dev/null 2>&1; sleep 30`],
+      { stdio: ["ignore", "pipe", "ignore"] }
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once("data", () => resolve());
+      child.once("exit", () => reject(new Error("shell wrapper exited before becoming ready")));
+    });
+    const file = writeRecord(marker, child.pid!);
+    try {
+      await launcher.sweepDeadStateFiles();
+      expect(await waitForExit(child)).toBe(true);
+      expect(existsSync(file)).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
