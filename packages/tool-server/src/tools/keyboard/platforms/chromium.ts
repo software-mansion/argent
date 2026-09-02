@@ -450,7 +450,11 @@ async function evaluateClearStep(
         `, so ${unknown} — the request is NOT cancelled by ` +
         (kind === "timeout" ? "the timeout" : "the drop") +
         " and had already been delivered. Do not retry blind and do not type into the field: read it " +
-        "back first (`describe`), then clear or type according to what it actually holds. " +
+        "back first with `debugger-evaluate` (`document.activeElement.value`, or `.textContent` for " +
+        "a rich-text field), then clear or type according to what it actually holds. `describe` " +
+        "cannot answer this on Chromium: it names an input by its `aria-label` or `placeholder` " +
+        "where it has one, falls back to the value only when it has neither, and never reports a " +
+        "password field's value at all — so an emptied field and a full one read alike. " +
         (kind === "timeout"
           ? "A renderer this busy is ordinary during QA; it is not a reason to restart the app."
           : "Reconnect if the next call needs it, but a restart is not a repair for this and a " +
@@ -625,8 +629,10 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
           "are NOT what it held before: the page rewrote the value after the delete, which is what a " +
           "currency, phone or card-number mask does from its `input` listener. The value you aimed at " +
           "is gone; what is there now is the page's own seed, and typing would append to THAT. Read the " +
-          "field back (`describe`) and clear or type according to what it actually holds — a second " +
-          "`clear` reaches the same mask and seeds it again.",
+          "field back with `debugger-evaluate` (`document.activeElement.value`) and clear or type " +
+          "according to what it actually holds — a second `clear` reaches the same mask and seeds it " +
+          "again. `describe` cannot answer this: it names an input by its `aria-label` or " +
+          "`placeholder` where it has one, and a masked field almost always has one.",
         {
           error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_FIELD,
           // Its own stage: the old value is destroyed here and intact in the
