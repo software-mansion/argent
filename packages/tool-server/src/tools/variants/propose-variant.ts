@@ -20,9 +20,10 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Device id (iOS udid / Android serial) the variants were captured on. The preview window " +
-        "streams THIS device directly — pass the same udid you screenshotted/described with, so " +
-        "the human never has to pick a simulator. Set it on the first propose_variant of a round; " +
-        "later calls may omit it (the last non-empty value wins)."
+        "streams THIS device directly, so the human never has to pick a simulator. This tool " +
+        "resolves no device of its own: pass the udid you named on the screenshot/describe calls, " +
+        "or read the booted device's id from `list-devices` when those calls named none. Set it on " +
+        "the first propose_variant of a round; later calls may omit it (the last non-empty value wins)."
     ),
   match: z
     .object({

@@ -700,10 +700,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Above the auto-target, so one controller covers the whole request. It
       // does not stop the device enumeration below — `list-devices` takes no
       // `ToolContext`, and its per-branch `withDeadline` is a deadline rather
-      // than cancellation — so that fan-out runs to its 25s bound either way.
-      // What the abort does buy is the check after the enumeration: the MCP
-      // client gives up at 30s and retries, and without it the abandoned attempt
-      // would still go on to drive the device the retry is about to drive again.
+      // than cancellation — so that fan-out runs to its own bound either way.
+      // What the abort buys is the check after it, below.
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -806,9 +804,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, subCtx);
           // The enumeration is the one stretch of a request that can run for
           // seconds before anything is done, and it cannot be cancelled from
-          // here. A client that gave up during it has already sent the retry, so
-          // going on would drive the device twice for one requested action —
-          // and write the result of the first to a socket nobody is reading.
+          // here. Driving the device for a caller that has already gone is worse
+          // than doing nothing: the result goes to a socket nobody reads, and a
+          // client that gave up and retried gets the action twice.
           if (controller.signal.aborted) return;
           bodyArgs = { ...bodyArgs, [def.autoDeviceTargetParam!]: autoResolvedDevice };
         } catch (err) {

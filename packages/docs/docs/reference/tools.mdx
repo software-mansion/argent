@@ -22,11 +22,17 @@ The declaration covers platform and device kind, but not form factor. An Apple T
 
 The call fails when no candidate is booted, and when more than one is. The error lists every device when no candidate matched. The error lists the candidates when several matched. Name one of them in the next call.
 
-Three groups keep an explicit target:
+Argent resolves no device for these arguments:
 
 - `boot-device` reads a missing `udid` as "boot by `avdName`, `vvdImage` or `electronAppPath`".
 - The debugger and profiler tools spell the argument `device_id`. Each one addresses the session that an earlier `debugger-connect` or `*-profiler-start` pinned. They stay bound to the device that call named.
-- A flow step and a `run-sequence` step carry no device of their own. Every step runs on the target its parent resolved. A flow pins that target when the flow runs. A sequence takes it from its own `udid`, which resolves like any other tool's.
+- `flow-add-step` records a step by running it, and it resolves no device for that run. Name the device in `args`, even for a tool that advertises `udid` as optional.
+- `propose_variant` passes its optional `udid` to the [Argent Lens](/docs/features/lens) window, which streams that device. Take the id from `list-devices` when the earlier `screenshot` and `describe` calls named no device. You pick the device in the window when no call supplies one.
+- `stop-all-simulator-servers` takes the ids to tear down in `devices`. That list is a teardown scope, not a target. Argent stops the services of every device on the machine when the caller omits the list.
+
+A recorded flow step carries no device of its own. Every step runs on the target the flow resolved at the start of the run. A `run-sequence` step works the same way, and the sequence resolves its own `udid` like any other tool.
+
+Argent never resolves a remote iOS simulator. `list-devices` reports one under the `ios-remote` platform. Pass its `udid` to drive it. A call that names no device fails when every listed device is remote. The error names the remote entry and repeats this rule.
 
 ## Devices and apps
 

@@ -12,7 +12,7 @@ Read this file before creating or changing a flow. Exercise the saved path throu
 
 ## Recorder contract
 
-`flow-add-step.command` is an MCP tool name. `args` is a JSON string, not an object. Omit `args` for a no-argument tool.
+`flow-add-step.command` is an MCP tool name. `args` is a JSON string, not an object. Omit `args` for a no-argument tool. Name the device in `args` even for a tool whose `udid` is optional: the recorder records the step by running it and resolves no device of its own, so take the id from `list-devices`.
 
 ```text
 command: "gesture-tap"

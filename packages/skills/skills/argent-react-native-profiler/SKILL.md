@@ -37,7 +37,7 @@ For native profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-nat
 
 Follow these rules throughout the profiling workflow:
 
-- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
+- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id` — the iOS UDID or Android serial from `list-devices`; use the same one for both so their data can be correlated later. This gives best coverage.
 - If the user only wants native profiling, use the `argent-native-profiler` skill workflow. Only skip `native-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
 
 ### After analysis: ask about next steps

@@ -15,7 +15,7 @@ Verify with `adb version` and `emulator -list-avds`.
 
 1. **Find a ready device** — with one device ready you can skip this: the interaction tools take `udid` as an optional argument and resolve it themselves. Call `list-devices` when you have to choose, or to see whether anything is up at all. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. Pick the first `serial` (e.g. `emulator-5554`) unless the user specified one.
 2. **Boot if needed** — if nothing Android is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list. The tool transparently picks hot vs cold boot: it probes the AVD's `default_boot` snapshot, restores it under a tight deadline when usable, and falls back to a full cold boot otherwise. Hot path is typically ~30s; cold path takes 2–10 min. On any stage failure the tool kills the emulator process it started so your next call starts from a clean state.
-3. **Metro (for React Native)** — once a device is up, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the device can reach Metro on your host. Repeat if the device restarts. See the `argent-metro-debugger` skill.
+3. **Metro (for React Native)** — once a device is up, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the device can reach Metro on your host. `<serial>` is the Android `serial` from `list-devices`. Repeat if the device restarts. See the `argent-metro-debugger` skill.
 
 ## 3. Using the device
 
@@ -27,4 +27,4 @@ The unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `s
 - Serials are the adb device id. iOS UDIDs and Android serials are not interchangeable, but you do NOT need to tell the tools which platform — dispatch is automatic.
 - `describe` on Android returns a shallower tree than iOS (no accessibility-service equivalent), but covers most tap-target discovery.
 - `reinstall-app` on Android always installs with `-g` so first-launch runtime permissions are pre-granted.
-- To stop the emulator, run `adb -s <serial> emu kill` from a shell (clean shutdown). Never `pkill -9`/`kill -9` qemu — a hard kill leaves the userdata image dirty, after which cold boots can hang for many minutes doing recovery (runaway writes, `boot_completed` never flips). If an image gets into that state, boot once with `-wipe-data` to reset it.
+- To stop the emulator, run `adb -s <serial> emu kill` (`<serial>` from `list-devices`) from a shell (clean shutdown). Never `pkill -9`/`kill -9` qemu — a hard kill leaves the userdata image dirty, after which cold boots can hang for many minutes doing recovery (runaway writes, `boot_completed` never flips). If an image gets into that state, boot once with `-wipe-data` to reset it.

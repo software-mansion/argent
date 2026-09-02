@@ -112,7 +112,7 @@ If the user did not specify a platform, do not default to iOS: with one device b
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
-When: Beginning a task that involves the iOS simulator, no simulator booted yet, or simulator-server trouble.
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, or choosing between several simulators.
 
 ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`

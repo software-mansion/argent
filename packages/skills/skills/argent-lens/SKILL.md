@@ -20,7 +20,7 @@ You implement several candidate designs, capture each one running on the device,
 
 `propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device id you captured the variants on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
 
-**Always pass `udid`** (the same simulator/emulator id you screenshotted and described with). The preview window then streams _that_ device directly — the human never has to pick a simulator. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins).
+**Always pass `udid`** (the same simulator/emulator id you screenshotted and described with). `propose_variant` resolves no device of its own, so if you have been driving one without naming it, call `list-devices` for the id. The preview window then streams _that_ device directly — the human never has to pick a simulator — and the crop frame is auto-captured; without `udid` a thumbnail is cropped only by a `variant.frame` you pass yourself. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins).
 
 ## 3. Workflow
 

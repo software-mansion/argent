@@ -194,8 +194,9 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   /** Runtime input validation; `inputSchema` is derived from it at registration. */
   zodSchema?: z.ZodObject<any>;
   /**
-   * JSON Schema advertised by `GET /tools`. Derived from `zodSchema` and should
-   * never need setting by hand: a hand-written top-level `oneOf`/`allOf`/`anyOf`
+   * JSON Schema advertised by `GET /tools`. Written at registration, which
+   * rewrites a hand-written one as readily as it derives an absent one, so it
+   * should never need setting by hand: a hand-written top-level `oneOf`/`allOf`/`anyOf`
    * reached clients once (#773), and the Anthropic Messages API rejects those
    * with a 400 that fails the WHOLE request, every tool in it. Express a
    * cross-field rule as a zod `.refine()`/`.superRefine()` plus a sentence in
@@ -206,7 +207,9 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   inputSchema?: Record<string, unknown>;
   /**
    * Set at registration, never by hand: the arg a dispatcher fills in with the
-   * single booted device this tool supports when the caller omits it. Present
+   * single booted device on a platform this tool declares, when the caller omits
+   * it. Not the single device this tool *supports* — the filter reads the
+   * declared platform and kind, and cannot tell an Apple TV from an iPhone. Present
    * exactly when `inputSchema` declared `udid` required, in which case that key
    * is dropped from the advertised `required` list. See
    * `auto-device-target.ts` for why the set is derived rather than declared.

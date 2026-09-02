@@ -246,6 +246,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
         "On session end: call stop-all-simulator-servers with devices: [...] naming the devices this session used, and perform any necessary cleanup. " +
         "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
+        "If you never named a device — the server resolved it for you — call list-devices for the ids to scope by. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
     }
   );
