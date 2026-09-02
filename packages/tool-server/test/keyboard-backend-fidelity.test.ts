@@ -8,6 +8,7 @@ import {
 } from "../src/tools/keyboard/simulator-server-keys";
 import {
   CLEAR_FOCUSED_EDITABLE_SCRIPT,
+  CLEAR_READBACK_SETTLE_MS,
   makeChromiumImpl,
 } from "../src/tools/keyboard/platforms/chromium";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
@@ -882,6 +883,38 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // none. `clearVerified` is what says the field was SEEN empty, which is
       // the claim only this backend can make.
       expect(result).toEqual({ typed: "", keys: 0, cleared: true, clearVerified: true });
+    });
+
+    it("leaves an editor time to put the value back before it reads the field", async () => {
+      // The read-back is one CDP round trip later, which lands in the renderer's
+      // next TASK: after the clear script's microtask checkpoint, before every
+      // timer. So an editor that restores from `setTimeout` or
+      // `requestAnimationFrame` restored AFTER the read that exists to catch it.
+      // Measured on Chrome 152 against five fields differing only in when they
+      // restore: `queueMicrotask` and `setTimeout(fn, 0)` were refused, while
+      // `setTimeout(fn, 16)`, `setTimeout(fn, 100)` and `requestAnimationFrame`
+      // each returned `clearVerified: true` over text that was back on screen.
+      const { api } = cdpRecorder();
+      let restored = false;
+      setTimeout(() => (restored = true), 100);
+      const evaluate = vi.fn(async (_expr: string, _opts?: unknown) =>
+        _expr === CLEAR_FOCUSED_EDITABLE_SCRIPT
+          ? { cleared: true, focus: "input type=text" }
+          : { focus: "input type=text", same: true, remaining: restored ? 5 : 0 }
+      );
+
+      const err = await makeChromiumImpl(registryWith({ ...api, evaluate }))
+        .handler({}, { udid: CHROMIUM.id, clear: true }, CHROMIUM)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+      expect(err?.message).toContain("still holds 5 characters");
+      // Pinned outright, as the key backends' settle is: it is the whole reason
+      // the restore above is seen, and the sum it contributes to is not
+      // separable from the transport's own latency.
+      expect(CLEAR_READBACK_SETTLE_MS).toBe(150);
     });
   });
 

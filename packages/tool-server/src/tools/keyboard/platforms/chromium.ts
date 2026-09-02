@@ -294,6 +294,33 @@ ${CONTENT_SIGNATURE_JS}
 // against a mock document — the sibling script has done that since it was
 // written, and this one decides just as much: which element is read, whether it
 // counts `value` or text, and what "still holds something" means.
+/**
+ * How long an accepted delete is left standing before the field is read back.
+ *
+ * The read-back is a second CDP round trip, and it lands in the renderer's very
+ * next task: after the clear script's microtask checkpoint, and BEFORE every
+ * timer. So an editor that restores from `setTimeout` or `requestAnimationFrame`
+ * rather than from a microtask put its value back after the read that exists to
+ * catch it. Measured on Chrome 152 against five fields differing only in when
+ * they restore: `queueMicrotask` and `setTimeout(fn, 0)` were correctly refused,
+ * while `setTimeout(fn, 16)`, `setTimeout(fn, 100)` and `requestAnimationFrame`
+ * each returned `clearVerified: true` over text that was back on screen 200ms
+ * later. `requestAnimationFrame` is a mainstream editor and
+ * controlled-component sync point.
+ *
+ * 150ms covers a frame and a `setTimeout(fn, 100)` restore with margin. It is a
+ * wait, not a proof: an editor that restores at 500ms still slips through, which
+ * is why `clearVerified` says the field was SEEN empty and never that it will
+ * stay so. The key backends already pay a settle of 300ms for the neighbouring
+ * problem (`simulator-server-keys.ts` `CLEAR_SETTLE_MS`).
+ *
+ * Host-side rather than inside the script because `api.evaluate` does not set
+ * `awaitPromise`: a script that returned a promise would serialize as `{}`.
+ *
+ * Exported so it is pinned on its own, as the key backends' constants are.
+ */
+export const CLEAR_READBACK_SETTLE_MS = 150;
+
 export const CLEAR_READBACK_SCRIPT = `(() => {
 ${CONTENT_SIGNATURE_JS}
   // Read and dropped in one go, so a later clear cannot inherit a stale record.
@@ -581,6 +608,7 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
       }
     );
   }
+  await sleep(CLEAR_READBACK_SETTLE_MS);
   // Every accepted clear is read back — there is no path that reports `cleared`
   // on the delete's word alone, because `delete` answers true whether or not it
   // removed anything.
