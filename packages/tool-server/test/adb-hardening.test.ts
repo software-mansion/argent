@@ -277,3 +277,29 @@ describe("runAdb — the caller's own cancel reaches the child", () => {
     expect(observed?.signal).toBeUndefined();
   });
 });
+
+describe("runAdb — an aborted child still gets the SIGKILL adb needs", () => {
+  it("registers an abort listener that kills, and drops it when the call ends", async () => {
+    // `execFile` forwards `signal` to `spawn` but NOT `killSignal`, so an abort
+    // kills with SIGTERM — and clears the `timeout` backstop on its way out. An
+    // adb client blocked on a hung daemon survives both, which is the whole
+    // reason ADB_KILL_SIGNAL is SIGKILL. Measured against the compiled `runAdb`
+    // with a SIGTERM-trapping `adb` on PATH: without this listener the child was
+    // still alive 300ms after the abort; with it, gone.
+    //
+    // The listener is what a test can see here: this file's `execFile` mock is a
+    // plain callback function, so `promisify` gives back a promise with no
+    // `.child` to kill.
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+
+    await adbShell("emulator-5554", "echo hi", { signal: controller.signal });
+
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    // A run-sequence or flow signal outlives many adb calls, so the listener
+    // must not accumulate on it.
+    expect(remove).toHaveBeenCalledWith("abort", add.mock.calls[0]![1]);
+  });
+});

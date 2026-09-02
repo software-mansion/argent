@@ -177,14 +177,31 @@ interface AdbRunOptions {
 export async function runAdb(args: string[], options: AdbRunOptions = {}): Promise<AdbRunResult> {
   const adbPath = await resolveAdbOrThrow();
   try {
-    const { stdout, stderr } = await execFileAsync(adbPath, args, {
+    const pending = execFileAsync(adbPath, args, {
       timeout: options.timeoutMs ?? 30_000,
       signal: options.signal,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
     });
-    return { stdout, stderr };
+    // `execFile` forwards `signal` to `spawn` but NOT `killSignal`, so an abort
+    // kills with SIGTERM — and clears the `timeout` backstop on its way out.
+    // The adb client `ADB_KILL_SIGNAL` was chosen for, blocked on a hung daemon,
+    // survives both: measured with a SIGTERM-trapping child, an aborted call
+    // rejected at 502ms and the process was still alive 4s past its own 3s
+    // timeout. Send the SIGKILL here instead.
+    const killOnAbort = (): void => {
+      pending.child?.kill(ADB_KILL_SIGNAL);
+    };
+    options.signal?.addEventListener("abort", killOnAbort, { once: true });
+    try {
+      const { stdout, stderr } = await pending;
+      return { stdout, stderr };
+    } finally {
+      // A run-sequence or flow signal outlives many adb calls, so the listener
+      // is dropped rather than accumulated on it.
+      options.signal?.removeEventListener("abort", killOnAbort);
+    }
   } catch (err) {
     throw describeAdbFailure(args, err);
   }
