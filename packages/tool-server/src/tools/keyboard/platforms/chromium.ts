@@ -174,8 +174,25 @@ ${CONTENT_SIGNATURE_JS}
     if (tag === "iframe") {
       return { cleared: false, focus: focus, reason: "iframe" };
     }
+    // \`childNodes.length === 0\` alone does not make a shadow host. An icon-only
+    // <button aria-label="Clear search"> has no light children either, and it was
+    // sent to "tap the field inside it" for an element that holds no field — a
+    // diagnosis one <svg> child flipped to the correct "tap the field first".
+    // Measured on Chrome 152: the same button, with and without that child, got
+    // the two opposite repairs.
+    //
+    // \`attachShadow\` throws NotSupportedError outside this list plus a valid
+    // custom element name, so a childless <button>, <a>, <li> or <td> CANNOT be
+    // hiding a closed root, and "nothing editable has focus" is what fits it.
+    const shadowHostable =
+      /^(article|aside|blockquote|body|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(
+        tag || ""
+      );
     const opaque =
-      !!el && !el.shadowRoot && tag !== null && (tag.indexOf("-") !== -1 || el.childNodes.length === 0);
+      !!el &&
+      !el.shadowRoot &&
+      tag !== null &&
+      (tag.indexOf("-") !== -1 || (el.childNodes.length === 0 && shadowHostable));
     return { cleared: false, focus: focus, reason: opaque ? "host-opaque" : "not-editable" };
   }
   const before = contentOf(el);

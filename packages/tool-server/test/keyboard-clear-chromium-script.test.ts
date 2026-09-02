@@ -634,6 +634,25 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — a host script cannot see into", () =
     expect(commands).toEqual([]);
   });
 
+  it("does not read an icon-only <button> as a host hiding a field", () => {
+    // An empty light subtree is the tell for a closed shadow root only on an
+    // element that can HAVE one. `attachShadow` throws NotSupportedError outside
+    // the spec's list plus a valid custom element name, so a childless <button>
+    // cannot be hiding a field — and "tap the field inside it" withholds the one
+    // repair that works. Measured on Chrome 152: the same
+    // `<button aria-label="Clear search">` got `KEYBOARD_CLEAR_UNSUPPORTED_FIELD`
+    // with no children and `KEYBOARD_CLEAR_NO_EDITABLE_FOCUS` with one <svg>.
+    expect(run(el("BUTTON", { childNodes: [] })).outcome).toEqual({
+      cleared: false,
+      focus: "button",
+      reason: "not-editable",
+    });
+    expect(run(el("BUTTON", { childNodes: [{}] })).outcome.reason).toBe("not-editable");
+    // Still a host where one is possible: the hyphen and the shadow-hostable
+    // tags keep the opaque diagnosis.
+    expect(run(el("SPAN", { childNodes: [] })).outcome.reason).toBe("host-opaque");
+  });
+
   it("still reports an ordinary non-editable element as a focus problem", () => {
     // These have light content of their own, so nothing is hidden and "tap the
     // field first" is the right repair.
