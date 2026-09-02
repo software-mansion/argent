@@ -823,6 +823,34 @@ describe("keyboard `clear` — the refusals reach a caller through the tool", ()
     expect(err.message).not.toMatch(/keyboard focus/);
   });
 
+  it("caps the page's own text, which the page chooses the length of", async () => {
+    // The detail is written by the PAGE. One that threw 50,000 characters made a
+    // 50,223-character tool error, measured on Chrome 152 — nothing truncates it
+    // at the HTTP layer, the MCP adapter or `run-sequence`'s step renderer.
+    // Every sibling device-output embed in the tool-server caps at 200.
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      evaluate: vi.fn(async () => ({
+        cleared: false,
+        reason: "script-error",
+        detail: "E".repeat(50_000),
+      })),
+    } as never);
+    const err = await makeChromiumImpl(registry)
+      .handler({}, { udid: chromiumDevice.id, clear: true }, chromiumDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e as Error
+      );
+    expect(err.message).toContain("E".repeat(200));
+    expect(err.message).not.toContain("E".repeat(201));
+    // The repair still reaches the caller after the cap.
+    expect(err.message).toMatch(/select the text with `gesture-drag`/);
+    expect(err.message.length).toBeLessThan(600);
+  });
+
   it("a document-wide editing host is refused with the focus code and its own wording", async () => {
     // designMode / <body contenteditable>: the repair IS "tap the field", so it
     // shares the focus code — but the reason a caller needs to read is that the

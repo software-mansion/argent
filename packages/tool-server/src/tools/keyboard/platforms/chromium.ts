@@ -571,7 +571,15 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
     if (reason === "script-error") {
       throw unclearableField(
         "the page raised an error while clearing, so nothing was cleared: " +
-          (outcome?.detail ?? "no detail") +
+          // The PAGE wrote this string. One that threw 50,000 characters made a
+          // 50,223-character tool error — measured on Chrome 152, with no
+          // truncation at the HTTP layer, the MCP adapter or `run-sequence`'s
+          // step renderer. Capped as every other device-output embed in the
+          // tool-server is (utils/vega-input.ts, blueprints/tv-control.ts,
+          // blueprints/android-tv-control.ts): trim, 200, no ellipsis.
+          (String(outcome?.detail ?? "")
+            .trim()
+            .slice(0, 200) || "no detail") +
           ". A page that replaces or removes `document.execCommand` cannot be cleared this way — " +
           "select the text with `gesture-drag` and type over the selection instead.",
         "keyboard_clear_chromium_script_error"
