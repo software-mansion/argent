@@ -206,6 +206,30 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     });
   }
 
+  it("keeps a native control the app draws beside the doubled WebView pair", () => {
+    // The merge replaces the landmark's child list with the inner half's own
+    // children, so it may only fire when that half is the host's ONLY child. An
+    // app that draws a control over the page — a close-ad button — publishes it
+    // as a second child of the same host; merging anyway deletes an on-screen,
+    // clickable element with no trace of it left. The flow selector tree pins
+    // the same shape.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.webkit.WebView" resource-id="com.example:id/webview" bounds="[0,200][1080,2000]">
+    <node class="android.webkit.WebView" text="Login Page" bounds="[0,200][1080,2000]">
+      <node class="android.widget.Button" resource-id="login" text="Login" clickable="true" bounds="[40,400][300,470]"/>
+    </node>
+    <node class="android.widget.Button" resource-id="com.example:id/close_ad" text="Close ad" clickable="true" bounds="[900,220][1060,290]"/>
+  </node>
+</hierarchy>`;
+    const all = flatten(parseUiAutomatorDump(xml, 1080, 2400));
+    const closeAd = all.find((n) => n.identifier === "com.example:id/close_ad");
+    expect(closeAd?.label).toBe("Close ad");
+    expect(closeAd?.clickable).toBe(true);
+    // The page's own button is still there too, so nothing was traded away.
+    expect(all.find((n) => n.identifier === "login")?.label).toBe("Login");
+  });
+
   it("leaves a control merely named like a WebView beside the host, not merged into it", () => {
     // `deriveUiAutomatorRole` maps every class whose name contains "webview" to
     // the role "WebView", so a role test cannot tell the host's own landmark
