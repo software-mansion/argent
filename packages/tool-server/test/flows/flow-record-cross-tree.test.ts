@@ -1420,10 +1420,17 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("raises no warning for a wait nested inside a recorded run-sequence", async () => {
-    // The recorder keys wait warnings off the tool id, so `run-sequence` is never probed.
     const registry = {
       invokeTool: vi.fn(async (id: string) => {
-        if (id === "run-sequence") return { completed: 0, total: 2, steps: [] };
+        if (id === "run-sequence")
+          return {
+            completed: 2,
+            total: 2,
+            steps: [
+              { tool: "await-ui-element", result: { success: true, elapsed: 12 } },
+              { tool: "gesture-tap", result: { tapped: true } },
+            ],
+          };
         throw new Error(`Tool "${id}" not found`);
       }),
       getTool: vi.fn(() => undefined),
@@ -1452,7 +1459,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(warningOf(result, "nested")).toBeUndefined();
     expect(fetchCount).toBe(0);
-    expect(result.toolResult).toMatchObject({ completed: 0, total: 2 });
+    expect(result.toolResult).toMatchObject({ completed: 2, total: 2 });
   });
 
   it("quotes a reason at or under the cap verbatim", async () => {
@@ -1924,6 +1931,55 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(finished.summary).toHaveLength(2);
+    expect(verdictsIn(finished.summary).size).toBe(0);
+    expect(finished.message).toContain(
+      "1 warning raised during this recording is NOT in `summary`"
+    );
+  });
+
+  it("drops the verdict when the call that absorbed the edit recorded nothing", async () => {
+    await startRecording("refused-absorb");
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await recordWait("refused-absorb", { condition: "visible", selector: { text: "Continue" } });
+    serveTree(iosRunnerTree([iosLabel("Continue")]));
+    await recordWait("refused-absorb", { condition: "visible", selector: { text: "Continue" } });
+
+    const file = path.join(tmpDir, ".argent", "flows", "refused-absorb.yaml");
+    const parsed = parseFlow(await fs.readFile(file, "utf8"));
+    parsed.steps = parsed.steps.slice(1);
+    await fs.writeFile(file, serializeFlow(parsed), "utf8");
+
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "run-sequence") {
+          return {
+            completed: 0,
+            total: 1,
+            steps: [{ tool: "keyboard", error: "device went away" }],
+          };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const refusal = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "refused-absorb",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({ udid: IOS, steps: [{ tool: "keyboard", args: { text: "hi" } }] }),
+      }
+    );
+    expect(refusal.recorded).toBeUndefined();
+    expect(refusal.stepCount).toBe(1);
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "refused-absorb", project_root: tmpDir }
+    );
+
+    expect(finished.summary).toHaveLength(1);
     expect(verdictsIn(finished.summary).size).toBe(0);
     expect(finished.message).toContain(
       "1 warning raised during this recording is NOT in `summary`"

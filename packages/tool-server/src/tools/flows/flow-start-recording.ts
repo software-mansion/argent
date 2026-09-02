@@ -94,8 +94,11 @@ LIVE so you can verify it works before it gets recorded. Read each step's
 returns success:false rather than failing), and a check that passes live can
 still fail once polished into an \`await:\`/\`assert:\` directive, which resolves
 against a different tree. flow-add-step warns about both when you record the
-wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
-— that tool reports its own shape — so for those, read \`toolResult\`. For a self-contained
+wait DIRECTLY. Nested inside a run-sequence a wait gets neither: one that did NOT
+hold stops the batch, so the recorder refuses the whole call — \`message\` names the
+wait, no step is written and \`stepCount\` does not move — and one that held is
+recorded inside an opaque batch step that no cross-tree check runs on. Record each
+wait as its own flow-add-step call. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use flow-add-echo to add labels. Call

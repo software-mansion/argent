@@ -136,6 +136,28 @@ describe("a nested flow-execute reports its own verdict", () => {
     expect(result.failed).toBe(0);
   });
 
+  it("still names the failing step when the run was cancelled after it failed", async () => {
+    const { result } = await run("flow-execute", { ...FAILED_SUBFLOW, aborted: true });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reason).toBe(
+      'flow "sub" was aborted (await-ui-element: no element matched the selector before timeout)'
+    );
+  });
+
+  it("says only that it was aborted when no composed step failed", async () => {
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      aborted: true,
+      failed: 0,
+      skipped: 1,
+      steps: [{ index: 0, kind: "tap", status: "skip", reason: "run aborted" }],
+    });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reason).toBe('flow "sub" was aborted');
+  });
+
   it("still passes a composed flow that succeeded", async () => {
     const passing = { ...FAILED_SUBFLOW, ok: true, passed: 1, failed: 0, steps: [] };
     const { result, registry } = await run("flow-execute", passing);
@@ -170,6 +192,33 @@ describe("a nested run-sequence reports its own verdict", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("flags a nested failure whose error message is empty", () => {
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 1,
+      steps: [{ tool: "keyboard", error: "" }],
+    });
+
+    expect(out?.status).toBe("fail");
+    expect(out?.reason).toBe(
+      "run-sequence stopped at keyboard after 0 of 1 steps: failed without an error message"
+    );
+  });
+
+  it("reports the FIRST failure, not a later one", () => {
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 2,
+      steps: [
+        { tool: "keyboard", error: "first" },
+        { tool: "gesture-tap", error: "second" },
+      ],
+    });
+
+    expect(out?.reason).toMatch(/stopped at keyboard/);
+    expect(out?.reason).toMatch(/first$/);
+  });
+
   it("skips when the sequence was cut short by cancellation", async () => {
     // No error entry, but fewer step results than steps requested — the only
     // other way run-sequence leaves its loop.
@@ -196,6 +245,59 @@ describe("a nested run-sequence reports its own verdict", () => {
 
     expect(result.steps[0].status).toBe("pass");
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("a cancelled nested run says whether it reached a step", () => {
+  it("marks a cancelled sequence that had already dispatched", async () => {
+    const { result } = await run("run-sequence", {
+      completed: 1,
+      total: 2,
+      steps: [{ tool: "gesture-swipe", result: { swiped: true } }],
+    });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reached).toBe(true);
+  });
+
+  it("leaves a sequence cancelled before its first step unmarked", async () => {
+    const { result } = await run("run-sequence", { completed: 0, total: 2, steps: [] });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reached).toBeUndefined();
+  });
+
+  it("marks a cancelled composed flow whose own step was reached", async () => {
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      aborted: true,
+      failed: 0,
+      skipped: 1,
+      steps: [{ index: 0, kind: "launch", status: "skip", reason: "run aborted", reached: true }],
+    });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reached).toBe(true);
+  });
+
+  it("leaves a composed flow whose every step was skipped unmarked", async () => {
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      aborted: true,
+      failed: 0,
+      skipped: 1,
+      steps: [{ index: 0, kind: "tap", status: "skip", reason: "run aborted" }],
+    });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reached).toBeUndefined();
+  });
+
+  it("leaves a nested run that FAILED unmarked", async () => {
+    const { result } = await run("flow-execute", FAILED_SUBFLOW);
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reached).toBeUndefined();
   });
 });
 

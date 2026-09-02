@@ -139,6 +139,7 @@ export interface ActionEnv {
    * `ActionEnv` by hand, which leaves every settle on its own budget.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
+  dispatch?: { reached: boolean };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -147,6 +148,11 @@ export interface DirectiveOutcome {
   reason?: string;
   /** The run was cancelled mid-step — reported as a skip, not a step failure. */
   aborted?: boolean;
+  /**
+   * On an `aborted` outcome only: whether this directive had already dispatched
+   * at the device when the cancel landed.
+   */
+  reached?: boolean;
   /**
    * The condition could not be evaluated — unknown, not false: the window never
    * produced a trustworthy read, or a `hidden` check ended on a blind or failed
@@ -201,6 +207,7 @@ export function invokeOnDevice(
   tool: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
+  if (env.dispatch) env.dispatch.reached = true;
   return invokeSubTool(
     env.registry,
     env.ctx,
@@ -815,7 +822,16 @@ export function offscreenHint(sel: FlowSelector): string {
  * Execute one directive step: the selector-acting ones plus `idle`, which takes
  * no selector because stillness is a property of the whole screen.
  */
-export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
+export async function runDirective(
+  outerEnv: ActionEnv,
+  step: DirectiveStep
+): Promise<DirectiveOutcome> {
+  const dispatch = { reached: false };
+  const outcome = await dispatchDirective({ ...outerEnv, dispatch }, step);
+  return outcome.aborted === true ? { ...outcome, reached: dispatch.reached } : outcome;
+}
+
+async function dispatchDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input. Fail upfront with
   // authoring guidance instead of a low-level gesture dispatch error after the
   // selector resolves.

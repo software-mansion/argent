@@ -184,6 +184,32 @@ describe("tool interaction messages", () => {
     ).toBe("Restarted recording flow checkout, discarding 4 steps");
   });
 
+  it("does not log a recorded step for a return that recorded nothing", () => {
+    const definitions = definitionsById(createRegistry());
+    const completedMsg = definitions.get("flow-add-step")!.interaction!.completedMsg!;
+    const params = { name: "checkout", project_root: "/tmp/proj", command: "run-sequence" };
+
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", toolResult: {}, stepCount: 2, savedTo: "/tmp/f.yaml" },
+      })
+    ).toBe("Did NOT add run-sequence step to flow checkout (see the returned message)");
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          message: "",
+          toolResult: {},
+          stepCount: 3,
+          recorded: "3. run-sequence",
+          savedTo: "/tmp/f.yaml",
+        },
+      })
+    ).toBe("Added run-sequence step to flow checkout");
+  });
+
   it("names the flow in every recording-tool interaction line", () => {
     // Recordings are concurrent, so several of these lines interleave in one log
     // and an unqualified "flow recording" would not say which one died or
@@ -249,7 +275,7 @@ describe("tool interaction messages", () => {
 
     expect(
       completedMsg({ params, result: { message: "", toolResult: undefined, stepCount: 0 } })
-    ).toBe("Recorded no echo step in flow checkout");
+    ).toBe("Did NOT add echo step to flow checkout (see the returned message)");
     expect(
       completedMsg({
         params,
@@ -278,7 +304,9 @@ describe("tool interaction messages", () => {
       });
 
       expect(result.recorded).toBeUndefined();
-      expect(completions).toEqual(["Recorded no echo step in flow checkout"]);
+      expect(completions).toEqual([
+        "Did NOT add echo step to flow checkout (see the returned message)",
+      ]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

@@ -45,7 +45,7 @@ import {
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { isUnmetUiWaitResult } from "../await-ui-element";
+import { isUnmetUiWaitResult, unmetUiWaitCause } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
@@ -201,6 +201,11 @@ export interface StepReport {
    * from one that waited.
    */
   warning?: string;
+  /**
+   * The runner had begun this step when the run was cancelled, so its `skip` is
+   * NOT proof that the device is untouched.
+   */
+  reached?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -2431,7 +2436,7 @@ async function execLeafStep(
       const r = await runLaunch(state, step.app);
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
-      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason, reached: true };
       return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
     }
 
@@ -2452,7 +2457,14 @@ async function execLeafStep(
         const r = await runDirective(deviceEnv(state), step);
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
-        if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+        if (r.aborted) {
+          return {
+            ...base,
+            status: "skip",
+            reason: r.reason,
+            ...(r.reached === false ? {} : { reached: true as const }),
+          };
+        }
         // `indeterminate` is `idle`'s only non-passing outcome: a screen that
         // merely kept moving passes with a warning, and so does one that
         // rendered nothing, so what is left here is a wait that could not run
@@ -2554,6 +2566,19 @@ async function execLeafStep(
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);
+        // The wait's own `cause` decides, not this run's signal. Only the poll
+        // loop knows which side of its final read the cancel landed on, and it
+        // says so: `cancelled` is set where the loop gave up, and never where a
+        // read judged the condition. Asking the signal instead would score a
+        // GENUINE miss that resolved in the same tick as an unrelated cancel a
+        // cancellation.
+        // Unmarked, like `case "wait"` and the `await:` directive: a wait polls
+        // the tree and calls no device tool, so `reached` - which says a skip is
+        // no proof of an untouched device - would be a claim about a step that
+        // dispatched nothing.
+        if (isUnmetUiWaitResult(step.name, result) && unmetUiWaitCause(result) === "cancelled") {
+          return { ...base, status: "skip", tool: step.name, reason: "run aborted during wait" };
+        }
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
@@ -2571,6 +2596,7 @@ async function execLeafStep(
           return {
             ...base,
             status: nested.status,
+            ...(nested.status === "skip" && nested.reached ? { reached: true as const } : {}),
             tool: step.name,
             reason: nested.reason,
             result,
@@ -2628,8 +2654,18 @@ async function execLeafStep(
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
         // step failure carrying the tool's own "aborted after N frames".
+        // Marked reached: the tool was invoked, so the gesture may already have
+        // gone out. Like the directive arm above, an unknown resolves to
+        // reached - an unmarked skip reads as "the device is untouched" and
+        // would drop the recorder's partial-mutation warning.
         if (signal?.aborted) {
-          return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
+          return {
+            ...base,
+            status: "skip",
+            tool: step.name,
+            reason: ABORTED_OUTCOME.reason,
+            reached: true,
+          };
         }
         const reframed = describeNestedParamError(registry, err, step.name, args, step.args ?? {});
         return { ...base, status: "error", tool: step.name, reason: reframed ?? errMsg(err) };

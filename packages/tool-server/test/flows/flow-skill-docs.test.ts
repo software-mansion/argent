@@ -14,6 +14,7 @@ import {
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
+import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 
 /**
  * Keep the core skill's scope routing concise while guarding the linked
@@ -75,6 +76,27 @@ describe("create-flow selector-scope docs", () => {
     for (const snippet of snippets) {
       expect(() => parseFlow(`steps:\n  - ${snippet}\n`), snippet).not.toThrow();
     }
+  });
+});
+
+describe("nested wait docs", () => {
+  it("flow-start-recording and live-authoring agree on a wait inside a run-sequence", () => {
+    const { description } = flowStartRecordingTool;
+    expect(description, "flow-start-recording no longer declares a description").toBeDefined();
+
+    // Both surfaces answer the same question, and the description is the one an
+    // agent reaches first. An unmet nested wait is refused, so there is no
+    // recorded batch left to inspect for it.
+    expect(description!).toMatch(/refuses the whole call/);
+    expect(description!).toMatch(/`stepCount` does not move/);
+    expect(description!).not.toMatch(/for those, read `toolResult`/);
+
+    const reference = readFileSync(LIVE_AUTHORING, "utf8");
+    expect(reference).toContain("the recorder refuses the whole call");
+    expect(reference).toContain("`stepCount` does not move");
+    // The remedy both give, and the reason the met case needs it too.
+    expect(description!).toMatch(/Record each\s+wait as its own flow-add-step call/);
+    expect(reference).toContain("Record each wait as its own `flow-add-step` call");
   });
 });
 

@@ -246,8 +246,9 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         const anchored = anchoredWarnings(session, flow.steps);
         const summary = attachStepWarnings(summarizeSteps(flow), anchored);
         // Everything raised, less what survived. `discardedWarnings` counts
-        // what the appends threw away; `stepWarnings` what the finish still
-        // held.
+        // what the calls that re-read the file threw away — the appends and the
+        // returns that record nothing alike; `stepWarnings` what the finish
+        // still held.
         const discarded =
           (session.discardedWarnings ?? 0) + (session.stepWarnings?.size ?? 0) - anchored.size;
         const headline = warningHeadline(anchored, discarded);

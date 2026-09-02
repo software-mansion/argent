@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { InvalidToolInputError } from "../src/utils/capability";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -128,8 +129,55 @@ describe("run-sequence", () => {
     expect(result.steps[0]).toMatchObject({
       tool: "not-a-tool",
       error: expect.stringContaining("not allowed"),
+      dispatched: false,
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("marks a step rejected by the capability pre-flight as never dispatched", async () => {
+    const registry = {
+      getTool: vi.fn(() => ({
+        capability: { apple: { simulator: true }, android: { emulator: true } },
+      })),
+      invokeTool: vi.fn(async () => ({ ok: true })),
+    } as unknown as Registry;
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: "chromium-cdp-9222",
+        steps: [
+          { tool: "button", args: { button: "home" }, delayMs: 0 },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(0);
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]).toMatchObject({
+      tool: "button",
+      error: expect.stringContaining("not supported"),
+      dispatched: false,
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not mark a step that WAS dispatched and then failed", async () => {
+    const registry = mockRegistry((id: string) => {
+      if (id === "keyboard") throw new Error("keyboard failed: device went away");
+      return { ok: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS, steps: [{ tool: "keyboard", args: { text: "hi" }, delayMs: 0 }] }
+    );
+
+    expect(result.steps[0]).toMatchObject({ tool: "keyboard", error: expect.any(String) });
+    expect(result.steps[0]).not.toHaveProperty("dispatched");
   });
 
   it("stops the sequence when an await-ui-element step reports an unmet condition", async () => {
@@ -171,6 +219,70 @@ describe("run-sequence", () => {
     expect(result.total).toBe(3);
   });
 
+  it("marks an unmet await-ui-element `dispatched: false` — it polled, it did not act", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? { success: false, elapsed: 5000, note: "not seen" }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    expect(result.steps[0]).toMatchObject({ tool: "await-ui-element", dispatched: false });
+    expect(result.completed).toBe(0);
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a CANCELLED await-ui-element out of `steps` instead of failing the batch", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? {
+            success: false,
+            elapsed: 12,
+            note: "wait was cancelled before the condition was met",
+            cause: "cancelled",
+          }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    // The short list is how every other cancel exit here reports itself, and it
+    // is what tells the batch's readers a cancel from a failure.
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps.every((s) => !("error" in s))).toBe(true);
+    expect(result.completed).toBe(1);
+    expect(result.total).toBe(3);
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+  });
+
   it("continues past an await-ui-element step whose condition is met", async () => {
     const registry = mockRegistry((id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
@@ -196,6 +308,33 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).toHaveBeenCalledTimes(3);
     expect(result.completed).toBe(3);
     expect(result.steps.every((s) => "result" in s)).toBe(true);
+  });
+
+  it("marks a MET await-ui-element `dispatched: false` as well — it read, it did not act", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element" ? { success: true, elapsed: 120 } : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    // Whether the condition held changes nothing at the device, so the marker
+    // must not either — the unmet twin above carries it as well.
+    expect(result.steps[0]).toMatchObject({ tool: "await-ui-element", dispatched: false });
+    expect(result.steps[1]).not.toHaveProperty("dispatched");
+    expect(result.completed).toBe(2);
   });
 
   it("only the await-ui-element tool's success:false halts — other tools are unaffected", async () => {
@@ -419,6 +558,43 @@ describe("run-sequence", () => {
       expect(result.completed).toBe(0);
       expect(result.total).toBe(2);
       expect(executed).toEqual([]);
+    });
+
+    it("marks the entry `dispatched: false`, since the parse precedes execute", async () => {
+      const { registry, executed } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      expect(result.steps[0]).toMatchObject({ tool: "gesture-tap", dispatched: false });
+      expect(executed).toEqual([]);
+    });
+
+    it("leaves a tool that rejects its OWN args unmarked", async () => {
+      const registry = new Registry();
+      const executed: string[] = [];
+      registry.registerTool({
+        id: "keyboard",
+        description: "test double that rejects from inside execute",
+        zodSchema: z.object({ udid: z.string(), text: z.string().optional() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("keyboard");
+          throw new InvalidToolInputError("text must not be empty");
+        },
+      } as never);
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "keyboard", args: { text: "" } }] }
+      );
+
+      expect(result.steps[0]).not.toHaveProperty("dispatched");
+      expect(executed).toEqual(["keyboard"]);
     });
 
     it("still emits the step's own invoked/failed events", async () => {

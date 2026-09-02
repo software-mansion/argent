@@ -121,6 +121,67 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("gesture-tap");
   });
 
+  it("leaves a directive cancelled in its settle unmarked, like the guard's skip", async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 3) controller.abort();
+      return {
+        tree: screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("cancelled-tap-pair", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", selector: { text: "Checkout", loose: true } },
+        { kind: "tap", selector: { text: "Checkout", loose: true } },
+      ],
+    });
+
+    const calls: string[] = [];
+    const result = await run("cancelled-tap-pair", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip", "tap:skip"]);
+    expect(result.steps.map((s) => s.reason)).toEqual(["run aborted", "run aborted"]);
+    expect(result.steps[0].reached).toBeUndefined();
+    expect(result.steps[1].reached).toBeUndefined();
+    expect(calls).not.toContain("gesture-tap");
+  });
+
+  it("marks a directive whose gesture had already gone out", async () => {
+    const controller = new AbortController();
+    currentFetch = () => ({
+      tree: screen([n({ label: "Email", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+      source: "native-devtools",
+    });
+    const calls: string[] = [];
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        calls.push(id);
+        if (id === "list-devices") return { devices: [] };
+        if (id === "gesture-tap") controller.abort();
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+
+    await writeFlow("cancelled-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { text: "Email", loose: true }, text: "a@b.c" }],
+    });
+
+    const result = await run("cancelled-type", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].reached).toBe(true);
+    expect(calls).toContain("gesture-tap");
+    expect(calls).not.toContain("keyboard");
+  });
+
   it("dispatches no tap when the run is cancelled during the settle-completing tree read", async () => {
     const controller = new AbortController();
     // The target is visible and the tree is stable, so read 2 is the read that
@@ -322,6 +383,11 @@ describe("run cancellation mid-directive", () => {
     expect(result.steps[0].reason).toBe("run aborted");
     // Not the tool's own "aborted - cancelled mid-gesture after N of M frames".
     expect(result.steps[0].reason).not.toMatch(/frames/);
+    // The swipe provably went out (asserted above), so this skip has to carry
+    // the marker: an unmarked skip tells `reachedAStep` nothing was dispatched,
+    // and the recorder then drops the partial-mutation warning for a run that
+    // did move the device.
+    expect(result.steps[0].reached).toBe(true);
     expect(result.aborted).toBe(true);
   });
 
@@ -532,6 +598,7 @@ describe("run cancellation mid-launch", () => {
     // tree-source gate were cut short, so the launch verified nothing.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].reached).toBe(true);
     expect(result.ok).toBe(false);
     expect(calls).toContain("restart-app");
   });
@@ -556,6 +623,34 @@ describe("run cancellation mid-launch", () => {
     // A skip with the uniform abort reason — NOT an error blaming restart-app.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].reached).toBe(true);
     expect(calls).toContain("restart-app");
+  });
+
+  it("leaves a step the cancel never reached unmarked", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const registry = launchRegistry(calls, () => {
+      controller.abort();
+      return { ok: true };
+    });
+
+    await writeFlow("cancelled-launch-pair", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "launch", app: "com.acme.other" },
+      ],
+    });
+
+    const result = await run("cancelled-launch-pair", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:skip",
+      "launch:skip",
+    ]);
+    expect(result.steps[0].reached).toBe(true);
+    expect(result.steps[1].reached).toBeUndefined();
+    expect(calls.filter((c) => c === "restart-app")).toHaveLength(1);
   });
 });

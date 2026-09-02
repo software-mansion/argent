@@ -5,7 +5,11 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import {
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetUiWaitResult,
+  unmetUiWaitCause,
+} from "../await-ui-element";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
 // sequence to the single capture the MCP layer appends after the last step.
@@ -62,7 +66,10 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
+/** `dispatched: false` marks a step that provably sent NO action to the device. */
+type StepResult =
+  | { tool: string; result: unknown; dispatched?: false }
+  | { tool: string; error: string; dispatched?: false };
 
 type RunSequenceResult = {
   completed: number;
@@ -97,7 +104,7 @@ export function createRunSequenceTool(
     description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, Apple TV / Android TV, or Chromium app).
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
-Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
+Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops). A step that sent nothing to the device — an unlisted tool name, one this target does not support, args that fail the tool's schema, or an \`await-ui-element\`, which only polls the UI tree and acts on nothing whether or not its condition held — carries \`dispatched: false\`, so a caller can tell "never acted on the device" from "acted and then failed".
 One screenshot is captured automatically after the whole sequence (not per step) — call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
 That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
 
@@ -179,6 +186,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           results.push({
             tool: step.tool,
             error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
+            dispatched: false,
           });
           break;
         }
@@ -193,7 +201,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             assertSupported(step.tool, subTool.capability, device);
           } catch (err) {
             if (err instanceof UnsupportedOperationError) {
-              results.push({ tool: step.tool, error: err.message });
+              results.push({ tool: step.tool, error: err.message, dispatched: false });
               break;
             }
             throw err;
@@ -205,14 +213,28 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetUiWaitResult(step.tool, result)) {
+            // A cancelled wait judged nothing, so it is not this batch's
+            // failure. Break without an entry, as every other cancel exit here
+            // does: the short `steps` list is what reports the cancel, and an
+            // error entry would score the batch a failure whose reason calls a
+            // condition unmet that was never read.
+            if (unmetUiWaitCause(result) === "cancelled") break;
             const note = (result as { note?: string }).note;
             results.push({
               tool: step.tool,
               error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+              dispatched: false,
             });
             break;
           }
-          results.push({ tool: step.tool, result });
+          // A met wait acts on nothing either: it read the tree and stopped. The
+          // unmet arm above already says so, and a caller reading only one of
+          // the two would score the same device reality both ways.
+          results.push(
+            step.tool === AWAIT_UI_ELEMENT_TOOL_ID
+              ? { tool: step.tool, result, dispatched: false as const }
+              : { tool: step.tool, result }
+          );
         } catch (err) {
           const reframed = describeNestedParamError(
             registry,
@@ -224,6 +246,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           results.push({
             tool: step.tool,
             error: reframed ?? (err instanceof Error ? err.message : String(err)),
+            ...(reframed !== undefined ? { dispatched: false as const } : {}),
           });
           break;
         }

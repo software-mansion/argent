@@ -26,10 +26,21 @@ const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 interface NestedOutcome {
   status: StepStatus;
   reason: string;
+  /** Whether the nested run got as far as a step AT THE DEVICE. */
+  reached: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function reachedAStep(steps: unknown): boolean {
+  if (!Array.isArray(steps)) return true;
+  return steps.some((entry) => {
+    if (!isRecord(entry)) return true;
+    if (entry.status === "skip") return entry.reached === true;
+    return entry.dispatched !== false;
+  });
 }
 
 function firstFailingStep(steps: unknown): string | undefined {
@@ -72,13 +83,19 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
       reason:
         `flow "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
         `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
+      reached: false,
     };
   }
 
   // Cancellation is a skip, never a failure — the rule the runner applies to
   // its own steps.
   if (result.aborted === true) {
-    return { status: "skip", reason: `flow "${flow}" was aborted` };
+    const detail = firstFailingStep(result.steps);
+    return {
+      status: "skip",
+      reason: `flow "${flow}" was aborted${detail ? ` (${detail})` : ""}`,
+      reached: reachedAStep(result.steps),
+    };
   }
 
   if (result.ok === false) {
@@ -88,6 +105,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
       reason:
         `flow "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
         `${count(result.errored)} errored${detail ? ` (${detail})` : ""}`,
+      reached: reachedAStep(result.steps),
     };
   }
 
@@ -108,11 +126,14 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
   const failed = steps.find((s) => isRecord(s) && typeof s.error === "string");
   if (failed && isRecord(failed)) {
     const tool = typeof failed.tool === "string" ? failed.tool : "step";
+    const message = typeof failed.error === "string" ? failed.error : "";
+    const why = message || "failed without an error message";
     return {
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${why}`,
+      reached: reachedAStep(steps),
     };
   }
 
@@ -123,6 +144,7 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
     return {
       status: "skip",
       reason: `run-sequence was aborted after ${count(result.completed)} of ${total} steps`,
+      reached: reachedAStep(steps),
     };
   }
 
