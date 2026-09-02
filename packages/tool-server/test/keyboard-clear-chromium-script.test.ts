@@ -61,6 +61,12 @@ function el(tagName: string, props: Record<string, unknown> = {}): Record<string
     select() {
       commandLog.push("select");
     },
+    // The page's own selection is anchored OUTSIDE this element unless a case
+    // says otherwise — the copy-to-clipboard shape, and the reason a
+    // contenteditable clear now moves the selection into its host before the
+    // select-all. Pass `contains: () => true` for a case where it is already
+    // inside.
+    contains: () => false,
     ...props,
   };
 }
@@ -94,6 +100,8 @@ function run(
   outcome: Outcome;
   commands: string[];
   selectionsDropped: number;
+  /** The host ranges the script built to scope its select-all. */
+  hostRanges: Array<Record<string, unknown>>;
   /** What the page's selection holds when the script returns. */
   selection: () => unknown[];
   /** What the script parked on the page for the read-back to compare against. */
@@ -107,6 +115,7 @@ function run(
   // code block is visible page state the next screenshot-diff registers.
   const pageRange = { id: "page-selection" };
   let ranges: unknown[] = [pageRange];
+  const hostRanges: Array<Record<string, unknown>> = [];
   const g = globalThis as Record<string, unknown>;
   const had = Object.hasOwn(g, "document");
   const saved = g.document;
@@ -149,7 +158,12 @@ function run(
       get rangeCount() {
         return ranges.length;
       },
-      getRangeAt: (i: number) => ({ cloneRange: () => ranges[i] }),
+      getRangeAt: (i: number) => ({
+        cloneRange: () => ranges[i],
+        // Where the page's selection sits, which the script tests against the
+        // focused editable's own `contains`.
+        commonAncestorContainer: ranges[i],
+      }),
       addRange(r: unknown) {
         ranges.push(r);
       },
@@ -158,6 +172,19 @@ function run(
         ranges = [];
       },
     }),
+    // The script builds one of these to put the selection inside the focused
+    // editing host, so `selectAll` has an editable root to scope to.
+    createRange: () => {
+      const range = {
+        id: "host-contents",
+        node: undefined as unknown,
+        selectNodeContents(node: unknown) {
+          range.node = node;
+        },
+      };
+      hostRanges.push(range);
+      return range;
+    },
     ...documentExtras,
   };
   try {
@@ -166,6 +193,8 @@ function run(
       outcome,
       commands,
       selectionsDropped: dropped.count,
+      /** The host ranges the script built to scope its select-all. */
+      hostRanges,
       selection: () => ranges,
       parked: win.__argentClearTarget as { el?: unknown; before?: unknown } | undefined,
     };
@@ -651,8 +680,11 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
     // `const` inside it, the name was not in scope in the `catch` — the call
     // threw a ReferenceError that the inner try swallowed, and on Chrome 152 it
     // resolved to the PAGE's own `window.restoreSelection` where one is defined.
-    // `selectionsDropped` is what sees that: it counts `removeAllRanges`, which
-    // only the restore calls.
+    // `selectionsDropped` is what sees that: it counts `removeAllRanges`. Two on
+    // this path — the script clears the page's own range to put the selection
+    // inside the editing host, so the select-all has an editable root to scope
+    // to, and the restore clears that one again to put the page's back. The
+    // range that ends up selected is the assertion that matters.
     const { outcome, selection, selectionsDropped } = run(
       el("DIV", { isContentEditable: true }),
       {},
@@ -665,8 +697,33 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — it leaves nothing behind", () => {
       }
     );
     expect(outcome.reason).toBe("script-error");
-    expect(selectionsDropped).toBe(1);
+    expect(selectionsDropped).toBe(2);
     expect(selection()).toEqual([{ id: "page-selection" }]);
+  });
+
+  it("aims the select-all at the focused host when the page's selection is elsewhere", () => {
+    // `selectAll` scopes to the root editable of WHERE THE SELECTION IS, not of
+    // the focused element. Anchored outside — the copy-to-clipboard shape the
+    // input path was already fixed for — it has no editable root and selects the
+    // WHOLE DOCUMENT, which `delete` then refuses. Measured on Chrome 152 with
+    // focus on a plain <div contenteditable> and the page selection on a <p>:
+    // the field was diagnosed as holding a block the editor will not remove, and
+    // sent to a `gesture-drag` that is not its repair.
+    const editor = el("DIV", { isContentEditable: true });
+    const outside = run(editor);
+    expect(outside.outcome).toEqual({ cleared: true, focus: "div" });
+    expect(outside.hostRanges).toHaveLength(1);
+    expect(outside.hostRanges[0]!.node).toBe(editor);
+    expect(outside.commands).toEqual(["selectAll", "delete"]);
+  });
+
+  it("leaves a selection already inside the host alone", () => {
+    // A nested editable keeps scoping to its outer host exactly as before, and
+    // a caller's own range inside the field is not replaced.
+    const inside = run(el("DIV", { isContentEditable: true, contains: () => true }));
+    expect(inside.outcome).toEqual({ cleared: true, focus: "div" });
+    expect(inside.hostRanges).toEqual([]);
+    expect(inside.commands).toEqual(["selectAll", "delete"]);
   });
 
   it("touches nothing on a refusal that never selected", () => {

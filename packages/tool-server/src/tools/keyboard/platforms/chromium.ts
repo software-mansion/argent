@@ -218,7 +218,29 @@ ${CONTENT_SIGNATURE_JS}
   // refusal below reads. A contenteditable has no separate selection to hijack,
   // so it keeps \`selectAll\`, which also reaches into an open shadow root.
   if (tag === "input" || tag === "textarea") el.select();
-  else document.execCommand("selectAll");
+  else {
+    // \`selectAll\` scopes to the root editable of WHERE THE SELECTION IS, not of
+    // the focused element. Anchored outside the editable — the same
+    // copy-to-clipboard shape that hijacked the input path above — it has no
+    // editable root to scope to and selects the WHOLE DOCUMENT, which \`delete\`
+    // then refuses. Measured on Chrome 152 with focus on a plain
+    // <div contenteditable> and the page selection on a <p>: the field was
+    // reported as holding a block the editor will not remove, and sent to a
+    // \`gesture-drag\` it does not need. Putting the selection inside the host
+    // first gives the select-all something to scope to. Only when it is not
+    // already there, so a nested editable keeps scoping to its outer host
+    // exactly as before, and the page's own ranges are cloned above either way.
+    const sel = document.getSelection();
+    const inside =
+      !!sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).commonAncestorContainer);
+    if (sel && !inside) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    document.execCommand("selectAll");
+  }
   // The cheap half of the check, and it is exact for the fields it does answer
   // for. Measured on Chrome 151: \`delete\` answers true for every element that
   // ends up empty — including one that was ALREADY empty, where \`selectAll\`
