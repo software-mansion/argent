@@ -1,49 +1,43 @@
 ---
 name: argent-create-flow
-description: Create, record, edit, replay, or repair reusable Argent flow YAML files. Use when the user asks to record or replay a repeatable device path, set up profiling or an A/B comparison, or invoke the authoring engine behind argent-qa-flows. Also use before repeating three or more interactions. For one-off UI checks, acceptance-driven regression tests, or screen video, use argent-test-ui-flow, argent-qa-flows, or argent-screen-recording respectively.
+description: Create, record, edit, replay, or repair reusable Argent flow YAML files. Use when the user asks to record or replay a repeatable device path, set up profiling or an A/B comparison, or invoke the authoring engine behind argent-qa-flows. Also use before repeating three or more interactions. Supports iOS, Android, and Chromium. For one-off UI checks, acceptance-driven regression tests, or screen video, use argent-test-ui-flow, argent-qa-flows, or argent-screen-recording respectively.
 ---
 
 # Create an Argent flow
 
-An Argent flow is a replayable sequence in `.argent/flows/<name>.yaml`.
+A flow is a list of steps in `.argent/flows/<name>.yaml` that Argent can replay. Flows run on iOS, Android, and Chromium. This skill does not record or author flows for Vega, Apple TV, or Android TV at this time. The runtime replays a hand-written Vega flow with `argent flow run --platform vega`. If the device is a TV, tell the user. Then stop.
 
-For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows` first. It adds deterministic setup, acceptance evidence, and two-pass proof.
+If the task is a QA test case, a ticket, or an acceptance criterion, load `argent-qa-flows` first.
 
-## Read the relevant reference
+## Read in this sequence
 
-- Before creating or changing a flow, read [Live authoring](references/live-authoring.md) completely.
-- When polishing, composing, or manually reviewing YAML, read [Flow YAML](references/flow-yaml.md). For Vega, read its platform limits before recording remote or keyboard tools.
-- On capture warnings, raw coordinates, unavailable trees, mistimed transitions, overlays, or replay failures, read [Reliability and recovery](references/reliability-and-recovery.md).
+1. Bind one device with `list-devices`. Then read the platform file one time: [iOS](references/platforms/ios.md), [Android](references/platforms/android.md), or [Chromium](references/platforms/chromium.md). Only the platform file gives the platform behavior.
+2. Read the file for your phase:
+   - Record a new flow, or record steps again: [Record](references/record.md).
+   - Convert the recorded YAML: [Polish](references/polish.md) and [Flow YAML](references/yaml.md).
+   - Audit before each replay: [Polish: Audit](references/polish.md#audit).
+   - Replay or repair a flow: [Replay](references/replay.md).
+3. If a tool result or a replay report contains a warning, read [Warnings](references/warnings.md).
 
-## Non-negotiable rules
+## Rules
 
-1. **Record the first walkthrough.** Start the recorder before the first launch or in-app action. Do not reconstruct a rehearsed path.
-2. **Record checks when their states appear.** Record `await-ui-element` live, then convert it during polish. An echo records intent or diagnostic context, not app behavior or a verdict. A screenshot is human evidence, not an executable verdict. For absence, record the same selector as `visible`, perform the removing action, then record it as `hidden`.
-3. **Use semantic targets.** Prefer a strict id, then stable text or an accessibility label. Use `scroll-to` for off-screen elements. Resolve every raw-point warning immediately through the [coordinate fallback gate](references/reliability-and-recovery.md#coordinate-fallback-gate).
-4. **Prove every screen change.** Record a destination-only identity check. During polish, follow it with `await: { idle: true }`. Stillness does not prove identity, and `idle` can pass with a warning.
-5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, and the documented Chromium packaging `launch:`.
-6. **Replay the final YAML end to end.** A normal flow needs one uninterrupted full pass. `argent-qa-flows` requires two consecutive passes.
-
-### Stable selectors
-
-A stable selector is fixed by app code and survives account, data, time, count, order, and every locale and environment the flow supports. Prefer ids such as `settings-screen`. Do not gate on values such as `Today`, `Item 4`, usernames, counters, or timestamps.
+1. **Record the first walkthrough.** Start the recorder before the first launch or app action. Do not write steps from memory. Before you do three or more interactions again, tell the user. Then start a recording.
+2. **When its state shows, record the check.** Record `await-ui-element` live. An echo gives context. A screenshot is evidence for a person. The two are not verdicts.
+3. **Use stable targets.** Use an id first, then stable text or an accessibility label. A stable target comes from the app code. It does not change with the account, data, time, count, sequence, locale, or environment. Do not use values such as `Today`, `Item 4`, a user name, a counter, or a timestamp. A value that the action changes, such as a counter after a tap, is a result check, not a target. If capture keeps a raw point or only a role, do the [coordinate fallback gate](references/record.md#coordinate-fallback-gate).
+4. **Show each screen change.** Record a check on an element that is only on the destination screen. Add `await: { idle: true }` after it in the polish pass. A screen that does not move does not show which screen it is.
+5. **Convert only recorded behavior.** You can remove a step or correct a parameter by hand. You can add by hand only the [steps that you can add by hand](references/polish.md#steps-that-you-can-add-by-hand). Record a missing action or check live.
+6. **Replay the complete YAML from start to end.** One full pass with no manual help completes a flow. Two passes, one after the other, are necessary for `argent-qa-flows`.
 
 ### Flow-only selector scopes
 
-During polish, use `within`, `after`, and `next` to disambiguate repeated elements. Read [Flow YAML: Relational scopes](references/flow-yaml.md#relational-scopes) for their frame-based semantics and failure cases.
+In the polish pass, use `within`, `after`, and `next` to select one of some equal elements. Read [Flow YAML: Relational scopes](references/yaml.md#relational-scopes).
 
 ## Workflow
 
-1. Choose the flow type:
-   - **e2e:** the first non-echo step is `launch:`. The flow controls process start.
-   - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
-2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
-3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
-
-## Proactive recording
-
-Before repeating three or more interactions, tell the user and start a recording. Record that run and replay it afterward. A completed path cannot be recorded retroactively.
+1. Select the flow type. An **e2e** flow starts with `launch:`. A **fragment** has no launch at the start and declares an `executionPrerequisite`. If the app has no control for the action in the task, report it. Then stop.
+2. Do the record, polish, audit, and replay phases. Each phase file gives the steps.
+3. Report the file, the replay command (`argent flow run <name>`), the result, the prerequisite or side effects, and each coordinate or raw-gesture step that you kept. At the end of the session, call `stop-all-simulator-servers` with `devices: [<this device>]`.
 
 ## Repair
 
-When replay fails, follow [Reliability and recovery](references/reliability-and-recovery.md). Inspect the first divergence, correct the smallest justified unit, audit, and replay the full flow. Stop after two unsuccessful correction cycles. Never weaken a requested check to obtain a pass.
+If a replay fails, report the first failed step. If the task asks for a flow that passes, repair it as [Replay](references/replay.md) tells you. Do not make a check that the task specifies weaker to get a pass.

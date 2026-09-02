@@ -19,12 +19,12 @@ import {
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 // Re-exported so the flow layer reads the relation list from the same place the
 // match engine defines it.
 export { SELECTOR_RELATIONS };
-import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
-import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -1973,7 +1973,7 @@ export const IDLE_MIN_STILL_INTERVALS = 2;
  * The stretch a settle is measured over: the intervals it takes, at one poll
  * each. Nothing can be concluded about motion in less.
  */
-export const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
+const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
 
 /**
  * The smallest `timeout:` that can contain a settle holding for `stableFor`.
@@ -1991,7 +1991,7 @@ export const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
  * `timeout: 1000, stableFor: 800` was rejected as impossible and settles in
  * ~820ms. The two agree exactly at `stableFor: 0`, where the sum was derived.
  */
-export function idleMinimumTimeoutMs(stableFor: number): number {
+function idleMinimumTimeoutMs(stableFor: number): number {
   return Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
 }
 
@@ -3549,7 +3549,7 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * and this host cannot read it at all, so the in-memory copy is both the take
  * and the only thing countable — the guarantee below does not carry across that
  * boundary. The agent-facing statement of it lives in
- * `packages/skills/skills/argent-create-flow/references/live-authoring.md`.
+ * `packages/skills/skills/argent-create-flow/references/record.md`.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
  * {@link appendStep} re-reads it before every append and `flow-finish-recording`

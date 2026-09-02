@@ -68,7 +68,7 @@ A flow also runs without an agent. The `argent flow run` command replays a flow 
 - A replay runs on one booted device. When more than one device is booted, name the device in the instruction.
 - A recorded tap with coordinates breaks when the layout changes. Give the element a stable text or identifier, then record the step again.
 - A flow does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the flow with a launch of the app or with a step that restores a known state.
-- The agent records a launch step for iOS, Android and Vega apps. For a Chromium or Electron app, add the launch step to the file by hand.
+- The agent records a launch step for iOS and Android apps. For a Chromium or Electron app, add the launch step to the file by hand. The guided agent workflow covers iOS, Android, and Chromium at this time. The runtime still replays a Vega flow (`argent flow run --platform vega`), and the [Flow YAML reference](/docs/reference/flow-yaml) documents the Vega step forms.
 - A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
 
 Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools. The [Flow YAML reference](/docs/reference/flow-yaml) contains the file format and the command options.

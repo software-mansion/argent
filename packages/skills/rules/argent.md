@@ -125,7 +125,7 @@ TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
 When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
-Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows` — both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
+Saved flows (`argent-create-flow`, `argent-qa-flows`) do not record on TV targets (Vega, Apple TV, Android TV) yet; `argent flow run` still replays a hand-written Vega flow. Report that limitation.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -167,7 +167,7 @@ Prompt keywords: flow, repeat, test X times
 
 GENERATED QA REGRESSION TESTS
 Use skill: `argent-qa-flows`
-When: Saving a test case, ticket, or acceptance criteria as a repeatable regression test. Requires stable evidence and two unchanged full passes. iOS, Android, Chromium, and Vega (D-pad navigation records as `tool: tv-remote` steps); not Apple TV or Android TV.
+When: Saving a test case, ticket, or acceptance criteria as a repeatable regression test. Requires stable evidence and two unchanged full passes. iOS, Android, and Chromium. Vega, Apple TV, and Android TV are not supported yet.
 Prompt keywords: QA test, regression test, test case, automate this test, automate an e2e test, keep this e2e test, generate a test
 Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-flow`; saved acceptance test → `argent-qa-flows`.
 
