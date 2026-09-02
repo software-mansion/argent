@@ -686,6 +686,25 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(getDescribeTapPoint(section.frame).y).toBeCloseTo(1030 / 2400, 5);
   });
 
+  it("keeps the dump's own box for a node the label dedup emptied", () => {
+    // The dedup runs AFTER the "invisible and nothing left" guard, so a
+    // labelled tap target can reach `publishedBounds` with an unusable box and
+    // no surviving child. There is no region to read then, and dropping the box
+    // takes the node with it: a null box routes it into `finalizeUiNode`'s
+    // bounds-less rule, which discards a childless node. The dump's numbers are
+    // a poor tap point but they are the only record that the control is there.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.view.ViewGroup" resource-id="row" content-desc="Open settings" clickable="true" bounds="[400,400][400,400]">
+    <node class="android.widget.TextView" text="Settings" bounds="[400,400][700,460]"/>
+  </node>
+</hierarchy>`;
+    const row = flatten(parseUiAutomatorDump(xml, 1080, 2400)).find((n) => n.identifier === "row");
+    expect(row?.label).toBe("Open settings");
+    expect(row?.clickable).toBe(true);
+    expect(row?.frame).toEqual({ x: 400 / 1080, y: 400 / 2400, width: 0, height: 0 });
+  });
+
   it("leaves a wrapper with no box at all to the bounds-less rule", () => {
     // A missing `bounds` is not an unusable box: `finalizeUiNode` passes a
     // bounds-less wrapper's sole child through in the wrapper's place. Handing
