@@ -346,7 +346,10 @@ Examples:
     const materialized = await materializeArtifacts(resp.data, {
       toolsUrl: url,
       authToken: token,
-      deviceId: getDeviceIdFromArgs(payload),
+      // `resp.device` is the server's pick when the payload named none, so an
+      // auto-targeted artifact lands in the same per-device directory a
+      // `--udid` run would have used.
+      deviceId: getDeviceIdFromArgs(payload) ?? resp.device,
     });
     result = materialized.result;
     images = materialized.images;

@@ -57,6 +57,25 @@ describe("callTool progress streaming", () => {
     expect(result.note).toBe("hi");
   });
 
+  it("carries the server-resolved device through both the streamed and buffered paths", async () => {
+    // The device a udid-less call was routed to: the only place the caller can
+    // learn it, and the artifact cache's per-device segment depends on it.
+    await startServer((req, res) => {
+      const streamed = (req.headers.accept ?? "").includes("application/x-ndjson");
+      if (streamed) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(`${JSON.stringify({ event: "result", data: {}, device: "SIM-AUTO" })}\n`);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: {}, device: "SIM-AUTO" }));
+    });
+
+    const { callTool } = createToolsClient();
+    expect((await callTool("streamy", {})).device).toBe("SIM-AUTO");
+    expect((await callTool("streamy", {}, { onProgress: () => {} })).device).toBe("SIM-AUTO");
+  });
+
   it("sends the Accept header only when a progress consumer is attached", async () => {
     const accepts: Array<string | undefined> = [];
     await startServer((req, res) => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as http from "node:http";
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
 import { run, type RunCommandOptions } from "../src/run.js";
@@ -15,6 +15,8 @@ interface ServerState {
   screenshotData: unknown;
   artifactBytes: Buffer;
   artifactHits: number;
+  /** Echoed as the response's `device` — what the server picks for a udid-less call. */
+  autoDevice?: string;
 }
 
 function startServer(state: ServerState): Promise<{ url: string; close: () => Promise<void> }> {
@@ -45,7 +47,12 @@ function startServer(state: ServerState): Promise<{ url: string; close: () => Pr
       req.on("data", () => {});
       req.on("end", () => {
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ data: state.screenshotData }));
+        res.end(
+          JSON.stringify({
+            data: state.screenshotData,
+            ...(state.autoDevice ? { device: state.autoDevice } : {}),
+          })
+        );
       });
       return;
     }
@@ -177,6 +184,30 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(out).toMatch(/Saved screenshot: .*shot\.png/);
     expect(out).toContain(artifactsRoot());
     expect(out).not.toContain("not-here.png");
+  });
+
+  it("udid-less call: caches under the device the server resolved, not the session root", async () => {
+    state.autoDevice = "SIM-AUTO";
+    state.screenshotData = {
+      image: {
+        [ARTIFACT_MARKER]: true,
+        id: "rem-2",
+        filename: "shot.png",
+        mimeType: "image/png",
+        size: PNG.length,
+        hostPath: join(hostDir, "not-here.png"), // absent → gate miss → download
+        mtimeMs: 123,
+      } satisfies ArtifactHandle,
+    };
+
+    await run(["screenshot"], opts);
+
+    // The payload named no device, so the per-device segment can only come from
+    // the response — without it the download lands in the session root.
+    const saved = logs.join("\n").match(/Saved screenshot: (\S+)/)?.[1];
+    expect(saved).toBeDefined();
+    expect(saved).toContain(`${sep}SIM-AUTO${sep}`);
+    expect(fs.existsSync(saved!)).toBe(true);
   });
 
   it("legacy { url, path }: fetches the url for --out and renders the host path", async () => {

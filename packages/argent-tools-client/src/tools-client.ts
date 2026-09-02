@@ -17,6 +17,11 @@ export interface ToolMeta {
 export interface ToolInvocationResult {
   data: unknown;
   note?: string;
+  /**
+   * The device the server picked when the call named none. Absent when the
+   * caller named one, and from any tool-server that predates the auto-target.
+   */
+  device?: string;
 }
 
 export interface CallToolOptions {
@@ -74,19 +79,20 @@ async function consumeToolStream(
   body: ReadableStream<Uint8Array>,
   onProgress: (event: unknown) => void
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string } | undefined;
+  let final: { data?: unknown; note?: string; device?: string } | undefined;
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
     const msg = JSON.parse(line) as {
       event?: string;
       data?: unknown;
       note?: string;
+      device?: string;
       error?: string;
       error_code?: string;
       error_kind?: string;
     };
     if (msg.event === "progress") onProgress(msg.data);
-    else if (msg.event === "result") final = { data: msg.data, note: msg.note };
+    else if (msg.event === "result") final = { data: msg.data, note: msg.note, device: msg.device };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
         errorCode: msg.error_code,
@@ -123,7 +129,7 @@ async function consumeToolStream(
   }
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
-  return { data, note: final.note };
+  return { data, note: final.note, device: final.device };
 }
 
 /**
@@ -215,6 +221,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       error?: string;
       message?: string;
       note?: string;
+      device?: string;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -229,7 +236,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, inbound: persist client-write directives (e.g. recorded
     // flow YAMLs) and rewrite them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);
-    return { data, note: json.note };
+    return { data, note: json.note, device: json.device };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };
