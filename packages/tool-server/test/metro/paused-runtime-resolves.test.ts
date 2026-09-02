@@ -10,14 +10,18 @@ scopeTempHome("argent-paused-runtime-home-");
 
 /**
  * A runtime stopped at a breakpoint is NOT what `runtime_unresponsive` reports,
- * and both guidance strings say so. The distinction is in which sends the
- * connect pipeline makes: the inspector answers its enables while paused (a
- * paused V8 answers `Runtime.evaluate` with `awaitPromise` off in under a
- * millisecond), and the only sends that wait on the JS thread — `addBinding`'s
- * probe and DISABLE_LOGBOX_SCRIPT — are both swallowed. So the session resolves
- * and `debugger-status` says "connected".
+ * and both guidance strings say so. What this test proves is the half of that
+ * argument the code decides: the connect pipeline's only sends that wait on the
+ * JS thread — `addBinding`'s probe and DISABLE_LOGBOX_SCRIPT — are swallowed, so
+ * an unanswered awaited evaluate still resolves the session and `debugger-status`
+ * says "connected".
  *
- * The mock here is that runtime: every inspector method answers, and every
+ * It does NOT prove that a paused inspector answers its enables: the mock answers
+ * them by construction. That half is a fact about V8 and Chrome, measured rather
+ * than tested (Chrome 152, `Debugger.paused` observed: every connect send,
+ * `readViewport`'s un-awaited `Runtime.evaluate` included, answers in under 4 ms).
+ *
+ * The mock models the JS thread only: every inspector method answers, and every
  * `Runtime.evaluate` that awaits a promise never does.
  */
 let mockServer: http.Server;

@@ -49,16 +49,3 @@ export function expectNoPlatformBeyondTag(cell: string, tag: string, label: stri
  * single-word check misses the synonyms ("and on any CDP browser").
  */
 export const CHROMIUM_WORDS = /chromium|electron|browser/i;
-
-/**
- * Assert the parenthesised `tag` is the whole platform claim `cell` makes. A
- * containment check reads the paren and nothing after it, so a platform
- * appended outside — "(iOS / Android / Vega) and Chromium" — documents support
- * the capability gate rejects while every tag assertion stays green.
- */
-export function expectTagEndsTheClaim(cell: string, tag: string, label: string) {
-  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  expect(cell, `${label}: (${tag}) must end the platform claim`).toMatch(
-    new RegExp(`\\(${escaped}\\)(?=\\s*(?:[.,;:|)]|$))`)
-  );
-}

@@ -41,7 +41,7 @@ Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch
 
 Call a discovery tool yourself only when you have no fresh tree for the current screen — before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
 
-- `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
+- `describe` - native app-level components and safely targetable foreground apps (every platform).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
 - `debugger-component-tree` - react-native specific components
 
@@ -75,7 +75,7 @@ Decision order:
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
-- Always open apps with `launch-app` or `open-url` — never tap home screen icons; on Chromium use `open-url` to navigate, since `launch-app` confirms the running renderer and starts nothing.
+- Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`

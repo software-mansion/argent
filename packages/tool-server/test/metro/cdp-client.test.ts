@@ -332,48 +332,25 @@ describe("CDPClient", () => {
       // so a loosened "unless it looks slow" at one end or a "retry until it answers"
       // at the other undoes the reason the guidance is in the message at all.
       pinsOnce(message, "Do not retry in a loop. Nothing here tells the two apart");
-      // The id source sits inside the Chromium parenthetical, and covers BOTH of its
-      // branches: this message is the shared client's, so a Metro reader reaches it
-      // too, and a chromium-cdp id is not a thing on their platform. The browser
-      // branch has no boot-device call to get an id from, so the port it is started
-      // on has to be named as the id.
-      pinsOnce(
-        message,
-        "relaunches an Electron app and returns the chromium-cdp-<port> id to reconnect with"
-      );
-      pinsOnce(
-        message,
-        "started again with --remote-debugging-port, where that port is the id — " +
-          "chromium-cdp-<that port> — since a relaunch on a new port is a new id"
-      );
-      pinsOnce(message, "one), then reconnect and retry once.");
-      expect(
-        message.slice(message.indexOf("one), then reconnect")),
-        "the platform-neutral close may not name a chromium id"
-      ).not.toMatch(/chromium-cdp/);
+      // Where the Chromium recovery lives. This message no longer restates it:
+      // it named a relaunch procedure that had to stay in step with two guidance
+      // strings and four prose surfaces, and the five drifted apart. The one
+      // Chromium fact it must carry itself is that restart-app is refused - it is
+      // the tool an agent reaches for from here - plus where the rest is.
+      const restartApp = createRestartAppTool({} as unknown as Registry).capability;
       // Derived from restart-app's own capability, not restated: the same tag on the
       // skill rows is built this way, and a literal here drifts off it silently.
-      const restartApp = createRestartAppTool({} as unknown as Registry).capability;
       pinsOnce(
         message,
-        `If it is hung, get the app restarted (restart-app on ${platformTag(restartApp)}; on ` +
-          `Chromium it is refused, so the user has to quit it and the relaunch has to wait ` +
-          `for the exit`
+        `If it is hung, get the app restarted: restart-app on ${platformTag(restartApp)}.`
       );
-      // The Chromium relaunch this message has to carry itself, for the same reason:
-      // the guidance that spells it out is unreachable while the socket is open, and
-      // launch-app is the tool an agent reaches for when restart-app is refused.
-      pinsOnce(message, "boot-device with electronAppPath relaunches an Electron app");
-      pinsOnce(message, "a browser has to be started again with --remote-debugging-port");
-      pinsOnce(message, "launch-app cannot start one");
-      // The duplicate-boot guard its twin on this same fault code carries. Without it
-      // this message sends a reader to boot-device while the app is provably still up.
       pinsOnce(
         message,
-        "the app is up here, and boot-device only starts an app, so relaunching a live one " +
-          "duplicates it or dies on its single-instance lock as `child process exited with " +
-          "code N before CDP was ready`"
+        "On Chromium restart-app is refused and boot-device only starts an app, so the quit " +
+          "is the user's and the relaunch has to wait for the exit — call debugger-status " +
+          "for the recovery."
       );
+      pinsOnce(message, "Then reconnect and retry once.");
       expect(getFailureSignal(err)).toMatchObject({
         error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
         failure_stage: "debugger_cdp_send",

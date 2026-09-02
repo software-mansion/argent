@@ -1,90 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { expectNoForbiddenAdvice } from "./forbidden-advice";
-import { pinsOnce, pinsSentenceEnd, pinsUnqualified } from "./pins";
-import {
-  CHROMIUM_WORDS,
-  expectNoPlatformBeyondTag,
-  expectTagEndsTheClaim,
-  platformTag,
-} from "./platform-tag";
+import { pinsOnce } from "./pins";
+import { CHROMIUM_WORDS, expectNoPlatformBeyondTag, platformTag } from "./platform-tag";
 
 /**
  * The doc-pinning helpers only ever fail under a mutation, so nothing in a green
- * suite tells a weakened one from the real thing — `pinsUnqualified` degraded to
- * `pinsOnce`, or the anchored tag regex degraded to a containment check, both
- * leave every caller passing. Their contracts are asserted here directly.
+ * suite tells a weakened one from the real thing — a widened `FORBIDDEN` pattern
+ * or a `CHROMIUM_WORDS` that lost a synonym leaves every caller passing. Their
+ * contracts are asserted here directly.
  */
 describe("pinsOnce", () => {
   it("requires exactly one occurrence", () => {
     pinsOnce("restart-app is not supported on chromium", "not supported on chromium");
     expect(() => pinsOnce("nothing here", "not supported on chromium")).toThrow();
     expect(() => pinsOnce("chromium chromium", "chromium")).toThrow();
-  });
-});
-
-describe("pinsUnqualified", () => {
-  const claim = "not supported on chromium";
-
-  it("passes when the claim stands on its own", () => {
-    for (const tail of [
-      ".",
-      ", where boot-device only starts an app",
-      " — the gate rejects it —",
-    ]) {
-      pinsUnqualified(`restart-app is ${claim}${tail}`, claim);
-    }
-  });
-
-  // Every word the qualifier list carries, so a shortened list fails here rather
-  // than silently letting that phrasing through on a real doc surface.
-  it("fails on a carve-out appended to the claim it pins", () => {
-    for (const tail of [
-      " except for an Electron app you booted yourself",
-      " unless you booted the app yourself",
-      " until boot-device has started it",
-      ", other than an app boot-device started",
-      ", apart from an app you booted yourself",
-      ", save for an Electron app",
-      " provided boot-device started it",
-      " as long as you booted it yourself",
-      " only when the app was booted elsewhere",
-      " only if boot-device started it",
-      ", though a vanished entry settles it",
-      ", although boot-device started this one",
-      ", aside from an app boot-device started",
-      ", barring an app you booted yourself",
-      ", but an app boot-device started can be",
-      ", however an app boot-device started can be",
-    ]) {
-      expect(() => pinsUnqualified(`restart-app is ${claim}${tail}`, claim), tail).toThrow();
-    }
-  });
-
-  it("sees a carve-out through markdown emphasis and quotes", () => {
-    // The device-interact row bolds the refusal, so the carve-out lands after the
-    // closing marks rather than against the needle.
-    expect(() => pinsUnqualified(`**${claim}** except for Electron`, claim)).toThrow();
-    expect(() => pinsUnqualified(`"${claim}", unless you booted it`, claim)).toThrow();
-  });
-});
-
-describe("pinsSentenceEnd", () => {
-  const claim = "the ports `boot-device` opened";
-
-  it("accepts a claim that closes its sentence", () => {
-    for (const tail of ["."]) pinsSentenceEnd(`probes 9222 and ${claim}${tail}`, claim);
-    pinsSentenceEnd(`probes 9222 and ${claim}`, claim);
-    pinsSentenceEnd(`(probes 9222 and ${claim}). Use it early.`, claim);
-  });
-
-  it("fails on a clause appended after it", () => {
-    for (const tail of [
-      ", plus any port a Chromium process is listening on",
-      " and anything else that answers",
-      " — and any port you already know",
-    ]) {
-      expect(() => pinsSentenceEnd(`probes 9222 and ${claim}${tail}`, claim), tail).toThrow();
-    }
   });
 });
 
@@ -108,37 +37,21 @@ describe("expectNoPlatformBeyondTag", () => {
   const tag = platformTag({ apple: { simulator: true }, android: { emulator: true } });
 
   it("accepts prose that claims only its tag", () => {
+    expect(tag).toBe("iOS / Android");
     expectNoPlatformBeyondTag(`Full React fiber tree on ${tag} (names, depth)`, tag, "row");
   });
 
-  it("rejects a platform claimed after the tag", () => {
-    expect(() =>
-      expectNoPlatformBeyondTag(`Full React fiber tree on ${tag} (names), and on Vega.`, tag, "row")
-    ).toThrow();
-  });
-});
-
-describe("expectTagEndsTheClaim", () => {
-  const tag = platformTag({ apple: { simulator: true }, android: { emulator: true } });
-
-  it("accepts a tag that ends the claim", () => {
-    expect(tag).toBe("iOS / Android");
+  it("rejects a platform claimed after the tag, however it is separated", () => {
+    // `row()` hands this helper the whole markdown line, so a platform in a LATER
+    // CELL is inside its reach and must fail — the separator is not the contract,
+    // the cell's whole text is.
     for (const cell of [
-      `| Reload JS | \`debugger-reload-metro\` (${tag}) |`,
-      `Reload all connected apps (${tag}). Needs a CDP target.`,
-      `Relaunch by bundleId (${tag}); not supported on Chromium`,
-      `Relaunch by bundleId (${tag})`,
+      `Full React fiber tree on ${tag} (names), and on Vega.`,
+      `| Reload | \`x\` (${tag}) | also on Vega |`,
+      `(${tag}); plus Vega`,
+      `(${tag}): also Vega`,
     ]) {
-      expectTagEndsTheClaim(cell, tag, "row");
-    }
-  });
-
-  it("rejects a platform appended outside the tag", () => {
-    for (const cell of [
-      `Relaunch by bundleId (${tag}) and Chromium. Use when …`,
-      `Reload all connected apps (${tag}) plus any CDP browser.`,
-    ]) {
-      expect(() => expectTagEndsTheClaim(cell, tag, "row"), cell).toThrow();
+      expect(() => expectNoPlatformBeyondTag(cell, tag, "row"), cell).toThrow();
     }
   });
 });
@@ -153,16 +66,36 @@ describe("expectNoForbiddenAdvice", () => {
     expectNoForbiddenAdvice(undefined, "absent surface");
   });
 
-  it("rejects each barred instruction, including the two the lookbehind must let past", () => {
+  it("accepts every ordinary way correct prose negates one", () => {
+    // A pattern keyed on one deleted negation turns correct prose red with a
+    // message accusing the author of the opposite. English has more than three
+    // ways to say no, and the surfaces use them.
+    for (const text of [
+      "Don't relaunch there.",
+      "You should not relaunch there.",
+      "A Chromium app is not relaunched with restart-app.",
+      "Never relaunch there.",
+      "You cannot relaunch it with restart-app on Chromium.",
+      "A missing entry does not mean the app exited.",
+      "Do not keep using the old id.",
+    ])
+      expectNoForbiddenAdvice(text, `correct: ${text}`);
+  });
+
+  it("rejects each barred instruction, in the shapes a rewrite actually produces", () => {
     for (const text of [
       "It may still be up — relaunch it anyway.",
       "Keep using the old chromium-cdp-<port> id.",
+      "Reuse the chromium-cdp-<port> id you already have.",
       "If nothing is listed, boot it again.",
+      "If nothing is listed, call boot-device again.",
       "A missing entry does mean the app exited.",
+      "A missing entry means the app exited.",
+      "An absent entry proves the app exited.",
       "On Chromium it is relaunched with restart-app.",
-      "That string means the app is still up, not that it failed to launch.",
-      "That string means the launch failed.",
+      "Use restart-app to relaunch a Chromium app.",
       "It only lacks a window, so relaunch there once.",
+      "It only lacks a window — relaunch it there.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

@@ -8,7 +8,7 @@ import {
 } from "@argent/registry";
 import { classifyNotConnected, buildNotConnected } from "../../src/tools/debugger/not-connected";
 import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
-import { pinsOnce, pinsUnqualified } from "../helpers/pins";
+import { pinsOnce } from "../helpers/pins";
 import { discoverPrimaryPage, ensureCdpReachable } from "../../src/chromium-server/cdp-session";
 import { getCandidateChromiumPorts } from "../../src/utils/chromium-discovery";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
@@ -35,6 +35,13 @@ function coded(
     failure_area: "tool_server",
     error_kind,
   });
+}
+
+function chromium(
+  reason: "cdp_unreachable" | "runtime_unresponsive",
+  code: FailureSignal["error_code"]
+) {
+  return buildNotConnected(reason, coded(code), { port: 8081, device_id: "chromium-cdp-9222" });
 }
 
 const MAP: Array<[FailureSignal["error_code"], string]> = [
@@ -70,19 +77,15 @@ describe("classifyNotConnected code map", () => {
 
 describe("guidance platform-correctness", () => {
   it("chromium cdp_unreachable guidance never points at launch-app (a documented no-op on Chromium)", () => {
-    const result = buildNotConnected(
-      "cdp_unreachable",
-      coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
-      { port: 8081, device_id: "chromium-cdp-9222" }
-    );
+    const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
     // The Metro phrasing "Verify the app is running (launch-app)" must not
     // appear — following it on Chromium manufactures a guaranteed second
     // failure. What replaces it depends on whether the app is still up, so the
     // override names --remote-debugging-port for the case that does relaunch
     // without letting a relaunch stand as the answer to all of them.
-    expect(result.guidance).not.toMatch(/\(launch-app\)/);
-    expect(result.guidance).toContain("--remote-debugging-port");
-    expect(result.guidance).toContain("launch-app cannot start a Chromium app");
+    expect(guidance).not.toMatch(/\(launch-app\)/);
+    expect(guidance).toContain("--remote-debugging-port");
+    expect(guidance).toContain("launch-app starts neither");
   });
 
   it("Metro cdp_unreachable keeps the launch-app guidance (it IS actionable there)", () => {
@@ -94,233 +97,149 @@ describe("guidance platform-correctness", () => {
     expect(result.guidance).toContain("launch-app");
     expect(result.guidance).not.toContain("--remote-debugging-port");
   });
+});
 
-  it("runtime_unresponsive guidance warns about the per-attempt timeout on both platforms", () => {
-    const metro = buildNotConnected(
-      "runtime_unresponsive",
-      coded(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT),
-      { port: 8081, device_id: "emulator-5554" }
-    );
-    const chromium = buildNotConnected(
-      "runtime_unresponsive",
-      coded(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT),
-      { port: 8081, device_id: "chromium-cdp-9222" }
-    );
-    for (const r of [metro, chromium]) {
-      pinsOnce(r.guidance, "Do not retry in a loop");
-      expect(r.guidance).toMatch(/timeout/);
-      expect(r.guidance, "no instruction to loop anyway").not.toMatch(
-        /until it (answers|connects)/
+describe("runtime_unresponsive prices the retry it forbids", () => {
+  const metro = () =>
+    buildNotConnected("runtime_unresponsive", coded(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT), {
+      port: 8081,
+      device_id: "emulator-5554",
+    });
+
+  it("names a per-attempt cost, not one timeout", () => {
+    // Measured against a stub that accepts the socket and never answers: the
+    // Chromium connect path issues four enables, setFocusEmulationEnabled and the
+    // viewport read in sequence and fails at 60.0s; the Metro path issues
+    // FuseboxClient.setClientMetadata, ReactNativeApplication.enable and
+    // Runtime.enable and fails at 30.0s. The sentence exists to price a retry, so
+    // "the full timeout" — one 10s send — understates it by 3x and 6x.
+    for (const { guidance } of [
+      metro(),
+      chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT),
+    ]) {
+      pinsOnce(guidance, "Do not retry in a loop");
+      expect(guidance, "prices the attempt in seconds").toMatch(/costs about (30s|a minute)/);
+      expect(guidance, "attributes the cost to the sequence, not to one send").toContain(
+        "each waits out its own 10s timeout"
+      );
+      expect(guidance, "no instruction to loop anyway").not.toMatch(/until it (answers|connects)/);
+    }
+  });
+
+  it("retires the paused branch its own detail offers", () => {
+    // The detail is the shared cdp-client timeout message, which offers a resume
+    // because debugger-evaluate — awaitPromise: true — really can hang on a
+    // breakpoint. The connect pipeline cannot pause, so the two ship contradicting
+    // instructions in one payload unless the guidance retires the branch, not just
+    // the phrase. Driven with the REAL message as the detail: a fixture message
+    // ("x") makes every assertion below vacuous.
+    const detail =
+      "CDP request Runtime.enable (id=3) timed out — the runtime accepted the connection but " +
+      "did not answer; it may be frozen, or paused at a breakpoint. Do not retry in a loop. " +
+      "Nothing here tells the two apart — no tool reports pausedness, and once the session is " +
+      'established debugger-status reports "connected" either way — so have the user check the ' +
+      "app before choosing. If it is paused, ask them to resume it — quitting throws the debug " +
+      "session away.";
+    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
+      const result = buildNotConnected(
+        "runtime_unresponsive",
+        new FailureError(detail, {
+          error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+          failure_stage: "debugger_cdp_send",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }),
+        { port: 8081, device_id }
+      );
+      // The premise: the detail beside this guidance really does offer a resume.
+      expect(result.detail, "the detail offers a resume").toMatch(/ask them to resume it/);
+      // So the guidance must say the offer does not apply here — retiring the
+      // branch, not only reconciling the "frozen, or paused at a breakpoint" phrase.
+      expect(result.guidance, `${device_id}: rules the paused state out`).toMatch(
+        /paused at a breakpoint does not reach this reason/
+      );
+      expect(result.guidance, `${device_id}: retires the detail's resume branch`).toContain(
+        "ignore its resume branch"
+      );
+      // And offers no resume of its own: nothing in the catalogue can resume a
+      // paused runtime, so a resume ask here is an instruction with no tool.
+      expect(result.guidance, `${device_id}: no resume ask of its own`).not.toMatch(
+        /ask (the user|them) to resume/i
       );
     }
-    // Metro cannot be in the paused state here either, and for the same reason as
-    // Chromium: test/metro/paused-runtime-resolves.test.ts drives the real connect
-    // pipeline against a runtime that never answers an awaited evaluate and gets
-    // status "connected" back. So a resume ask here sends the user after a state
-    // the result cannot be reporting.
-    pinsOnce(
-      metro.guidance,
-      "A runtime paused at a breakpoint does not reach this reason — every send that can " +
-        "time out here is answered by the inspector rather than by the JS thread, and the " +
-        "two that do wait on the JS thread are both swallowed, so the session resolves and " +
-        "debugger-status reports connected."
+  });
+
+  it("claims only what timed out on Metro, and the frozen renderer on Chromium", () => {
+    const { guidance } = metro();
+    // What timed out on Metro is answered by the inspector, so the JS thread's
+    // state is an inference this reason cannot support. The hedged form ("it is
+    // likely frozen") claims it just as much.
+    expect(guidance, "claims only what timed out").not.toMatch(
+      /\bis (likely |probably )?frozen\b/i
     );
-    // And what that leaves as the observable. Metro has no un-swallowed send that
-    // waits on the JS thread — Chromium's readViewport is the discriminator its
-    // twin claims "the renderer is frozen" from — so naming the runtime's state
-    // here would be an inference the timeout cannot support.
     pinsOnce(
-      metro.guidance,
+      guidance,
       "What timed out is one of those inspector-answered sends, so the inspector itself " +
         "has stopped answering."
     );
-    // Two of the four un-swallowed connect sends are not enables -
-    // Debugger.setPauseOnExceptions and Runtime.addBinding - and the detail beside
-    // this guidance names whichever one timed out. Calling them enables contradicts
-    // the detail in half the cases.
-    expect(metro.guidance, "does not narrow the sends to the enables").not.toMatch(
-      /one of those enables/i
-    );
-    // Frozen is the likeliest cause, not the observable: what timed out is answered
-    // by the inspector, so the JS thread's state is an inference this reason cannot
-    // support. The hedged form ("it is likely frozen") claims it just as much.
-    expect(metro.guidance, "claims only what timed out").not.toMatch(
-      /\bis (likely |probably )?frozen\b/i
-    );
-    expect(metro.guidance, "no resume ask here").not.toMatch(/resume/i);
-    pinsOnce(
-      metro.guidance,
-      "The runtime accepted the debugger connection but did not answer within the timeout."
-    );
-    pinsOnce(metro.guidance, "(each attempt waits out the full timeout)");
-    pinsOnce(metro.guidance, "Restart it (restart-app), then retry once.");
     // The Metro arm may not take up its twin's platform: appended, "The same applies
     // on Chromium" points a Chromium reader at restart-app, which the gate refuses.
-    expect(metro.guidance, "the Metro arm names no Chromium remedy").not.toMatch(/chromium/i);
-    // The detail beside BOTH of these names a breakpoint; each has to say which
-    // half of its own detail applies or it contradicts itself in one response.
-    for (const r of [metro, chromium])
-      pinsOnce(
-        r.guidance,
-        'The detail says "frozen, or paused at a breakpoint" because it is the shared ' +
-          "request-timeout wording, which also covers debugger-evaluate; only the frozen " +
-          "half of it applies here."
-      );
-
-    // Chromium cannot be in that state here, so it gets the opposite treatment.
-    // Measured on Chrome 151 with a page stopped at a breakpoint (Debugger.paused
-    // observed): Page/DOM/Runtime/Accessibility.enable, setFocusEmulationEnabled
-    // and readViewport's Runtime.evaluate all answer in under a millisecond, so
-    // createChromiumServer resolves and debugger-status reports connected. Only a
-    // frozen renderer times out those sends, and a branch for a state that never
-    // arrives costs a wasted round-trip through the user.
-    pinsOnce(chromium.guidance, "the renderer is frozen");
-    // Through the rationale: "does not reach this reason" alone is satisfied by a
-    // sentence that goes on to say it times out identically and to branch on it.
-    pinsOnce(
-      chromium.guidance,
-      "A renderer paused at a breakpoint does not reach this reason — it answers the " +
-        "viewport read, which is the one send on this path that is not swallowed, so the " +
-        "session resolves and debugger-status reports connected."
+    expect(guidance, "the Metro arm names no Chromium remedy").not.toMatch(/chromium/i);
+    // Chromium may make the stronger claim, because there the discriminator is
+    // real: readViewport issues an un-awaited Runtime.evaluate, which a paused V8
+    // answers and a frozen one does not (measured on Chrome 152, Debugger.paused
+    // observed: every connect send answers in under 4ms).
+    const { guidance: chromiumGuidance } = chromium(
+      "runtime_unresponsive",
+      FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
     );
-    // And no resume ask survives on the one state that is never paused, whoever
-    // the sentence names as the actor.
-    expect(chromium.guidance, "no resume ask here").not.toMatch(/resume/i);
-    pinsOnce(chromium.guidance, "(each attempt waits out the full timeout)");
-    pinsOnce(chromium.guidance, "Ask the user to quit the app, then relaunch once it has exited");
-    // Why absence is not the exit, in the state this reason is actually in: the
-    // socket opened, so the app has a page target and stays listed while it hangs.
-    // The cdp_unreachable twin states the opposite mechanism for the opposite
-    // reason, and a shared needle would let either one take the other's.
-    pinsOnce(
-      chromium.guidance,
-      "a wedged app keeps its page target and stays listed, so when the entry goes it means " +
-        "the window was closed just as readily as that the app exited"
-    );
+    pinsOnce(chromiumGuidance, "the renderer is frozen");
+    expect(chromiumGuidance).toContain("it answers the viewport read");
   });
+});
 
-  it("gives both Chromium overrides the whole recovery, not half of it each", () => {
-    // Both route around restart-app, so each has to carry the whole recovery the
-    // skill surfaces carry. Asserted in one loop: a per-reason assertion pins the
-    // half it names on one override and leaves the twin free to lose it.
-    for (const [reason, code] of [
-      ["cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE],
-      ["runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT],
-    ] as const) {
-      const { guidance } = buildNotConnected(reason, coded(code), {
-        port: 8081,
-        device_id: "chromium-cdp-9222",
-      });
-      // The same bar the prose surfaces are held to. These two strings are the
-      // highest-traffic copy of the recovery and were outside it.
-      expectNoForbiddenAdvice(guidance, `chromium ${reason}`);
-      pinsOnce(guidance, "ask the user to start the browser again", reason);
-      pinsOnce(guidance, "same CDP port", reason);
-      pinsOnce(guidance, "chromium-cdp-<port> id from boot-device / list-devices", reason);
-      // boot-device never stops an app, and nothing in the catalogue can tell a
-      // broken-but-running one from an exited one, so the user is the only actor
-      // that can end it - and the relaunch has to wait for that, or it lands on a
-      // single-instance lock.
-      pinsOnce(guidance, "then relaunch once it has exited", reason);
-      // The order, not the wording: the two overrides phrase the quit differently
-      // (one knows the app is up, the other is reached only when nothing answers),
-      // and a relaunch-first rewrite keeps every needle above while telling the
-      // reader to relaunch into a running app. Positions are what rule that out.
-      // Anchored on the instruction, not the word: "quit" also appears in the
-      // paused branch's "quitting throws the debug session away", which sits early
-      // enough to satisfy an ordering check while the actual quit moves after the
-      // relaunch. Case-folded for the same reason - a sentence-initial "Relaunch"
-      // is invisible to a case-sensitive search.
-      const lower = guidance.toLowerCase();
-      const quitAt = lower.indexOf("ask the user to quit");
-      expect(quitAt, `${reason}: names the quit as an instruction`).toBeGreaterThan(-1);
-      expect(quitAt, `${reason}: quit must precede any relaunch`).toBeLessThan(
-        lower.indexOf("relaunch")
-      );
-      // The one retry-discipline clause each override has. Its twin's 'do not retry
-      // in a loop' is pinned above; without this one 'retry once' can become
-      // 'retry until it connects' on the reason that waits out a full timeout.
-      pinsOnce(guidance, "Then retry once.", reason);
-      // The way out of the one state list-devices cannot show: the id carries the
-      // port, so a browser the user names is drivable whether or not it is listed.
-      pinsOnce(
-        guidance,
-        "if the user names the port, use chromium-cdp-<that port> directly",
-        reason
-      );
-      // Both dead ends, on both overrides. restart-app is refused by the gate and
-      // launch-app is a documented no-op that reports launched: true, so either
-      // one named as an action manufactures a guaranteed second failure - and a
-      // per-reason negative leaves the twin free to take up the one it was not
-      // checked against.
-      expect(guidance, reason).not.toContain("restart-app");
-      expect(guidance, reason).not.toMatch(/\(launch-app\)/);
-      pinsOnce(guidance, "launch-app cannot start a Chromium app", reason);
-      pinsOnce(
-        guidance,
-        "boot-device with electronAppPath relaunches an Electron app, and for a browser, " +
-          "ask the user to start the browser again on the same CDP port with " +
-          "--remote-debugging-port.",
-        reason
-      );
-      // The premise the manual quit rests on, worded the same way the four prose
-      // surfaces word it.
-      pinsOnce(guidance, "only starts an app and never stops one", reason);
-      // Absence of a list-devices entry is not the exit, on either reason: probePort
-      // drops an app that is up with no drivable page exactly as it drops an exited
-      // one. The converse reads as the more useful statement - still listed, so
-      // still up - and is false in the direction the reader needs, so the claim is
-      // pinned together with the mechanism that makes it actionable.
-      pinsUnqualified(guidance, "list-devices cannot confirm the exit", reason);
-      // The rule needs its consequence: without it a reader takes 'never recovers
-      // it' for 'has no effect' and tries the relaunch anyway.
-      // Through the lock outcome and what it MEANS: boot-electron keeps none of the
-      // child's stderr, so this exit string is the only trace a caller gets that the
-      // app survived, and read as a launch failure it invites another relaunch.
-      pinsOnce(guidance, "duplicates the app or dies on its single-instance lock", reason);
-      pinsOnce(guidance, "child process exited with code N before CDP was ready", reason);
-      pinsOnce(
-        guidance,
-        "a string boot-device also emits for a launch that really failed, so it does not " +
-          "tell you which happened",
-        reason
-      );
-      // Its premise. Without it "duplicates or fails" reads as a risk worth taking.
-      pinsUnqualified(guidance, "never recovers it", reason);
-      // The id is re-readable only where discovery looks: getCandidateChromiumPorts
-      // probes 9222, the env list and the ports boot-device opened. Without this the
-      // new-port clause reads as an invitation to relaunch anywhere and re-read.
-      pinsOnce(guidance, "not listed at all", reason);
-      pinsOnce(
-        guidance,
-        "a boot-device port that has since failed a probe is dropped from that set for " +
-          "good, so an id it listed once may not come back when the app does",
-        reason
-      );
-      pinsOnce(
-        guidance,
-        "since the id carries the port and discovery is only how you find one you were " +
-          "not told",
-        reason
-      );
-      // The order the re-read has to happen in: before the relaunch there is no new
-      // id to read.
-      pinsOnce(guidance, "After a relaunch, re-read", reason);
-      // The id tracks the port, so a relaunch returning on the same port keeps it.
-      // A negative regex cannot hold this: it passes for every wording that does
-      // not spell out the one phrase it names, the false ones included.
-      pinsOnce(guidance, "a relaunch on a new port is a new id", reason);
-      pinsOnce(guidance, "re-read the chromium-cdp-<port> id", reason);
-      expect(guidance, `${reason}: never says to keep the dead id`).not.toMatch(
-        /keep (using )?the (old )?chromium-cdp/i
-      );
-      // Both relaunch mechanisms, on both reasons. An Electron app does not come
-      // back by restarting a browser, and a browser restarted without the flag
-      // exposes no CDP at all, so a surface carrying one branch strands whoever
-      // is on the other.
-      pinsOnce(guidance, "boot-device with electronAppPath relaunches an Electron app", reason);
-      pinsOnce(guidance, "with --remote-debugging-port", reason);
-    }
+describe("both Chromium overrides carry the whole recovery", () => {
+  it.each(["cdp_unreachable", "runtime_unresponsive"] as const)("%s", (reason) => {
+    const code =
+      reason === "cdp_unreachable"
+        ? FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE
+        : FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT;
+    const { guidance } = chromium(reason, code);
+
+    // The same bar the prose surfaces are held to, so a rewrite fails on the
+    // advice rather than on a needle. This is where restart-app is policed: a
+    // blunt substring ban would reject the negated mention the shared list
+    // permits, and the cdp-client message that ships as this result's own detail
+    // names the tool exactly that way.
+    expectNoForbiddenAdvice(guidance, `chromium ${reason}`);
+
+    // Both relaunch branches. An Electron app does not come back by restarting a
+    // browser, and a browser restarted without the flag exposes no CDP, so a
+    // surface carrying one of them strands whoever is on the other.
+    pinsOnce(guidance, "boot-device with electronAppPath for an Electron app", reason);
+    pinsOnce(
+      guidance,
+      "ask the user to start the browser again with --remote-debugging-port",
+      reason
+    );
+    // Why the recovery is manual at all, and the instrument that cannot confirm it.
+    pinsOnce(guidance, "boot-device only starts an app and never stops one", reason);
+    pinsOnce(guidance, "list-devices cannot confirm the exit", reason);
+    // The id churn a relaunch causes, and the escape from the one state discovery
+    // cannot show: parseChromiumCdpPort reads the port straight out of the id, so a
+    // browser on an unprobed port is drivable whether or not it is listed.
+    pinsOnce(guidance, "A relaunch on a new port is a new id", reason);
+    pinsOnce(guidance, "use chromium-cdp-<that port> straight off if the user names it", reason);
+    pinsOnce(guidance, "Then retry once.", reason);
+
+    // The order, not the wording: a relaunch-first rewrite keeps every needle
+    // above while telling the reader to relaunch into a running app.
+    const lower = guidance.toLowerCase();
+    const quitAt = lower.indexOf("ask the user to quit it and wait for the exit");
+    expect(quitAt, `${reason}: names the quit as an instruction`).toBeGreaterThan(-1);
+    expect(quitAt, `${reason}: quit must precede any relaunch`).toBeLessThan(
+      lower.indexOf("then boot-device with electronapppath")
+    );
   });
 
   it("names the probe set discovery actually has, not a restated one", () => {
@@ -331,23 +250,24 @@ describe("guidance platform-correctness", () => {
     const prevList = process.env.ARGENT_CHROMIUM_PORTS;
     const prevFile = process.env.ARGENT_CHROMIUM_PORTS_FILE;
     delete process.env.ARGENT_CHROMIUM_PORTS;
-    process.env.ARGENT_CHROMIUM_PORTS_FILE = path.join(os.tmpdir(), "argent-absent-ports.json");
+    // Per-process: os.tmpdir() is shared across every checkout and agent on this
+    // machine, so a fixed name lets someone else's leftover ports land in the
+    // derived string and fail this as if the prose had drifted.
+    process.env.ARGENT_CHROMIUM_PORTS_FILE = path.join(
+      os.tmpdir(),
+      `argent-absent-ports-${process.pid}.json`
+    );
     try {
-      const { guidance } = buildNotConnected(
-        "cdp_unreachable",
-        coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
-        { port: 8081, device_id: "chromium-cdp-9222" }
-      );
+      const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
       pinsOnce(
         guidance,
-        `only probes ${getCandidateChromiumPorts().join(", ")}, ARGENT_CHROMIUM_PORTS and the ` +
-          "ports boot-device opened"
+        `list-devices probes only ${getCandidateChromiumPorts().join(", ")}, ` +
+          "ARGENT_CHROMIUM_PORTS and the ports boot-device opened"
       );
       // And the env var it names is the one discovery reads - the name is prose on
       // both sides, so nothing but a round trip through the function pins it.
       process.env.ARGENT_CHROMIUM_PORTS = "9333";
       expect(getCandidateChromiumPorts()).toContain(9333);
-      pinsOnce(guidance, "ARGENT_CHROMIUM_PORTS");
     } finally {
       if (prevList === undefined) delete process.env.ARGENT_CHROMIUM_PORTS;
       else process.env.ARGENT_CHROMIUM_PORTS = prevList;
@@ -405,107 +325,41 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       expect(d.code).toBe(FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET);
     }
 
-    const { guidance } = buildNotConnected(
-      "cdp_unreachable",
-      coded(FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET),
-      { port: 8081, device_id: "chromium-cdp-9222" }
-    );
-    // Both variants of this code are routed by the prefix they share, not by their
+    const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET);
+    // Both variants of this code are routed by the phrase they share, not by their
     // differing tails - a tail the guidance keyed on would leave the other variant
     // matching whichever arm its wording happened to resemble.
     for (const detail of [devtoolsOnly.message, noPages.message]) {
-      expect(detail, "the prefix the guidance routes on must be in the detail").toContain(
+      expect(detail, "the phrase the guidance routes on must be in the detail").toContain(
         "Chromium CDP on port"
       );
     }
-    expect(guidance).toContain("Chromium CDP on port");
-    // The one narrowing inside that arm, and the only detail that supports it.
-    expect(devtoolsOnly.message).toContain("devtools://");
-    pinsOnce(guidance, "none at all, or only devtools:// ones");
-    pinsOnce(
-      guidance,
-      "the CDP endpoint was unreachable, answered as something other than CDP, or is up " +
-        "with no usable page"
-    );
-    // The instruction that makes the three arms usable at all. Without it they read
-    // as three descriptions and the reader picks by resemblance.
-    pinsOnce(
-      guidance,
-      "Which one is in the detail, and the phrase it carries is the split — a service tag " +
-        "opens every detail, so read past it."
-    );
-    // The clause that routes a live app away from a relaunch - both halves. The
+    // The clause that routes a live app away from a relaunch — both halves. The
     // diagnosis alone leaves the remedy free to become the relaunch this whole
     // branch exists to prevent.
     pinsOnce(
       guidance,
-      "means the app answered and has no drivable page (none at all, or only devtools:// " +
-        "ones): it is still running and only lacks a window, so ask the user to bring one " +
-        "back — chromium-tabs cannot open one, since its own resolver needs an existing " +
-        "page. If the detail carrying that phrase closes by asking about " +
-        "--remote-debugging-port, ignore the question: this port answered, so the flag was " +
-        "passed."
+      "'Chromium CDP on port': the app answered and has no drivable page, so it is up and " +
+        "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one " +
+        "— and do not relaunch, which recovers nothing here."
     );
-    // The third state cdp_unreachable covers, and no relaunch is its remedy. Only
-    // two of CHROMIUM_CDP_INVALID_RESPONSE's three throw sites can reach a
-    // not_connected result - fetchJson's !res.ok and its non-JSON body; the third
-    // (browserWebSocketUrl) is called only from chromium-tabs, which throws
-    // instead. Naming the unreachable one gives the reader a shape to match that
-    // never arrives, so the list has to track the reachable sites, not the file's.
+    // #880: that message asks about --remote-debugging-port on the port that just
+    // answered the request it reports on, which is one plausible step from a
+    // relaunch with a flag the app already has.
+    expect(noPages.message).toMatch(/--remote-debugging-port/);
     pinsOnce(
       guidance,
-      "'failed (HTTP <status>)' or 'returned a body that is not valid JSON' means something " +
-        "answered that is not a CDP endpoint, usually another service holding it"
-    );
-    expect(guidance, "names a shape no cdp_unreachable detail can carry").not.toContain(
-      "browser socket"
-    );
-    // A named state with no way out is a dead end: there is no port-inspecting
-    // tool, so the actor is the user, and the id is gone either way.
-    pinsOnce(
-      guidance,
-      "In that second case pass on what the detail says, since nothing here can free a port"
-    );
-    // Its remedy. A squatted port named without one leaves the reader holding a
-    // diagnosis and no action.
-    pinsOnce(guidance, "for an Electron app boot-device takes a free port and returns the new id");
-    pinsOnce(guidance, "a browser has to come back on a port nothing else holds");
-    // This arm is reached only when nothing answered the port at all, so the quit
-    // is a precaution rather than a diagnosis - and it still has to come first,
-    // since the one case it guards against is an app that is somehow still up.
-    pinsOnce(guidance, "Once the app is gone: ask the user to quit it if it is somehow still up");
-    // Which half of arm 1 kills the id. A port that merely stopped answering does
-    // not: the id carries the port, so the same app coming back on it resolves again.
-    pinsOnce(guidance, "That id stays dead while something else holds the port");
-    pinsOnce(
-      guidance,
-      "After 'could not connect' the port is merely unanswered, so the same id works " +
-        "again if the app comes back on it."
-    );
-    // The precondition on the one tool named after the quit. Without it the clause
-    // reads as an alternative to the quit rather than the step that follows it.
-    pinsOnce(guidance, "Once it is gone, launch-app cannot start a Chromium app");
-    // How the relaunch fails is per-app - a duplicate, an early exit behind
-    // Electron's single-instance lock, a refusal behind Chrome's - so the
-    // guidance states the rule and failure-scenarios.md carries the shapes.
-    pinsOnce(guidance, "relaunching a live app never recovers it");
-    // Why absence is not the exit here: nothing answered, so probePort drops this
-    // app exactly as it drops a live one with no drivable page.
-    pinsOnce(
-      guidance,
-      "it drops an app that is up with no drivable page exactly as it drops an exited one"
+      "If that detail closes by asking about --remote-debugging-port, ignore it: this port " +
+        "answered, so the flag was passed."
     );
 
-    // Only the devtools:// variant names a window - the asymmetry
-    // failure-scenarios.md's "App unreachable" row states, so a window hint added
-    // here makes the row stale. Fix it there before relaxing this. (That the other
-    // message asks about --remote-debugging-port on a port that just answered is
-    // filed as #880.)
+    // Only the devtools:// variant names a window - so the guidance may not tell
+    // the reader to recognise the state by a window hint.
     expect(devtoolsOnly.message).toMatch(/window/i);
     expect(noPages.message, "the no-targets message gained a window hint").not.toMatch(/window/i);
   });
 
-  it("splits on a detail prefix each throw site actually produces", async () => {
+  it("splits on a detail phrase each throw site actually produces", async () => {
     // The reader is told to route on a phrase the detail carries, so the phrases
     // have to be the ones the throw sites emit. Restating them here would let a
     // reworded message and the guidance drift apart with the suite green, and the
@@ -531,7 +385,7 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
 
     const noPages = await detailFor([{ id: "1", type: "worker", title: "w", url: "x" }]);
     // A socket-level detail: reached only after discovery answered, and it names
-    // neither prefix, which is what puts it in the guidance's third arm.
+    // neither phrase, which is what puts it in the guidance's third arm.
     const socketLevel = await new CDPClient("ws://127.0.0.1:1").send("Runtime.enable").then(
       () => undefined,
       (e: unknown) => e
@@ -540,41 +394,51 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED
     );
 
-    for (const [what, message, prefix] of [
+    for (const [what, message, phrase] of [
       ["nothing answered", (unreachable as Error).message, DISCOVERY],
       ["answered, no page", noPages.message, PORT_LEVEL],
     ] as const) {
-      expect(message, `${what}: the guidance routes on this phrase`).toContain(prefix);
+      expect(message, `${what}: the guidance routes on this phrase`).toContain(phrase);
       // Every one of these is thrown inside the Chromium service factory, so the
       // detail the reader sees is the registry's rewrite of it. Routing worded
       // positionally ("a detail starting X") therefore matches NOTHING, and every
       // state falls into the last arm — which claims the app was up moments ago.
       const detail = new ServiceInitializationError("ChromiumCdp:chromium-cdp-9222", message)
         .message;
-      expect(detail.startsWith(prefix), `${what}: service-tagged, so never at the start`).toBe(
+      expect(detail.startsWith(phrase), `${what}: service-tagged, so never at the start`).toBe(
         false
       );
-      expect(detail, `${what}: still findable as a phrase`).toContain(prefix);
+      expect(detail, `${what}: still findable as a phrase`).toContain(phrase);
     }
     expect((unreachable as Error).message).toContain("could not connect");
-    for (const prefix of [DISCOVERY, PORT_LEVEL]) {
+    for (const phrase of [DISCOVERY, PORT_LEVEL]) {
       expect(
         (socketLevel as Error).message,
-        "a socket-level detail must fall through both prefixes"
-      ).not.toContain(prefix);
+        "a socket-level detail must fall through both phrases"
+      ).not.toContain(phrase);
     }
 
-    const { guidance } = buildNotConnected(
-      "cdp_unreachable",
-      coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
-      { port: 8081, device_id: "chromium-cdp-9222" }
-    );
-    pinsOnce(guidance, `A detail carrying '${DISCOVERY}' is the discovery request itself`);
-    pinsOnce(guidance, `A detail carrying '${PORT_LEVEL}' means the app answered`);
+    const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
+    // The three arms, each keyed on what the detail carries rather than on where
+    // it carries it, and the instruction that makes them usable at all.
     pinsOnce(
       guidance,
-      "'could not connect' means the request never got an answer — nothing listening, or " +
-        "something holding the port without answering"
+      "Which state it is is in the detail, in a phrase it carries — a service tag opens " +
+        "every detail, so read past that."
+    );
+    pinsOnce(guidance, `'${DISCOVERY}': the discovery request itself.`);
+    pinsOnce(guidance, `'${PORT_LEVEL}': the app answered`);
+    pinsOnce(
+      guidance,
+      "'could not connect' means nothing answered that port — consistent with an exit, not " +
+        "proof of one."
+    );
+    // The squatter half, and its remedy: there is no port-inspecting tool, so the
+    // actor is the user, and no relaunch on that port clears it.
+    pinsOnce(
+      guidance,
+      "means something that is not CDP holds the port, which no relaunch on that port " +
+        "clears: pass that on, and relaunch onto a free one."
     );
     expect(guidance, "no positional routing — the detail is service-tagged").not.toMatch(
       /detail (starting|beginning|that starts|that begins)|opening words/i
@@ -583,15 +447,8 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     // the guidance may not claim which of the two states it is now in.
     pinsOnce(
       guidance,
-      "A detail carrying neither is the CDP socket failing after discovery had already " +
-        "answered, so the app was up moments ago."
-    );
-    // Both halves of the ambiguity, then the refusal to resolve it. Either half
-    // alone lets the arm assert the state it is there to say it cannot know.
-    pinsOnce(
-      guidance,
-      "It may have lost only the page it was driving, which the window remedy above fixes, " +
-        "or exited since — nothing here tells the two apart, so have the user check."
+      "Neither phrase: the socket failed after discovery had answered, so the app was up " +
+        "moments ago and may have lost only the page it was driving. Have the user check it."
     );
   });
 });
