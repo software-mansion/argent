@@ -78,6 +78,7 @@ import { stopMetroTool } from "../tools/simulator/stop-metro";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
@@ -183,6 +184,7 @@ export function createRegistry(): Registry {
   registry.registerTool(flowStartRecordingTool);
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowAddScriptTool);
   registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));

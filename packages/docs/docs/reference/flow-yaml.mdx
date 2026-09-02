@@ -271,16 +271,16 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-A `script` step runs a local `.mjs` file in a new Node process. Use a script for work that no device step does: a call to an API, a database seed, or a cleanup after the run.
+Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local `.mjs` file.
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
-| Key       | Required | Description                                                                                                                |
-| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | yes      | A file with a lowercase `.mjs` suffix. The path resolves as a `run` path does. The letter case must match the file on disk |
-| `timeout` | no       | The limit of the step in milliseconds. The minimum is 100, and the default is 30000                                        |
+| Key       | Required | Description                                                                                                                        |
+| --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs` file, relative to the flow file that holds the step. Write the extension in lowercase, and match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                           |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -297,13 +297,11 @@ Three entries in the list give access to a credential. Each entry holds the valu
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
-Argent prints the standard output and the standard error below the step line, on a pass and on a failure. The limit is 64 KiB for one step and 256 KiB for the run. **Argent does not redact this log.** Do not print a credential from a script.
-
 A failed step stops the flow. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Failed  | The script | An error, a load failure, a non-zero exit code, or a value in the `output` global that Argent cannot serialize             |
+| Failed  | The script | A missing file, a load error, a thrown error, or a non-zero exit code                                                      |
 | Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
 
 A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.

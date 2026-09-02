@@ -16,7 +16,7 @@ Load `argent-create-flow` as the authoring engine. Follow its required reference
 A QA flow is complete only when:
 
 1. The first step that is not `echo:` or `script:` is `launch:`. In-flow setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
-2. The first walkthrough recorded every action and live structural check. Only the four documented polish insertions are unrecorded.
+2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
 5. Targets satisfy the stable-selector and coordinate-fallback rules. QA keeps coordinates only for genuinely unlabeled targets. Vacuous on Vega, which has no coordinate targets.
@@ -43,7 +43,12 @@ Make repeated runs deterministic:
 3. After setup navigation, echo the named baseline and hard-check it before the first scenario mutation. Use `assert:` or a destination `await:` that fully proves the baseline.
 4. Prefer to restore the baseline at the end.
 
-Use `run:` for a separately recorded reset or seed flow, and `script:` for setup or cleanup that no recorded flow can do. There is no other fixture mechanism. Ask before cleanup that creates or deletes meaningful user data outside the request.
+A flow has two fixture mechanisms:
+
+- `run:` replays a separately recorded reset or seed flow.
+- `script:` runs requested local setup or cleanup. Record it with `flow-add-script` where it belongs in the walkthrough.
+
+Ask before cleanup that creates or deletes meaningful user data outside the request.
 
 ### Compact example
 
@@ -91,7 +96,7 @@ Complete the create-flow polish and blocking audit. Then:
 | ------------------ | ----------- | ------------------------- | --------- |
 | Tap `settings-tab` | Settings    | `settings-screen` visible | `idle`    |
 
-The two are repaired differently. A missing identity check must be recorded live on the restored screen. A missing `idle` check is added in YAML, because `await: { idle: true }` has no recorder form and is one of `argent-create-flow`'s four permitted polish insertions. Re-record any missing action or other structural check.
+The two are repaired differently. A missing identity check must be recorded live on the restored screen. A missing `idle` check is added in YAML, because `await: { idle: true }` has no recorder form and is one of `argent-create-flow`'s three permitted polish insertions. Re-record any missing action or other structural check.
 
 ## 5. Prove two consecutive passes
 

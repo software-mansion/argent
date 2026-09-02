@@ -8,15 +8,13 @@ Read this reference when polishing, composing, or manually reviewing a flow.
     - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
     - [Relational scopes](#relational-scopes)
   - [Directives](#directives)
+    - [`swipe`](#swipe)
   - [Verification conditions](#verification-conditions)
   - [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
     - [`idle` readiness](#idle-readiness)
   - [Optional divergences](#optional-divergences)
   - [Composition and platform limits](#composition-and-platform-limits)
-  - [Local scripts: `script`](#local-scripts-script)
-    - [Where `path` points](#where-path-points)
-    - [What the script gets](#what-the-script-gets)
-    - [What the step reports](#what-the-step-reports)
+  - [Local scripts](#local-scripts)
   - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
   - [YAML safety](#yaml-safety)
 
@@ -29,7 +27,7 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow has a literal `launch:` as its first step that is not `echo:` or `script:`. A flow that runs a setup script before its launch is therefore e2e too. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+An e2e flow has a literal `launch:` as its first step that is not `echo:` or `script:`. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
 
 A leading `run:` does not classify the outer flow as e2e, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A flow whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
 
@@ -231,36 +229,23 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
 
-## Local scripts: `script`
+## Local scripts
 
-A `script:` step runs a local `.mjs` file in a new Node process. Use it for work that no device step can do: call an API, a database seed, or clean up after a run.
+Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-### Where `path` points
+Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-`path` resolves against the directory of the flow file that **contains the step**, so a fragment finds the same script in each flow that composes it. Always write the extension.
+- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-`timeout` is milliseconds and defaults to 30000. Parse rejects one below 100, because the step starts a Node process first and that start alone costs tens of milliseconds. A smaller limit ends the step at its limit, or makes the verdict depend on the load of the host.
+If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
-### What the script gets
-
-- The working directory is `project_root`, not the directory of the script file, so `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`. A bare `import` is different: Node resolves it from the script file and up, so a script outside the project cannot import the project's dependencies.
-- The environment is an allowlist, not a copy of your shell: `PATH`, `HOME`, the identity, shell, locale, terminal, temp-directory, cache and Windows platform names, the proxy and TLS names, the Node, npm, Android, Java and Apple toolchain names, `CI`, `SSH_AUTH_SOCK`, and every `npm_config_` name. All other names are absent, such as `NODE_ENV`, `DATABASE_URL`, each value in a project `.env`, and the tool-server's own token and port. Two of the names that do pass carry a credential: `SSH_AUTH_SOCK` reaches the SSH agent, and an `npm_config_` name can hold a registry token. Let the script read what it needs from a file.
-
-### What the step reports
-
-The step report carries the stdout and stderr of the script and prints them below the step line, on a pass and on a failure. The limit is 64 KiB for one step and 256 KiB for the run, and the runner says on its own line that it cut the output. **The log has no redaction**, and it reaches the step report, the terminal and each CI log. Do not print a credential from a script.
-
-Both verdicts stop the flow. The verdict names the side that caused the failure, so CI can separate a regression from the machine that ran it.
-
-| Verdict     | Cause      | Examples                                                                                                                   |
-| ----------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **failed**  | the script | threw an error, did not load, exited non-zero, or wrote an `output` value that the runner cannot serialize                 |
-| **errored** | the host   | a time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
+If a script fails, check its changes before you retry.
 
 ## Snapshots and standalone runs
 

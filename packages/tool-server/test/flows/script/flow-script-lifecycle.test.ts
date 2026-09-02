@@ -219,6 +219,8 @@ describe("flow script executor — time limits and cancellation", () => {
 
     expect(result.failure?.kind).toBe("cancelled");
     expect(result.durationMs).toBeLessThan(10_000);
+    // The script was forked and ran for 300ms, so whatever it did stands.
+    expect(result.failure?.beforeFork).toBeUndefined();
   });
 
   it("honours an abort raised in the same tick as the call", async () => {
@@ -242,6 +244,28 @@ describe("flow script executor — time limits and cancellation", () => {
     expect(result.failure?.kind).toBe("cancelled");
     expect(result.log).not.toContain("finished work");
     expect(result.durationMs).toBeLessThan(1_000);
+    expect(result.failure?.beforeFork).toBe(true);
+  });
+
+  // The same kind carries both halves of a cancellation, and only the executor
+  // knows which one it raised: a caller that tells its author to go clean up
+  // after a script that was never forked sends them after state that does not
+  // exist.
+  it("marks a cancellation that arrived before the call as never forked", async () => {
+    const ws = workspace();
+    const script = ws.write("seed.mjs", `output.seeded = true;`);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      signal: controller.signal,
+    });
+
+    expect(result.failure?.kind).toBe("cancelled");
+    expect(result.failure?.message).toContain("before the script started");
+    expect(result.failure?.beforeFork).toBe(true);
   });
 
   it("does not relabel a cancellation as a timeout when the deadline passes mid-stop", async () => {

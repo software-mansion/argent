@@ -187,21 +187,17 @@ describe("tool interaction messages", () => {
   it("names the flow in every recording-tool interaction line", () => {
     // Recordings are concurrent, so several of these lines interleave in one log
     // and an unqualified "flow recording" would not say which one died or
-    // finished. Only two of the twelve formatters on the four recording tools
-    // are pinned elsewhere (flow-start-recording.completedMsg above,
-    // flow-add-echo.completedMsg in the secrets test), so the other ten could
-    // silently revert to name-free wording. Hold every one to naming the flow —
-    // the property the concurrency support introduced — including the failure
+    // finished. Hold every formatter on every recording tool to naming the flow
+    // — the property the concurrency support introduced — including the failure
     // lines, which are the diagnostic when several recordings are live.
     const definitions = definitionsById(createRegistry());
     const name = "checkout";
     const params = { name, project_root: "/tmp/proj", command: "gesture-tap", message: "note" };
     // Each tool's OWN result shape. One shared `{ message, flowFile, savedTo }`
-    // used to stand in for all four, which stopped describing any of them once
+    // used to stand in for all of them, which stopped describing any once
     // the recorder dropped the per-step YAML: `flowFile` survives on start and
     // finish only, and add-step/add-echo report `stepCount` (plus `recorded`
-    // on add-step) instead. No formatter below reads a field that differs
-    // between them, but a fixture that misdescribes the contract is the one
+    // on add-step) instead. A fixture that misdescribes the contract is the one
     // that gets copied into a test that does.
     const results: Record<string, Record<string, unknown>> = {
       "flow-start-recording": { message: "", flowFile: "", savedTo: "project" },
@@ -213,6 +209,13 @@ describe("tool interaction messages", () => {
         savedTo: "project",
       },
       "flow-add-echo": { message: "", stepCount: 1, savedTo: "project" },
+      "flow-add-script": {
+        message: "",
+        status: "pass",
+        stepCount: 1,
+        recorded: "1. script: ../../scripts/seed.mjs",
+        savedTo: "project",
+      },
       "flow-finish-recording": {
         message: "",
         path: "/tmp/proj/.argent/flows/checkout.yaml",
@@ -228,6 +231,7 @@ describe("tool interaction messages", () => {
       "flow-start-recording",
       "flow-add-step",
       "flow-add-echo",
+      "flow-add-script",
       "flow-finish-recording",
     ]) {
       const i = definitions.get(id)!.interaction!;

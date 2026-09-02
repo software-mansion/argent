@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ToolContext } from "@argent/registry";
-import { ArtifactStore, Registry, zodObjectToJsonSchema } from "@argent/registry";
+import {
+  ArtifactStore,
+  FAILURE_CODES,
+  getFailureSignal,
+  Registry,
+  zodObjectToJsonSchema,
+} from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -356,6 +362,170 @@ describe("flow-add-echo", () => {
     expect(err.message).toContain(`No active recording for flow "wrong-root" in ${otherDir}`);
     expect(err.message).toContain("Active recordings: none in this project (plus 1 in other");
     expect(err.message).not.toContain(tmpDir);
+  });
+});
+
+describe("a step the recorder refuses", () => {
+  it("leaves the flow file exactly as it was, and the recording usable", async () => {
+    await flowStartRecordingTool.execute({}, { name: "poison", project_root: tmpDir });
+    await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "one" });
+
+    const err = await flowInsertEchoTool
+      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user.id}}" })
+      .catch((e: unknown) => e as Error);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("unsupported template syntax");
+    expect(parseFlow(await onDisk("poison")).steps).toEqual([{ kind: "echo", message: "one" }]);
+
+    await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "two" });
+    const finished = await flowFinishRecordingTool.execute({}, {
+      name: "poison",
+      project_root: tmpDir,
+    } as never);
+    expect(finished.steps).toBe(2);
+  });
+
+  it("keeps a client-mode recording just as clean", async () => {
+    const clientRoot = path.join(os.tmpdir(), "not-on-this-host", "agent-project");
+    const ctx = {
+      artifacts: new ArtifactStore(),
+      fileInputs: {
+        project_root: { clientPath: clientRoot, presentOnHost: false, viaUpload: false },
+      },
+    } as unknown as ToolContext;
+    await flowStartRecordingTool.execute({}, { name: "poison", project_root: clientRoot }, ctx);
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "poison", project_root: clientRoot, message: "one" }
+    );
+
+    const err = await flowInsertEchoTool
+      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id}}" })
+      .catch((e: unknown) => e as Error);
+
+    expect((err as Error).message).toContain("unsupported template syntax");
+    const session = await getRecordingSession(clientRoot, "poison");
+    expect(session?.flow.steps).toEqual([{ kind: "echo", message: "one" }]);
+  });
+
+  it("says the tool call already ran when the refusal lands after it", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "already-ran", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const err = await tool
+      .execute(
+        {},
+        {
+          name: "already-ran",
+          project_root: tmpDir,
+          command: "keyboard",
+          args: '{"text":"{{output:code}}"}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "{{output:code}}" });
+    expect((err as Error).message).toContain("`keyboard` call ran");
+    expect((err as Error).message).toContain("unsupported template syntax");
+    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+    expect(parseFlow(await onDisk("already-ran")).steps).toEqual([]);
+  });
+
+  // A host-mode append re-parses the file, so the same guard also judges the
+  // steps already in it — and a mid-recording hand edit is how one of those
+  // comes to hold a reference the recorder never accepted.
+  it("does not blame the just-run call for a reference an earlier step already held", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "hand-edited", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(flowsDirFor(tmpDir), "hand-edited.yaml"),
+      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user.id}}"\n`
+    );
+
+    const err = await tool
+      .execute(
+        {},
+        {
+          name: "hand-edited",
+          project_root: tmpDir,
+          command: "keyboard",
+          args: '{"text":"hi"}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    const message = (err as Error).message;
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "hi" });
+    // The call ran, so that half stands — but the field the scan refused is the
+    // hand-edited step's, and the wrap has to say so.
+    expect(message).toContain("`keyboard` call ran");
+    expect(message).toContain("an existing flow step failed validation");
+    expect(message).toContain("Step 1 (`echo`)");
+    expect(message).not.toContain("its step failed validation");
+  });
+
+  // The other half of that claim: the tool's description tells an agent a
+  // failure ran the call unless it landed in one of the checks that precede the
+  // dispatch, and this is the check an agent meets most often. A dispatch moved
+  // above it would make the description advise cleanup for an action that never
+  // happened.
+  it("rejects a call for a recording that was never started without dispatching it", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
+    const tool = createFlowAddStepTool(registry);
+
+    const err = await tool
+      .execute(
+        {},
+        {
+          name: "never-started",
+          project_root: tmpDir,
+          command: "keyboard",
+          args: '{"text":"hi"}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("leaves the refusals it did not introduce worded as they were", async () => {
+    const registry = createMockRegistry({ "restart-app": { result: { restarted: true } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "prereq", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const err = await tool
+      .execute(
+        {},
+        {
+          name: "prereq",
+          project_root: tmpDir,
+          command: "restart-app",
+          args: '{"bundleId":"com.acme.notes"}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("restart-app", {
+      bundleId: "com.acme.notes",
+    });
+    expect((err as Error).message).toContain("must not declare executionPrerequisite");
+    expect((err as Error).message).not.toContain("already ran");
+    expect(getFailureSignal(err as Error)?.error_code).toBe(
+      FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE
+    );
   });
 });
 
@@ -2867,10 +3037,11 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
     expect(schema.properties["args"]).toMatchObject({ type: "string" });
   });
 
-  it("still opens its description with the sentence those fixtures quote verbatim", () => {
-    expect(createFlowAddStepTool({} as unknown as Registry).description).toContain(
-      "Execute a tool call and record it as a step in the flow named by `name` + `project_root`"
-    );
+  it("keeps the description focused on how to use the tool", () => {
+    const description = createFlowAddStepTool({} as unknown as Registry).description!;
+    expect(description).toContain("Execute one MCP tool and record its flow step");
+    expect(description).toContain("Call recording tools, including `flow-add-script`, directly");
+    expect(description.split(/\s+/).length).toBeLessThan(80);
   });
 });
 

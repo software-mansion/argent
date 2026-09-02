@@ -2719,9 +2719,9 @@ export function runTargetName(target: string): string {
  * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked here;
  * nothing about WHERE the path lands. At run time execRunStep joins it onto the
  * containing flow file's own directory and resolves the result with kernel
- * semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a lexical
- * collapse, since a `..` after a symlinked component names the parent of the
- * link's target, not of the spelling. There is no path fence there: a target
+ * semantics (see canonicalFlowPath in flow-file-refs.ts) — deliberately not a
+ * lexical collapse, since a `..` after a symlinked component names the parent of
+ * the link's target, not of the spelling. There is no path fence there: a target
  * runs if the tool server can read it, and fails with that file's own ENOENT if
  * it cannot.
  */
@@ -2820,7 +2820,7 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
   return step;
 }
 
-function parseScriptPath(raw: unknown, value: unknown): string {
+export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
@@ -2881,7 +2881,7 @@ function parseScriptPath(raw: unknown, value: unknown): string {
  * ran. Refused here, deviceless and naming the key, rather than after the run
  * has started.
  */
-function parseScriptTimeout(raw: unknown, value: unknown): number {
+export function parseScriptTimeout(raw: unknown, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     badEntry(raw, "script.timeout needs a positive number of milliseconds (e.g. `timeout: 30000`)");
   }
@@ -2894,6 +2894,236 @@ function parseScriptTimeout(raw: unknown, value: unknown): number {
     );
   }
   return value as number;
+}
+
+const OUTPUT_REFERENCE_MARKER = "{{output:";
+
+interface StepField {
+  where: string;
+  /**
+   * A second spelling of the same field, when the parse cannot tell which one
+   * the author wrote. Set only by the gesture targets — see
+   * {@link gestureTargetPath}.
+   */
+  altWhere?: string;
+  value: string;
+}
+
+/**
+ * A selector's own string leaves, addressed by their YAML spellings.
+ *
+ * `patterns` adds the regex spelling `text: { matches }`, which the walk
+ * otherwise skips — see {@link outputReferenceFields} for the one context that
+ * asks for it.
+ */
+function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
+  if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
+  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
+  if (patterns && sel.textMatches !== undefined) {
+    yield { where: `${where}.text.matches`, value: sel.textMatches };
+  }
+  if (sel.identifier !== undefined) yield { where: `${where}.id`, value: sel.identifier };
+  if (sel.role !== undefined) yield { where: `${where}.role`, value: sel.role };
+  for (const relation of SELECTOR_RELATIONS) {
+    const nested = sel[relation];
+    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`, patterns);
+  }
+}
+
+/**
+ * Every string leaf of a `tool` step's args, addressed by its own path.
+ *
+ * `args:` is the one step body the parser does not constrain, so a YAML anchor
+ * can make it cyclic (`args: &a { self: *a }`) and the walk has to survive one
+ * rather than blow the stack. `seen` holds the containers on the current path
+ * only: a node reached twice down two different branches is two real leaves and
+ * must be yielded twice, while a node that contains itself is dropped at the
+ * point it closes the loop.
+ */
+function* argFields(
+  value: unknown,
+  where: string,
+  seen: Set<object> = new Set()
+): Generator<StepField> {
+  if (typeof value === "string") {
+    yield { where, value };
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [i, item] of value.entries()) yield* argFields(item, `${where}[${i}]`, seen);
+  } else if (value instanceof Map) {
+    // `%YAML 1.1` + `!!omap` materializes a real Map, whose entries
+    // Object.entries reports as none.
+    for (const [key, item] of value) yield* argFields(item, `${where}.${String(key)}`, seen);
+  } else if (value instanceof Set) {
+    // `!!set` members ARE the values, so they carry no key of their own and the
+    // path stays the container's.
+    for (const item of value) yield* argFields(item, where, seen);
+  } else {
+    for (const [key, item] of Object.entries(value))
+      yield* argFields(item, `${where}.${key}`, seen);
+  }
+  seen.delete(value);
+}
+
+/**
+ * Where a gesture step's target sits in the file: `tap.on` for the options
+ * form, `tap` for the bare one.
+ *
+ * `pinch` and `rotate` have only the options form, so those are certain. `tap`
+ * and `long-press` take both, and the parsed step keeps no record of which was
+ * written — `duration` is optional in long-press's options form and `times: 1`
+ * normalizes to `undefined`, so a step carrying neither could have been spelled
+ * either way. Naming one spelling there would name a path that is not in the
+ * author's file, so `alt` carries the other and the refusal offers both.
+ */
+function gestureTargetPath(
+  step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
+): { path: string; alt?: string } {
+  if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
+  const option = step.kind === "tap" ? step.times : step.duration;
+  if (option !== undefined) return { path: `${step.kind}.on` };
+  return { path: step.kind, alt: `${step.kind}.on` };
+}
+
+function* conditionFields(
+  kind: string,
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  },
+  patterns = false
+): Generator<StepField> {
+  yield* selectorFields(
+    cond.selector,
+    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`,
+    patterns
+  );
+  if (cond.expectedText !== undefined && (patterns || cond.textMatch !== "matches")) {
+    yield {
+      where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
+      value: cond.expectedText,
+    };
+  }
+}
+
+function* outputReferenceFields(step: FlowStep): Generator<StepField> {
+  switch (step.kind) {
+    case "echo":
+      yield { where: "echo", value: step.message };
+      return;
+    case "tool":
+      yield* argFields(step.args, "args");
+      return;
+    case "type":
+      yield* selectorFields(step.into, "type.into");
+      yield { where: "type.text", value: step.text };
+      return;
+    case "await":
+    case "assert":
+      yield* conditionFields(step.kind, step);
+      return;
+    case "when":
+      // Patterns included HERE and nowhere else. `{{output:…}}` is on no
+      // resolver list, so a regex carrying one matches nothing — which a `tap`,
+      // an `await` or an `assert` reports on its first run. A `when` does not:
+      // an unmatchable guard is simply not met, the block is skipped, and the
+      // run is green. Same reasoning, and same field set, as the `{{secret:`
+      // scan in parseWhenCondition.
+      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition, true);
+      return;
+    case "tap":
+    case "long-press":
+    case "pinch":
+    case "rotate": {
+      if (!step.selector) return;
+      const { path, alt } = gestureTargetPath(step);
+      for (const field of selectorFields(step.selector, path)) {
+        // Every path this walk yields opens with `path`, so the alternative
+        // spelling is that prefix swapped for the other one.
+        yield alt ? { ...field, altWhere: `${alt}${field.where.slice(path.length)}` } : field;
+      }
+      return;
+    }
+    // Both ends are optional and either may be a bare point, so each is
+    // guarded on its own. Neither spelling is ambiguous the way a `tap`'s is:
+    // `from`/`to` exist only in the options form, so there is no `altWhere`.
+    case "swipe":
+      if (step.from && "selector" in step.from) {
+        yield* selectorFields(step.from.selector, "swipe.from");
+      }
+      if (step.to && "selector" in step.to) {
+        yield* selectorFields(step.to.selector, "swipe.to");
+      }
+      return;
+    case "scroll-to":
+      yield* selectorFields(step.target, "scroll-to.target");
+      if (step.within) yield* selectorFields(step.within, "scroll-to.within");
+      return;
+    case "snapshot":
+      if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
+      return;
+    case "script":
+      return;
+    case "launch":
+    case "run":
+    case "idle":
+    case "wait":
+      return;
+    default: {
+      const unclassified: never = step;
+      void unclassified;
+      return;
+    }
+  }
+}
+
+/**
+ * Whether this step, or one nested in it, spells an output reference.
+ *
+ * {@link assertNoOutputReferences} judges a WHOLE flow, and a host-mode append
+ * re-parses the file before it pushes — so its refusal can name a step that was
+ * already there (a mid-recording hand edit) rather than the one being appended.
+ * A caller that reports the refusal asks this which of the two it is holding.
+ */
+export function holdsOutputReference(step: FlowStep): boolean {
+  for (const field of outputReferenceFields(step)) {
+    if (field.value.includes(OUTPUT_REFERENCE_MARKER)) return true;
+  }
+  return blockSteps(step)?.some(holdsOutputReference) ?? false;
+}
+
+function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {
+  steps.forEach((step, i) => {
+    const at = [...trail, i + 1];
+    for (const field of outputReferenceFields(step)) {
+      if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
+      const rendered =
+        field.value.length > MAX_ENTRY_RENDER_CHARS
+          ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
+          : field.value;
+      const locator = field.altWhere
+        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+        : `\`${field.where}\``;
+      throw new FailureError(
+        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
+          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
+        {
+          error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+          failure_stage: "flow_output_reference",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    const inner = blockSteps(step);
+    if (inner) assertNoOutputReferences(inner, at);
+  });
 }
 
 const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
@@ -3282,8 +3512,8 @@ export function serializeFlow(flow: FlowFile): string {
   return yamlStringify(doc, { blockQuote: false });
 }
 
-/** Validate cross-field invariants that are checkable without other files. */
 export function validateFlow(flow: FlowFile): void {
+  assertNoOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
@@ -3761,15 +3991,35 @@ export type FlowSavedTo = string | ClientFileDirective;
  * step still lands in the file it was recorded for, and only the NEXT call on
  * the key reports the recording gone.
  */
-function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+/**
+ * Whether this session still holds its key, and if not, how it lost it.
+ *
+ * `restarted` means a DIFFERENT session occupies the key; `gone` means the key
+ * is empty, which is either a finish or the MAX_RECORDINGS backstop — the
+ * server cannot tell those apart after the fact. {@link assertSessionStillLive}
+ * asks this for a caller about to WRITE, and throws on anything but `live`. A
+ * caller whose step already ran and has nothing to write still has a report to
+ * make, and every claim in it about the flow file — that it is unchanged, and
+ * how many steps it holds — is about a file another take may already own.
+ * Outside the flow-file lock the answer can go stale the moment it returns, so
+ * such a caller reads it to qualify a sentence, never to decide a write.
+ */
+export function recordingSessionState(session: RecordingSession): "live" | "restarted" | "gone" {
   const current = recordings.get(session.key);
-  if (current === session) return;
+  if (current === session) return "live";
+  return current ? "restarted" : "gone";
+}
+
+function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+  const state = recordingSessionState(session);
+  if (state === "live") return;
   // A key that is occupied by a DIFFERENT session was restarted; an empty key
   // was either finished or evicted by the MAX_RECORDINGS backstop, which the
   // server cannot tell apart after the fact — so name both rather than guess.
-  const why = current
-    ? "it was restarted while this step was running, so the step belongs to the discarded take"
-    : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
+  const why =
+    state === "restarted"
+      ? "it was restarted while this step was running, so the step belongs to the discarded take"
+      : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
   // Do NOT send the agent to flow-start-recording here. It truncates
   // unconditionally, and on every branch there is something to lose: the live
   // take that just claimed this key, or the finished flow sitting on disk.
@@ -3780,17 +4030,19 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
   // because the key is empty, and `startRecordingSession` registers under this
   // key's lock — so naming a competing agent that does not exist would send the
   // reader after the wrong cause.
-  const whatIsAtStake = current
-    ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
-      `under a fresh name rather than restarting this one.`
-    : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
-      `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
-  const recovery =
-    `Nothing was added to the flow file` +
-    (step.kind === "echo"
+  const whatIsAtStake =
+    state === "restarted"
+      ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
+        `under a fresh name rather than restarting this one.`
+      : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
+        `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
+  const alreadySpent =
+    step.kind === "echo"
       ? ". "
-      : ", but the step itself already ran on the device — repeating it repeats that action. ") +
-    whatIsAtStake;
+      : step.kind === "script"
+        ? ", but the script already ran — repeating it repeats whatever it did. "
+        : ", but the step itself already ran on the device — repeating it repeats that action. ";
+  const recovery = `Nothing was added to the flow file` + alreadySpent + whatIsAtStake;
   throw new FailureError(
     `Recording of "${session.name}" in ${session.projectRoot} is no longer active — ${why}. ` +
       recovery,

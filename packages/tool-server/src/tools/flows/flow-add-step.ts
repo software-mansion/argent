@@ -4,13 +4,16 @@ import * as path from "node:path";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   ToolNotFoundError,
+  wrapFailure,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
+  holdsOutputReference,
   appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
@@ -58,16 +61,7 @@ const zodSchema = z.object({
   command: z
     .string()
     .describe(
-      'MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app") — a TOOL, not a flow directive. ' +
-        'A flow-file directive name ("tap", "launch", "run", "type", "await", "assert", "pinch", ' +
-        '"swipe", "echo", "script", "wait", "long-press", "scroll-to", "snapshot", "when") is ' +
-        "answered with guidance, " +
-        "and nothing runs or is recorded: most name the tool that records the directive, while " +
-        '"script", "wait", "long-press", "scroll-to", "snapshot" and "when" have no recording tool ' +
-        "at all and " +
-        "are answered with what to do instead. A recording tool (flow-add-step, flow-add-echo, " +
-        "flow-start-recording, flow-finish-recording) is refused the same way, each for its own " +
-        "reason — nesting one would erase this flow at replay, end the take, or write the step twice."
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass a flow directive or a recording tool. Call flow-add-script directly for a requested script step.'
     ),
   args: z
     .string()
@@ -720,6 +714,8 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
     "`flow-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
     "flow-add-step — nesting it would write the echo AND a `tool: flow-add-echo` step that " +
     "fails on every replay.",
+  "flow-add-script":
+    "`flow-add-script` records its own step. Call it directly, not through flow-add-step.",
   "flow-add-step":
     "flow-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
   "flow-start-recording":
@@ -767,11 +763,7 @@ export function directiveCommandHint(command: string): string | undefined {
     );
   }
   if (command === "script") {
-    return (
-      `"script" is a flow directive, not a tool, and no tool records one — it runs a local .mjs ` +
-      `file you write, which no recorded call produces. Add the \`script:\` step by hand, ` +
-      `pointing it at that file, and prove it with the replay.`
-    );
+    return `"script" is a flow directive. Call \`flow-add-script\` directly.`;
   }
   if (command === "wait") {
     return (
@@ -1086,10 +1078,10 @@ async function captureRunTarget(
     // as-written flows dir under the caller's project_root. When the recording
     // is a symlink out of the flows dir the two anchors can name different
     // files, so require them to canonicalize to the same one, matching the
-    // runner's own canonicalization (canonicalFlowPath in flow-run.ts realpaths
-    // before reading). An executed path that cannot be canonicalized (e.g.
-    // ENOENT) means nothing verifiable ran from the flows dir, and the raw step
-    // is then the honest record: it replays via name + project_root.
+    // runner's own canonicalization (canonicalFlowPath in flow-file-refs.ts
+    // realpaths before reading). An executed path that cannot be canonicalized
+    // (e.g. ENOENT) means nothing verifiable ran from the flows dir, and the raw
+    // step is then the honest record: it replays via name + project_root.
     let executedPath: string | undefined;
     try {
       executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
@@ -1308,7 +1300,33 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         };
       }
 
-      const { savedTo, stepCount } = await appendStepToFlow(session, step);
+      let savedTo: FlowSavedTo;
+      let stepCount: number;
+      try {
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+      } catch (err) {
+        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+        const refused = err instanceof Error ? err.message : String(err);
+        // A host-mode append re-parses the file, so the scan that refuses an
+        // output reference sees the steps ALREADY there as well — and a
+        // mid-recording hand edit is a supported way for one of those to carry
+        // one. Blaming the just-run call for that step's field would send the
+        // author back over a call whose args were clean.
+        throw wrapFailure(
+          err,
+          {
+            error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+            failure_stage: "flow_output_reference",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          },
+          holdsOutputReference(step)
+            ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
+                `recorded. Check the call's changes before you retry. ${refused}`
+            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
+                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+        );
+      }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by
