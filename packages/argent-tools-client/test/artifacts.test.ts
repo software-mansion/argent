@@ -44,6 +44,14 @@ describe("getDeviceIdFromArgs", () => {
     expect(getDeviceIdFromArgs({})).toBeUndefined();
     expect(getDeviceIdFromArgs(null)).toBeUndefined();
   });
+
+  it("reads a blank id as absent, so nothing is scoped to an empty segment", () => {
+    expect(getDeviceIdFromArgs({ udid: "" })).toBeUndefined();
+    expect(getDeviceIdFromArgs({ udid: "   " })).toBeUndefined();
+    expect(getDeviceIdFromArgs({ device_id: "" })).toBeUndefined();
+    // A blank `udid` must not shadow a real `device_id` alongside it.
+    expect(getDeviceIdFromArgs({ udid: "", device_id: "D1" })).toBe("D1");
+  });
 });
 
 describe("materializeArtifacts", () => {

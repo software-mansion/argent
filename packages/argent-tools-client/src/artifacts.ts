@@ -548,11 +548,17 @@ export async function materializeArtifacts(
   return { result: rewritten, images };
 }
 
-/** Pull a device id from tool args (`udid` or `device_id`) for cache scoping. */
+/**
+ * Pull a device id from tool args (`udid` or `device_id`) for cache scoping.
+ *
+ * A blank value reads as absent, the way the tool-server reads it: a client with
+ * a required-shaped field sends `""` for "no device", and scoping a cache by it
+ * would key every such call to the same empty segment.
+ */
 export function getDeviceIdFromArgs(args: unknown): string | undefined {
   if (!args || typeof args !== "object") return undefined;
   const rec = args as Record<string, unknown>;
-  if (typeof rec.udid === "string") return rec.udid;
-  if (typeof rec.device_id === "string") return rec.device_id;
+  if (typeof rec.udid === "string" && rec.udid.trim() !== "") return rec.udid;
+  if (typeof rec.device_id === "string" && rec.device_id.trim() !== "") return rec.device_id;
   return undefined;
 }

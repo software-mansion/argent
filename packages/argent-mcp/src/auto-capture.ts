@@ -123,7 +123,11 @@ export function getUdidFromArgs(args: unknown): string | undefined {
     "udid" in args &&
     typeof (args as { udid: unknown }).udid === "string"
   ) {
-    return (args as { udid: string }).udid;
+    // Blank reads as absent, the way the tool-server reads it — so a `""` the
+    // server resolved a device for falls through to that device rather than
+    // standing as an id of its own.
+    const udid = (args as { udid: string }).udid;
+    return udid.trim() === "" ? undefined : udid;
   }
   return undefined;
 }

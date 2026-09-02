@@ -65,6 +65,15 @@ describe("getUdidFromArgs", () => {
   it("returns undefined for non-object args", () => {
     expect(getUdidFromArgs("string-arg")).toBeUndefined();
   });
+
+  it.each(["", "   ", "\t"])("reads a blank udid (%j) as absent", (udid) => {
+    // The tool-server resolves a device for a blank `udid` and echoes it back.
+    // Returning the blank verbatim would make `getUdidFromArgs(args) ?? device`
+    // keep it — `??` is nullish-only — dropping the post-action screenshot and
+    // element tree for a call the server did in fact target.
+    expect(getUdidFromArgs({ udid })).toBeUndefined();
+    expect(getUdidFromArgs({ udid }) ?? "resolved-by-server").toBe("resolved-by-server");
+  });
 });
 
 // ---------------------------------------------------------------------------
