@@ -1003,6 +1003,35 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // strip. The metadata is what carries the diagnosis.
     expect((err as Error & { cause?: Error }).cause).toBeUndefined();
     expect(err?.message).not.toMatch(/67 112 67 112/);
+    // The SIGKILL fixture carries `code: null`, so `subprocessFailureMetadata`
+    // never emits `failure_exit_code` here and the spread that forwards it is
+    // unobserved — see the exit-status case below.
+  });
+
+  it("forwards the adb exit status, not only the signal", async () => {
+    // `failure_exit_code` is set only for `typeof err.code === "number"`, and
+    // the SIGKILL case above builds its fixture with `code: null` — so the
+    // spread that forwards it could be deleted with the whole file green. The
+    // two spread branches need two fixtures.
+    adbShell.mockClear();
+    const raw = Object.assign(new Error("adb: device offline"), { code: 1, signal: null });
+    adbShell.mockRejectedValueOnce(
+      new FailureError("adb -s emulator-5554 shell input keyevent … failed: adb: protocol fault", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(raw, "adb"),
+      })
+    );
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    const signal = getFailureSignal(err);
+    expect(signal?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(signal?.failure_exit_code).toBe(1);
+    expect(signal?.failure_command).toBe("adb");
   });
 
   it("presses the key it was asked for, not a hardcoded Enter", async () => {
