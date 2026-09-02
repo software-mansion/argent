@@ -271,7 +271,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-A `script` step runs a local `.mjs` file in a new Node process. Use a script for work that no device step can do, for example to seed a database or to clean up after a run.
+Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local `.mjs` file.
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
@@ -285,30 +285,23 @@ The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
 - `PATH`, `HOME` and the equivalent Windows names
-- The identity, shell, locale, terminal, temporary-directory, cache and configuration names of the host
+- The identity, shell, locale, terminal, temporary-directory and cache names of the host
 - The Windows platform names
 - The proxy names and the TLS certificate names
 - The Node, npm, Android, Java and Apple toolchain names
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
-Argent removes every other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. A name such as `NODE_ENV` or `DATABASE_URL` is absent, even when your shell sets it. Argent does not read a project `.env` file. There is no `env` key. Let the script read a secret or a URL from a file.
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
-A script returns a document through the `output` global. Assign the value to `globalThis.output`, or set a key on the `output` object that Argent puts there. Argent ignores an `export default` value: the step passes with an empty document. The document must be a plain object of JSON-compatible data. `flow-add-script` returns the document as `outputJson`. No flow step reads it yet.
-
-```js
-// scripts/seed-order.mjs
-globalThis.output = { orderId: "A-1001" };
-```
-
 A failed step stops the flow. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Failed  | The script | A missing file, a load error, a thrown error, a non-zero exit code, or an `output` value that Argent cannot serialize      |
+| Failed  | The script | A missing file, a load error, a thrown error, or a non-zero exit code                                                      |
 | Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
 
 A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.
@@ -359,7 +352,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step. Argent then rejects a `run:`, `script:` or `snapshot` step at any depth. The error names the missing co-location, not a missing fragment, script or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:`, `script:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment, script or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
 
 ## YAML safety
 
