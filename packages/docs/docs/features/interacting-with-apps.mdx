@@ -37,6 +37,8 @@ The agent opens an app by its bundle id or package name. The agent does not tap 
 
 The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
+The agent also clears a text field that already holds a value. The agent clears the field, then types the new value. Thus the agent replaces a value instead of adding to it. On a mobile target, on Apple TV and on Android TV, the agent removes the text before the cursor and the text after it. Thus a field with many lines also becomes empty. On Vega the agent removes only the text before the cursor, because the platform has no forward delete. On Chromium, the agent selects the field and deletes the selection, then reads the field again to make sure it is empty.
+
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
 
 ## Permissions
@@ -72,6 +74,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 - "Open the app and go to the settings screen."
 - "Scroll the list to the end. Tell me the last item."
 - "Type `hello` in the search field. Press enter."
+- "Clear the name field and type `Ada Lovelace`."
 - "Reset the camera permission and open the camera screen again."
 - "Rotate the device to landscape and make a screenshot."
 
@@ -81,5 +84,8 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
+- The clear action is bounded on every target except Chromium, so the agent clears a long field more than once. [Clearing a text field](/docs/reference/tools#clearing-a-text-field) has the limits.
+- On Chromium, the agent reads the field again after the clear. When that read finds the field empty, the agent knows the field is empty. A page can replace the field or stop showing its value; then the read gives no answer, and the agent knows only what it sent. On the other targets the agent always knows only what it sent, so it reads the field itself when it needs proof.
+- On a remote Apple TV the clear action is not available, because the TV tools drive a simulator on the machine that runs Argent. There the agent uses a local Apple TV simulator, or the on-screen keyboard of the app.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

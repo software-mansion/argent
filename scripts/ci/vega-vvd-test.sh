@@ -10,7 +10,8 @@
 #   - screenshot         → `adb emu screenrecord` (PNG written host-side)
 #   - tv-remote          → `adb shell inputd-cli` button injection
 #   - describe           → `adb forward` + on-device automation toolkit
-#   - keyboard           → `adb shell inputd-cli send_text`
+#   - keyboard           → `adb shell inputd-cli send_text` (text) and
+#                          `inputd-cli series button_press` (the clear burst)
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
@@ -39,9 +40,12 @@ fail() { echo "FAIL: $*"; FAILURES+=("$*"); }
 group() { echo "::group::$*"; }
 endg() { echo "::endgroup::"; }
 
-# post_tool <id> <json-args> — prints the raw response.
+# post_tool <id> <json-args> [max-time] — prints the raw response. `max-time`
+# defaults to 60s; a tool whose OWN budget is longer must be given more, or
+# curl's give-up looks like a tool failure — and, because the server aborts the
+# request when the client disconnects (src/http.ts), actually cancels the call.
 post_tool() {
-  curl -fsS -m 60 -X POST "${TOOLS_URL}/tools/$1" \
+  curl -fsS -m "${3:-60}" -X POST "${TOOLS_URL}/tools/$1" \
     -H 'Content-Type: application/json' -d "$2" 2>/dev/null
 }
 
@@ -269,6 +273,30 @@ if [ -n "$keys" ] && [ "$keys" -ge 1 ] 2>/dev/null; then
   echo "OK: keyboard injected ${keys} chars via inputd-cli"
 else
   fail "keyboard did not report injected keys (keys='${keys}')"
+fi
+
+# `clear` sends 200 KEY_BACKSPACE presses through the same `inputd-cli` channel.
+# No focused field is needed here either: what this gates is that the burst
+# reaches the device and the tool reports the presses it issued. The field-level
+# proof (250 characters -> 50 against a focused TextInput) is not something CI
+# can set up without an app fixture, so it stays a manual E2E result.
+# 100s, not the default 60: the tool's own budget is VEGA_CLEAR_TIMEOUT_MS (90s,
+# packages/tool-server/src/utils/vega-input.ts). A VVD image that ignores
+# `holdDuration` runs the 200 presses at the default hold — 57s measured — so a
+# 60s curl lands in the gap, cancels the burst, and blames the tool for it.
+clear_resp="$(post_tool keyboard "$(printf '{"udid":"%s","clear":true}' "$SERIAL")" 100)" || clear_resp=""
+clear_keys="$(jget "$clear_resp" keys)"
+clear_flag="$(jget "$clear_resp" cleared)"
+echo "clear response: ${clear_resp:0:200}"
+# `keys` alone is not enough: it is 200 whatever the burst did. `cleared` is the
+# structural claim the tool makes, and `clearVerified` must NOT appear — nothing
+# reads the field back on Vega, and a backend that started claiming otherwise
+# would be telling callers the field is proven empty.
+if [ "$clear_keys" = "200" ] && [ "$clear_flag" = "True" ] &&
+   ! printf '%s' "$clear_resp" | grep -q "clearVerified"; then
+  echo "OK: keyboard clear issued 200 presses via inputd-cli, reported as SENT"
+else
+  fail "keyboard clear should report 200 sent presses and no clearVerified (keys='${clear_keys}' cleared='${clear_flag}')"
 fi
 endg
 

@@ -5,6 +5,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -106,6 +107,12 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const device = resolveDevice(params.udid);
     const timestampMs = Date.now();
     const clickCount = params.clickCount ?? 1;

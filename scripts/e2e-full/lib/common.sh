@@ -192,6 +192,45 @@ assert_reject() { # phase tool case json-args [zod-path] [zod-code]
   fi
 }
 
+# Block until `text` shows up on the target. Best effort — the assertions after
+# it are what decide the case; this only stops them racing something that
+# resolves before the page settles, such as `open-url`, which is `Page.navigate`
+# and resolves on COMMIT rather than on load.
+await_ui() { # udid text [timeoutMs]
+  run_tool await-ui-element \
+    "{\"udid\":\"$1\",\"condition\":\"exists\",\"selector\":{\"text\":\"$2\"},\"timeoutMs\":${3:-10000}}" \
+    >/dev/null 2>&1 || true
+}
+
+# The tool call must FAIL (rc != 0) AND its output must contain `needle`.
+#
+# Use this wherever two rejections a case must tell apart are both
+# `InvalidToolInputError`s: `assert_reject`'s zod-path form cannot separate
+# those (neither carries zod issues), so both cases would pass on "the call
+# failed" alone, and a tap that drifted off its field would silently turn one
+# into a duplicate of the other.
+#
+# Matches the MESSAGE, not the `error_code`: `argent run` prints only
+# `err.message` on a tool failure, so the code never reaches this harness. Pick
+# a needle that is unique to the branch under test.
+assert_reject_matching() { # phase tool case json-args needle
+  local phase="$1" tool="$2" case="$3" args="$4" needle="$5"
+  run_tool "$tool" "$args"
+  if [ "$RT_RC" -eq 0 ]; then
+    fail "$phase" "$tool" "$case" "expected rejection but tool SUCCEEDED"
+    return
+  fi
+  case "$RT_RC" in
+    124) fail "$phase" "$tool" "$case" "timed out after ${TOOL_TIMEOUT}s — no verdict on the input"; return;;
+    125|126|127) fail "$phase" "$tool" "$case" "tool never ran (timeout rc=$RT_RC) — no verdict on the input"; return;;
+  esac
+  if printf '%s' "$RT_OUT" | grep -qF -- "$needle"; then
+    pass "$phase" "$tool" "$case" "rejected with \"$needle\""
+  else
+    fail "$phase" "$tool" "$case" "rejected, but not with \"$needle\": $(printf '%s' "$RT_OUT" | tr -d '\n' | cut -c1-160)"
+  fi
+}
+
 # Private tool-server lifecycle. Isolation is the sandbox HOME alone: the state
 # file lands in $E2E_HOME/.argent, so every `argent` call in this run discovers
 # our server and no foreign one.

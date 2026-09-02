@@ -3,6 +3,7 @@ import type { ServiceRef, ToolCapability, ToolContext, ToolDefinition } from "@a
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,6 +90,12 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     chromium: chromiumCdpRef(resolveDevice(params.udid)),
   }),
   async execute(services, params, ctx?: ToolContext) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
     // A drag's ~60fps mouse moves each wait on compositor hit-testing, which a

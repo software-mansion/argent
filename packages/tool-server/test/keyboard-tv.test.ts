@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { UnsupportedOperationError } from "../src/utils/capability";
 
@@ -22,7 +23,12 @@ const registry = {} as Registry;
 // total — the count moves with every commit, so a stale figure reads as a
 // failed reproduction.
 //
-// That guard is load-bearing beyond its own file. `flow-actions.ts`'s `runType`
+// The `clear` half of that guard is gone — both TV backends now carry a delete
+// burst — so what is pinned here instead is that `clear` reaches the service's
+// own `clear` verb rather than its typing channel, and that a short burst does
+// not come back claiming the field is empty.
+//
+// The `key` guard is load-bearing beyond its own file. `flow-actions.ts`'s `runType`
 // splits "type, then submit" into two keyboard calls, and on an Android TV the
 // SECOND of them is the one that fails here — the text lands, the submit 400s.
 // If the guard degraded to ignoring `key` instead of throwing, `keyboard
@@ -30,10 +36,11 @@ const registry = {} as Registry;
 // `{ typed: "", keys: 0 }` — a success that pressed nothing — and that
 // directive's submit would silently no-op on a still-filled field.
 //
-// The tool's own text/key exclusivity guard never reaches this backend, so it
-// cannot stand in for this one: it runs above the platform dispatch and only
-// sees requests carrying BOTH parameters, while what a TV rejects is `key` on
-// its own. That is why the exclusivity message carries the TV caveat statically
+// The tool's own exclusivity guard never reaches this backend, so it cannot
+// stand in for this one: it runs above the platform dispatch and only sees
+// requests carrying MORE THAN ONE of `text` / `key` / `clear`, while what a TV
+// rejects is `key` on its own and `clear` on its own. That is why the
+// exclusivity message carries the TV caveat statically
 // (keyboard-text-key-exclusive.test.ts) instead of relying on this rejection.
 describe("typeTv — the TV keyboard backend", () => {
   beforeEach(() => {
@@ -64,6 +71,99 @@ describe("typeTv — the TV keyboard backend", () => {
       typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, text: "hello", key: "enter" })
     ).rejects.toThrow(/named keys are not supported on a TV target/);
     expect(resolveTvApi).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Apple TV", APPLE_TV],
+    ["Android TV", ANDROID_TV],
+  ])("clears through the TV service on %s, and never types", async (_label, device) => {
+    // The two backends' `clear` verbs differ underneath — an injected HID burst
+    // on Apple TV, one `adb shell input keyevent` on Android TV — but both are
+    // reached through this one call, and the result shape has to be identical:
+    // `keys` counts what was SENT (200 presses) and no `clearVerified` follows,
+    // because neither channel can read the field back.
+    const type = vi.fn(async () => {});
+    const clear = vi.fn(async () => 200);
+    resolveTvApi.mockResolvedValue({ type, clear });
+
+    const result = await typeTv(registry, device, { udid: device.id, clear: true });
+
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(type).not.toHaveBeenCalled();
+    expect(result).toEqual({ typed: "", keys: 200, cleared: true });
+    // The one thing that differs between the two rows. `typeTv` touches
+    // `device` exactly once on this path — to look up the service — so without
+    // this the second row was byte-equivalent to the first and could not fail
+    // unless the first did. Which backend that lookup then picks is
+    // `tv-service`'s own decision, mocked here.
+    expect(resolveTvApi).toHaveBeenCalledWith(registry, device.id);
+    expect(resolveTvApi).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the request's abort to the TV service's burst", async () => {
+    // Apple TV's burst is 200 separate socket writes and reads the signal
+    // between them; without this wiring a cancelled call keeps driving the
+    // device, its deletions landing in whatever is sent there next.
+    const controller = new AbortController();
+    const clear = vi.fn(async () => 200);
+    resolveTvApi.mockResolvedValue({ type: vi.fn(), clear });
+
+    await typeTv(registry, APPLE_TV, { udid: APPLE_TV.id, clear: true }, controller.signal);
+
+    expect(clear).toHaveBeenCalledWith(controller.signal);
+  });
+
+  it("FAILS when the burst stopped short, rather than returning it", async () => {
+    // A burst the caller abandoned leaves the field emptied by however many keys
+    // got through — the one state `cleared` must not be claimed for, since the
+    // next step would type into a field it believes is empty. Returning it filed
+    // that state as a COMPLETED step: `run-sequence` counts a returned step in
+    // `completed`, and a flow `tool:` step has no verdict of its own. The two
+    // adb backends already threw for the harmless "nothing was sent" case, so
+    // the split was inverted relative to the risk.
+    const clear = vi.fn(async () => 42);
+    resolveTvApi.mockResolvedValue({ type: vi.fn(), clear });
+
+    const err = await typeTv(registry, APPLE_TV, { udid: APPLE_TV.id, clear: true }).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_clear_tv_abandoned");
+    expect(err?.message).toContain("42 of the 200 delete keys");
+    expect(err?.message).toMatch(/cancelled partway/);
+  });
+
+  it("says the field is UNCHANGED when the burst was cancelled before it started", async () => {
+    const clear = vi.fn(async () => 0);
+    resolveTvApi.mockResolvedValue({ type: vi.fn(), clear });
+
+    const err = await typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, clear: true }).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(err?.message).toContain("NO delete key was sent");
+    expect(err?.message).toContain("the focused field is unchanged");
+    expect(err?.message).not.toMatch(/PARTIALLY/);
+  });
+
+  it("treats `clear: false` as absent and still types", async () => {
+    // The switch reading: a guard written over PRESENCE would turn
+    // `{ text, clear: false }` — a shape the tool accepts — into an empty burst
+    // at the field it was told to type into.
+    const type = vi.fn(async () => {});
+    const clear = vi.fn(async () => 200);
+    resolveTvApi.mockResolvedValue({ type, clear });
+    const result = await typeTv(registry, ANDROID_TV, {
+      udid: ANDROID_TV.id,
+      text: "hi",
+      clear: false,
+    });
+    expect(type).toHaveBeenCalledWith("hi");
+    expect(clear).not.toHaveBeenCalled();
+    expect(result).toEqual({ typed: "hi", keys: 2 });
   });
 
   it("types text alone through the TV service (positive control)", async () => {

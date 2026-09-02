@@ -1,7 +1,12 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type DeviceInfo, type Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { isAndroidTv } from "../../../utils/adb";
-import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
+import { getAndroidRuntimeKind } from "../../../utils/adb";
+import {
+  injectAndroidClear,
+  injectAndroidNamedKey,
+  injectAndroidText,
+} from "../../../utils/android-input";
+import { CLEAR_KEY_PAIRS } from "../key-codes";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
@@ -11,11 +16,20 @@ import { typeTv } from "./tv";
 // (#449). `device.id` is the adb serial.
 async function typeAndroidPhone(
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  signal?: AbortSignal
 ): Promise<KeyboardResult> {
+  // `clear` empties the field with a fixed key burst rather than typing, so it
+  // returns before the `typed`/`keys` arithmetic below: there is nothing typed
+  // to count and nothing to echo. `cleared` reports that the burst was SENT —
+  // the field is never read back.
+  if (params.clear === true) {
+    await injectAndroidClear(device.id, signal);
+    return { typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true };
+  }
   let keysPressed = 0;
-  // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
-  // branch runs and there is no ordering to get right.
+  // `text`, `key` and `clear` are at-most-one (rejected in ../index.ts), so at
+  // most one branch runs and there is no ordering to get right.
   if (params.text) {
     await injectAndroidText(device.id, params.text);
     // `injectAndroidText` rejects non-ASCII, so `.length` is the codepoint count
@@ -32,17 +46,65 @@ async function typeAndroidPhone(
 // An Android TV emulator classifies as platform "android" by serial shape, and TV
 // is a `runtimeKind` rather than a `platform`, so this branch probes the kind at
 // runtime and routes a TV target to the focus-driven backend.
+//
+// The kind is read as three-valued rather than through `isAndroidTv`, which
+// collapses "not a TV" and "could not tell" into `false`. `readRuntimeKind`
+// (utils/adb.ts) answers undefined when `pm list features` does not come back
+// within its 5s budget and `ro.build.characteristics` carries no `tv` token —
+// which is exactly what the Google ATV emulator reports (`emulator`).
+//
+// Only `key` needs the answer, and only it re-probes. Everything else this
+// backend does is the SAME command on both kinds: `TvControlApi.type` IS
+// `adb shell input text` and `TvControlApi.clear` IS `injectAndroidClear`
+// (../../../blueprints/android-tv-control.ts), the very calls the phone path
+// below makes. So an unknown kind falls through to the phone path and still
+// sends exactly what a TV would have received — where refusing the clear, as
+// platforms/ios.ts still must, would only deny a request that cannot go wrong.
+// A named key is different: it is navigation on a TV, which `tv-remote` owns,
+// and pressing it at the focus engine is not what the caller asked for.
 export function makeAndroidImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    // Both sub-paths shell out to `adb` (the `isAndroidTv` probe, then `input`
-    // either way), so declaring it makes a missing binary fail with
+    // Both sub-paths shell out to `adb` (the kind probe, then `input` either
+    // way), so declaring it makes a missing binary fail with
     // `dispatchByPlatform`'s 424 install hint instead of from inside the probe.
     requires: ["adb"],
-    handler: async (_services, params, device) =>
-      (await isAndroidTv(device.id))
-        ? typeTv(registry, device, params)
-        : typeAndroidPhone(device, params),
+    handler: async (_services, params, device, options) => {
+      const needsKind = params.key !== undefined;
+      let kind = await getAndroidRuntimeKind(device.id);
+      // One re-probe, and only for the shape that needs the answer: an
+      // indeterminate verdict is never cached, so this is a real second read and
+      // a probe that timed out under a load spike usually resolves here.
+      if (kind === undefined && needsKind) kind = await getAndroidRuntimeKind(device.id);
+      if (kind === "tv") return typeTv(registry, device, params, options?.signal);
+      if (kind === undefined && needsKind) {
+        throw new FailureError(
+          `whether ${device.id} is a phone/tablet or an Android TV could not be determined, and ` +
+            "`key` means different things on the two — nothing was pressed. It is refused rather " +
+            "than guessed: a named key is navigation on a TV, which `tv-remote` owns, so this " +
+            "press would have gone to the focus engine. The probe " +
+            "reads `pm list features` and `ro.build.characteristics`; a device still booting, or one " +
+            "under enough load to miss the 5s budget, answers neither — and a device that is not in " +
+            "the `device` state at all (offline, unauthorized, gone) is never probed. Check " +
+            "`list-devices` reports it in the `device` state and retry — or, if it IS a TV, move " +
+            "focus with `tv-remote` instead. A `clear` needs none of this: it is the same " +
+            `${CLEAR_KEY_PAIRS * 2}-key \`adb shell input keyevent\` burst on both kinds, so it ` +
+            "runs whatever the probe says.",
+          {
+            error_code: FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN,
+            failure_stage: "keyboard_android_runtime_kind",
+            failure_area: "tool_server",
+            // Not "timeout": `getAndroidRuntimeKind` also answers undefined for
+            // a serial that is not in the `device` state — offline,
+            // unauthorized, gone — where no probe ran at all, let alone timed
+            // out. What every cause shares is that the answer was not found.
+            error_kind: "not_found",
+            failure_command: "adb",
+          }
+        );
+      }
+      return typeAndroidPhone(device, params, options?.signal);
+    },
   };
 }

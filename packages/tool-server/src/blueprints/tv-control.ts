@@ -13,6 +13,9 @@ import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { cachedDeviceSetForUdid, simctlPrefix } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
+import { CLEAR_KEY_PAIRS, FORWARD_DELETE_KEYCODE, NAMED_KEYS } from "../tools/keyboard/key-codes";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { sleep } from "../utils/timing";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
@@ -92,6 +95,23 @@ const TYPE_BASE_MS = 10_000;
 export function typeTimeoutMs(textLength: number): number {
   return TYPE_BASE_MS + textLength * TYPE_MS_PER_CHAR;
 }
+
+// One `key <code>` is press + release with the daemon's own 40ms hold
+// (`tvos_hid_daemon.m`), so the burst's cost is that hold, not the socket. 8.78s
+// for the 200 keys, measured against a tvOS 26.5 simulator with a 250-character
+// UITextField: 200 of 200 landed and the field went 250 -> 50, exactly the
+// 100-per-side bound the other backends document.
+//
+// The obvious speed-up is NOT usable: driving `key_down` + `key_up` as separate
+// commands drops the hold to ~0 and finishes in 0.01s, but only 83-95 of the 200
+// keys reach the field (measured over three runs on the same fixture) — the
+// Indigo send is asynchronous and coalesces. A clear that silently leaves a
+// third of the field is worse than a slow one.
+const CLEAR_KEY_TIMEOUT_MS = 10_000;
+
+// Matches `CLEAR_SETTLE_MS` in tools/keyboard/simulator-server-keys.ts, and for
+// the same reason: the transport is fire-and-forget on both.
+const CLEAR_SETTLE_MS = 300;
 
 async function sendJson(socketPath: string, command: string, timeoutMs?: number): Promise<unknown> {
   const raw = (await sendLine(socketPath, command, timeoutMs)).trim();
@@ -442,6 +462,71 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           throw new Error("Apple TV keyboard text must not contain newlines");
         }
         await sendJson(hidSock, `type ${text}`, typeTimeoutMs(text.length));
+      },
+
+      async clear(signal?: AbortSignal): Promise<number> {
+        // The same burst the iOS backend writes over simulator-server
+        // (tools/keyboard/simulator-server-keys.ts): `CLEAR_KEY_PAIRS`
+        // backspaces interleaved with as many forward-deletes, no modifier held
+        // across an await. Both halves are load-bearing here — measured on a
+        // tvOS 26.5 simulator, HID 0x4C removed 10 characters with the caret
+        // parked mid-text and nothing with it at the end, so the pair is what
+        // makes the caret's position stop mattering.
+        let keysSent = 0;
+        // Read through a call rather than inline: `AbortSignal.aborted` is
+        // declared readonly, so TypeScript narrows it to `false` for the rest of
+        // the loop body after the first check and rejects the second as
+        // unreachable — even though the whole point is that it flips across the
+        // await in between.
+        const aborted = () => signal?.aborted === true;
+        try {
+          for (let i = 0; i < CLEAR_KEY_PAIRS; i++) {
+            if (aborted()) break;
+            await sendJson(hidSock, `key ${NAMED_KEYS.backspace}`, CLEAR_KEY_TIMEOUT_MS);
+            keysSent++;
+            if (aborted()) break;
+            await sendJson(hidSock, `key ${FORWARD_DELETE_KEYCODE}`, CLEAR_KEY_TIMEOUT_MS);
+            keysSent++;
+          }
+        } catch (err) {
+          // Re-stated for the reason the other two bursts are: it is not
+          // atomic, so a daemon that dies partway leaves the field emptied by
+          // however many keys got through, and a caller told only "the socket
+          // is gone" reads that as "nothing happened" and types over a field
+          // that is now shorter.
+          throw new FailureError(
+            // A refused CONNECTION delivers nothing: `sendLine` writes only from
+            // the socket's `connect` handler, so a socket that errors instead
+            // rejects the very first `sendJson` with `keysSent` still 0 — and
+            // "may be PARTIALLY emptied — 0 of the 200" sends the caller to
+            // re-read a field nothing touched. The Android and Vega bursts both
+            // special-case the same state.
+            (keysSent === 0
+              ? `the clear burst never reached ${udid}: the Apple TV HID daemon refused the very ` +
+                `first of the ${CLEAR_KEY_PAIRS * 2} delete keys, so NO delete key was sent and ` +
+                "the focused field is unchanged. This is a daemon problem, not a field problem — " +
+                "nothing needs to be read back; retry the clear once the simulator answers again. "
+              : `the clear burst did not finish on ${udid}, and the focused field may be ` +
+                `PARTIALLY emptied — ${keysSent} of the ${CLEAR_KEY_PAIRS * 2} delete keys had ` +
+                "been written one at a time when the Apple TV HID daemon stopped accepting them. " +
+                "Read the field back before clearing or typing again. ") +
+              "Underlying failure: " +
+              (err instanceof Error ? err.message.split("\n")[0] : String(err)),
+            {
+              error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,
+              failure_stage: "keyboard_clear_tvos_burst",
+              failure_area: "tool_server",
+              error_kind: getFailureSignal(err)?.error_kind ?? "subprocess",
+            },
+            { cause: err instanceof Error ? err : undefined }
+          );
+        }
+        // The daemon's Indigo send is fire-and-forget, so the last keys are
+        // still in flight when the burst returns; without a settle the tool's
+        // auto-screenshot races them. Skipped for an abandoned burst, where
+        // there is no auto-screenshot left to protect.
+        if (keysSent === CLEAR_KEY_PAIRS * 2) await sleep(CLEAR_SETTLE_MS);
+        return keysSent;
       },
 
       async recycleAx(): Promise<void> {

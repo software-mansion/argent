@@ -59,7 +59,7 @@ Give the flow a `launch:` step as usual. On iOS the launch waits the full devtoo
 
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
-- A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
+- A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit. Where the field arrives non-empty, put a raw `keyboard` with `clear: true` between the tap and the text, and a `wait:` of at least 500ms BETWEEN the tap and that clear — `wait:` is a standalone step, so it goes after the tap, not before it. Raw `tool:` steps take no settle, and a burst that arrives before focus lands deletes from the previously focused element and still reports success (on a Vega flow the focus step is a `tool: tv-remote` press, not a tap). The order is: tap, `wait: 500`, `clear`, text. Keep the clear even so: an injection-free flow has no tree to read the field back from, so a splice into a remembered value would replay unnoticed.
 - Raw swipes with `momentum: false` because `scroll-to` needs the missing flow tree. Momentum-free scrolling keeps later coordinate taps valid. `momentum: false` needs `durationMs` of at least 150 and is rejected below it, so keep the 300 default or raise it.
 
 Every point tap, long-press or coordinate swipe in such a flow passes **carrying a warning** for as long as the app serves no tree: each [selector-less gesture](flow-yaml.md#directives) dispatches unsettled. Nothing here repairs it. Accept the warnings, read each green as "the gesture was sent, not that it landed", and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps take no settle, so they never carry that warning.
@@ -143,7 +143,7 @@ Starting again under the same name truncates the YAML. Copy any working prefix b
 | Tap lost during motion        | Fixed wait     | `idle` after destination identity         |
 | Toast absorbs tap             | Retry          | Verified overlay dismissal                |
 | `hidden` never established    | Longer timeout | Same-selector `visible`, action, `hidden` |
-| Typed value is wrong          | Retype         | Assert the committed value                |
+| Typed value is wrong          | Retype over it | Clear the field, retype, assert the value |
 
 State the added proof before rerunning.
 

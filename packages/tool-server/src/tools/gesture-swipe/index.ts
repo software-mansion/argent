@@ -3,6 +3,7 @@ import type { ToolCapability, ToolContext, ToolDefinition } from "@argent/regist
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -113,6 +114,12 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params, ctx?: ToolContext) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const duration = params.durationMs ?? DEFAULT_DURATION_MS;
     const momentumFree = params.momentum === false;
     const timestampMs = Date.now();

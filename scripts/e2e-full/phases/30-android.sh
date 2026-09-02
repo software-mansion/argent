@@ -85,6 +85,24 @@ run_phase() {
   assert_field "$P" run-sequence keyboard-text-then-key \
     "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"keyboard\",\"args\":{\"text\":\"hello e2e\"}},{\"tool\":\"keyboard\",\"args\":{\"key\":\"enter\"}}]}" \
     '.completed' '2'
+  # `clear` sends its whole 200-key burst through one `adb shell input keyevent`,
+  # so a non-zero adb exit is the only thing that can fail it — which is exactly
+  # what this case covers. Whether the burst EMPTIES a field is a per-framework
+  # property (native / React Native / Flutter) and is verified on real fixtures;
+  # a headless tier has no focused text field to observe. The chromium tier
+  # carries the before/after evidence, because there the field is in the fixture.
+  assert_field "$P" keyboard clear "{\"udid\":\"$DEV\",\"clear\":true}" '.cleared' 'true'
+  # One action per call, `clear` included — the same guard as text+key above.
+  # Matched on the message: the rule is enforced in `execute`, not by the schema,
+  # so the rejection carries no zod issue path and bare `assert_reject` passes on
+  # ANY non-zero exit — a device that dropped off adb included.
+  assert_reject_matching "$P" keyboard clear-and-text \
+    "{\"udid\":\"$DEV\",\"clear\":true,\"text\":\"hello e2e\"}" \
+    "keyboard takes one of"
+  # ...and its prescribed remedy: replace a value in one round-trip.
+  assert_field "$P" run-sequence keyboard-clear-then-text \
+    "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"keyboard\",\"args\":{\"clear\":true}},{\"tool\":\"keyboard\",\"args\":{\"text\":\"hello e2e\"}}]}" \
+    '.completed' '2'
   assert_ok   "$P" run-sequence seq "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"button\",\"args\":{\"button\":\"home\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.5,\"y\":0.5}}]}"
 
   assert_true "$P" open-url url "{\"udid\":\"$DEV\",\"url\":\"https://example.com\"}" '.opened'

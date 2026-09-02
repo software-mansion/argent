@@ -111,13 +111,15 @@ Never tap the on-screen keyboard through the recorder. Some platforms expose it 
 
 ### Typing
 
-Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carries `text` or `key`, never both. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
+Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carries `text`, `key` or `clear`, never two of them. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
+
+If the field already holds a value on arrival, record `keyboard` with `clear: true` between the focus tap and the text step, and record it with `delayMs: 500`. That delay is the clear's settle, and it is the only form the RECORDER can emit: `wait:` is a directive no tool records (`flow-add-step` refuses it outright), the recorder emits no gap of its own, and `execSteps` puts none between steps — so the tap and the clear replay in the same millisecond. A hand-added `wait: 500` step between the two does the same at replay, and that is the form to use when you edit the YAML during polish — which is what `reliability-and-recovery.md` prescribes. A recorded `delayMs` is slept BEFORE the step runs, which is where the settle belongs, and it also keeps the pair from being folded into `type:`. Typing into a filled field splices the new characters into the old value, and replay reproduces that wrong value on every run. The clear works on Vega too, where the focus step before it is a `tv-remote` press rather than a tap. Apple TV and Android TV are not flow targets at all (see [flow-yaml.md](flow-yaml.md)): the clear works there, but only through direct tool calls. A remote (`ios-remote`) Apple TV is the one target that refuses it — there, record the app's own on-screen delete key with `tv-remote`.
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
 **`describe` reports focus on Chromium only.** iOS and Android leave it unset — it is a Vega/D-pad signal there — so those platforms have no live pre-typing focus check, and the value check afterwards is what proves the keys landed. On Chromium, read `focused` before recording `keyboard`.
 
-If characters are lost, restore the field with direct calls. Do not record a duplicate typing step. Polish the valid pair into `type:`. Its replay focus wait reads the runner's own tree, which does report focus on iOS, Android, and Chromium, but an unconfirmed poll falls through to typing rather than failing — so retain the committed-value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
+If characters are lost, restore the field with direct calls — a direct `keyboard` `{ clear: true }` empties it in one call on Chromium, up to 100 characters on each side of the caret on iOS, Android and the TV targets, and up to 200 behind the cursor on Vega, where a longer field needs a second call. Do not record a duplicate typing step. Polish the valid pair into `type:`. Its replay focus wait reads the runner's own tree, which does report focus on iOS, Android, and Chromium, but an unconfirmed poll falls through to typing rather than failing — so retain the committed-value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
 
 ### Scrolling and swiping
 
@@ -163,8 +165,9 @@ Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-prese
 
 | Recorded form                              | Finished form                                                      |
 | ------------------------------------------ | ------------------------------------------------------------------ |
-| focus tap + `tool: keyboard`               | `type:`                                                            |
+| **adjacent** focus tap + `tool: keyboard`  | `type:`                                                            |
 | text `keyboard` + `key: enter` `keyboard`  | submitted `type:` without Enter in its text                        |
+| `clear: true` `keyboard`                   | stays a raw `tool: keyboard` step — `type:` has no clear form yet  |
 | `tool: await-ui-element`                   | `await:` or `assert:`                                              |
 | element-seeking movement                   | `scroll-to:`                                                       |
 | `tool: gesture-swipe` as the action itself | `swipe:` with `from` on the gesture's subject                      |
@@ -172,6 +175,8 @@ Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-prese
 | `tool: gesture-pinch`                      | selector-based `pinch:` with `scale = endDistance / startDistance` |
 | `tool: gesture-rotate`                     | selector-based `rotate:` with `by = endAngle - startAngle`         |
 | sibling `tool: flow-execute`               | recorder-captured `run:`                                           |
+
+**Adjacent** means nothing sits between the two steps. A `clear: true` recorded between the focus tap and the text step breaks that adjacency, and folding the pair anyway leaves the clear FIRST, with nothing focused yet, followed by a `type:` that does its own focus tap. On replay that is a hard `KEYBOARD_CLEAR_NO_EDITABLE_FOCUS` on Chromium and, on every key-injecting backend, a 200-key burst into whatever the app happens to focus. Leave all three steps raw.
 
 Copy the recorded `selector:` map when you convert a wait. Do not use the loose bare-string form. Flow YAML accepts `identifier`; rename it to `id` only for style. Convert `textMatch: equals` to `equals:` and other text checks to `contains:`.
 

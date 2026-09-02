@@ -4,6 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { resolveDevice } from "../../utils/device-info";
 import { sendTouchEvent } from "../../utils/gesture-utils";
 import { sleep } from "../../utils/timing";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -89,6 +90,12 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));

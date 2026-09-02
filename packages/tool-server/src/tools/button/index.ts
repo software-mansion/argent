@@ -6,6 +6,7 @@ import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
 import { ensureDep } from "../../utils/check-deps";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -68,6 +69,12 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
     return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const device = resolveDevice(params.udid);
     if (!BUTTONS_BY_PLATFORM[device.platform].has(params.button)) {
       throw new UnsupportedOperationError(

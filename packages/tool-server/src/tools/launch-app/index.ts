@@ -10,6 +10,7 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 // Union of the Android package and iOS bundle-id (dashes allowed) alphabets.
 // The head is restricted so a bundleId like `--user` can't masquerade as a flag
@@ -57,6 +58,24 @@ const capability: ToolCapability = {
 // slice (the TVOSSIMULATOR bootstrap for Apple TV sims), so injection is
 // prepared on tvOS too.
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
+  const dispatch = dispatchByPlatform<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    Params,
+    LaunchAppResult,
+    LaunchAppChromiumServices,
+    LaunchAppVegaServices,
+    LaunchAppIosServices
+  >({
+    toolId: "launch-app",
+    capability,
+    ios: makeIosImpl(registry),
+    iosRemote: iosRemoteImpl,
+    android: androidImpl,
+    chromium: chromiumImpl,
+    vega: vegaImpl,
+  });
+
   return {
     id: "launch-app",
     interaction: {
@@ -86,22 +105,13 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
       return {};
     },
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      Params,
-      LaunchAppResult,
-      LaunchAppChromiumServices,
-      LaunchAppVegaServices,
-      LaunchAppIosServices
-    >({
-      toolId: "launch-app",
-      capability,
-      ios: makeIosImpl(registry),
-      iosRemote: iosRemoteImpl,
-      android: androidImpl,
-      chromium: chromiumImpl,
-      vega: vegaImpl,
-    }),
+    execute: async (services, params, options) => {
+      // A focus move landing inside another session's `run-sequence` keyboard
+      // hold redirects that sequence's own clear — the hold serializes
+      // `keyboard` and `paste` and nothing else. This waits only while a hold is
+      // actually active on this device (utils/device-serial.ts).
+      await awaitDeviceHold(params.udid);
+      return dispatch(services, params, options);
+    },
   };
 }

@@ -8,19 +8,21 @@ import {
   redactSecretsFromError,
   resolveSecretPlaceholders,
 } from "../../utils/secrets";
+import { serializedPerDevice } from "../../utils/device-serial";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
-// `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
-// so: `not` is one of the top-level combinators #782 banned repo-wide, and
-// `tool-input-schema-contract.test.ts` fails any tool declaring one — the
+// `text`, `key` and `clear` are at-most-one, and the advertised JSON Schema
+// cannot say so: `not` is one of the top-level combinators #782 banned
+// repo-wide, and `tool-input-schema-contract.test.ts` fails any tool
+// declaring one — the
 // Messages API rejects such a request with a 400 that fails EVERY tool in it.
 // The check therefore runs in `execute`, and the constraint reaches a client
-// only as prose: both fields' `.describe()` and the tool description each
-// restate it, so a caller reading either parameter alone still sees it.
+// only as prose: all three fields' `.describe()` and the tool description each
+// restate it, so a caller reading any one parameter alone still sees it.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -31,8 +33,11 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Text to type character by character. Cannot be combined with `key` in one call — one call per action; " +
-        "to type and then press a key, put two `keyboard` steps in one `run-sequence`. " +
+      "Text to type character by character. Cannot be combined with `key` or `clear` in one call — one call per action; " +
+        "to type and then press a key, or to replace a value, put two `keyboard` steps in one `run-sequence`. " +
+        'That rule counts `text` and `key` by PRESENCE, so `{ text: "", key: "enter" }` is rejected as a combined ' +
+        "call even though the text is empty; `clear` counts only when it is `true`, so `{ clear: false }` never " +
+        "collides. " +
         "Handles uppercase and common punctuation. " +
         "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
         '`{{secret:<NAME>}}` — e.g. text: "{{secret:APP_PASSWORD}}". The value is resolved on the machine running the ' +
@@ -47,13 +52,42 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
+      'Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` or `clear` in one call — one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. That rule counts `key` by PRESENCE, so `{ key: "", clear: true }` is rejected as a combined call — omit `key` when there is nothing to press. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead.'
+    ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set to true to empty the focused text field. Focus the field first — the clear goes wherever keyboard focus is, so " +
+        "tap it, or move focus to it with `tv-remote` on a TV or Vega — and give that at least 500ms to land before the " +
+        "clear: `run-sequence` waits only 100ms between steps and checks no focus, so on every key-injecting backend a " +
+        "burst that arrives early deletes from the PREVIOUSLY focused element and still reports success. " +
+        "Cannot be combined with `text` or `key` in one call — one call per action; to replace a value, put " +
+        '`{ clear: true }` then `{ text: "new value" }` in one `run-sequence`. ' +
+        "iOS, Android, Apple TV and Android TV send 100 backspaces interleaved with 100 forward-deletes, so the caret " +
+        "can sit anywhere in the field and a multi-line one empties too; there a field holding more than 100 characters " +
+        "on either side of the caret keeps the remainder — call `clear` again. Vega sends 200 backspaces instead, " +
+        "because it has no forward delete: there the burst reaches 200 characters BEFORE the caret and none after it. " +
+        "None of those five reads the field back, so the result reports " +
+        "what was SENT, not what the field now holds: `keys` is 200, the key presses issued. " +
+        "Chromium instead selects the focused editable, deletes the selection (no length limit) and then reads the " +
+        "field back: `clearVerified: true` is added when that read found it empty, and it is the one structural way to " +
+        "tell the two meanings of `cleared` apart. It is absent in the rare case the field could not be read back at all " +
+        "(a page that replaced it, sealed `window`, or stopped exposing a value to read), where `cleared` reports the " +
+        "accepted delete alone. `keys` is 0, " +
+        "because it dispatches no key events. It " +
+        "fails when nothing editable has focus (tap the field first), on a field no select-and-delete can empty (a " +
+        'date/time input — press `key: "backspace"` on one of those instead — or a readonly, disabled or non-text one), ' +
+        "and when a rich-text editor restores the value it just deleted. " +
+        "The one target that refuses it is a REMOTE Apple TV (an `ios-remote` tvOS UDID), which no argent TV tool " +
+        "reaches: the tvOS daemons drive a simulator in the tool-server host's own CoreSimulator set. `false` means " +
+        "the same as omitting it."
     ),
   delayMs: z
     .number()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
+      "Delay in ms between key presses (default 50). Paces typing only: `clear` runs its delete burst at its own fixed cadence, so this does not apply to it. Also ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
     ),
 });
 
@@ -103,23 +137,55 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
-        if (params.key === undefined) return "Entering text";
-        return "Entering text and pressing a key";
+        // `clear` first, so a request that also carries one of the other two —
+        // the combined shape `execute` is about to reject, which only this
+        // formatter sees — is not announced as plain typing.
+        if (params.clear === true) return "Clearing the field";
+        if (params.text !== undefined && params.key !== undefined)
+          return "Entering text and pressing a key";
+        if (params.key !== undefined) return "Pressing a key";
+        if (params.text !== undefined) return "Entering text";
+        // The no-op: `{}` and `{ clear: false }`, which `clear`'s own
+        // `.describe()` says mean the same thing. Both used to fall into the
+        // `params.text === undefined` arm and be announced — and logged — as a
+        // key press that never happened.
+        return "Using the keyboard";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params }) => {
+        if (params.clear === true) return "Cleared the field";
+        if (params.key !== undefined) return "Pressed a key";
+        if (params.text !== undefined) return "Entered text";
+        return "Used the keyboard";
+      },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+    description: `Type text, press a special key, or clear the focused text field on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+Use when you need to enter text, replace what a field already holds, or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
+Returns { typed: string, keys: number, cleared?: true, clearVerified?: true }. \`cleared\` means the clear was SENT on every key-injecting backend (iOS, Android, Apple TV, Android TV, Vega) and the delete was ACCEPTED on Chromium; \`clearVerified\` is added only where the field was then read back empty, so branch on that rather than on \`keys\`. Fails if more than one of text, key and clear is given in one call (rejected before anything is sent), if an unsupported key name is provided, if clear finds nothing editable focused on Chromium, or if the device's input backend is not reachable.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
-On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
+- clear: empties the focused text field. Focus the field first — it goes wherever keyboard focus is (tap it, or move focus to it with \`tv-remote\` on a TV or Vega) — and let that settle for ~500ms before the clear, because \`run-sequence\` waits only 100ms between steps and only Chromium checks focus — the other five delete from whatever is focused and report success. iOS, Android, Apple TV and Android TV send 100 backspaces interleaved with 100 forward-deletes, so the caret can be anywhere and multi-line fields empty too; there, a field holding more than 100 characters on either side of the caret keeps the remainder — call clear again. Vega sends 200 backspaces instead (it has no forward delete), so it reaches 200 characters BEFORE the caret and none after it. None of those five reads anything back: the result says what was sent, not what the field now holds (\`keys\` is 200, the key presses issued) and carries no \`clearVerified\`, so assert the field or its consequence if you need proof. Chromium instead selects the focused editable, deletes the selection (no length limit) and reads the field back, adding \`clearVerified: true\` when that read found it empty (absent only when the field could not be read back at all), with \`keys\` 0; it fails if nothing editable has focus, if the field cannot be cleared this way (a date/time input — press key: "backspace" on one of those — or a readonly, disabled or non-text one), or if a rich-text editor restored the value it just deleted. Refused only on a REMOTE Apple TV, which no argent TV tool reaches — its daemons drive a LOCAL simulator only. Prefer it over pressing backspace in a loop, and over typing over a filled field: appending to a value the app remembered is a data bug, not a slow path.
+On a TV target (runtimeKind 'tv') \`text\` and \`clear\` apply and \`key\` does not — focus a text field first (with \`tv-remote\`), then type into it or empty it (injected HID keyboard on Apple TV, \`adb input\` on Android TV).
+One call does one action: pass text, key OR clear, never two of them. \`text\` and \`key\` count by presence (so { text: "", key: "enter" } is rejected too) while \`clear\` counts only when true, so { clear: false } never collides. To do two in a row, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } to type and submit, or { clear: true } then { text: "hello" } to replace a value — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    // A `keyboard` call can legitimately outrun the MCP adapter's 30s fetch
+    // timeout, and that timeout is not a cancellation: `fetchWithReconnect`
+    // retries on ANY error including its own AbortError, so a slow call was
+    // re-sent up to five times, CONCURRENTLY, at the same device — measured
+    // through the real stdio adapter at five overlapping invocations and
+    // "This operation was aborted" after 154s, with the field holding what the
+    // surplus attempts left rather than what the caller asked for.
+    //
+    // Both slow shapes belong to this tool: an Android `clear` carries 200
+    // `input keyevent` injections under a 90s budget (14.9s measured against a
+    // debug Flutter field, 16.3s under guest load), and `text` paced with
+    // `delayMs` is unbounded by construction. `run-sequence`, which is where
+    // the description sends a caller to combine two steps, has been
+    // `longRunning` for the same reason — a bare `keyboard` call was the one
+    // exposed path.
+    longRunning: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
     services: () => ({}),
@@ -127,12 +193,23 @@ One call does one action: pass text OR key, never both. To type and then press a
       // A combined call has no meaning a caller can rely on: `key: "enter"` reads
       // as "type, then submit", `key: "backspace"` just as naturally as "delete,
       // then type" — and whichever order a backend picks, the other reading
-      // silently corrupts the field (#579). Rejected ahead of the secret
-      // resolution and the dispatch below, so a combined request resolves no
-      // `ARGENT_SECRET_*` value and reaches no device.
-      if (params.text !== undefined && params.key !== undefined) {
-        // `undefined`, not truthiness: the rule is about the shape of the
-        // request, so `{ text: "", key: "enter" }` is rejected too.
+      // silently corrupts the field (#579). `clear` joins the same rule for the
+      // same reason, and that is what keeps the clear burst free of the
+      // whole-request pre-validation and focus-loss detection a `{ clear, text }`
+      // shape would need. Rejected ahead of the secret resolution and the
+      // dispatch below, so a combined request resolves no `ARGENT_SECRET_*`
+      // value and reaches no device.
+      //
+      // `undefined`, not truthiness, for `text` and `key`: the rule is about the
+      // shape of the request, so `{ text: "", key: "enter" }` is rejected too.
+      // `clear` is the one exception — it is a switch rather than a payload, so
+      // `clear: false` means what omitting it means, as its `.describe()` says.
+      const combined = [
+        params.text !== undefined ? "`text`" : undefined,
+        params.key !== undefined ? "`key`" : undefined,
+        params.clear === true ? "`clear`" : undefined,
+      ].filter((name): name is string => name !== undefined);
+      if (combined.length > 1) {
         throw new InvalidToolInputError(
           // Says what did NOT happen, so the caller retries instead of first
           // inspecting the field. The example is literal because an ellipsis is
@@ -142,26 +219,58 @@ One call does one action: pass text OR key, never both. To type and then press a
           // dispatch, so the target kind is unknown here — yet without it the
           // prescribed `{ key: "enter" }` is a retry that cannot succeed on a
           // TV, where `key` is rejected outright (platforms/tv.ts).
-          "keyboard takes `text` or `key`, not both — nothing was typed. To type and then press " +
-            'a key, send two `keyboard` steps in one `run-sequence`: { text: "hello" } followed by ' +
-            '{ key: "enter" }. On a TV target (Apple TV / Android TV) `key` is not supported at ' +
-            "all — type with `text` and move focus with `tv-remote` (up/down/left/right/select)." +
+          "keyboard takes one of `text`, `key` or `clear` per call, and this one carries " +
+            combined.join(" and ") +
+            " — nothing was typed, pressed or cleared. To do two of them in a row, send two " +
+            '`keyboard` steps in one `run-sequence`: { text: "hello" } followed by ' +
+            '{ key: "enter" } to type and submit, or { clear: true } followed by ' +
+            '{ text: "hello" } to replace a value. On a TV target (Apple TV / Android TV) ' +
+            "`key` is not supported at all — move focus with `tv-remote` " +
+            "(up/down/left/right/select) instead, and split into `text` and `clear` steps only. " +
+            "`clear` works on every target except a REMOTE Apple TV, which refuses `key` too." +
+            // The split above prescribes a `key`, and this request's `key` names
+            // none — so following it literally sends a `{ key: "enter" }` the
+            // caller never asked for, whose retry then fails with
+            // KEYBOARD_KEY_UNSUPPORTED. The empty-`key` guard below cannot say
+            // this: the shape rule is deliberately checked first.
+            (params.key === ""
+              ? " This `key` is an empty string, which names no key at all — if there is nothing " +
+                "to press, drop `key` from the request rather than splitting it into two steps."
+              : "") +
             // One `run-sequence` and two bare calls are NOT equivalent once the
             // text carries a placeholder, and this message is where an agent
             // converts a combined secret call. Syntactic check, so the guard
-            // still resolves nothing.
-            (params.text.includes(SECRET_PLACEHOLDER_MARKER)
+            // still resolves nothing. The reason is worded off the OTHER field
+            // the request carries: with `clear` there is no later Enter to
+            // screenshot, and the exposure sits on the clear step instead.
+            (params.text?.includes(SECRET_PLACEHOLDER_MARKER) === true
               ? " This `text` carries a `" +
                 SECRET_PLACEHOLDER_MARKER +
                 "...}}` placeholder, so keep both steps in that ONE `run-sequence` rather than " +
                 "splitting them into two bare calls: the auto-screenshot skip is decided per tool " +
-                'call from the whole request, and a separate { key: "enter" } call carries no ' +
-                "placeholder — its screenshot is taken after the key lands and can capture the " +
-                "still-visible secret."
+                "call from the whole request, and " +
+                (params.key !== undefined
+                  ? 'a separate { key: "enter" } call carries no placeholder — its screenshot is ' +
+                    "taken after the key lands and can capture the still-visible secret."
+                  : "a separate { clear: true } call releases the device's keyboard queue the " +
+                    "moment it returns, so another session's `keyboard` or `paste` can reach the " +
+                    "field before the secret is typed — one `run-sequence` holds that queue " +
+                    "across the clear and the type together.")
               : ""),
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
-            failure_stage: "keyboard_text_and_key_combined",
+            // One code, three stages. Reusing the CODE is the disclosed decision
+            // — one telemetry bucket for every misuse of the exclusivity rule —
+            // but the stage names the source location, and a single string here
+            // makes clear-misuse unmeasurable next to the older text+key one.
+            failure_stage:
+              params.clear !== true
+                ? "keyboard_text_and_key_combined"
+                : params.text !== undefined && params.key !== undefined
+                  ? "keyboard_text_key_and_clear_combined"
+                  : params.text !== undefined
+                    ? "keyboard_text_and_clear_combined"
+                    : "keyboard_key_and_clear_combined",
           }
         );
       }
@@ -190,22 +299,52 @@ One call does one action: pass text OR key, never both. To type and then press a
           }
         );
       }
-      // Resolve inside `execute`: after every logging boundary (agent
-      // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
-      // see only the placeholder) and before the dispatch, so run-sequence and
-      // flow `type` steps are covered for free.
-      if (params.text === undefined) return dispatch(services, params, options);
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
-      if (secrets.length === 0) return dispatch(services, params, options);
-      try {
-        const result = await dispatch(services, { ...params, text }, options);
-        // Echo the placeholder form, never the resolved value.
-        return { ...result, typed: params.text };
-      } catch (err) {
-        // A backend error can quote its input (e.g. the Android `input text`
-        // command line) — scrub the resolved values before it propagates.
-        throw redactSecretsFromError(err, secrets);
-      }
+      // Resolved inside `execute`: after every logging boundary (agent
+      // transcript, mcp-calls.log, the event log and recorded flow YAMLs all see
+      // only the placeholder) and before the dispatch, so run-sequence and flow
+      // `type` steps are covered for free.
+      //
+      // ABOVE the queue, with the two request-shape guards. An unknown
+      // `{{secret:NAME}}` is a request error like theirs — it reaches no device
+      // and its repair is to define the secret — so it must come back at once
+      // rather than after another session's 90s burst.
+      // `placeholder` is the request's own text, kept beside the resolved one so
+      // the echo below never has to reach back for it.
+      const requested = params.text;
+      const resolved =
+        requested === undefined
+          ? undefined
+          : { ...resolveSecretPlaceholders(requested), placeholder: requested };
+      // Serialized per device, on the same queue `paste` uses and for the same
+      // reason it gives: both tools write to whatever holds keyboard focus over
+      // several unserialized steps, so two concurrent calls at one device
+      // interleave and BOTH report success. `clear` widens that window from one
+      // keystroke to 700ms on iOS and 2-90s on Android — measured on a booted
+      // simulator against a 250-character field, `{ clear: true }` with
+      // `{ text: "HELLO" }` 200ms behind it left `…aaaaaaaaaaLO`, with "HEL"
+      // eaten by backspaces still in flight.
+      // The signal is the request's own abort. A call whose client is already
+      // gone must not reach the device when its turn comes: by then the queue
+      // has run everything ahead of it, and the field it was aimed at is
+      // whatever the session ahead left focused.
+      return serializedPerDevice(
+        params.udid,
+        async () => {
+          if (resolved === undefined || resolved.secrets.length === 0) {
+            return dispatch(services, params, options);
+          }
+          try {
+            const result = await dispatch(services, { ...params, text: resolved.text }, options);
+            // Echo the placeholder form, never the resolved value.
+            return { ...result, typed: resolved.placeholder };
+          } catch (err) {
+            // A backend error can quote its input (e.g. the Android `input text`
+            // command line) — scrub the resolved values before it propagates.
+            throw redactSecretsFromError(err, resolved.secrets);
+          }
+        },
+        options?.signal
+      );
     },
   };
 }

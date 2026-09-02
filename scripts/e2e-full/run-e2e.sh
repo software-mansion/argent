@@ -18,10 +18,15 @@
 #
 # Usage:
 #   run-e2e.sh [--tgz PATH] [--phase a,b,c] [--skip-install] [--system]
-#              [--android-serial S | --android-avd NAME] [--keep] [-h]
+#              [--android-serial S | --android-avd NAME] [--ios-udid UDID]
+#              [--keep] [-h]
 #
-# Phases: install introspection validation android chromium rn
-#   (default: all that apply to this OS; iOS/tvOS/Vega are intentionally omitted)
+# Phases: install introspection validation android ios chromium rn
+#   (default: all that apply to this OS; tvOS/Vega are intentionally omitted)
+#   The ios tier drives ONLY the simulator named by --ios-udid / E2E_IOS_UDID,
+#   booting it if it is not already running, and skips when none is named — it
+#   never picks a booted device for you, because on a developer machine that is
+#   somebody else's.
 set -uo pipefail
 
 E2E_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +39,7 @@ SYSTEM_INSTALL=0
 KEEP=0
 export E2E_ANDROID_SERIAL="${E2E_ANDROID_SERIAL:-}"
 export E2E_ANDROID_AVD="${E2E_ANDROID_AVD:-}"
+export E2E_IOS_UDID="${E2E_IOS_UDID:-}"
 
 # Help text is the header block above. Stopping at the first non-comment line
 # means it can never drift into printing code, the way a pinned range would.
@@ -51,6 +57,7 @@ while [ $# -gt 0 ]; do
     --system) SYSTEM_INSTALL=1; shift;;
     --android-serial) need_val $# "$1"; E2E_ANDROID_SERIAL="$2"; shift 2;;
     --android-avd) need_val $# "$1"; E2E_ANDROID_AVD="$2"; shift 2;;
+    --ios-udid) need_val $# "$1"; E2E_IOS_UDID="$2"; shift 2;;
     --keep) KEEP=1; shift;;
     -h|--help) usage 0;;
     *) echo "unknown arg: $1" >&2; usage 1;;
@@ -59,7 +66,7 @@ done
 
 # A misspelled phase would otherwise select nothing, and a run that executes no
 # phase records no failure: "pass:0 fail:0" and exit 0 for an untested release.
-ALL_PHASES="install introspection validation android chromium rn"
+ALL_PHASES="install introspection validation android ios chromium rn"
 for _p in ${PHASES//,/ }; do
   case " $ALL_PHASES " in
     *" $_p "*) ;;
@@ -187,7 +194,7 @@ export TGZ_VERSION
 if [ -z "$PHASES" ]; then
   case "$E2E_OS" in
     linux)  PHASES="install,introspection,validation,android,chromium,rn";;
-    darwin) PHASES="install,introspection,validation,android,chromium,rn";;
+    darwin) PHASES="install,introspection,validation,android,ios,chromium,rn";;
     *)      PHASES="install,introspection,validation";;
   esac
 fi
@@ -259,6 +266,7 @@ if [ "$SKIP_INSTALL" -eq 0 ] && selected install;      then run_one install     
 if selected introspection; then run_one introspection "$E2E_ROOT/phases/10-introspection.sh"; fi
 if selected validation;    then run_one validation    "$E2E_ROOT/phases/20-validation.sh"; fi
 if selected android;       then run_one android       "$E2E_ROOT/phases/30-android.sh"; fi
+if selected ios;           then run_one ios           "$E2E_ROOT/phases/35-ios.sh"; fi
 if selected chromium;      then run_one chromium      "$E2E_ROOT/phases/40-chromium.sh"; fi
 if selected rn;            then run_one rn            "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
 

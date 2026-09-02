@@ -114,7 +114,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+When: Performing touch interactions, typing, clearing or replacing a field's value, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
@@ -123,7 +123,7 @@ Prompt keywords: permission, grant, deny, revoke, reset permission, privacy, cam
 
 TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
-When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
+When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type, or `clear` to empty the focused field); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
 Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows` — both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
 

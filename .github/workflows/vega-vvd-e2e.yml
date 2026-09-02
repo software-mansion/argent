@@ -21,12 +21,26 @@ on:
     paths:
       - "packages/tool-server/src/tools/tv-remote/**"
       - "packages/tool-server/src/tools/keyboard/index.ts"
+      # The Vega backend and the shared TV backend both live under
+      # platforms/, so a change that only edits one of those must still run
+      # the job that drives `keyboard` on a real VVD.
+      - "packages/tool-server/src/tools/keyboard/platforms/**"
+      # The clear burst's size lives here, and both the tool's reported `keys`
+      # and the presses `injectVegaClear` emits are read off it.
+      - "packages/tool-server/src/tools/keyboard/key-codes.ts"
       - "packages/tool-server/src/tools/screenshot/index.ts"
       - "packages/tool-server/src/tools/describe/platforms/vega/**"
       - "packages/tool-server/src/tools/describe/platforms/vega.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/tools/devices/list-devices.ts"
       - "packages/tool-server/src/utils/vega-*.ts"
+      # `utils/vega-*.ts` alone does not cover the clear: `injectVegaClear`
+      # shells out through `adbShell`, and tells a half-emptied field from an
+      # untouched one with `adbDeliveredCommand` — both live here.
+      - "packages/tool-server/src/utils/adb.ts"
+      # Every Vega `keyboard` call is serialized on the per-device queue here,
+      # so a change to it changes what this job actually exercises.
+      - "packages/tool-server/src/utils/device-serial.ts"
       - "packages/tool-server/src/utils/device-info.ts"
       - "scripts/ci/vega-vvd-test.sh"
       - ".github/workflows/vega-vvd-e2e.yml"

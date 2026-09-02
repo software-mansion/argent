@@ -6,6 +6,7 @@ import type { TvRemoteParams, TvRemoteResult } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
@@ -74,6 +75,21 @@ const capability: ToolCapability = {
 // call time — which is also why `services()` is empty: the backend can only be
 // resolved lazily, per device.
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
+  const dispatch = dispatchByPlatform<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    TvRemoteParams,
+    TvRemoteResult,
+    Record<string, unknown>,
+    Record<string, unknown>
+  >({
+    toolId: "tv-remote",
+    capability,
+    ios: makeIosImpl(registry),
+    android: makeAndroidImpl(registry),
+    vega: vegaImpl,
+  });
+
   return {
     id: "tv-remote",
     interaction: {
@@ -99,19 +115,13 @@ Returns { pressed, count }.`,
     zodSchema,
     capability,
     services: () => ({}),
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      TvRemoteParams,
-      TvRemoteResult,
-      Record<string, unknown>,
-      Record<string, unknown>
-    >({
-      toolId: "tv-remote",
-      capability,
-      ios: makeIosImpl(registry),
-      android: makeAndroidImpl(registry),
-      vega: vegaImpl,
-    }),
+    execute: async (services, params, options) => {
+      // A focus move landing inside another session's `run-sequence` keyboard
+      // hold redirects that sequence's own clear — the hold serializes
+      // `keyboard` and `paste` and nothing else. This waits only while a hold is
+      // actually active on this device (utils/device-serial.ts).
+      await awaitDeviceHold(params.udid);
+      return dispatch(services, params, options);
+    },
   };
 }

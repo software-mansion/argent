@@ -6,7 +6,12 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
-import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
+import {
+  assertTypeableAndroidText,
+  injectAndroidClear,
+  injectAndroidText,
+} from "../utils/android-input";
+import { CLEAR_KEY_PAIRS } from "../tools/keyboard/key-codes";
 import { UnsupportedOperationError } from "../utils/capability";
 import {
   parseUiAutomatorXml,
@@ -242,6 +247,25 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
           }
           await injectAndroidText(serial, words[i]!);
         }
+      },
+
+      async clear(signal?: AbortSignal): Promise<number> {
+        // The very same call the phone/tablet backend makes
+        // (`tools/keyboard/platforms/android.ts`): on Android TV the input
+        // channel IS `adb shell input`, so the delete burst rides the transport
+        // that is already proven here — `type` above uses it for every word.
+        // Verified on a leanback API 36 emulator against a focused `EditText`:
+        // 249 characters -> 149 -> 49 over two calls at ~3s each (the caret sits
+        // at the end, so only the backspace half of each burst does anything),
+        // then a third with the caret moved 25 left emptied it outright — the
+        // forward half reaching the tail no backspace could.
+        //
+        // The whole burst is one `input keyevent`, so `signal` can stop the
+        // wait and kill the adb client but cannot interrupt an injection
+        // already running on the guest — hence the full count on success,
+        // rather than a partial one this backend has no way to measure.
+        await injectAndroidClear(serial, signal);
+        return CLEAR_KEY_PAIRS * 2;
       },
 
       // Android TV reads the live hierarchy on every describe — no cache to drop.

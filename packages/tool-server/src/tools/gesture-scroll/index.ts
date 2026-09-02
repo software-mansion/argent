@@ -3,6 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -79,6 +80,12 @@ Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is no
     chromium: chromiumCdpRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device, so an uncontended call is unaffected
+    // (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
     await assertChromiumWindowVisible(chromium, "scroll", "chromium_scroll_window_hidden");

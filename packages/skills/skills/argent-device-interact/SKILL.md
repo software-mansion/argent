@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, clearing or replacing a field's value, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -30,7 +30,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`. Pass `momentum: false` when the swipe should decelerate before ending for a precise movement.
-4. **Tap a text field before typing**, then use `keyboard` to enter text.
+4. **Tap a text field before typing**, then use `keyboard` to enter text. Where the field can already hold a value, clear it first: `keyboard` `{ "clear": true }` between the tap and the text (§ 5).
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
 6. **For app navigation, use the element tree returned after each action** (`--- Elements after action (describe) ---`); call `describe` only when no fresh tree is available for the current screen. It works on any screen without app restart. Do not navigate from screenshot pixels on regular in-app screens unless the tree failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
@@ -72,7 +72,8 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                       |
 | Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                 |
 | Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
+| Type text         | `keyboard`          | Every platform. One of text / key / clear per call, never two     |
+| Clear a field     | `keyboard`          | `{ "clear": true }`. Every platform bar a remote Apple TV         |
 | Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
 | Rotate device     | `rotate`            | Orientation changes                                               |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
@@ -168,15 +169,43 @@ For long-press, drag-and-drop, and other complex sequences, see `references/gest
 
 Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionButton`
 
-### keyboard — Type text or press special keys
+### keyboard — Type text, press a special key, or clear the field
 
 ```json
 { "udid": "<UDID>", "text": "search query" }
 ```
 
-One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
+One call does one action. `text`, `key` and `clear` are mutually exclusive, and a call that carries two of them is rejected with nothing typed, pressed or cleared. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
+**Clearing a field.** `{ "udid": "<UDID>", "clear": true }` empties whatever holds keyboard focus, so tap the field first. Never type into a field that already holds a value: the keystrokes land at the cursor and the app receives the old value with yours spliced into it — a wrong value the app then saves, not a slow path. Clear first, then type. Give the tap a `delayMs` of at least 500: `run-sequence` waits only 100ms between steps, so on a slow app the clear can arrive before the tap has moved focus. Only Chromium checks focus at all; on iOS, Android, Apple TV, Android TV and Vega an early clear deletes from the PREVIOUSLY focused element and still reports success. Chromium fails with `KEYBOARD_CLEAR_NO_EDITABLE_FOCUS` when nothing editable holds focus — but even Chromium cannot tell your field from another editable one, so an early clear there empties whichever editable the page had.
+
+```json
+{
+  "udid": "<UDID>",
+  "steps": [
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.3 }, "delayMs": 500 },
+    { "tool": "keyboard", "args": { "clear": true } },
+    { "tool": "keyboard", "args": { "text": "new value" } }
+  ]
+}
+```
+
+Keep the tap and the clear in ONE `run-sequence`, as above. One tool-server is shared by every agent session on the machine, so another session can move focus on this device at any moment — with a tap, a `launch-app`, a `button` or an `open-url`. A sequence that uses the keyboard holds that device's keyboard for all of its steps, so no other session's `keyboard` or `paste` runs between your tap and your clear. Two separate calls have no such hold, and the clear then goes wherever focus is by the time it runs. On a TV or a Vega VVD there is no tap: put the `tv-remote` presses that move focus into the same sequence instead.
+
+On iOS, Android, Apple TV and Android TV the clear is a burst of delete keys in both directions, so it does not matter where the tap left the cursor and a multi-line field empties too — but it is bounded per side, not in total: 100 characters behind the caret and 100 ahead of it. A tap into a filled field usually lands at the END, where only the backspaces do anything, so one call clears 100 characters, not 200 — a 250-character field measurably keeps 150. Call `clear` again until the field reads empty. Vega has no forward delete, so its burst is 200 backspaces: it reaches 200 characters BEHIND the cursor and none ahead of it, and text after the cursor survives however many times you call it. Chromium instead selects the focused editable and deletes the selection, with no length limit.
+
+`cleared` means two different things, and `clearVerified` is what tells them apart: on Chromium the field is read back, and `clearVerified: true` is added when that read found it EMPTY; on every key-injecting backend (iOS, Android, Apple TV, Android TV, Vega) nothing is read back, the result reports what was SENT, and `clearVerified` is absent. It is absent on Chromium too where the field could not be read back at all — a page that replaced it, sealed `window`, or left it on screen with nothing readable on it. Branch on that rather than on `keys` (200 on the key-injecting backends, 0 on Chromium, which sends no key events). Where it is absent, read the field back or check what the app does with it if you need proof — on Chromium with `debugger-evaluate` (`document.activeElement.value`), because `describe` prefers an input's `aria-label` or `placeholder` to its value and never shows a password's at all. The one target that refuses `clear` outright is a REMOTE Apple TV (an `ios-remote` tvOS UDID): the tvOS daemons drive a simulator in the tool-server host's own CoreSimulator set, so nothing reaches one behind sim-remote — `tv-remote` and `describe`'s TV view are unavailable there too. Run against a LOCAL Apple TV simulator, or drive the field through the app's own on-screen keyboard.
+
+A failed clear names its own repair in the error code. Read the code first, then the message, which names the element:
+
+| Code                               | What happened                                                                                                                                                                                                                                                                                                                                                                                                                                                | What to do next                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KEYBOARD_CLEAR_NO_EDITABLE_FOCUS` | Chromium only. Nothing editable holds focus. Nothing was cleared and nothing was selected                                                                                                                                                                                                                                                                                                                                                                    | Tap the field (`gesture-tap`), then clear it. If the same error returns, the field may be `disabled`: a disabled control cannot take focus at all                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `KEYBOARD_CLEAR_UNSUPPORTED_FIELD` | Chromium only. The clear reached an element it cannot empty: a date/time input, a readonly, disabled or non-text control, an opaque custom element, an `<iframe>`, a page whose whole document is the editing host (`designMode`), a page that broke the script, an editor that restored the value, or a mask that rewrote it                                                                                                                                | Do not retry the same call — the message says which of these it was, and the repair for that one. Press `key: "backspace"` on a date/time input. Select the text with `gesture-drag` and type over it for an `<iframe>`, an opaque custom element, a restoring editor, or a page-wide editing host. Use the app's own control for a `readonly`, `disabled` or non-text field: no edit reaches those at all, so a drag-and-type does nothing. Where a mask rewrote the value, read the field first: the old value is already gone                                                                                                                        |
+| `KEYBOARD_CLEAR_UNCONFIRMED`       | Every platform. The outcome is unknown, and the message says WHICH unknown. Delivered: the Chromium renderer did not answer or the connection dropped, or a key transport died mid-burst and the field may be PARTIALLY emptied. NOT delivered: the request was cancelled before the burst was sent, adb refused it before delivering it, the iOS or tvOS transport refused the first key, or Vega's `inputd-cli` injected 0 of 200 — the field is unchanged | Read the MESSAGE first. Where it says the field is unchanged, fix the device or the cancellation and send the clear again — nothing needs to be read back. Where it says the clear was delivered, read the field back before you clear or type again, then act on what it holds. On Chromium read it with `debugger-evaluate` (`document.activeElement.value`): `describe` names an input by its `aria-label` or `placeholder` where it has one, and never reports a password value, so an emptied field and a full one read alike. Elsewhere `describe`. Never retry blind: a second clear on a field the first one emptied is not a no-op for the app |
+| `KEYBOARD_TARGET_KIND_UNKNOWN`     | iOS: `clear`, because an iPhone and an Apple TV take the burst over different transports. Android: `key` only, because it is navigation on a TV. Nothing was sent                                                                                                                                                                                                                                                                                            | Check `list-devices` reports the device ready, then retry. On a LOCAL iOS id the clear then works on either kind. On an `ios-remote` id it works on an iPhone or iPad only: a remote Apple TV refuses `clear` and `key` outright (`KEYBOARD_CLEAR_UNSUPPORTED_TARGET`), and `tv-remote` does not reach it either — run against a local Apple TV simulator. For a refused `key` on an Android TV, move focus with `tv-remote` instead                                                                                                                                                                                                                    |
+
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — it paces typing only, so `clear` (which runs at its own fixed cadence) ignores it, as do Android phones/tablets (typed via `adb input text`, no per-key cadence), Vega, and TV targets. It applies to `text` and `key` on the iOS simulator and Chromium.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
@@ -210,7 +239,7 @@ Puts `text` on the **device** clipboard (the host clipboard is untouched) and tr
 
 `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
 
-Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
+Tap the field first so it has focus; pasting with no focused field is a silent no-op, as `keyboard` `text` and `key` are. (`keyboard` `{ clear: true }` is not: on Chromium it fails outright when nothing editable has focus.) Where the field already holds a value, `paste` inserts at the caret exactly as typing does — clear it first with `keyboard` `{ clear: true }`, or the pasted text is spliced into what was there. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
 
 ### rotate — Change orientation
 
@@ -306,7 +335,7 @@ Use the sequencing when:
 
 - Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
 - "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- form interactions, "clear and retype field" -> tap the field, `keyboard` `{ "clear": true }`, then `keyboard` `{ "text": ... }`
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 
@@ -317,6 +346,8 @@ Use the sequencing when:
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
 Add an `await-ui-element` step to gate a later tap on a screen transition (e.g. tap → wait for the next screen's button → tap it). If its condition is **not** met before the timeout, the sequence stops at that step and the following steps do **not** run — so a mistimed tap can't fire against a screen that never settled.
+
+A sequence that contains a `keyboard` or `paste` step takes that device's keyboard from its first step through its **last** `keyboard` / `paste` step. Inside that span no other agent session's `keyboard` or `paste` runs, and any of theirs that can move focus — a tap, a gesture, `button`, `tv-remote`, `launch-app`, `restart-app`, `open-url` — waits it out. That is why the tap-clear-type recipe belongs in one sequence rather than in three calls. Steps after the last keyboard step run outside the hold. A gesture-only sequence takes no hold, and two bare calls take none either.
 
 ### Examples
 
@@ -333,7 +364,7 @@ Scroll down three times:
 }
 ```
 
-Type into a focused field and submit. This is the only way to mix text and a key, because one `keyboard` call cannot carry both:
+Type into a focused field and submit. This is the only way to combine two of them, because one `keyboard` call carries `text`, `key` or `clear`, never two:
 
 ```json
 {

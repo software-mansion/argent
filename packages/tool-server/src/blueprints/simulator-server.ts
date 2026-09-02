@@ -94,11 +94,39 @@ async function buildRemoteInstance(
   // instead of silently dialing a nonexistent local port.
   const stubUrl = `moq+remote://${device.id}`;
 
+  // The remote analogue of the local branch's `pipeDead` guard below.
+  // `sendControl` resolves before the frame is acknowledged, so the first
+  // failure is only observable asynchronously — by which time the burst that
+  // caused it has already returned `cleared: true` for a field nothing touched.
+  let controlDead: Error | null = null;
+
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
     pressKey: (direction, keyCode) => {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+      if (controlDead !== null) {
+        throw new FailureError(
+          `the MoQ control channel for ${device.id} is no longer accepting key events, so this ` +
+            "key press and any that follow it in the same burst were NOT delivered. The device " +
+            "is fine; the remote transport is gone (a closed session, or a sim-remote " +
+            "orchestrator restart). Read the field back before typing or clearing again — it " +
+            "may hold whatever the keys that DID land left.",
+          {
+            error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+            failure_stage: "simulator_server_key_write",
+            failure_area: "tool_server",
+            error_kind: "network",
+          },
+          { cause: controlDead }
+        );
+      }
+      // `.catch`, not a bare `void`: an unhandled rejection here reaches
+      // index.ts's `unhandledRejection` handler, which `crashShutdown`s the
+      // WHOLE tool-server — one process shared by every agent session on the
+      // machine — and a clear burst issues 400 of these calls.
+      moq.sendControl(encodeKey({ action: direction, code: keyCode })).catch((err: unknown) => {
+        controlDead ??= err instanceof Error ? err : new Error(String(err));
+      });
     },
     transport,
   };
@@ -363,13 +391,58 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     proc.on("error", (err) => {
       events.emit("terminated", err);
     });
+    // `pressKey` writes to this pipe with no callback, so a write that races the
+    // child's death emits EPIPE on the socket with nothing listening — which
+    // `index.ts`'s `uncaughtException` handler turns into a `crashShutdown` of
+    // the WHOLE tool-server, and one tool-server is shared by every agent
+    // session on the machine. The race is ordinary: every session is told to
+    // call `stop-simulator-server` when it ends, and a `clear` writes 400 lines
+    // at a 2ms cadence. Same listener as the repo's two other stdin-writing
+    // spawn sites (screen-recording/capture.ts, utils/window-shake.ts).
+    //
+    // Swallowing it is right, but it must not swallow the FACT: `terminated`
+    // reaches the next `resolveService`, not the call already holding this
+    // `api` — which is the one about to report `cleared: true`. Measured on a
+    // booted sim: `kill -9` 50ms into a clear left 9 of 200 keys delivered and
+    // the tool answered `{ keys: 200, cleared: true }`. So the death is
+    // recorded here and `pressKey` refuses afterwards.
+    let pipeDead: Error | null = null;
+    proc.stdin?.on("error", (err) => {
+      pipeDead ??= err;
+    });
+    proc.stdin?.on("close", () => {
+      pipeDead ??= new Error("the simulator-server input pipe closed");
+    });
 
     const instance: ServiceInstance<SimulatorServerApi> = {
       api: {
         apiUrl,
         streamUrl,
         pressKey: (direction: "Down" | "Up", keyCode: number) => {
-          proc.stdin?.write(`key ${direction} ${keyCode}\n`);
+          // Both halves are needed and neither is redundant. `writable` turns
+          // false the moment the stream is destroyed, which covers a `dispose`
+          // on this side; the recorded EPIPE covers the child dying under a
+          // still-open pipe, where the first writes after the death are
+          // accepted and only the async error says they went nowhere.
+          const stdin = proc.stdin;
+          if (pipeDead !== null || !stdin || stdin.writable === false) {
+            throw new FailureError(
+              `the simulator-server for ${device.id} is no longer accepting key events, so this key ` +
+                "press and any that follow it in the same burst were NOT delivered. The device is fine; " +
+                "the helper process is gone (a `stop-simulator-server`, a simulator shutdown, or a " +
+                "crash). " +
+                "Read the field back before typing or clearing again — it may hold whatever the keys " +
+                "that DID land left.",
+              {
+                error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+                failure_stage: "simulator_server_key_write",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+              },
+              { cause: pipeDead ?? undefined }
+            );
+          }
+          stdin.write(`key ${direction} ${keyCode}\n`);
         },
       },
       dispose: async () => {

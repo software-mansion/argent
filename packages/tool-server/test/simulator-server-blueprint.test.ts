@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import type { DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { toSimulatorNetworkError } from "../src/utils/format-error";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
@@ -47,16 +47,32 @@ vi.mock("../src/utils/ios-device-sets", () => ({
   deviceSetForUdid: (udid: string) => deviceSetForUdidMock(udid),
 }));
 
+// The MoQ transport an `ios-remote` device is driven over. Stubbed so the remote
+// branch of the factory runs without a sim-remote orchestrator.
+const sendControlMock = vi.fn(async (_payload: unknown) => {});
+vi.mock("../src/utils/moq-client", () => ({
+  openMoqClient: vi.fn(async () => ({
+    sendControl: (payload: unknown) => sendControlMock(payload),
+    close: vi.fn(async () => {}),
+    events: new EventEmitter(),
+  })),
+}));
+
 function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;
     stderr: Readable;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn>; writable: boolean };
     kill: ReturnType<typeof vi.fn>;
   };
   proc.stdout = new Readable({ read() {} });
   proc.stderr = new Readable({ read() {} });
-  proc.stdin = { write: vi.fn() };
+  // An EventEmitter, not a bare `{ write }`: a real `child.stdin` is a socket
+  // that emits `error`, and the blueprint has to listen for it. `writable` is
+  // part of that shape too — a real socket starts writable and turns false the
+  // moment it is destroyed. Left off, the guard that reads it was unreachable
+  // in every test here, so deleting that half kept the file green.
+  proc.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), writable: true });
   proc.kill = vi.fn();
   return proc;
 }
@@ -230,6 +246,71 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
+    // `pressKey` writes with no callback, so a write racing the child's death
+    // emits EPIPE on the socket. With nothing listening, node's
+    // `uncaughtException` handler crash-shuts down the whole tool-server —
+    // which every agent session on the machine shares.
+    expect(fakeProc.stdin.listenerCount("error")).toBe(1);
+    expect(() => fakeProc.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+  });
+
+  it.each([
+    ["an EPIPE", (p: ReturnType<typeof makeFakeProc>) => p.stdin.emit("error", new Error("EPIPE"))],
+    ["the pipe closing", (p: ReturnType<typeof makeFakeProc>) => p.stdin.emit("close")],
+  ])("refuses every later pressKey after %s", async (_label, kill) => {
+    // Swallowing the EPIPE is right — an unhandled one crash-shuts down the
+    // whole tool-server, which every agent session on the machine shares. But
+    // swallowing it must not swallow the FACT: `terminated` reaches the next
+    // `resolveService`, not the call already holding this `api`, which is the
+    // one about to report `cleared: true`. Measured on a booted simulator:
+    // `kill -9` 50ms into a clear delivered 9 of 200 keys and the tool answered
+    // `{ keys: 200, cleared: true }` with the field almost untouched.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55558);
+    const instance = await factoryPromise;
+
+    instance.api.pressKey("Down", 0x29);
+    expect(fakeProc.stdin.write).toHaveBeenCalledTimes(1);
+
+    kill(fakeProc);
+
+    let thrown: unknown;
+    try {
+      instance.api.pressKey("Up", 0x29);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.SIMULATOR_SERVER_TERMINATED);
+    // The pipe's own error rides along as the cause: the message says the helper
+    // is gone, and the cause says how it went.
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    // And nothing further was written: a burst that keeps going after the pipe
+    // is gone is exactly what produced the silent success.
+    expect(fakeProc.stdin.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a pressKey once the pipe is no longer writable", async () => {
+    // The second half of the guard, and not redundant: `writable` turns false
+    // the moment the stream is destroyed — a `dispose` on THIS side — where no
+    // `error` and no `close` has been seen, so the recorded-EPIPE half has
+    // seen nothing.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55558);
+    const instance = await factoryPromise;
+
+    fakeProc.stdin.writable = false;
+    expect(() => instance.api.pressKey("Down", 0x29)).toThrow(/no longer accepting key events/);
+    expect(fakeProc.stdin.write).not.toHaveBeenCalled();
   });
 
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
@@ -325,5 +406,71 @@ describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server
   it("does NOT recover on an unrelated error carrying no failure signal", async () => {
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
     expect(simulatorServerBlueprint.recoverable!(new Error("boom"))).toBe(false);
+  });
+});
+
+describe("simulatorServerBlueprint.factory — the remote MoQ key transport", () => {
+  const REMOTE: DeviceInfo = {
+    id: "AAAA1111-2222-3333-4444-555566667777",
+    platform: "ios-remote",
+    kind: "simulator",
+  };
+
+  async function remoteApi() {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const instance = await simulatorServerBlueprint.factory({} as never, REMOTE, {
+      device: REMOTE,
+    } as never);
+    return instance.api;
+  }
+
+  it("never leaves a control-frame rejection unhandled", async () => {
+    // `sendControl` used to be fired with a bare `void`, which attaches no
+    // handler at all — and index.ts's `unhandledRejection` listener
+    // `crashShutdown`s the WHOLE tool-server, one process shared by every agent
+    // session on the machine. A clear burst issues 400 of these calls.
+    sendControlMock.mockRejectedValue(new Error("MoQ control broadcast closed"));
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const api = await remoteApi();
+      api.pressKey("Down", 42);
+      // Two macrotask turns: enough for a rejection with no handler to be
+      // reported, and for the `.catch` to have run if there is one.
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      sendControlMock.mockReset();
+      sendControlMock.mockImplementation(async () => {});
+    }
+  });
+
+  it("refuses the next key once the control channel has failed", async () => {
+    // The remote analogue of the local branch's `pipeDead` guard. Without it the
+    // burst wrote 400 frames into a dead channel and still answered
+    // `{ keys: 200, cleared: true }` for a field nothing had touched.
+    sendControlMock.mockRejectedValueOnce(new Error("MoQ control broadcast closed"));
+    const api = await remoteApi();
+    api.pressKey("Down", 42);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(() => api.pressKey("Up", 42)).toThrowError(/no longer accepting key events/);
+    try {
+      api.pressKey("Up", 42);
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_SERVER_TERMINATED);
+    }
+  });
+
+  it("keeps pressing while the channel is healthy", async () => {
+    sendControlMock.mockClear();
+    const api = await remoteApi();
+    expect(() => {
+      api.pressKey("Down", 42);
+      api.pressKey("Up", 42);
+    }).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendControlMock).toHaveBeenCalledTimes(2);
   });
 });

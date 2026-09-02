@@ -6,6 +6,7 @@ import { parse as parseIni } from "ini";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   subprocessFailureMetadata,
   type FailureSignal,
 } from "@argent/registry";
@@ -151,6 +152,57 @@ function describeAdbFailure(args: string[], err: unknown): Error {
 }
 
 /**
+ * Whether an `adb` failure could have reached the guest at all.
+ *
+ * These are the adb CLIENT's own refusals, printed before any command is
+ * delivered — so nothing was injected and the device is untouched. Everything
+ * else (a non-zero exit from the command itself, a timeout, a budget's SIGKILL)
+ * may have done some of its work before it stopped.
+ *
+ * It lives here rather than beside either caller because it classifies
+ * `describeAdbFailure`'s own output: the delete bursts in ./android-input.ts and
+ * ./vega-input.ts both have to tell "the field may be half empty" from "the
+ * field is untouched", and a copy in each would drift.
+ */
+export function adbDeliveredCommand(err: unknown): boolean {
+  // A spawn failure means the adb binary itself never ran.
+  if (getFailureSignal(err)?.failure_spawn_code !== undefined) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return !ADB_NEVER_DELIVERED.test(message);
+}
+
+// Every arm is a refusal adb makes BEFORE the command reaches the guest, so the
+// field is provably untouched. `insufficient permissions for device` and
+// `cannot connect to daemon` are the two that were missing — both were told the
+// field "may be PARTIALLY emptied" and lost the `list-devices` repair that
+// applies.
+//
+// `protocol fault` is deliberately NOT here. It comes from `adb_status()`,
+// which reads the OKAY for the service request — and the adb server sends that
+// only after adbd has already answered A_OKAY, i.e. after the shell service was
+// spawned. So it is genuinely ambiguous, and this side of the split is the one
+// that claims nothing was sent.
+const ADB_NEVER_DELIVERED =
+  /device '[^']*' not found|device offline|device unauthorized|no devices\/emulators found|more than one device|device still (?:connecting|authorizing)|insufficient permissions for device|cannot connect to daemon/i;
+
+/**
+ * `timeoutMs` bounds a hung child; `signal` cancels a live one. They answer
+ * different questions and both are needed: an `input keyevent` burst has a
+ * budget measured in tens of seconds, and a caller that has gone away should
+ * not have to wait it out while the guest keeps deleting. `execFile` kills the
+ * child on either.
+ */
+interface AdbRunOptions {
+  timeoutMs?: number;
+  /**
+   * The request's own abort — the HTTP layer fires it on client disconnect, and
+   * run-sequence and a flow run pass theirs down. Optional everywhere: a call
+   * that does not pass one behaves exactly as before.
+   */
+  signal?: AbortSignal;
+}
+
+/**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
@@ -158,19 +210,34 @@ function describeAdbFailure(args: string[], err: unknown): Error {
  * On non-zero exit or timeout, throws with adb's own stderr (or stdout) in the
  * message.
  */
-export async function runAdb(
-  args: string[],
-  options: { timeoutMs?: number } = {}
-): Promise<AdbRunResult> {
+export async function runAdb(args: string[], options: AdbRunOptions = {}): Promise<AdbRunResult> {
   const adbPath = await resolveAdbOrThrow();
   try {
-    const { stdout, stderr } = await execFileAsync(adbPath, args, {
+    const pending = execFileAsync(adbPath, args, {
       timeout: options.timeoutMs ?? 30_000,
+      signal: options.signal,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
     });
-    return { stdout, stderr };
+    // `execFile` forwards `signal` to `spawn` but NOT `killSignal`, so an abort
+    // kills with SIGTERM — and clears the `timeout` backstop on its way out.
+    // The adb client `ADB_KILL_SIGNAL` was chosen for, blocked on a hung daemon,
+    // survives both: measured with a SIGTERM-trapping child, an aborted call
+    // rejected at 502ms and the process was still alive 4s past its own 3s
+    // timeout. Send the SIGKILL here instead.
+    const killOnAbort = (): void => {
+      pending.child?.kill(ADB_KILL_SIGNAL);
+    };
+    options.signal?.addEventListener("abort", killOnAbort, { once: true });
+    try {
+      const { stdout, stderr } = await pending;
+      return { stdout, stderr };
+    } finally {
+      // A run-sequence or flow signal outlives many adb calls, so the listener
+      // is dropped rather than accumulated on it.
+      options.signal?.removeEventListener("abort", killOnAbort);
+    }
   } catch (err) {
     throw describeAdbFailure(args, err);
   }
@@ -208,7 +275,7 @@ export function shellQuote(value: string): string {
 export async function adbShell(
   serial: string,
   shellCommand: string,
-  options: { timeoutMs?: number } = {}
+  options: AdbRunOptions = {}
 ): Promise<string> {
   const { stdout } = await runAdb(["-s", serial, "shell", shellCommand], options);
   return stdout;

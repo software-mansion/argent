@@ -49,6 +49,21 @@ export interface TvControlApi {
   /** Type a string into the focused field. */
   type(text: string): Promise<void>;
   /**
+   * Empty the focused text field with a delete burst, and answer how many
+   * delete keys were actually sent.
+   *
+   * The count is the abort channel: a backend that can stop mid-burst returns
+   * short when `signal` fires, and `keyboard`'s TV backend then drops the
+   * `cleared` claim for exactly that case. One that cannot (Android TV sends
+   * the whole burst as a single `adb shell input keyevent`) returns the full
+   * `CLEAR_KEY_PAIRS * 2` or throws.
+   *
+   * Nothing is read back on either backend — a TV exposes no value to read
+   * through this channel — so a resolved call means the keys were SENT, not
+   * that the field is empty.
+   */
+  clear(signal?: AbortSignal): Promise<number>;
+  /**
    * tvOS: respawn the ax daemon, dropping a `primaryApp` cache left stale by
    * launch-app / restart-app. Android TV: no cached daemon, so a no-op.
    */

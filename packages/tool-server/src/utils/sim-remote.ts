@@ -72,32 +72,47 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
- * True when a remote UDID is a tvOS (Apple TV) simulator.
+ * Runtime kind of a remote UDID, or undefined when the device list did not say.
  *
  * `resolveDevice` classifies remote ids by shape alone, and iOS and tvOS sims
  * are both `platform: "ios-remote"` UUIDs, so the runtime is only knowable
  * from the orchestrator's device list, whose keys name the runtime.
  *
- * A failed lookup resolves to `false` rather than throwing: callers use this
- * to narrow an already-supported device, so it must not turn a working phone
- * simulator into an error.
+ * Three-valued on purpose: a listing that fails, times out or simply omits the
+ * UDID answers "could not tell", which is NOT the same as "not a TV". A caller
+ * whose operation is destructive on a TV must refuse that verdict rather than
+ * act on it — see `keyboard`'s clear. Parallels `getSimulatorRuntimeKind` on the
+ * local side. Only successful lookups are cached.
  */
-export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
+export async function getRemoteSimulatorRuntimeKind(
+  udid: string
+): Promise<"mobile" | "tv" | undefined> {
   const id = stripRemotePrefix(udid);
   const cached = remoteRuntimeKindCache.get(id);
-  if (cached) return cached === "tv";
+  if (cached) return cached;
   try {
     const { devices } = await simctlListDevices();
     for (const [runtime, entries] of Object.entries(devices)) {
       if (!entries.some((d) => d.udid === id)) continue;
       const kind = runtime.includes("tvOS") ? "tv" : "mobile";
       remoteRuntimeKindCache.set(id, kind);
-      return kind === "tv";
+      return kind;
     }
   } catch {
-    // unknown runtime — treat as non-TV
+    // unknown runtime
   }
-  return false;
+  return undefined;
+}
+
+/**
+ * True when a remote UDID is a tvOS (Apple TV) simulator.
+ *
+ * A failed lookup resolves to `false` rather than throwing: callers use this
+ * to narrow an already-supported device, so it must not turn a working phone
+ * simulator into an error.
+ */
+export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
+  return (await getRemoteSimulatorRuntimeKind(udid)) === "tv";
 }
 
 export async function simctlBoot(udid: string): Promise<void> {

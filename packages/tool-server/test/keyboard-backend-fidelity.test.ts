@@ -1,16 +1,49 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { DeviceInfo } from "@argent/registry";
-import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
-import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
+import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import {
+  CLEAR_KEY_CADENCE_MS,
+  CLEAR_SETTLE_MS,
+  clearSimulatorServer,
+  typeSimulatorServer,
+} from "../src/tools/keyboard/simulator-server-keys";
+import {
+  CLEAR_FOCUSED_EDITABLE_SCRIPT,
+  CLEAR_READBACK_SETTLE_MS,
+  makeChromiumImpl,
+} from "../src/tools/keyboard/platforms/chromium";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
+import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
+import { CLEAR_KEY_PAIRS, FORWARD_DELETE_KEYCODE } from "../src/tools/keyboard/key-codes";
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/vega-input")>()),
   injectVegaText: vi.fn(async () => {}),
   injectVegaNamedKey: vi.fn(async () => {}),
+  injectVegaClear: vi.fn(async () => {}),
 }));
 
-import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+// Both ios branches probe the runtime kind by shelling out; stub them so the
+// routing tests below are not host-dependent. Three-valued, as the impls read
+// them: `undefined` is "the listing did not answer", which is a different
+// verdict from "mobile".
+type RuntimeKind = "mobile" | "tv" | undefined;
+const { getRemoteSimulatorRuntimeKind } = vi.hoisted(() => ({
+  getRemoteSimulatorRuntimeKind: vi.fn(async (_udid: string): Promise<RuntimeKind> => "mobile"),
+}));
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  getRemoteSimulatorRuntimeKind,
+}));
+const { getSimulatorRuntimeKind } = vi.hoisted(() => ({
+  getSimulatorRuntimeKind: vi.fn(async (_udid: string): Promise<RuntimeKind> => "mobile"),
+}));
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  getSimulatorRuntimeKind,
+}));
+
+import { injectVegaClear, injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { makeIosImpl, makeIosRemoteImpl } from "../src/tools/keyboard/platforms/ios";
 
 const IOS_SIM: DeviceInfo = { id: "TEST-UDID", platform: "ios", kind: "simulator" };
 const CHROMIUM: DeviceInfo = { id: "chromium-cdp-9222", platform: "chromium", kind: "app" };
@@ -23,6 +56,10 @@ const HID_I = 12;
 const HID_ENTER = 40;
 const HID_ESCAPE = 41;
 const HID_LEFT_SHIFT = 225;
+// Keyboard DELETE/Backspace (0x2A) and Keyboard DELETE Forward (0x4C) — the two
+// keys the `clear` burst pairs, again as literals.
+const HID_BACKSPACE = 42;
+const HID_FORWARD_DELETE = 76;
 
 function registryWith(api: unknown) {
   return { resolveService: vi.fn(async () => api) } as never;
@@ -66,9 +103,9 @@ const CDP_ENTER = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
 const CDP_ESCAPE = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
 
 // Single-parameter fidelity: does each backend emit exactly the action it was
-// given? Every request here carries `text` or `key`, never both — the tool
-// rejects the combined shape (keyboard-text-key-exclusive.test.ts), so one
-// action per call is the only shape a backend ever sees, and there is no
+// given? Every request here carries exactly ONE of `text`, `key` and `clear` —
+// the tool rejects any combination of them (keyboard-text-key-exclusive.test.ts),
+// so one action per call is the only shape a backend ever sees, and there is no
 // relative order left to pin.
 //
 // What a success shape cannot see is a backend that emits its one action
@@ -200,6 +237,595 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ).rejects.toThrow(/Unknown key "bogus"/);
       expect(events).toEqual([]);
     });
+
+    it("clears with an exact alternating backspace / forward-delete burst", async () => {
+      const { events, api } = hidRecorder();
+
+      const result = await clearSimulatorServer(registryWith(api), IOS_SIM);
+
+      // The whole ordered stream, built independently of the code under test.
+      // Both directions have to be there and they have to alternate: a burst of
+      // backspaces alone leaves everything ahead of the caret (the field looks
+      // cleared in a screenshot taken with the caret at the end), and a grouped
+      // 100+100 burst diverges from this one exactly at the documented
+      // 100-character boundary.
+      const expected: Array<[string, number]> = [];
+      for (let i = 0; i < CLEAR_KEY_PAIRS; i++) {
+        expected.push(["Down", HID_BACKSPACE], ["Up", HID_BACKSPACE]);
+        expected.push(["Down", HID_FORWARD_DELETE], ["Up", HID_FORWARD_DELETE]);
+      }
+      expect(events).toEqual(expected);
+      expect(result).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+    });
+
+    it("holds no modifier anywhere in the burst", async () => {
+      // The reason the burst is delete keys and not Cmd+A: `pressKey` is
+      // fire-and-forget and this backend awaits between presses, so a held
+      // Left-GUI outlives any throw in between and latches — a later
+      // `{ text: "w" }` then becomes Cmd+W and closes the simulator window.
+      // Stated separately from the exact-stream assertion above so the reason
+      // survives a rewrite of the expectation.
+      const { events, api } = hidRecorder();
+      await clearSimulatorServer(registryWith(api), IOS_SIM);
+      expect(events.some(([, code]) => code === HID_LEFT_SHIFT)).toBe(false);
+      // Left GUI (0xE3) / Left Ctrl (0xE0) — the two select-all chords.
+      expect(events.some(([, code]) => code === 227 || code === 224)).toBe(false);
+    });
+
+    it("releases every key it presses (no stuck auto-repeat)", async () => {
+      // A Down without its Up leaves the guest repeating that key for as long
+      // as the simulator lives, which on a delete key empties whatever is
+      // focused next. The exact-stream test would catch it, but only as one
+      // diff among 400 events; this states the property.
+      const { events, api } = hidRecorder();
+      await clearSimulatorServer(registryWith(api), IOS_SIM);
+      const downs = events.filter(([d]) => d === "Down").length;
+      const ups = events.filter(([d]) => d === "Up").length;
+      expect(downs).toBe(CLEAR_KEY_PAIRS * 2);
+      expect(ups).toBe(downs);
+    });
+
+    it("pins the forward-delete usage id (0x4C) against the shared constant", () => {
+      // `FORWARD_DELETE_KEYCODE` is the only HID code in the tool with no name
+      // in `NAMED_KEYS`, so nothing else in the suite would notice it drifting
+      // to, say, 42 — which would turn the burst into backspaces alone and
+      // leave every field's tail behind while every other assertion stayed
+      // green.
+      expect(FORWARD_DELETE_KEYCODE).toBe(0x4c);
+    });
+
+    it("sends the literal 200 key presses the tool description promises", async () => {
+      // Every other assertion here is written as `CLEAR_KEY_PAIRS * 2`, so
+      // setting the constant to 3 leaves them all green — while "100
+      // backspaces... 100 forward-deletes" and "`keys` is 200" are caller-facing
+      // contract in the parameter description, the tool description, the
+      // run-sequence table and the docs. This is the only place the number
+      // itself is stated.
+      expect(CLEAR_KEY_PAIRS).toBe(100);
+      const { events, api } = hidRecorder();
+      const result = await clearSimulatorServer(registryWith(api), IOS_SIM);
+      expect(result.keys).toBe(200);
+      expect(events.length).toBe(400);
+    });
+
+    it("stops the burst when the request is aborted, and does not claim a clear", async () => {
+      // The HTTP layer aborts on client disconnect, and run-sequence and a flow
+      // run pass their own signal down. `gesture-swipe` already honours it for
+      // the same shape, and for the reason quoted there: without it a cancelled
+      // call keeps driving the device for the rest of the burst, its deletions
+      // landing in whatever is sent to that device next. Measured on a booted
+      // simulator against a 250-character field: a client gone at 150ms left the
+      // full 100 deletions running, and now leaves 34.
+      // Aborted at a CHOSEN key rather than after a wall-clock wait: a timer
+      // lands wherever the host's load puts it, so nothing could assert an
+      // absolute count and `result.keys === events.length / 2` compared two
+      // values production had just produced — an identity that holds at every
+      // exit of the loop, so it could not tell an abort that fired far too
+      // early from one that fired far too late.
+      const { events, api } = hidRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        ...api,
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          if (events.length === 6) controller.abort();
+        },
+      };
+      const result = await clearSimulatorServer(
+        registryWith(aborting),
+        IOS_SIM,
+        controller.signal
+      ).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      // Three key presses: six Down/Up events, and the burst stopped at the
+      // cadence gap that follows them.
+      expect(events).toHaveLength(6);
+      // A half-emptied field is a FAILURE, not a short success. Returning it
+      // filed the dangerous state as a completed step — `run-sequence` counts a
+      // returned step in `completed` — while the two adb backends already threw
+      // for the harmless "nothing was sent" case.
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(getFailureSignal(result)?.failure_stage).toBe("keyboard_clear_simulator_abandoned");
+      expect(result?.message).toMatch(/cancelled partway/);
+      expect(result?.message).toContain("3 of the 200 delete keys");
+    });
+
+    it("a burst the transport stops accepting is NOT reported as a clear", async () => {
+      // `pressKey` is fire-and-forget over the simulator-server's stdin pipe, so
+      // a helper process that dies mid-burst (a concurrent
+      // `stop-simulator-server`, a simulator shutdown, a crash) used to leave
+      // the loop writing into nothing and the tool answering
+      // `{ keys: 200, cleared: true }`. Measured on a booted simulator: `kill -9`
+      // 50ms in delivered 9 of 200 keys against a 250-character field.
+      //
+      // Re-stated like the Android sibling, because the burst is not atomic: an
+      // agent told only "the helper process is gone" reads that as "nothing
+      // happened" and types over a field that is now shorter.
+      const { events, api } = hidRecorder();
+      let sent = 0;
+      const dying = {
+        ...api,
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          if (++sent > 20) throw new Error("the simulator-server input pipe closed");
+          api.pressKey(direction, keyCode);
+        },
+      };
+      const err = await clearSimulatorServer(registryWith(dying), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      const signal = getFailureSignal(err);
+      expect(signal?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(signal?.failure_stage).toBe("keyboard_clear_simulator_burst");
+      expect(err?.message).toMatch(/PARTIALLY emptied/);
+      // The count the caller acts on, not just the fact of a failure. Ten KEY
+      // presses, which is the twenty Down/Up events the recorder saw.
+      expect(err?.message).toContain("10 of the 200 delete keys");
+      // It stopped where the transport did rather than writing the rest.
+      expect(events.length).toBe(20);
+    });
+
+    it("re-states the transport's OWN error_kind, and only falls back to subprocess", async () => {
+      // The blueprint's pipe guard throws a `FailureError` once the child's
+      // stdin has closed, and the burst copies its `error_kind` rather than
+      // assuming a subprocess fault. Every other case on this backend throws a
+      // PLAIN Error, so the guard's signal never reached this wrapper and a
+      // hardcoded `"subprocess"` passed them all.
+      const { api } = hidRecorder();
+      const withSignal = {
+        ...api,
+        pressKey: () => {
+          throw new FailureError("the simulator-server is no longer accepting key events", {
+            error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+            failure_stage: "simulator_server_key_write",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          });
+        },
+      };
+      const carried = await clearSimulatorServer(registryWith(withSignal), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(carried)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(getFailureSignal(carried)?.error_kind).toBe("timeout");
+      // The guard's own verdict is still reachable through the cause chain.
+      expect(getFailureSignal(carried?.cause)?.error_code).toBe(
+        FAILURE_CODES.SIMULATOR_SERVER_TERMINATED
+      );
+
+      const plain = {
+        ...api,
+        pressKey: () => {
+          throw new Error("write EPIPE");
+        },
+      };
+      const fell = await clearSimulatorServer(registryWith(plain), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(fell)?.error_kind).toBe("subprocess");
+    });
+
+    it("says the field is UNCHANGED when the transport refused the first key", async () => {
+      // The other end of the same count, and the opposite instruction. The
+      // blueprint's pipe guard latches on the child's stdin `close`, so an api
+      // resolved just before a `stop-simulator-server` throws on the FIRST
+      // `pressKey` with nothing delivered — and "may be PARTIALLY emptied" sends
+      // the caller to re-read a field nothing touched. The Android and Vega
+      // bursts already split this way.
+      const { events, api } = hidRecorder();
+      const dead = {
+        ...api,
+        pressKey: () => {
+          throw new Error("the simulator-server input pipe closed");
+        },
+      };
+      const err = await clearSimulatorServer(registryWith(dead), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(err?.message).toContain("NO delete key was sent");
+      expect(err?.message).toContain("the focused field is unchanged");
+      expect(err?.message).not.toMatch(/PARTIALLY/);
+      expect(events).toEqual([]);
+    });
+
+    it("settles after the burst, so the auto-screenshot cannot race the deletions", async () => {
+      // `pressKey` is fire-and-forget, so the burst returns before the app has
+      // drained it. Without the settle, the tool's auto-screenshot is taken
+      // mid-clear and hands back a picture of a field still emptying — and
+      // nothing else in the suite goes red when the `await sleep(...)` is
+      // deleted. Timed rather than mocked: a fake-timer version passes against
+      // a settle of zero.
+      const { api } = hidRecorder();
+      const started = Date.now();
+      await clearSimulatorServer(registryWith(api), IOS_SIM);
+      const elapsed = Date.now() - started;
+      // 200 cadence gaps (2ms each) plus the 300ms settle. Bounded below by
+      // their SUM, so dropping either one goes red: without the settle the burst
+      // finishes in ~400ms, and without the cadence in ~300ms.
+      expect(elapsed).toBeGreaterThanOrEqual(650);
+      // The sum alone cannot separate them: a cadence of 5 and a settle of 1000
+      // each keep it green, and this settle-named case would go red for a
+      // cadence change. Both values are their own decision — the cadence is what
+      // keeps a 400-line write in order on a loaded host, the settle is what
+      // keeps the auto-screenshot off a field still emptying — so both are
+      // pinned outright.
+      expect(CLEAR_KEY_CADENCE_MS).toBe(2);
+      expect(CLEAR_SETTLE_MS).toBe(300);
+    });
+  });
+
+  // `clear` is a switch, not a payload: `false` means what omitting it means, as
+  // its own `.describe()` says. The guard in ../index.ts pins that for the
+  // REQUEST shape, but it sends every shape to one android udid — so each
+  // backend's own `params.clear === true` is unpinned, and widening any of them
+  // to `!== undefined` (the natural symmetry with `text`) makes `{ clear: false }`
+  // delete a field.
+  describe("`clear: false` is an omitted clear on every backend", () => {
+    it("chromium: dispatches nothing and evaluates nothing", async () => {
+      const { events, api } = cdpRecorder();
+      const evaluate = vi.fn(async () => ({ cleared: true }));
+      const result = await makeChromiumImpl(registryWith({ ...api, evaluate })).handler(
+        {},
+        { udid: CHROMIUM.id, clear: false },
+        CHROMIUM
+      );
+      expect(result).toEqual({ typed: "", keys: 0 });
+      expect(events).toEqual([]);
+      expect(evaluate).not.toHaveBeenCalled();
+    });
+
+    it("iOS simulator: presses no key", async () => {
+      // Through `.handler`, not through `typeSimulatorServer`: that function
+      // never reads `params.clear` at all (the decision lives in
+      // platforms/ios.ts `runSimulatorServer`), so calling it directly proved
+      // nothing — make the widening this block names and it stays green while
+      // `{ clear: false }` fires a 200-key burst at a simulator. The chromium
+      // and ios-remote siblings already go through their handlers.
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_SIM.id, clear: false },
+        IOS_SIM
+      );
+      expect(result).toEqual({ typed: "", keys: 0 });
+      expect(events).toEqual([]);
+    });
+
+    it("vega: injects nothing", async () => {
+      const result = await vegaImpl.handler({}, { udid: VEGA.id, clear: false }, VEGA);
+      expect(result).toEqual({ typed: "", keys: 0 });
+      expect(injectVegaText).not.toHaveBeenCalled();
+      expect(injectVegaNamedKey).not.toHaveBeenCalled();
+    });
+  });
+
+  // The LOCAL Apple TV route, which no test reached: `makeIosImpl` appeared in
+  // none, and the kind probe was pinned non-TV everywhere — so hoisting
+  // `params.clear === true` above the probe would have aimed the 400-event burst
+  // at a tvOS simulator with the whole suite green. (The route itself is
+  // correct: on a real tvOS 26.5 simulator a `clear` empties the focused field
+  // through the injected HID daemon — 250 characters -> 50 in 8.8s — while
+  // `key` is refused with TOOL_CAPABILITY_UNSUPPORTED_OPERATION and `text`
+  // types.)
+  describe("ios — the local Apple TV route", () => {
+    const APPLE_TV: DeviceInfo = { id: "TVOS-UDID", platform: "ios", kind: "simulator" };
+
+    it("sends a tvOS clear to the TV daemon, not to simulator-server", async () => {
+      // The routing is the whole guard. `clearSimulatorServer` resolves the
+      // simulator-server blueprint for the udid it is given, which for a tvOS
+      // one answers nothing while still reporting `{ keys: 200, cleared: true }`
+      // — so a clear that reached the HID recorder here would be the bug, and
+      // the empty `events` is what says it did not.
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { events, api } = hidRecorder();
+      const clear = vi.fn(async () => 200);
+      // `includes`, not `startsWith`: `resolveDevice` classifies this fixture's
+      // id by shape, so the TV ref it builds is `AndroidTvControl:…` here and
+      // `TvControl:…` for a real tvOS UUID. Either way it is the TV service, and
+      // anything else must fall to the HID recorder so a wrong route shows up as
+      // events.
+      const result = await makeIosImpl({
+        resolveService: vi.fn(async (urn: string) => (urn.includes("TvControl") ? { clear } : api)),
+      } as never).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV);
+
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ typed: "", keys: 200, cleared: true });
+      expect(events).toEqual([]);
+    });
+
+    it("hands the request's abort through to the tvOS burst", async () => {
+      // The tvOS burst reads the signal between its 200 socket writes, so a
+      // dropped `options?.signal` at THIS call site leaves a cancelled call
+      // driving the device for the rest of the burst — with `keyboard-tv.test.ts`
+      // (which calls `typeTv` directly) still green.
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { api } = hidRecorder();
+      const clear = vi.fn(async (_signal?: AbortSignal) => 200);
+      const controller = new AbortController();
+      await makeIosImpl({
+        resolveService: vi.fn(async (urn: string) => (urn.includes("TvControl") ? { clear } : api)),
+      } as never).handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV, {
+        signal: controller.signal,
+      });
+
+      expect(clear).toHaveBeenCalledWith(controller.signal);
+    });
+
+    it("refuses a named key on one too", async () => {
+      getSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { events, api } = hidRecorder();
+      await expect(
+        makeIosImpl(registryWith(api)).handler({}, { udid: APPLE_TV.id, key: "enter" }, APPLE_TV)
+      ).rejects.toBeInstanceOf(UnsupportedOperationError);
+      expect(events).toEqual([]);
+    });
+
+    it("probes the kind BEFORE it looks at `clear`", async () => {
+      // The ordering is the whole guard: `clear` routed above the probe reaches
+      // `clearSimulatorServer`, which resolves the simulator-server for a device
+      // it cannot drive and bursts at it.
+      getSimulatorRuntimeKind.mockClear();
+      getSimulatorRuntimeKind.mockResolvedValue("mobile");
+      const { api } = hidRecorder();
+      await makeIosImpl(registryWith(api)).handler({}, { udid: IOS_SIM.id, clear: true }, IOS_SIM);
+      expect(getSimulatorRuntimeKind).toHaveBeenCalledWith(IOS_SIM.id);
+    });
+
+    it("refuses a clear when the listing cannot say what the target is", async () => {
+      // `undefined` is not "not a TV": `getSimulatorRuntimeKind` answers it for a
+      // UDID missing from the listing, and `listIosSimulators` returns [] on ANY
+      // failure of `xcrun simctl list devices --json`, its own 10s timeout
+      // included. Collapsed onto `false`, a booted Apple TV took the burst and
+      // the caller was told `{ keys: 200, cleared: true }` — reproduced on a
+      // tvOS 26.5 simulator filtered out of the listing, with simulator-server
+      // spawned at the tvOS UDID.
+      getSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const err = await makeIosImpl(registryWith(api))
+        .handler({}, { udid: APPLE_TV.id, clear: true }, APPLE_TV)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_ios_runtime_kind");
+      // The message tells a LOCAL caller the retry is worth making: once the
+      // listing answers, the clear runs on either kind.
+      expect(err?.message).toMatch(/the clear then works on either kind/);
+      expect(events).toEqual([]);
+    });
+
+    it("still types when the listing cannot say what the target is", async () => {
+      // The refusal is scoped to `clear`. `text` reaches an Apple TV through the
+      // same simulator-server HID transport it uses on a phone, so an unreadable
+      // listing must not take typing away with it.
+      getSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+        IOS_SIM
+      );
+      expect(result).toEqual({ typed: "hi", keys: 2 });
+      expect(events.length).toBeGreaterThan(0);
+    });
+
+    it("hands the request's abort down to the clear burst", async () => {
+      // The handler's fourth argument is the only route from the HTTP layer's
+      // cancel to the burst, and no test used to pass one — so deleting
+      // `options?.signal` from both iOS impls, making every iOS clear
+      // un-abortable, left the suite green. Android is pinned in
+      // keyboard-android.test.ts, which is what made this an oversight rather
+      // than a decision.
+      const controller = new AbortController();
+      controller.abort();
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api))
+        .handler({}, { udid: IOS_SIM.id, clear: true }, IOS_SIM, { signal: controller.signal })
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      // An abandoned burst FAILS; a signal that never arrives sends all 200 keys
+      // and claims the clear.
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(result?.message).toContain("NO delete key was sent");
+      expect(events).toEqual([]);
+    });
+
+    it("still types on a non-TV simulator", async () => {
+      // The positive control: a probe that answered `true` for everything would
+      // satisfy the two refusals above on its own.
+      const { events, api } = hidRecorder();
+      const result = await makeIosImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+        IOS_SIM
+      );
+      expect(result).toEqual({ typed: "hi", keys: 2 });
+      expect(events.length).toBeGreaterThan(0);
+    });
+  });
+
+  // The ios and ios-remote impls share one `runSimulatorServer`, and the remote
+  // one is reached by no other test in the suite: reverting it to
+  // `typeSimulatorServer` — deleting the clear routing for every remote sim —
+  // breaks nothing, and `{ clear: true }` then returns `{ typed: "", keys: 0 }`
+  // with no `cleared`, having sent nothing at all.
+  describe("ios-remote", () => {
+    const IOS_REMOTE: DeviceInfo = {
+      id: "remote:REMOTE-UDID",
+      platform: "ios-remote",
+      kind: "simulator",
+    };
+
+    it("clears over the same HID transport as a local simulator", async () => {
+      const { events, api } = hidRecorder();
+      const registry = registryWith(api);
+      const result = await makeIosRemoteImpl(registry).handler(
+        {},
+        { udid: IOS_REMOTE.id, clear: true },
+        IOS_REMOTE
+      );
+      expect(result).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+      expect(events.length).toBe(CLEAR_KEY_PAIRS * 4);
+      expect(events.slice(0, 4)).toEqual([
+        ["Down", HID_BACKSPACE],
+        ["Up", HID_BACKSPACE],
+        ["Down", HID_FORWARD_DELETE],
+        ["Up", HID_FORWARD_DELETE],
+      ]);
+    });
+
+    it("treats `{ clear: false }` as an omitted clear, sending nothing", async () => {
+      const { events, api } = hidRecorder();
+      const result = await makeIosRemoteImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_REMOTE.id, clear: false },
+        IOS_REMOTE
+      );
+      expect(result).toEqual({ typed: "", keys: 0 });
+      expect(events).toEqual([]);
+    });
+
+    it("refuses a named key on a REMOTE tvOS simulator, and not with the local wording", async () => {
+      // The other shape that reaches this branch. Nothing pinned it, so a
+      // fall-through to `runSimulatorServer` was green: a remote Apple TV would
+      // then take an Enter over the phone HID transport and report `{ keys: 1 }`.
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { events, api } = hidRecorder();
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, key: "enter" }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      // NOT `UnsupportedOperationError`: that renders as "Tool 'keyboard' is not
+      // supported on ios-remote simulator", which is false — `text` still types
+      // on this device — and it left the refusal outside the KEYBOARD_* buckets.
+      expect(err?.message).not.toMatch(/Tool 'keyboard' is not supported/);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
+      expect(err?.message).toMatch(/`key` and `clear` are not supported on a REMOTE Apple TV/);
+      expect(err?.message).toMatch(/`text` still types on this device/);
+      // NOT the local TV backend's wording. That one sends the caller to
+      // `tv-remote`, which does not declare `appleRemote` and so refuses this
+      // device too — advice that cannot be followed.
+      expect(err?.message).not.toMatch(/move focus with `tv-remote`/);
+      expect(err?.message).toMatch(/`tv-remote` cannot reach it either/);
+      expect(events).toEqual([]);
+    });
+
+    it("refuses a clear on a REMOTE tvOS simulator instead of bursting at it", async () => {
+      // A remote tvOS sim is `ios-remote` by udid shape exactly as a local one is
+      // `ios`, so without the probe a remote Apple TV took the 400-event burst
+      // meant for an iPhone.
+      //
+      // A LOCAL Apple TV now clears, and this one still cannot: the burst rides
+      // the tvOS HID daemon, a host process holding a client against a device in
+      // THIS machine's CoreSimulator set, and a sim-remote UDID is not one.
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce("tv");
+      const { events, api } = hidRecorder();
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      expect(err?.message).not.toMatch(/Tool 'keyboard' is not supported/);
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_TARGET
+      );
+      // The message has to separate this refusal from the local route that
+      // works, and name a target that CAN serve the request.
+      expect(err?.message).toMatch(/not supported on a REMOTE Apple TV/);
+      expect(err?.message).toMatch(/LOCAL Apple TV simulator/);
+      expect(events).toEqual([]);
+    });
+
+    it("refuses a remote clear when the device list cannot say what the target is", async () => {
+      // The remote listing collapses the same way the local one does — a failed
+      // `sim-remote simctl list devices --json`, or one without this UDID, is
+      // indistinguishable from a phone unless the kind is read three-valued.
+      getRemoteSimulatorRuntimeKind.mockResolvedValueOnce(undefined);
+      const { events, api } = hidRecorder();
+      const err = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TARGET_KIND_UNKNOWN);
+      // Both impls share this message, and only one of them can promise a clear
+      // once the kind is known — a remote Apple TV refuses it outright. Left
+      // static, the retry this text prescribes walks a remote caller into that
+      // second failure.
+      expect(err?.message).toMatch(/a remote Apple TV does not support `clear` at all/);
+      expect(err?.message).not.toMatch(/works on either kind/);
+      expect(events).toEqual([]);
+    });
+
+    it("hands the request's abort down to a REMOTE clear burst too", async () => {
+      // Same wiring on the remote impl, reached by no test either: both share
+      // `runSimulatorServer`, and both used to be able to lose the signal
+      // independently.
+      const controller = new AbortController();
+      controller.abort();
+      const { events, api } = hidRecorder();
+      const result = await makeIosRemoteImpl(registryWith(api))
+        .handler({}, { udid: IOS_REMOTE.id, clear: true }, IOS_REMOTE, {
+          signal: controller.signal,
+        })
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+      expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(result?.message).toContain("NO delete key was sent");
+      expect(events).toEqual([]);
+    });
+
+    it("does not probe the TV kind for a plain typing call", async () => {
+      // The probe is a round-trip to the orchestrator's device list. `text`
+      // keeps the transport it already had, so it must not pay for it.
+      getRemoteSimulatorRuntimeKind.mockClear();
+      const { api } = hidRecorder();
+      await makeIosRemoteImpl(registryWith(api)).handler(
+        {},
+        { udid: IOS_REMOTE.id, text: "hi", delayMs: 0 },
+        IOS_REMOTE
+      );
+      expect(getRemoteSimulatorRuntimeKind).not.toHaveBeenCalled();
+    });
   });
 
   describe("chromium", () => {
@@ -298,6 +924,108 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ).rejects.toThrow(/Unknown key "bogus"/);
       expect(events).toEqual([]);
     });
+
+    it("marks a Chromium clear as verified, and the key backends as not", async () => {
+      // `cleared` means two different things — "sent" on the key backends,
+      // "seen empty" here — and the only discriminator in the result was `keys`
+      // (0 vs 200), which is documented as the count of key presses issued, not
+      // as a verification flag. A flow assertion or a caller branching on the
+      // result had nothing structural to read.
+      const { api } = cdpRecorder();
+      const evaluate = vi.fn(async (_expr: string, _opts?: unknown) =>
+        _expr === CLEAR_FOCUSED_EDITABLE_SCRIPT
+          ? { cleared: true, focus: "input type=text" }
+          : { focus: "input type=text", same: true, changed: false, remaining: 0, embeds: 0 }
+      );
+      const chromium = await makeChromiumImpl(registryWith({ ...api, evaluate })).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true },
+        CHROMIUM
+      );
+      expect(chromium).toEqual({ typed: "", keys: 0, cleared: true, clearVerified: true });
+
+      // The key backends send a fixed burst and read nothing, so the flag must
+      // be ABSENT there rather than false — the claim is not made at all.
+      const ios = await clearSimulatorServer(registryWith(hidRecorder().api), IOS_SIM);
+      expect(ios).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
+      // `Object.hasOwn`, not `toBeUndefined`: no key backend sets the property
+      // at all, so the old assertion passed with the whole feature deleted — and
+      // it would pass for an explicit `clearVerified: undefined` too, which is a
+      // different claim. The Chromium side gets the mirror assertion.
+      expect(Object.hasOwn(ios, "clearVerified")).toBe(false);
+      expect(Object.hasOwn(chromium, "clearVerified")).toBe(true);
+    });
+
+    it("clears through TWO renderer evaluations and no key events at all", async () => {
+      const { events, api } = cdpRecorder();
+      const evaluate = vi.fn(async (_expr: string, _opts?: unknown) =>
+        _expr === CLEAR_FOCUSED_EDITABLE_SCRIPT
+          ? { cleared: true, focus: "input type=text" }
+          : { focus: "input type=text", same: true, remaining: 0 }
+      );
+
+      const result = await makeChromiumImpl(registryWith({ ...api, evaluate })).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true },
+        CHROMIUM
+      );
+
+      // No key events is the point, not an accident of the transport: a
+      // modifier-only Meta+A / Ctrl+A selects nothing in a Chromium renderer on
+      // macOS, and a 200-key delete burst would deliver 200 keydowns to a page
+      // whose own shortcut handler can cancel them. The DOM path delivers
+      // one `input` event (inputType deleteContentBackward) and no keydown.
+      expect(events).toEqual([]);
+      // Two, and they must be two SEPARATE evaluates: an editor that restores
+      // its model does so at the microtask checkpoint that ends the first one,
+      // so a read-back folded into the clear script sees the emptied field and
+      // reports a clear that did not survive.
+      expect(evaluate).toHaveBeenCalledTimes(2);
+      expect(evaluate.mock.calls[0]![0]).toBe(CLEAR_FOCUSED_EDITABLE_SCRIPT);
+      expect(evaluate.mock.calls[1]![0]).not.toBe(CLEAR_FOCUSED_EDITABLE_SCRIPT);
+      // `returnByValue` is load-bearing on both: without it CDP answers the
+      // script's object as a RemoteObject handle with `value` undefined, the
+      // backend reads no `cleared: true`, and every successful clear reports the
+      // "nothing editable has focus" 400.
+      expect(evaluate.mock.calls[0]![1]).toEqual({ returnByValue: true });
+      expect(evaluate.mock.calls[1]![1]).toEqual({ returnByValue: true });
+      // `keys: 0` — the count reports key events sent, and this backend sends
+      // none. `clearVerified` is what says the field was SEEN empty, which is
+      // the claim only this backend can make.
+      expect(result).toEqual({ typed: "", keys: 0, cleared: true, clearVerified: true });
+    });
+
+    it("leaves an editor time to put the value back before it reads the field", async () => {
+      // The read-back is one CDP round trip later, which lands in the renderer's
+      // next TASK: after the clear script's microtask checkpoint, before every
+      // timer. So an editor that restores from `setTimeout` or
+      // `requestAnimationFrame` restored AFTER the read that exists to catch it.
+      // Measured on Chrome 152 against five fields differing only in when they
+      // restore: `queueMicrotask` and `setTimeout(fn, 0)` were refused, while
+      // `setTimeout(fn, 16)`, `setTimeout(fn, 100)` and `requestAnimationFrame`
+      // each returned `clearVerified: true` over text that was back on screen.
+      const { api } = cdpRecorder();
+      let restored = false;
+      setTimeout(() => (restored = true), 100);
+      const evaluate = vi.fn(async (_expr: string, _opts?: unknown) =>
+        _expr === CLEAR_FOCUSED_EDITABLE_SCRIPT
+          ? { cleared: true, focus: "input type=text" }
+          : { focus: "input type=text", same: true, remaining: restored ? 5 : 0 }
+      );
+
+      const err = await makeChromiumImpl(registryWith({ ...api, evaluate }))
+        .handler({}, { udid: CHROMIUM.id, clear: true }, CHROMIUM)
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+      expect(err?.message).toContain("still holds 5 characters");
+      // Pinned outright, as the key backends' settle is: it is the whole reason
+      // the restore above is seen, and the sum it contributes to is not
+      // separable from the transport's own latency.
+      expect(CLEAR_READBACK_SETTLE_MS).toBe(150);
+    });
   });
 
   // No android section: `adb shell input` is a command line rather than an event
@@ -315,6 +1043,33 @@ describe("keyboard backends — emit exactly the action they were given", () => 
 
       expect(vi.mocked(injectVegaText).mock.calls.map((c) => c[0])).toEqual(["Hi"]);
       expect(injectVegaNamedKey).not.toHaveBeenCalled();
+    });
+
+    it("clears through the delete burst, typing and pressing nothing", async () => {
+      // The two neighbouring injectors are the point: `clear` shares a backend
+      // with them, and a branch that fell through would `send_text` an empty
+      // string or press a key. `keys` is the 200 presses issued, as on the other
+      // key-injecting backends — the field is never read back, so no
+      // `clearVerified`.
+      const result = await vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA);
+
+      expect(result).toEqual({ typed: "", keys: 200, cleared: true });
+      expect(injectVegaClear).toHaveBeenCalledTimes(1);
+      expect(injectVegaText).not.toHaveBeenCalled();
+      expect(injectVegaNamedKey).not.toHaveBeenCalled();
+    });
+
+    it("hands the request's abort down to the burst", async () => {
+      // `injectVegaClear` reads the signal to tell "cancelled before the send"
+      // — where it can prove the field is untouched — from a burst that may have
+      // half-emptied it. A backend that dropped the signal makes that
+      // distinction unreachable, and nothing else in the file would notice.
+      const controller = new AbortController();
+      await vegaImpl.handler({}, { udid: VEGA.id, clear: true }, VEGA, {
+        signal: controller.signal,
+      });
+
+      expect(vi.mocked(injectVegaClear).mock.calls.at(-1)?.[0]).toBe(controller.signal);
     });
 
     it("forwards the key it was given to the injector, not a hardcoded one", async () => {

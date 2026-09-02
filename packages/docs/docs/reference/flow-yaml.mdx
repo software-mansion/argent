@@ -130,6 +130,25 @@ Each step contains one directive. A failed directive stops the flow.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
+`type` always appends: it focuses the element and types, and it has no clear form. A field can already hold a value: one the app remembered, or one an earlier run of the same flow left. `type` then splices the new characters into the old value, and the flow replays that wrong value on every run. Where the field can arrive non-empty, write the steps by hand instead:
+
+```yaml
+- tap: { id: email }
+- wait: 500
+- tool: keyboard
+  args: { clear: true }
+- tool: keyboard
+  args: { text: "new@example.com" }
+- tool: keyboard
+  args: { key: enter }
+```
+
+The last step replaces the Enter that `type` sends. `type` presses Enter unless it carries
+`submit: false`. A `tool: keyboard` step never does, so a replacement without that step fills the
+field and never submits it. Drop the step where the original `type` carried `submit: false`.
+
+The `wait:` is load-bearing: raw `tool:` steps take no settle. On every target except Chromium a clear that arrives before focus lands empties the previously focused element and still reports success. On Chromium the clear fails when nothing editable holds focus, but it cannot tell one editable element from another. On iOS, Android and the TV targets the burst clears up to 100 characters on each side of the cursor, so a longer field needs a second `clear` step; on Vega it clears up to 200 characters before the cursor and none after it; on Chromium there is no limit and the result carries `clearVerified` when the field was read back empty.
+
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
@@ -242,11 +261,13 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ p
 
 A `run:` path resolves against the directory of the flow file that contains the step. The `.yaml` suffix is optional.
 
-| Platform     | Behavior                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                                                          |
-| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected |
-| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                            |
+| Platform     | Behavior                                                                                                                                                                                                                            |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                                                                                                  |
+| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected                                         |
+| Vega         | Use `tool: tv-remote` and `tool: keyboard`. `keyboard` takes `text`, `key` or `clear`. The runner rejects the touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) before it resolves a selector |
+
+Apple TV and Android TV are not flow targets. Their ids classify as `ios` and `android`, so the runner accepts the touch directives instead of rejecting them, and an author must not write them. On Android TV they reach the device and do nothing useful at a focus-driven UI. On Apple TV they fail: every touch directive resolves the simulator-server, which refuses a tvOS id outright, so the step errors and the flow stops. `keyboard` still refuses `key` on both. Drive those two with the tools directly (`describe` for focus, `tv-remote`, `keyboard` with `text` or `clear`).
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 

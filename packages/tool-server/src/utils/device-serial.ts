@@ -1,0 +1,240 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { FAILURE_CODES, FailureError } from "@argent/registry";
+
+import { chromiumIdFromPort, parseChromiumCdpPort, resolveDevice } from "./device-info";
+
+/**
+ * One queue per device for the tools that drive its keyboard.
+ *
+ * `paste` and `keyboard` both write to whatever holds keyboard focus, over
+ * several unserialized steps each: a paste fills the clipboard and then sends
+ * Cmd+V, and a `keyboard` clear writes 200 key events one at a time (700ms on
+ * iOS, 2-90s on Android). Two concurrent calls at one device interleave inside
+ * those windows and BOTH report success — measured on a booted simulator with a
+ * 250-character field: `{ clear: true }` and, 200ms later, `{ text: "HELLO" }`
+ * left `…aaaaaaaaaaLO`, with "HEL" eaten by backspaces still in flight.
+ *
+ * The map is shared across the tools rather than per tool, because the hazard is
+ * the device's single focused field, not any one tool's steps: a paste racing a
+ * clear corrupts the value exactly as two clears would. One tool-server is
+ * shared by every agent session on the machine, so two sessions driving one
+ * device is the documented default rather than an exotic case.
+ *
+ * A rejection does not stall the queue (`then(task, task)`), and the entry is
+ * dropped once it is the tail again, so an idle device holds nothing.
+ */
+const deviceQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * The tools that take this queue. `holdDeviceQueue`'s callers ask it whether a
+ * batch of steps will need the queue at all, so the membership lives here rather
+ * than being restated per caller.
+ */
+export const DEVICE_QUEUE_TOOLS: ReadonlySet<string> = new Set(["keyboard", "paste"]);
+
+/**
+ * The devices whose queue THIS async call chain already holds, so a call made
+ * inside `holdDeviceQueue` runs instead of waiting for a queue it is itself the
+ * head of. `AsyncLocalStorage` rather than a plain variable because two
+ * sequences can be in flight at once, and each one's nested tool calls must see
+ * only its own holds.
+ */
+const heldByCaller = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/**
+ * How long a queued call may wait before its own request is stale.
+ *
+ * The queue makes a second session WAIT instead of interleaving, and a wait is
+ * not free: the caller chose its field before it sent the call, and everything
+ * ahead of it in the queue may have moved focus since. Measured on Chrome 152 —
+ * a `run-sequence` holding the queue while its own steps tapped a different
+ * field, and a second session's `keyboard { text: "BBB" }` behind it: the call
+ * waited 11.54s, returned `{ typed: "BBB", keys: 3 }`, and put BBB in the
+ * SEQUENCE's field while its own stayed empty. A plain success for a write that
+ * went somewhere else.
+ *
+ * So the wait is bounded and the write is not attempted past the bound. 30s is
+ * chosen against the queued work that is legitimately slow: 100 characters at
+ * the default 50ms cadence is 5s, an iOS clear burst is under 1s, a Chromium
+ * clear is two CDP round trips. It is under the 90s an Android clear may take,
+ * deliberately — nothing about a field's focus is still trustworthy 90 seconds
+ * after the caller looked at it.
+ */
+export const DEVICE_QUEUE_MAX_WAIT_MS = 30_000;
+
+function deviceBusyError(deviceId: string, waitedMs: number): FailureError {
+  return new FailureError(
+    `another session held ${deviceId}'s keyboard for ${Math.round(waitedMs / 1000)}s, so nothing ` +
+      "was typed, pressed or cleared — this call was NOT sent to the device. `keyboard` and " +
+      "`paste` are serialized per device because they both write to whatever holds keyboard " +
+      "focus, and the session ahead of this one may have moved that focus while this call " +
+      "waited: sending it now would write into ITS field and report success. Tap the field " +
+      "again (`gesture-tap`, or `tv-remote` on a TV), then retry. Keep the tap and the write in " +
+      "one `run-sequence` so they cannot be separated again.",
+    {
+      error_code: FAILURE_CODES.KEYBOARD_DEVICE_BUSY,
+      failure_stage: "device_queue_wait",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
+/**
+ * One key per DEVICE, not per spelling of its id.
+ *
+ * The map used to key on the caller's raw string while every other consumer
+ * PARSES it, so two spellings of one target got two queues and the
+ * serialization silently did nothing: `chromium-cdp-09333` and
+ * `chromium-cdp-9333` are the same browser (`parseChromiumCdpPort` reads both
+ * as port 9333), and an iOS UDID is case-insensitive to the same degree. Two
+ * concurrent `keyboard` calls spelled the two ways interleaved to
+ * `AAABABABABABABBB` instead of `AAAAAAAABBBBBBBB`.
+ */
+function deviceQueueKey(deviceId: string): string {
+  const port = parseChromiumCdpPort(deviceId);
+  if (port !== null) return chromiumIdFromPort(port);
+  const platform = resolveDevice(deviceId).platform;
+  return platform === "ios" || platform === "ios-remote" ? deviceId.toUpperCase() : deviceId;
+}
+
+export function serializedPerDevice<T>(
+  deviceId: string,
+  task: () => Promise<T>,
+  /**
+   * The request's own abort — the HTTP layer fires it when the client
+   * disconnects, and `run-sequence` and a flow run pass theirs down. Without it
+   * a call the caller had ALREADY given up on still ran when its turn came, into
+   * whatever held focus by then: measured on Chrome 152 with the client SIGKILLed
+   * 2.5s in, the write landed at t=16s in another session's field and the server
+   * logged `toolCompleted keyboard (12107ms)`.
+   */
+  signal?: AbortSignal
+): Promise<T> {
+  const key = deviceQueueKey(deviceId);
+  if (heldByCaller.getStore()?.has(key) === true) return task();
+  const previous = deviceQueues.get(key) ?? Promise.resolve();
+  const queuedAt = Date.now();
+  // Both guards are checked when the turn comes rather than raced against a
+  // timer: giving up early would leave the task still chained and still due to
+  // run, which is the one outcome that must not happen — the point is that no
+  // write lands after the bound, not that the caller hears about it sooner.
+  const guarded = async (): Promise<T> => {
+    if (signal?.aborted === true) {
+      throw new FailureError(
+        `the request was cancelled while it waited for ${deviceId}'s keyboard, so nothing was ` +
+          "typed, pressed or cleared and the device was not touched. Another session's call was " +
+          "ahead of this one in the queue.",
+        {
+          error_code: FAILURE_CODES.KEYBOARD_DEVICE_BUSY,
+          failure_stage: "device_queue_abandoned",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        }
+      );
+    }
+    const waited = Date.now() - queuedAt;
+    if (waited > DEVICE_QUEUE_MAX_WAIT_MS) throw deviceBusyError(deviceId, waited);
+    return task();
+  };
+  const next = previous.then(guarded, guarded);
+  deviceQueues.set(key, next);
+  const drop = () => {
+    if (deviceQueues.get(key) === next) deviceQueues.delete(key);
+  };
+  void next.then(drop, drop);
+  return next;
+}
+
+/**
+ * Hold one device's queue across a RUN of tool calls, not just the queued ones
+ * inside it.
+ *
+ * The queue serializes `keyboard` and `paste` and nothing else, so in the
+ * `[gesture-tap, keyboard { clear }]` recipe the tap landed immediately while the
+ * clear queued behind whatever another session was doing, for up to the 90s
+ * Android budget — and anything that moved focus in that window redirected the
+ * clear. Measured on Chrome 152 with a 20s `keyboard` call held by a second
+ * session: the sequence tapped its own `<input>`, the second session tapped a
+ * textarea four seconds later, and the clear emptied the TEXTAREA and reported
+ * `completed: 2 of 2`, `cleared: true`, `clearVerified: true` — truthful about an
+ * element, silent about which.
+ *
+ * Holding from the first step puts the caller's own focus tap inside the
+ * critical section, so the pair replays in the order it was written. Two things
+ * bound the cost, and both are load-bearing:
+ *
+ *   * The caller releases at its LAST queued step rather than at the end of its
+ *     batch (`tools/run-sequence`), because everything after that is another
+ *     session's wait for nothing.
+ *   * A focus move made OUTSIDE the hold waits it out (`awaitDeviceHold`), which
+ *     is what closes the window the docstring above describes — the queue alone
+ *     never covered a bare `gesture-tap`.
+ */
+export function holdDeviceQueue<T>(deviceId: string, body: () => Promise<T>): Promise<T> {
+  const key = deviceQueueKey(deviceId);
+  const held = heldByCaller.getStore();
+  if (held?.has(key) === true) return body();
+  const nested = new Set(held ?? []);
+  nested.add(key);
+  return serializedPerDevice(deviceId, () => {
+    const running = heldByCaller.run(nested, body);
+    activeHolds.set(key, running);
+    const drop = () => {
+      if (activeHolds.get(key) === running) activeHolds.delete(key);
+    };
+    void running.then(drop, drop);
+    return running;
+  });
+}
+
+/**
+ * The hold currently in flight at each device, for the tools that can MOVE
+ * keyboard focus.
+ *
+ * The queue serializes `keyboard` and `paste` and nothing else, so another
+ * session's bare `gesture-tap` landed INSIDE a hold — between the sequence's own
+ * focus tap and its clear — and the clear emptied the tapped-over field.
+ * Measured on Chrome 152 against `[gesture-tap delayMs 4000, keyboard
+ * { clear: true }]` with a second session's tap 1.5s in: the sequence returned
+ * `completed: 2 of 2`, `cleared: true`, `clearVerified: true`, the OTHER
+ * session's textarea was emptied, and the field the sequence tapped kept its
+ * value.
+ *
+ * Kept separate from `deviceQueues` on purpose. Putting the focus movers on the
+ * queue itself would make every `gesture-tap` wait behind every `keyboard` call
+ * — up to 90s for an Android clear — for a hazard that only exists while a hold
+ * is open. This map is empty the rest of the time, and `awaitDeviceHold` then
+ * costs one lookup.
+ */
+const activeHolds = new Map<string, Promise<unknown>>();
+
+/**
+ * Wait out another session's hold on this device, if there is one.
+ *
+ * Called by the tools that move keyboard focus (the gestures, `button`,
+ * `tv-remote`, `launch-app`, `restart-app`, `open-url`). A call made INSIDE the
+ * hold — a `run-sequence`'s own steps — returns at once, exactly as a nested
+ * `keyboard` step does.
+ *
+ * Bounded by the same budget the queue uses, and it PROCEEDS at the bound rather
+ * than failing: a tap is not a write into a field, and a tap that never lands is
+ * worse than one that lands late.
+ */
+export function awaitDeviceHold(deviceId: string): Promise<void> {
+  const key = deviceQueueKey(deviceId);
+  if (heldByCaller.getStore()?.has(key) === true) return Promise.resolve();
+  const hold = activeHolds.get(key);
+  if (hold === undefined) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, DEVICE_QUEUE_MAX_WAIT_MS);
+    // Never keep the process alive for a hold that outlives its own request.
+    timer.unref?.();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    hold.then(done, done);
+  });
+}
