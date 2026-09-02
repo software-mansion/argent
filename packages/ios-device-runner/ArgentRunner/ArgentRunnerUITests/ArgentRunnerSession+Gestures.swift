@@ -3,11 +3,14 @@ import XCTest
 extension ArgentRunnerSession {
     /// Builds an XCUICoordinate for absolute wire coordinates. Wire `x`/`y` are
     /// screen points in the same space as `XCUIElement.frame` and snapshot rects.
-    private func point(_ app: XCUIApplication, _ x: Double, _ y: Double)
-        -> XCUICoordinate
-    {
-        let origin = app.frame.origin
-
+    /// `origin` is `app.frame.origin`, which the caller reads once per command:
+    /// app.frame is a live element query, and a drag needs two points.
+    private func point(
+        _ app: XCUIApplication,
+        _ x: Double,
+        _ y: Double,
+        relativeTo origin: CGPoint
+    ) -> XCUICoordinate {
         // withOffset is relative to the app element's origin. Subtract it so a
         // non-zero app.frame.origin is not applied twice. XCUICoordinate handles
         // interface orientation itself.
@@ -43,7 +46,7 @@ extension ArgentRunnerSession {
             )
         }
 
-        let coordinate = point(app, x, y)
+        let coordinate = point(app, x, y, relativeTo: app.frame.origin)
 
         if taps == 2 {
             coordinate.doubleTap()
@@ -63,7 +66,7 @@ extension ArgentRunnerSession {
         }
 
         let seconds = max(0.05, (request.durationMs ?? 800) / 1000)
-        point(app, x, y).press(forDuration: seconds)
+        point(app, x, y, relativeTo: app.frame.origin).press(forDuration: seconds)
 
         return .success(MessagePayload(message: "long-pressed"))
     }
@@ -82,8 +85,9 @@ extension ArgentRunnerSession {
             )
         }
 
-        let start = point(app, fromX, fromY)
-        let end = point(app, toX, toY)
+        let origin = app.frame.origin
+        let start = point(app, fromX, fromY, relativeTo: origin)
+        let end = point(app, toX, toY, relativeTo: origin)
 
         // The press before the movement. 50 ms is a plain drag; a long-press
         // pickup needs the caller's holdMs, since a short press never lifts a
