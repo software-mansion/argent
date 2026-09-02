@@ -146,8 +146,19 @@ export function adbDeliveredCommand(err: unknown): boolean {
   return !ADB_NEVER_DELIVERED.test(message);
 }
 
+// Every arm is a refusal adb makes BEFORE the command reaches the guest, so the
+// field is provably untouched. `insufficient permissions for device` and
+// `cannot connect to daemon` are the two that were missing — both were told the
+// field "may be PARTIALLY emptied" and lost the `list-devices` repair that
+// applies.
+//
+// `protocol fault` is deliberately NOT here. It comes from `adb_status()`,
+// which reads the OKAY for the service request — and the adb server sends that
+// only after adbd has already answered A_OKAY, i.e. after the shell service was
+// spawned. So it is genuinely ambiguous, and this side of the split is the one
+// that claims nothing was sent.
 const ADB_NEVER_DELIVERED =
-  /device '[^']*' not found|device offline|device unauthorized|no devices\/emulators found|more than one device|device still (?:connecting|authorizing)/i;
+  /device '[^']*' not found|device offline|device unauthorized|no devices\/emulators found|more than one device|device still (?:connecting|authorizing)|insufficient permissions for device|cannot connect to daemon/i;
 
 /**
  * `timeoutMs` bounds a hung child; `signal` cancels a live one. They answer

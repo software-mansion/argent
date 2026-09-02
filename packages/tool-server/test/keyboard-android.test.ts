@@ -791,6 +791,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     ["an ambiguous serial", "adb: more than one device/emulator"],
     ["a device still connecting", "adb: device still connecting"],
     ["a device still authorizing", "adb: device still authorizing"],
+    // Two more the pattern used to miss. Both are printed by the adb CLIENT
+    // before it delivers anything, and both were told the field "may be
+    // PARTIALLY emptied" and lost the `list-devices` repair. Wordings taken from
+    // adb 36.0.0's own strings.
+    ["a device it lacks permission for", "adb: insufficient permissions for device"],
+    ["a daemon it cannot reach", "adb: cannot connect to daemon at tcp:5037: Connection refused"],
   ])("does not claim a partial clear for %s", async (_label, adbMessage) => {
     // The adb CLIENT prints these before it delivers anything, so no event
     // reached the guest and the field is untouched. "may be PARTIALLY emptied"
@@ -809,6 +815,21 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // on the same device.
     expect(err?.message).toMatch(/list-devices/);
     expect(err?.message).not.toMatch(/Read the field back/);
+  });
+
+  it("still claims a POSSIBLE partial for a refusal that may have reached the guest", async () => {
+    // The other side of the split, and the reason `protocol fault` is not on the
+    // never-delivered list: it comes from the status read for the service
+    // request, which the adb server only answers after adbd has spawned the
+    // shell service. Ambiguous, so it keeps the conservative claim.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(new Error("adb: protocol fault (couldn't read status): eof"));
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toMatch(/PARTIALLY emptied/);
+    expect(err?.message).not.toMatch(/NO delete key was sent/);
   });
 
   it("does not claim a partial clear for a burst the abort stopped before it was sent", async () => {
