@@ -2,7 +2,7 @@ import { FAILURE_CODES, FailureError, type DeviceInfo, type Registry } from "@ar
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { getSimulatorRuntimeKind } from "../../../utils/ios-devices";
 import { getRemoteSimulatorRuntimeKind } from "../../../utils/sim-remote";
-import { UnsupportedOperationError } from "../../../utils/capability";
+import { InvalidToolInputError } from "../../../utils/capability";
 import { CLEAR_KEY_PAIRS } from "../key-codes";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { clearSimulatorServer, typeSimulatorServer } from "../simulator-server-keys";
@@ -128,14 +128,29 @@ export function makeIosRemoteImpl(
           // One message for both, because that last fact makes the LOCAL
           // refusals' remedies wrong here: "move focus with `tv-remote`" names a
           // tool this device cannot use either.
-          throw new UnsupportedOperationError(
-            "keyboard",
-            device,
-            "`key` and `clear` are not supported on a REMOTE Apple TV — both need the tvOS " +
-              "daemons, which drive a simulator in this host's own CoreSimulator set and cannot " +
+          // NOT `UnsupportedOperationError`: that class renders as "Tool
+          // 'keyboard' is not supported on ios-remote simulator", which is
+          // false — `keyboard { text }` on this very device falls through to
+          // the MoQ path below. It also left this the one clear refusal outside
+          // the `KEYBOARD_CLEAR_*` telemetry buckets. `InvalidToolInputError`
+          // keeps the 400 (http.ts maps it by class, as it does the other one)
+          // while carrying the granular code, which is the pattern
+          // ../simulator-server-keys.ts already uses.
+          throw new InvalidToolInputError(
+            "`key` and `clear` are not supported on a REMOTE Apple TV — nothing was pressed or " +
+              "cleared. `text` still types on this device; those two need the tvOS daemons, " +
+              "which drive a simulator in this host's own CoreSimulator set and cannot " +
               "reach one behind sim-remote. `tv-remote` cannot reach it either, so there is no " +
               "focus-driven fallback on this device: run against a LOCAL Apple TV simulator, or " +
-              "empty and fill the field with the app's own on-screen keyboard."
+              "empty and fill the field with the app's own on-screen keyboard.",
+            {
+              error_code:
+                params.clear === true
+                  ? FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_TARGET
+                  : FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+              failure_stage: "keyboard_ios_remote_tv",
+              error_kind: "unsupported",
+            }
           );
         }
         if (kind === undefined && params.clear === true) {

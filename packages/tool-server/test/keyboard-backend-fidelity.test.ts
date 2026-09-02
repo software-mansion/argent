@@ -12,7 +12,7 @@ import {
   makeChromiumImpl,
 } from "../src/tools/keyboard/platforms/chromium";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
-import { UnsupportedOperationError } from "../src/utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
 import { CLEAR_KEY_PAIRS, FORWARD_DELETE_KEYCODE } from "../src/tools/keyboard/key-codes";
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({
@@ -671,8 +671,14 @@ describe("keyboard backends — emit exactly the action they were given", () => 
           (e: unknown) => e as Error
         );
 
-      expect(err).toBeInstanceOf(UnsupportedOperationError);
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      // NOT `UnsupportedOperationError`: that renders as "Tool 'keyboard' is not
+      // supported on ios-remote simulator", which is false — `text` still types
+      // on this device — and it left the refusal outside the KEYBOARD_* buckets.
+      expect(err?.message).not.toMatch(/Tool 'keyboard' is not supported/);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
       expect(err?.message).toMatch(/`key` and `clear` are not supported on a REMOTE Apple TV/);
+      expect(err?.message).toMatch(/`text` still types on this device/);
       // NOT the local TV backend's wording. That one sends the caller to
       // `tv-remote`, which does not declare `appleRemote` and so refuses this
       // device too — advice that cannot be followed.
@@ -697,7 +703,11 @@ describe("keyboard backends — emit exactly the action they were given", () => 
           () => undefined,
           (e: unknown) => e as Error
         );
-      expect(err).toBeInstanceOf(UnsupportedOperationError);
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      expect(err?.message).not.toMatch(/Tool 'keyboard' is not supported/);
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_TARGET
+      );
       // The message has to separate this refusal from the local route that
       // works, and name a target that CAN serve the request.
       expect(err?.message).toMatch(/not supported on a REMOTE Apple TV/);
