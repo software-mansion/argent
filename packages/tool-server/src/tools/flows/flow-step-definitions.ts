@@ -1,6 +1,7 @@
 import {
   describeSelector,
   describeTextExpectation,
+  escapeInline,
   selectorToYaml,
   SELECTOR_RELATIONS,
   swipeByLabel,
@@ -76,14 +77,16 @@ function selectorLabel(sel: FlowSelector): string {
   // The universal selector prints as CSS spells it, so a scope-only target
   // never renders as an empty label.
   if (sel.any) parts.push("*");
-  // Text literals use JSON quoting, the module's own convention for literals
-  // (see `yamlTextConditionLabel`): a raw `"…"` delimiter is indistinguishable
-  // from content when the text itself carries quotes, and an embedded newline
-  // breaks the one-line-per-target report shape.
+  // A report target is one line and these values are free text out of the flow
+  // file, so `escapeInline` keeps a newline or an escape byte in one from
+  // breaking the line or driving the terminal. `text` takes full JSON quoting
+  // instead — the module's convention for literals (see
+  // `yamlTextConditionLabel`), and alone among the four it carries no `key=` or
+  // `/…/` marker to hold it apart from its neighbours.
   if (sel.text !== undefined) parts.push(JSON.stringify(sel.text));
-  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
-  if (sel.identifier) parts.push(`id=${sel.identifier}`);
-  if (sel.role) parts.push(`role=${sel.role}`);
+  if (sel.textMatches !== undefined) parts.push(`/${escapeInline(sel.textMatches)}/`);
+  if (sel.identifier) parts.push(`id=${escapeInline(sel.identifier)}`);
+  if (sel.role) parts.push(`role=${escapeInline(sel.role)}`);
   // Each relational scope renders after the fields, parenthesized and
   // recursive, so two steps that differ only by scope don't collapse to the
   // same target label in the report — the scope shape `describeSelector` gives
@@ -197,19 +200,48 @@ function delayLabel(step: Extract<FlowStep, { kind: "tool" }>): string {
   return ms >= 1 && ms <= 2 ** 31 - 1 ? ` (after ${ms}ms)` : "";
 }
 
+/**
+ * How much of a typed string the report target quotes.
+ *
+ * `type` text is a whole payload rather than an expectation — a pasted form
+ * body, a credential written literally into the .yaml — and this target is
+ * emitted on EVERY replay: stdout, `--json`, the MCP blocks handed to the
+ * agent, and the appended `~/.argent/mcp-calls.log`, which has no cap or
+ * rotation. Same ceiling `parseFlow` puts on the entry it echoes
+ * (`MAX_ENTRY_RENDER_CHARS`); it still shows a real field entry whole.
+ *
+ * The SUMMARY keeps the text entire: it is also {@link stepAnchor}, so eliding
+ * there would collide two steps differing only past the cap and drop the
+ * recording's verdicts on both.
+ */
+const MAX_TARGET_TEXT_CHARS = 200;
+
+function typedTextLabel(text: string): string {
+  if (text.length <= MAX_TARGET_TEXT_CHARS) return JSON.stringify(text);
+  // Elide before quoting, not after: a cut through the rendered form can halve
+  // an escape sequence.
+  const elided = text.length - MAX_TARGET_TEXT_CHARS;
+  return `${JSON.stringify(text.slice(0, MAX_TARGET_TEXT_CHARS))}…(+${elided} chars)`;
+}
+
 // ── Step definitions ──
 
 /**
  * How one flow step kind reads to a human — the recording summary and the run
  * report's target — owned by the kind itself, the way each tool owns its log
  * wording in `ToolDefinition.interaction`.
+ *
+ * Both renderers are PROPERTY types, not method shorthand: a method's
+ * parameters are checked bivariantly even under `strict`, which would let an
+ * entry annotated narrower than its slot — one taking a `tap` that must carry
+ * `times`, say — read a field the step need not have, with a green typecheck.
  */
 interface FlowStepDefinition<S extends FlowStep> {
   /**
    * The step's summary line minus the `<n>. <key>: ` prefix
    * {@link summarizeStep} adds, in the flow file's own spellings.
    */
-  summary(step: S): string;
+  summary: (step: S) => string;
   /**
    * The key the flow FILE spells this kind under, when that differs from the
    * kind — `idle` is authored as `await: { idle: true }`. The summary is read
@@ -220,7 +252,7 @@ interface FlowStepDefinition<S extends FlowStep> {
    * What the step acts on, for the runner's `StepReport.target`. Undefined for
    * a step that addresses nothing (`echo`, `wait`, `launch`, `tool`, `idle`).
    */
-  target(step: S): string | undefined;
+  target: (step: S) => string | undefined;
 }
 
 /** `tap` and `long-press` address a point the same way: a selector, else raw coordinates. */
@@ -324,7 +356,7 @@ const FLOW_STEP_DEFINITIONS: {
     // The typed text rides along, the way an await/assert target carries its
     // expectation: two steps into the same field with different text would
     // otherwise render identical targets.
-    target: (step) => `into ${selectorLabel(step.into)} ← ${JSON.stringify(step.text)}`,
+    target: (step) => `into ${selectorLabel(step.into)} ← ${typedTextLabel(step.text)}`,
   },
   "await": UI_CONDITION_STEP,
   "assert": UI_CONDITION_STEP,
@@ -371,6 +403,10 @@ const FLOW_STEP_DEFINITIONS: {
     },
   },
   "snapshot": {
+    // `name` interpolates raw on both surfaces. It becomes a baseline filename,
+    // so `parseFlow` gates it on FLOW_NAME_PATTERN (letters, digits, `_`, `-`)
+    // — and that parse is the only thing that builds a snapshot step, so no
+    // quote, backslash or newline reaches here to escape.
     summary: (step) =>
       step.name +
       (step.cropOn ? ` cropOn ${yamlSelectorLabel(step.cropOn)}` : "") +
@@ -416,10 +452,12 @@ export function summarizeSteps(flow: FlowFile): string[] {
  * move with the position.
  *
  * The anchor rests on {@link summarizeStep} being STABLE across a
- * serialize-then-parse round trip: two of the three comparisons put a raw
- * in-memory step against a parsed one. Every field it reads has to survive that
- * trip — including the selector, whose key order {@link yamlSelectorLabel}
- * sorts because the round trip does not preserve it.
+ * serialize-then-parse round trip. Of flow-finish-recording's two comparisons,
+ * the per-verdict one always puts a raw in-memory step against a parsed one;
+ * the whole-file one does so in client persist mode, host mode having re-parsed
+ * both sides. Every field it reads has to survive that trip — including the
+ * selector, whose key order {@link yamlSelectorLabel} sorts because the round
+ * trip does not preserve it.
  */
 export function stepAnchor(step: FlowStep): string {
   return summarizeStep(step, 0);

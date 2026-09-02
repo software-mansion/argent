@@ -1,24 +1,35 @@
 import { describe, it, expect } from "vitest";
 import {
   summarizeSteps,
+  stepAnchor,
   stepTarget,
   describeWhenCondition,
 } from "../../src/tools/flows/flow-step-definitions";
-import type { FlowStep } from "../../src/tools/flows/flow-utils";
+import { parseFlow, serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 
-interface Case {
+interface Case<S extends FlowStep = FlowStep> {
   /** What the step reads as in a finished recording's summary, first line of its flow. */
   summary: string;
   /** What a run report names as the step's target, or undefined for a step that addresses nothing. */
   target: string | undefined;
-  step: FlowStep;
+  step: S;
 }
 
 /**
- * One case per step kind, keyed by kind so a kind added to {@link FlowStep}
- * without wording here fails to compile — the same gate the definitions
- * themselves carry, asserted against the strings both surfaces actually print.
+ * One case per step kind. Keying by {@link FlowStep} kind makes a kind added
+ * without wording here fail to compile — the same gate the definitions
+ * themselves carry. The value type closes what a bare `readonly Case[]` left
+ * open: a NON-EMPTY tuple of cases whose `step` is narrowed to the key's own
+ * kind, so neither an empty list nor a case for some other kind can pass for a
+ * kind's coverage.
  */
+type CaseTable = {
+  [K in FlowStep["kind"]]: readonly [
+    Case<Extract<FlowStep, { kind: K }>>,
+    ...Case<Extract<FlowStep, { kind: K }>>[],
+  ];
+};
+
 const CASES = {
   "tool": [
     {
@@ -42,15 +53,16 @@ const CASES = {
     },
     {
       // One past it sleeps a clamped tick instead, so the summary describes no
-      // delay. Neither bound is hand-edit-only: `flow-add-step`'s `delayMs` is
+      // delay. This bound is not hand-edit-only: `flow-add-step`'s `delayMs` is
       // `z.number().int().min(0)` with no ceiling, so the recorder's own
-      // per-step line renders these too.
+      // per-step line renders it too.
       step: { kind: "tool", name: "screenshot", args: {}, delayMs: 2 ** 31 },
       summary: "1. tool: screenshot {}",
       target: undefined,
     },
     {
-      // Below setTimeout's 1ms floor, likewise no delay to describe.
+      // Below setTimeout's 1ms floor, likewise no delay to describe. This one
+      // IS hand-edit-only — that `.int()` admits no value between 0 and 1.
       step: { kind: "tool", name: "screenshot", args: {}, delayMs: 0.5 },
       summary: "1. tool: screenshot {}",
       target: undefined,
@@ -102,9 +114,14 @@ const CASES = {
           expectedText: "Ready",
           textMatch: "equals",
         },
-        steps: [],
+        steps: [
+          { kind: "echo", message: "ready" },
+          { kind: "wait", ms: 10 },
+        ],
       },
-      summary: '1. when: text {"id":"status"} == "Ready" (0 steps)',
+      // The plural arm; `when #1` above pins the singular one. `parseFlow`
+      // refuses an empty guarded block, so no count below 1 is renderable.
+      summary: '1. when: text {"id":"status"} == "Ready" (2 steps)',
       target: 'id=status equals "Ready"',
     },
   ],
@@ -357,7 +374,7 @@ const CASES = {
       target: '"cart" cropOn id=total',
     },
   ],
-} satisfies Record<FlowStep["kind"], readonly Case[]>;
+} satisfies CaseTable;
 
 const CASE_LIST: [string, Case][] = Object.entries(CASES).flatMap(([kind, cases]) =>
   (cases as readonly Case[]).map((c, i): [string, Case] => [
@@ -406,6 +423,57 @@ describe("flow step definitions", () => {
     ).toEqual(["1. tool: keyboard [cyclic args]", "2. echo: still summarized"]);
   });
 
+  it("keeps a step's anchor across a serialize-then-parse round trip", () => {
+    // The anchor is this summary on a fixed number, and flow-finish-recording
+    // compares a raw in-memory step against one that came back through
+    // parseFlow. A field the round trip does not carry back byte-for-byte drops
+    // every verdict in the recording, and nothing in the payload shows it — so
+    // the whole table goes through the trip, not just the fields whose
+    // stability was reasoned about.
+    for (const [label, testCase] of CASE_LIST) {
+      const parsed = parseFlow(serializeFlow({ executionPrerequisite: "", steps: [testCase.step] }))
+        .steps[0];
+      expect(`${label} ${stepAnchor(parsed)}`).toBe(`${label} ${stepAnchor(testCase.step)}`);
+    }
+  });
+
+  it("escapes every selector field value into a one-line report target", () => {
+    // Selector fields are free text out of the flow file, and a report target
+    // is one line of stdout: a raw newline in any of the four splits one step
+    // across two lines, and a raw escape byte repaints the terminal. `text`
+    // additionally takes JSON's quotes, so a quote in the content cannot pass
+    // for the closing delimiter.
+    expect(stepTarget({ kind: "tap", selector: { text: 'Delete "all"\nnow' } })).toBe(
+      '"Delete \\"all\\"\\nnow"'
+    );
+    // The pattern's own backslash is content and survives; only the newline is
+    // spelled out, or the target would print a regex nobody could copy back.
+    expect(stepTarget({ kind: "tap", selector: { textMatches: "^Row\n\\d+$" } })).toBe(
+      "/^Row\\n\\d+$/"
+    );
+    expect(stepTarget({ kind: "tap", selector: { identifier: "row\n1" } })).toBe("id=row\\n1");
+    expect(stepTarget({ kind: "tap", selector: { role: "but\u001bton" } })).toBe(
+      "role=but\\u001bton"
+    );
+  });
+
+  it("bounds the typed text a report target quotes, and only there", () => {
+    // The summary runs once at authoring time and is the step anchor, so it
+    // carries the text whole; the target is emitted on every replay, into the
+    // agent's context and an unrotated log, so it stops at the cap.
+    const text = "x".repeat(250);
+    const step: FlowStep = { kind: "type", into: { identifier: "bio" }, text };
+    expect(stepTarget(step)).toBe(`into id=bio ← "${"x".repeat(200)}"…(+50 chars)`);
+    expect(summarizeSteps({ executionPrerequisite: "", steps: [step] })).toEqual([
+      `1. type: {"id":"bio"} ← "${text}"`,
+    ]);
+    // One char under the cap is still quoted whole, with no elision marker.
+    const atCap = "y".repeat(200);
+    expect(stepTarget({ kind: "type", into: { identifier: "bio" }, text: atCap })).toBe(
+      `into id=bio ← "${atCap}"`
+    );
+  });
+
   it("describes a when guard for report reasons with the failure-prose selector spelling", () => {
     expect(describeWhenCondition({ kind: "platform", platform: "android" })).toBe(
       "platform android"
@@ -419,5 +487,23 @@ describe("flow step definitions", () => {
         textMatch: "equals",
       })
     ).toBe('id="status" within (text="Cart") equals "Ready"');
+    // Same one-line-per-report constraint as the target spelling above, on the
+    // other surface: `describeSelector` quotes its values, so they need the
+    // same escaping inside those quotes.
+    expect(
+      describeWhenCondition({
+        kind: "ui",
+        condition: "visible",
+        selector: { text: 'Say "hi"\nnow', identifier: "st\u001batus" },
+      })
+    ).toBe('visible text="Say \\"hi\\"\\nnow" id="st\\u001batus"');
+    // And on its regex arm, which the quoting above does not reach.
+    expect(
+      describeWhenCondition({
+        kind: "ui",
+        condition: "visible",
+        selector: { textMatches: "^Row\n\\d+$" },
+      })
+    ).toBe("visible text=/^Row\\n\\d+$/");
   });
 });

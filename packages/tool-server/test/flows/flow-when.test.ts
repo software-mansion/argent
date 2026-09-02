@@ -22,7 +22,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
-import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
+import { describeWhenCondition, summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
@@ -1294,27 +1294,36 @@ describe("when: run cancellation", () => {
     // The `(N step/N steps)` tail is spelled twice — here in the skip reason
     // and in flow-step-definitions' when summary. This couples them: an edit
     // to either spelling that desyncs the two fails this, not a user-facing
-    // drift nobody pinned.
-    const block = {
+    // drift nobody pinned. BOTH counts run, because a plural-only block leaves
+    // the singular arm free to be hardcoded away on either side.
+    const block = (n: number) => ({
       kind: "when" as const,
       condition: {
         kind: "ui" as const,
         condition: "visible" as const,
         selector: { text: "What's new", loose: true },
       },
-      steps: [
-        { kind: "echo" as const, message: "a" },
-        { kind: "echo" as const, message: "b" },
-      ],
-    };
-    await writeFlow("plural", { executionPrerequisite: "", steps: [block] });
+      steps: Array.from({ length: n }, (_, i) => ({
+        kind: "echo" as const,
+        message: `step ${i}`,
+      })),
+    });
     currentTree = () => screen([]);
 
-    const result = await run("plural");
+    for (const [n, tail] of [
+      [1, "(1 step)"],
+      [2, "(2 steps)"],
+    ] as const) {
+      await writeFlow(`plural-${n}`, { executionPrerequisite: "", steps: [block(n)] });
 
-    const summaryTail = summarizeStep(block, 1).match(/\([^()]*\)$/)?.[0];
-    expect(summaryTail).toBe("(2 steps)");
-    // Plain suffix compare: the tail's parentheses are regex metacharacters.
-    expect(result.steps[0].reason?.endsWith(`block skipped ${summaryTail}`)).toBe(true);
+      const result = await run(`plural-${n}`);
+
+      expect(summarizeStep(block(n), 1).match(/\([^()]*\)$/)?.[0]).toBe(tail);
+      // Whole reason, not a suffix: a compare that only looks at the end passes
+      // on anything appended after the tail.
+      expect(result.steps[0].reason).toBe(
+        `condition not met (${describeWhenCondition(block(n).condition)}) — block skipped ${tail}`
+      );
+    }
   });
 });

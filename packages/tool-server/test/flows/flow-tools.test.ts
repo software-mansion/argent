@@ -2878,8 +2878,11 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
 // `recorded` line and flow-finish-recording's `summary`. `times` (tap),
 // `duration` (long-press) and `delayMs` (tool) change what replays, so a
 // summary that drops them misdescribes the file. flow-step-definitions.test.ts
-// pins one case per kind; these add the `delayMs` shapes only a real YAML parse
-// yields — `soon`, `.nan`, `"2000"`, `0`, `-5`.
+// pins one case per kind; these add the `delayMs` shapes that reach the
+// renderer only through a parse — `soon`, `.nan`, `"2000"` are not numbers and
+// `-5` is below `flow-add-step`'s `min(0)`. (`0` is not one of them: the
+// recorder can record it and `serializeFlow` writes it back out; it is here
+// because it is the falsy number the runner's own gate turns on.)
 describe("summarizeStep rendering", () => {
   it("renders a tap's times count", () => {
     // A recorded selector spells the id key `identifier`; selectorToYaml maps it
