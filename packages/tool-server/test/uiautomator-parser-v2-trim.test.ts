@@ -738,6 +738,27 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(all.find((n) => n.role === "WebView")?.scrollHidden).toBeUndefined();
   });
 
+  it("hands a degenerate scroller the clip window its ancestor set", () => {
+    // A scroller whose own box is unusable clips nothing OF ITS OWN — but the
+    // viewport it sits in still applies to what is under it. Dropping the
+    // inherited window instead of passing it down re-admits the rows the
+    // ancestor scrolled away: they publish as on-screen and tappable, and the
+    // `scrollHidden` swipe-before-you-tap signal disappears with them.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.ScrollView" resource-id="outer" bounds="[0,300][1080,1000]">
+    <node class="android.widget.ScrollView" resource-id="inner" scrollable="true" bounds="[0,300][1080,300]">
+      <node class="android.widget.TextView" text="On screen row" bounds="[0,320][1080,380]"/>
+      <node class="android.widget.TextView" text="Scrolled away row" bounds="[0,1800][1080,1860]"/>
+    </node>
+  </node>
+</hierarchy>`;
+    const all = flatten(parseUiAutomatorDump(xml, 1080, 2400));
+    expect(all.map((n) => n.label)).toContain("On screen row");
+    expect(all.map((n) => n.label)).not.toContain("Scrolled away row");
+    expect(all.find((n) => n.identifier === "inner")?.scrollHidden).toBe(1);
+  });
+
   it("keeps a content container taller than the scroller that holds it", () => {
     // The ordinary React Native shape: the direct child is the content view,
     // which is taller than the viewport and therefore overlaps rather than
