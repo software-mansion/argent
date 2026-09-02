@@ -1463,7 +1463,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "unregistered",
-      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process carries argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
+      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate — unless the message says this tool-server no longer owns the simulator's devtools socket, which names both steps in the order they work. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process carries argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
     ],
     [
       "indeterminate",
@@ -1480,7 +1480,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "service_stale",
-      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
+      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names what is left to do.",
     ],
     [
       "injection_failed",

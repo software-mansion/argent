@@ -11,9 +11,10 @@ import type * as net from "node:net";
  * its RPC waited out the timeout. A `\n` byte can never occur inside a
  * multi-byte UTF-8 sequence, so splitting on it alone is exact.
  *
- * Every frame that does not yield a record is reported through `onDropped`
- * rather than vanishing: a silent drop is what turned a framing defect into a
- * fifteen-second mystery.
+ * A frame with content that does not yield a record is reported through
+ * `onDropped` rather than vanishing: a silent drop is what turned a framing
+ * defect into a fifteen-second mystery. Empty frames are the exception, skipped
+ * without a report — a blank line or a bare `\r` carries nothing to diagnose.
  */
 interface NdjsonReaderHandlers {
   onMessage: (msg: object) => void;

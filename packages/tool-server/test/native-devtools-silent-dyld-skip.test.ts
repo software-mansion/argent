@@ -35,6 +35,8 @@ const world = vi.hoisted(() => ({
   running: [] as string[],
   /** The pid `launchctl list` reports for the current process. A relaunch moves it. */
   pid: 4242,
+  /** Whether the `ps` probe fails, which degrades every reading to `indeterminate`. */
+  psFails: false,
 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
@@ -72,6 +74,10 @@ vi.mock("node:child_process", async () => {
       const callback = (typeof opts === "function" ? opts : cb!) as ExecCb;
       const argv = args.join(" ");
       if (/\bps$/.test(cmd)) {
+        if (world.psFails) {
+          callback(new Error("ps: cannot read process table"), { stdout: "", stderr: "" });
+          return;
+        }
         // Age and launch environment of the one modelled process.
         callback(null, {
           stdout: `${etime(Date.now() - world.execAt)} /Devices/App.app/App ${world.env}\n`,
@@ -172,6 +178,7 @@ beforeEach(() => {
   world.env = INJECTED_ENV;
   world.running = [BUNDLE];
   world.pid = 4242;
+  world.psFails = false;
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 });
 
@@ -541,6 +548,157 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
     }
   });
 
+  it("keeps the standing verdict when the next read cannot inspect the process", async () => {
+    // `indeterminate` is an absent measurement, and its own remedy is a relaunch
+    // that escalates to a tool-server restart — which clears the record the
+    // verdict rests on. One unreadable `ps` would hand back both steps the
+    // verdict just forbade.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(10_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      const terminal = await nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect("status" in terminal && terminal.status).toBe("injection_failed");
+
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      const unreadable = await nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect("status" in unreadable && unreadable.status).toBe("injection_failed");
+      const message = "message" in unreadable ? unreadable.message : "";
+      expect(message).toContain("could not be inspected on this read");
+      expect(message).not.toContain("Call restart-app then retry");
+      expect(message).not.toContain("argent server stop");
+
+      const feature = await nativeDescribeScreenTool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect(feature.status).toBe("injection_failed");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("does not read an unreadable process as a relaunch that happened", async () => {
+    // The terminal diagnosis opens by asserting a relaunch took place. An
+    // `indeterminate` reading saw no process at all, so recording one there
+    // would let the SAME process — never relaunched — read terminal as soon as
+    // it becomes readable again.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(10_000);
+
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      adviseOnUninjectedApp(api, BUNDLE, "indeterminate", INJECTION_FAILED_RECOVERY);
+
+      // Same process throughout: nothing was relaunched between the two reads.
+      world.psFails = false;
+      world.execAt = Date.now();
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY);
+
+      expect(advice.terminal).toBe(false);
+      expect(advice.message).not.toContain("the process now running is a different one");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("admits a bundle id whose first character is a digit", async () => {
+    // Real ids do start with one (`9gag.app`). A silent refusal here is read by
+    // the diagnosis three functions away as a dylib dyld never loaded.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let socket: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      socket = await connectApp(api, "9gag.app");
+      expect(api.listConnectedBundleIds()).toEqual(["9gag.app"]);
+    } finally {
+      socket?.destroy();
+      await instance.dispose();
+    }
+  });
+
+  it("refuses a pattern-valid id longer than the cap", async () => {
+    // The id becomes a map key and is interpolated verbatim into the terminal
+    // diagnosis's peer list, so its length is not the peer's to choose.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let socket: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      socket = await new Promise<net.Socket>((resolve, reject) => {
+        const s = net.connect(api.socketPath);
+        s.once("connect", () => resolve(s));
+        s.once("error", reject);
+      });
+      let closed = false;
+      socket.once("close", () => {
+        closed = true;
+      });
+      socket.write(
+        JSON.stringify({ type: "Control", payload: { bundleId: `com.${"a".repeat(300)}` } }) + "\n"
+      );
+      for (let i = 0; i < 100 && !closed; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(closed, "an over-long id must not be admitted").toBe(true);
+      expect(api.listConnectedBundleIds()).toEqual([]);
+    } finally {
+      socket?.destroy();
+      await instance.dispose();
+    }
+  });
+
+  it("surfaces a ViewInspector error a peer did not shape as { message }", async () => {
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let socket: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      socket = await connectApp(api, "com.example.peer");
+      const requests: { id: number }[] = [];
+      socket.on("data", (chunk: Buffer | string) => {
+        for (const line of String(chunk).split("\n")) {
+          if (line.trim().length === 0) continue;
+          const frame = JSON.parse(line) as { payload?: { id?: number } };
+          if (typeof frame.payload?.id === "number") requests.push({ id: frame.payload.id });
+        }
+      });
+
+      const rpc = api.queryViewHierarchy("com.example.peer", "ViewHierarchy.getFullHierarchy");
+      for (let i = 0; i < 200 && requests.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(requests).toHaveLength(1);
+      socket.write(
+        JSON.stringify({
+          type: "ViewInspector",
+          payload: { id: requests[0]!.id, error: "the view server said no" },
+        }) + "\n"
+      );
+
+      await expect(rpc).rejects.toThrow("the view server said no");
+    } finally {
+      socket?.destroy();
+      await instance.dispose();
+    }
+  });
+
   it("withholds the verdict when another tool-server has taken the socket", async () => {
     // The per-UDID socket path carries no server identity and the last binder
     // owns it, so a second tool-server on this simulator takes every future
@@ -718,6 +876,12 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
       );
       await expect(queryFullHierarchyTree(registry, device, UNPINNED_TARGET)).rejects.toThrow(
         /takes a point directly and reads no tree/
+      );
+      // The terminal diagnosis already ends on the flow-level remedy, so the
+      // generic tail must not follow it and re-recommend the tree it just said
+      // this app has none of.
+      await expect(queryFullHierarchyTree(registry, device, UNPINNED_TARGET)).rejects.not.toThrow(
+        /Flows resolve selectors against the full view hierarchy/
       );
     } finally {
       await instance.dispose();

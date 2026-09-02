@@ -128,14 +128,16 @@ interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
-  // Whether this read's `hint` is certain to reach an agent, which only the
-  // `describe` tool's own handlers can promise. await-ui-element renders one
-  // too — see the timeout note below — but one poll's worth, and only when the
-  // wait times out, while the record is written per read. Opting it in would
-  // arm a relaunch hand-out on waits that go on to succeed, and a later process
-  // replacement would then read as a relaunch nobody was asked to perform. The
-  // remaining callers never show one to an agent (the Lens preview serialises a
-  // hint for a human, which is not who the record must be promised to).
+  // Whether this read's `hint` is rendered for an agent rather than discarded.
+  // Only the `describe` tool's own handlers set it, and only they return the
+  // hint as a field: the MCP auto-describe block re-renders a describe read as
+  // `description` alone, so the hint it carried is gone. await-ui-element shows
+  // one, but one poll's worth and only on timeout, while the record is written
+  // per read — opting it in would arm a relaunch hand-out on waits that go on to
+  // succeed, and a later process replacement would then read as a relaunch
+  // nobody performed. The rest never show one to an agent (the Lens preview
+  // serialises a hint for a human, which is not who the record must be promised
+  // to).
   hintReachesAgent?: boolean;
 }
 

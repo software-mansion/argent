@@ -302,9 +302,9 @@ export function buildAppStateMessage(
  * `status` with it) or this same block again — never `unregistered`, which
  * carries a `state` these surfaces stop returning. A repeat is therefore also
  * the second-landing test `unregistered`'s own message has to spell out by
- * hand. A quit app or an unreadable `ps` answer neither, and both fall back to
- * the measured state's own remedy; the record outlives them, so the next
- * readable process restores the verdict.
+ * hand. Two readings answer neither: a quit app, which falls back to asking for
+ * a launch, and this service losing the socket, which withdraws the verdict
+ * because the premise it rests on became a statement about the socket.
  */
 function buildInjectionFailedDiagnosis(
   bundleId: string,
@@ -321,6 +321,21 @@ function buildInjectionFailedDiagnosis(
     `It carries argent's bootstrap dylib pointed at this simulator's devtools endpoint and it started after this service's listener bound, so the launchd environment reached it. That proves the dylib was handed to the process, not that dyld loaded it: dyld skips an inserted library silently when its slice does not match the simulator's platform, when it is unsigned, or when one of its dependencies is missing. Relaunching it again reproduces exactly this reading. ` +
     `One reading can mimic this with nothing wrong: a cold start that takes longer than ${Math.round(connectBudgetMs / 1000)} seconds to make its first connection. Before treating this as final, wait about ${Math.round((connectBudgetMs * 2) / 1000)} seconds — twice the budget this verdict already allowed, so a cold start half this speed still clears it — and probe native-devtools-status once more. An app that has connected by then reports connected and this verdict is gone; if it repeats this diagnosis instead, the wait was not the answer. ` +
     localisation
+  );
+}
+
+/**
+ * What `indeterminate` means once the terminal verdict is standing: the process
+ * could not be read, so the call measured nothing. Its own remedy escalates to a
+ * tool-server restart, which discards the record the verdict rests on.
+ */
+function buildUnreadableProcessMessage(bundleId: string): string {
+  return (
+    `${bundleId}'s process could not be inspected on this read, so nothing was measured. The ` +
+    `earlier reading — a relaunch that happened and a fresh process that still never connected — ` +
+    `stands: do NOT restart the app and do NOT restart the tool-server, which would discard the ` +
+    `record that reading rests on. Probe native-devtools-status again once the process is ` +
+    `readable; an app that has connected by then reports connected and this verdict is gone. `
   );
 }
 
@@ -410,6 +425,11 @@ export function adviseOnUninjectedApp(
 ): NativeDevtoolsUninjectedAdvice {
   if (state === "stale_process") {
     if (options.recordAdvice ?? true) api.noteRelaunchAdvice(bundleId);
+  } else if (state === "indeterminate" && api.wasAdvisedToRelaunch(bundleId)) {
+    // Terminal: the standing verdict is neither withdrawn nor re-argued, where
+    // `indeterminate`'s own remedy would start the restarts again. ios-remote
+    // cannot inspect a process, so it never hands out the relaunch this reads.
+    return { terminal: true, message: buildUnreadableProcessMessage(bundleId) + terminalRecovery };
   } else if (state === "unregistered" && api.wasAdvisedToRelaunch(bundleId)) {
     // The diagnosis reasons from "nothing dialed the listener this service
     // holds". If it no longer holds one, that premise is about the socket, not
@@ -1021,8 +1041,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             ) {
               // Audible, because the diagnosis three functions away reads a
               // missing registration as a dylib dyld never loaded. Bounded after
-              // stringifying, not before: the id is whatever the peer sent, and
-              // only the string branch has a length the guard above caps.
+              // stringifying: only the string branch has a length the guard caps.
               process.stderr.write(
                 `[native-devtools] refused a handshake whose bundle id is not a plain identifier: ${(
                   JSON.stringify(requested) ?? "undefined"
@@ -1085,8 +1104,17 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             if (!pending) return;
             pendingRpc.delete(p.id);
             if (p.error) {
+              // A peer's `error` need not carry a `message`, and without this
+              // the RPC rejects with an empty string. Rendered as the sibling
+              // ax-service reader renders the same field.
+              const detail =
+                typeof p.error === "object" && typeof p.error.message === "string"
+                  ? p.error.message
+                  : typeof p.error === "string"
+                    ? p.error
+                    : JSON.stringify(p.error);
               pending.reject(
-                new FailureError(p.error.message, {
+                new FailureError(detail, {
                   error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
                   failure_stage: "native_devtools_rpc_response",
                   failure_area: "tool_server",
