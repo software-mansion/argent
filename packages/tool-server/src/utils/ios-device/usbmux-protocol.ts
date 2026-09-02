@@ -218,6 +218,10 @@ export function readUsbmuxResultCode(xml: string): number | undefined {
 
 /**
  * Resolve a mux DeviceID from a `ListDevices` response by exact serial match.
+ *
+ * A phone paired for Wi-Fi sync is listed once per transport, and usbmuxd
+ * makes no promise about the order. The `USB` entry wins so every runner
+ * command rides the cable; any other exact match is the fallback.
  */
 export function readUsbmuxDeviceIdForSerial(xml: string, serial: string): number | undefined {
   const root = parsePlistOrUndefined(xml);
@@ -231,6 +235,8 @@ export function readUsbmuxDeviceIdForSerial(xml: string, serial: string): number
   if (!Array.isArray(list)) {
     return undefined;
   }
+
+  let fallbackDeviceId: number | undefined;
 
   for (const entry of list) {
     // Hardware UDIDs share long prefixes. Matching must be exact.
@@ -250,12 +256,18 @@ export function readUsbmuxDeviceIdForSerial(xml: string, serial: string): number
 
     const deviceId = entry["DeviceID"];
 
-    if (typeof deviceId === "number" && Number.isSafeInteger(deviceId) && deviceId > 0) {
+    if (typeof deviceId !== "number" || !Number.isSafeInteger(deviceId) || deviceId <= 0) {
+      continue;
+    }
+
+    if (properties["ConnectionType"] === "USB") {
       return deviceId;
     }
+
+    fallbackDeviceId ??= deviceId;
   }
 
-  return undefined;
+  return fallbackDeviceId;
 }
 
 function parsePlistOrUndefined(xml: string): PlistValue | undefined {

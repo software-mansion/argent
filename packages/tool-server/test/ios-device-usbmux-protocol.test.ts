@@ -132,13 +132,15 @@ describe("plist build/parse", () => {
 });
 
 describe("readUsbmuxDeviceIdForSerial", () => {
-  const deviceListXml = (devices: Array<{ id: number; serial: string }>): string => {
+  const deviceListXml = (
+    devices: Array<{ id: number; serial: string; connection?: "USB" | "Network" }>
+  ): string => {
     const entries = devices
       .map(
         (device) =>
           `<dict><key>DeviceID</key><integer>${device.id}</integer>` +
           `<key>Properties</key><dict>` +
-          `<key>ConnectionType</key><string>USB</string>` +
+          `<key>ConnectionType</key><string>${device.connection ?? "USB"}</string>` +
           `<key>SerialNumber</key><string>${device.serial}</string>` +
           `</dict></dict>`
       )
@@ -175,6 +177,28 @@ describe("readUsbmuxDeviceIdForSerial", () => {
       "</array></dict></plist>";
 
     expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(9);
+  });
+
+  it("prefers the USB entry when Wi-Fi sync lists the same phone twice, Network first", () => {
+    // A phone paired for Wi-Fi sync shows up once per transport, and usbmuxd
+    // may list the Network entry first. Taking the first exact match would
+    // route every runner command over Wi-Fi on a feature that promises the
+    // cable, so the USB entry must win wherever it sits in the list.
+    const xml = deviceListXml([
+      { id: 12, serial: DEVICE_UDID, connection: "Network" },
+      { id: 13, serial: DEVICE_UDID, connection: "USB" },
+    ]);
+
+    expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(13);
+  });
+
+  it("falls back to the only exact match when no USB entry carries the serial", () => {
+    const xml = deviceListXml([
+      { id: 12, serial: DEVICE_UDID, connection: "Network" },
+      { id: 13, serial: "00008030-000000000000AAAA", connection: "USB" },
+    ]);
+
+    expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(12);
   });
 });
 
