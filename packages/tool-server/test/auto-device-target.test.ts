@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
-import request from "supertest";
+import request, { type Response } from "supertest";
 import { z } from "zod";
 import { Registry, type ToolCapability } from "@argent/registry";
 import { createHttpApp } from "../src/http";
@@ -10,7 +10,6 @@ import { deviceEntryId, isBooted } from "../src/utils/booted-devices";
 import { AUTO_DEVICE_TARGET_PROBE } from "../src/utils/auto-device-target";
 import { DependencyMissingError } from "../src/utils/check-deps";
 import { advertisedSchema } from "./helpers/catalog";
-import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 
 const IPHONE = "6DBF83B4-0000-4000-8000-00000000AAAA";
 const ANDROID = "emulator-5554";
@@ -89,6 +88,21 @@ async function postChunked(
   } finally {
     server.close();
   }
+}
+
+/** Collect a non-JSON response body as raw text (supertest only parses JSON). */
+function collectText(res: Response, cb: (err: Error | null, body: string) => void): void {
+  let text = "";
+  res.setEncoding("utf8");
+  res.on("data", (chunk: string) => (text += chunk));
+  res.on("end", () => cb(null, text));
+}
+
+function parseLines(body: string): Array<Record<string, unknown>> {
+  return body
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 describe("the advertised schema relaxes `udid` while the zod schema keeps it", () => {
@@ -228,6 +242,18 @@ describe("the HTTP dispatcher fills in the single booted device", () => {
     const res = await request(app).post("/tools/poke").send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/No booted device runs `poke`/);
+    // "Boot one" would be answered by booting a second device, and every later
+    // device-less call is ambiguous from then on. Say what is wrong with the
+    // one that is already up.
+    expect(res.body.error).toMatch(/1 booted device does not match the platforms `poke` declares/);
+    expect(res.body.error).toContain("Boot a matching one");
+  });
+
+  it("advises booting when the pool really is empty, not that something mismatched", async () => {
+    const { app } = harness([iphone("Shutdown")]);
+    const res = await request(app).post("/tools/poke").send({});
+    expect(res.body.error).toContain("Boot one, or pass `udid` explicitly.");
+    expect(res.body.error).not.toMatch(/do(es)? not match the platforms/);
   });
 
   it("does not fill in for a tool whose udid is already optional", async () => {
@@ -368,6 +394,20 @@ describe("the caller keeps a device id they can act on", () => {
     const res = await request(app).post("/tools/poke").send({ udid: IPHONE });
     expect(res.status).toBe(200);
     expect(res.body.device).toBeUndefined();
+  });
+
+  it("echoes it on the streamed result line as well, not just the buffered body", async () => {
+    const { app } = harness([iphone()]);
+    const res = await request(app)
+      .post("/tools/poke")
+      .set("Accept", "application/x-ndjson")
+      .send({})
+      .buffer(true)
+      .parse(collectText);
+    expect(res.status).toBe(200);
+    const lines = parseLines(res.body as string);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ event: "result", data: { saw: IPHONE }, device: IPHONE });
   });
 });
 
@@ -551,19 +591,27 @@ describe("the refusal names what it passed over", () => {
 });
 
 describe("reading the advertised schema does not rewrite the tool", () => {
-  it("leaves the module-level singleton untouched", () => {
+  it("leaves the definition it is handed untouched", () => {
     // `registerTool` writes `inputSchema` and `autoDeviceTargetParam` onto the
-    // definition it is handed, and the helper's callers pass imported
-    // singletons — so registering one to read its schema back would relax the
-    // object every other test in the process shares.
-    const snapshot = () =>
-      JSON.stringify({
-        inputSchema: settingsPermissionsTool.inputSchema,
-        autoDeviceTargetParam: settingsPermissionsTool.autoDeviceTargetParam,
-      });
-    const before = snapshot();
-    advertisedSchema(settingsPermissionsTool);
-    expect(snapshot()).toBe(before);
+    // definition, and the helper's callers pass imported singletons — so
+    // registering one to read its schema back would relax the object every
+    // other test in the process shares.
+    //
+    // Built here rather than taken from the catalogue: `createRegistry()` in an
+    // earlier test has already written `inputSchema` onto every singleton, and
+    // the helper returns that without registering anything, so a singleton
+    // cannot exercise the copy at all.
+    const def = {
+      id: "pristine",
+      zodSchema: z.object({ udid: z.string() }),
+      services: () => ({}),
+      execute: async () => ({}),
+    };
+    // `udid` was the only required arg, so a relaxed schema has no `required`
+    // at all — which is how we know registration ran.
+    expect(advertisedSchema(def)).not.toHaveProperty("required");
+    expect(def).not.toHaveProperty("inputSchema");
+    expect(def).not.toHaveProperty("autoDeviceTargetParam");
   });
 });
 
@@ -746,6 +794,23 @@ describe("an unresolvable device is refused the way a bad param is", () => {
       { code: "custom", path: ["udid"], message: expect.any(String) },
     ]);
     expect(JSON.parse(res.body.error)).toEqual(res.body.issues);
+  });
+
+  it("stays plain JSON when the caller asked for a stream", async () => {
+    // The refusal fires before the response commits to streaming; a response
+    // that had already sent NDJSON headers could carry neither this status nor
+    // this body.
+    const { app } = harness([]);
+    const res = await request(app)
+      .post("/tools/poke")
+      .set("Accept", "application/x-ndjson")
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.body.message).toMatch(/No booted device runs `poke`/);
+    expect(res.body.issues).toEqual([
+      { code: "custom", path: ["udid"], message: expect.any(String) },
+    ]);
   });
 
   it("attributes the failure to the device param in telemetry", async () => {

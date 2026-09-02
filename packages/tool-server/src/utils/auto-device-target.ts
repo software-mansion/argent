@@ -80,15 +80,21 @@ export async function resolveAutoDeviceTarget(
 
   const listing = devices.length ? devices.map(describeDevice).join(", ") : "none";
   if (candidates.length === 0) {
-    // Without this an entry the listing prints as `Booted` sits directly under
-    // "no booted device", and the caller has no way to tell why it was passed
-    // over.
+    // Both notes exist because an entry the listing prints as `Booted` otherwise
+    // sits directly under "no booted device" with no way to tell why it was
+    // passed over — and "boot one" is then advice that boots a second device and
+    // leaves every later device-less call ambiguous instead.
     const remoteNote = devices.some((d) => d.platform === "ios-remote" && d.state === "Booted")
       ? " A remote simulator is never resolved automatically — name one by id to use it."
       : "";
+    const mismatched = booted.filter((entry) => deviceEntryId(entry)).length;
+    const advice = mismatched
+      ? `${mismatched} booted ${mismatched === 1 ? "device does" : "devices do"} not match the ` +
+        `platforms \`${def.id}\` declares. Boot a matching one, or pass \`udid\` explicitly.`
+      : `Boot one, or pass \`udid\` explicitly.`;
     throw new AutoDeviceTargetError(
       `No booted device runs \`${def.id}\`, so \`udid\` could not be resolved. ` +
-        `Boot one, or pass \`udid\` explicitly. Devices: ${listing}.${remoteNote}`
+        `${advice} Devices: ${listing}.${remoteNote}`
     );
   }
   throw new AutoDeviceTargetError(
