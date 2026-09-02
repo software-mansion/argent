@@ -45,13 +45,21 @@ export function isInjectableBundleId(bundleId: string): boolean {
 }
 
 /**
- * Every app-scoped native-devtools feature tool. Both dead-end warnings below
- * interpolate this one list, so neither can come to name a different set of
- * tools than the other.
+ * Every app-scoped native-devtools feature tool. The dead-end warnings below and
+ * {@link NATIVE_DEVTOOLS_BLOCKING_STATUSES} both derive from this one list: a
+ * seventh tool named in prose but missing from the map would report every
+ * precheck block as a successful read.
  */
-const NATIVE_FEATURE_TOOLS =
-  "native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, " +
-  "native-view-at-point, native-user-interactable-view-at-point";
+const NATIVE_FEATURE_TOOL_IDS = [
+  "native-describe-screen",
+  "native-find-views",
+  "native-full-hierarchy",
+  "native-network-logs",
+  "native-view-at-point",
+  "native-user-interactable-view-at-point",
+] as const;
+
+const NATIVE_FEATURE_TOOLS = NATIVE_FEATURE_TOOL_IDS.join(", ");
 
 /**
  * The invariant half of the non-injectable recovery guidance: which tools NOT
@@ -484,16 +492,7 @@ const NATIVE_DEVTOOLS_BLOCKING_STATUSES = new Map<
   string,
   ReadonlySet<NativeDevtoolsPrecheckBlock["status"]>
 >([
-  ...(
-    [
-      "native-describe-screen",
-      "native-find-views",
-      "native-full-hierarchy",
-      "native-network-logs",
-      "native-view-at-point",
-      "native-user-interactable-view-at-point",
-    ] as const
-  ).map(
+  ...NATIVE_FEATURE_TOOL_IDS.map(
     (id) =>
       [
         id,
