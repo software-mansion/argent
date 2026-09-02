@@ -392,10 +392,18 @@ describe("android-input — the `clear` key burst", () => {
   it("sends the SAME keycode `backspace` names, so the two cannot drift apart", async () => {
     // The burst's backward half is read from ANDROID_NAMED_KEYCODES rather than
     // redeclared, so a change to the named key reaches the burst too.
+    //
+    // Both sides against LITERALS. Comparing the burst's first code with
+    // `String(ANDROID_NAMED_KEYCODES.backspace)` was `String(X) === String(X)`
+    // for the same live X: set the map entry to 4 and it stayed green, which is
+    // exactly the drift the title claims to catch. 67 is KEYCODE_DEL and 112 is
+    // KEYCODE_FORWARD_DEL.
     adbShell.mockClear();
     await injectAndroidClear(SERIAL);
     const codes = adbShell.mock.calls[0]![1].replace("input keyevent ", "").split(" ");
-    expect(codes[0]).toBe(String(ANDROID_NAMED_KEYCODES.backspace));
+    expect(codes[0]).toBe("67");
+    expect(codes[1]).toBe("112");
+    expect(ANDROID_NAMED_KEYCODES.backspace).toBe(67);
   });
 });
 
