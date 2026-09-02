@@ -182,13 +182,13 @@ For simple taps use the gesture-tap tool. For straight-line scrolling use the ge
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-On a physical iOS device (XCTest has no raw touch stream) two shapes are executable: a Down followed by an Up, at the same point (press-hold) or at another point (drag: the finger rests at the Down point for the Up's delayMs, then moves and lifts), optionally with one Move at the Down point in between (its delayMs is the hold, the Up's delayMs the movement time), which is the shape for a long-press pickup and drag. No second finger, no other Move waypoints; use gesture-swipe for scrolls there.
-Returns { events: number } with the total count of events dispatched. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this gesture (the foreground screen changed as a side effect). Fails if the target device is not booted or an event type is invalid.
+Physical iOS: Down then Up only. Same point = press-hold. Other point = drag (Up delayMs = rest before the move). One Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). No second finger, no other waypoints; scroll with gesture-swipe.
+Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
 
-Example pick up a list item with a long press, then drag it up (also the physical-iOS shape for this):
+Example pick up a list item with a long press, then drag it up:
   [{"type":"Down","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.6,"delayMs":800},{"type":"Up","x":0.5,"y":0.3,"delayMs":500}]
 
 Example smooth scroll down:

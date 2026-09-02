@@ -126,7 +126,7 @@ const zodSchema = z
       .optional()
       .describe(
         "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium, " +
-          "and on physical iOS devices (there the tree always comes from the app `launch-app` targeted)."
+          "and on physical iOS."
       ),
     timeoutMs: z
       .number()
@@ -364,7 +364,7 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS simulator AXRuntime, physical-iOS XCUITest runner snapshot, Android uiautomator, Chromium CDP,
+(iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
 Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 

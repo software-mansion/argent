@@ -72,11 +72,11 @@ export const buttonTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
-  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device). iOS simulators send a Down then Up event automatically; a physical iOS device presses through the XCUITest runner ('home', 'volumeUp', 'volumeDown', 'actionButton'; 'power' and 'appSwitch' have no XCUITest API); Android injects a single \`adb\` key event.
-Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone) are rejected with a clear error, as is a button the hardware itself lacks ('actionButton' on a non-Pro iPhone).
+  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event.
+Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
-Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
+Fails if the device backend is not reachable: the simulator-server for iOS, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
   // Declare only the service the resolved path actually consumes. The Android

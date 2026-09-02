@@ -29,7 +29,7 @@ const zodSchema = z.object({
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .optional()
     .describe(
-      "Physical-iOS only: the app that receives the URL. Defaults to Safari (com.apple.mobilesafari) for http(s) URLs and is required for any other scheme on hardware, because devicectl cannot resolve a scheme's handler system-wide. Ignored on simulators, Android, and Chromium, which resolve the handler themselves."
+      "Physical iOS only: the app that receives the URL. Defaults to Safari for http(s); required for any other scheme. Ignored elsewhere."
     ),
 });
 
@@ -66,7 +66,7 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
 Use to navigate to a web page or deep-link into an app. On Chromium, this navigates the primary renderer to the given URL.
 Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.
 Deep-linking caveat: an https:// link opens the native app only when an installed app is verified for the link's domain (iOS Universal Links / Android App Links) — otherwise it opens in the browser, and on iOS simulators it may open in Safari even when the owning app is installed. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app with its bundle id.
-On a physical iPhone, devicectl delivers the URL to one named app at launch: http(s) URLs default to Safari, and any other scheme requires bundleId naming the receiving app. The receiving app becomes the app under automation, as with launch-app.
+On a physical iPhone, http(s) URLs default to Safari and any other scheme needs bundleId; the receiving app becomes the app under automation.
 Returns { opened, url, note? }. note carries the deep-linking caveat when a web URL was opened on a native device. Fails if no app is registered to handle the URI (iOS/Android) or the renderer rejects the navigation (Chromium).`,
   zodSchema,
   capability,

@@ -171,8 +171,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     header.push(
       opts.source === "xcuitest-runner"
         ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-            "Two-finger gestures (pinch/rotate) are unavailable on physical iOS devices; " +
-            "drive zoom via the app's UI."
+            "No two-finger gestures on physical iOS."
         : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(

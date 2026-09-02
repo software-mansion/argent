@@ -26,9 +26,8 @@ const zodSchema = z.object({
     .describe(
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
-        "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap, " +
-        "while higher counts land as separate taps on the device (no N-tap API on hardware), " +
-        "not one multi-tap gesture. Default 1."
+        "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap and " +
+        "higher counts land as separate taps. Default 1."
     ),
 });
 
@@ -104,8 +103,8 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this tap (the foreground screen changed as a side effect); clickCount above 2 lands there as separate taps (hardware has no N-tap API), not one multi-tap gesture. Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.
-On a physical iPhone, find coordinates with \`describe\` (the XCUITest runner snapshot): \`native-describe-screen\` needs the native-devtools injection, which is not available on hardware, so in the list below it applies to iOS simulators only.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",

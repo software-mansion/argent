@@ -165,12 +165,7 @@ final class ArgentRunnerSession: XCTestCase {
 
     /// Ends the session as a failed test after the listener failed. The
     /// failure is recorded before the wait is released, so the xcresult and
-    /// the xcodebuild exit code carry the cause. Fulfilling the expectation
-    /// alone ended the session as a green test with exit code 0, and the host
-    /// could only report that xcodebuild exited before the runner became
-    /// ready, with the cause in one NSLog line. Recording hops to the main
-    /// thread, which the session wait keeps pumping, so it lands on the
-    /// running test the same way a command's failure does.
+    /// the xcodebuild exit code carry the cause.
     private func abort(listenerFailure description: String) {
         DispatchQueue.main.async {
             XCTFail("listener failed: \(description)")

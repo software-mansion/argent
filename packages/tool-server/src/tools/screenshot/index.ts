@@ -32,7 +32,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones, where the capture always follows the device's real orientation."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones."
     ),
   scale: z
     .number()
@@ -54,7 +54,7 @@ const zodSchema = z.object({
     .enum(["lanczos3", "box", "bilinear", "nearest"])
     .optional()
     .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones, where the runner capture is downscaled with sips."
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
     ),
 });
 
@@ -185,7 +185,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.`,
+Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
     zodSchema,

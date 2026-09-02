@@ -1,17 +1,5 @@
 name: iOS device runner build
 
-# Compiles the XCUITest runner argent signs and installs on a physical iPhone
-# (packages/ios-device-runner). The package workflows only assert that the
-# runner sources are packed into the tarball; this is the one place the Swift
-# goes through a compiler, so a change that breaks the project fails here
-# rather than on a user's Mac the first time a phone is connected.
-#
-# build-for-testing against the generic iOS destination with signing disabled
-# needs no team, profile or attached device. The project uses the objectVersion
-# 77 format (Xcode 16 or newer); like the other macOS jobs this relies on the
-# Xcode macos-latest ships rather than selecting one, and the version step
-# records which one built it.
-
 on:
   workflow_dispatch:
   push:

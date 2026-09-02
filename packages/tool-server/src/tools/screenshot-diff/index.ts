@@ -57,8 +57,7 @@ const zodSchema = z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
       .describe(
-        "Orientation override for live baseline/current captures. Ignored on physical iPhones, " +
-          "where the capture always follows the device's real orientation."
+        "Orientation override for live baseline/current captures. Ignored on physical iPhones."
       ),
     outputDir: z
       .string()
@@ -108,13 +107,13 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend (simulator-server, or the on-device XCUITest runner for a physical iPhone) can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
-Physical iPhones are supported for both file diffs and live captures; a live capture on hardware is device-wide and needs no registered app. Keep baselines per device model and resolution: same-aspect images are rescaled to compare, while different aspect ratios fail as a dimension mismatch.
+Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend / physical-device runner is not reachable.`,
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,

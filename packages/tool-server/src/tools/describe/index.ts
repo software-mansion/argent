@@ -46,7 +46,7 @@ const zodSchema = z.object({
       "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
         "and the describe tool falls back to native-devtools inspection. " +
         "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium, " +
-        "and on a physical iOS device, which always inspects the app registered by launch-app."
+        "and on a physical iOS device."
     ),
 });
 
@@ -152,8 +152,7 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
 system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
-comes from the XCUITest runner instead, which snapshots only the app registered by launch-app, so
-system UI running outside that process is not part of it. On Android, runs \`uiautomator dump\`.
+covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
@@ -163,8 +162,7 @@ app (the toolkit attaches at launch) and try again.
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
-On a physical iOS device that holds only for a dialog the session app itself owns; to read a
-SpringBoard alert or permission prompt there, point launch-app at \`com.apple.springboard\` first.
+On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
 
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates

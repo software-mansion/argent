@@ -313,8 +313,7 @@ describe("formatDescribeTree", () => {
     expect(out).not.toContain("gesture-pinch");
     expect(out).toContain(
       "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-        "Two-finger gestures (pinch/rotate) are unavailable on physical iOS devices; " +
-        "drive zoom via the app's UI."
+        "No two-finger gestures on physical iOS."
     );
   });
 
