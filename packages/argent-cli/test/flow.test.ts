@@ -2120,14 +2120,23 @@ describe("argent flow run <dir>", () => {
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
   });
 
-  it("stops the batch on a server error the signal does not mark as validation", async () => {
+  // The two signals a rejection reaches here with that are not scoped to the
+  // one call: a kind other than validation, and the absent kind a pre-signal
+  // server sends. Both end the batch, so the verdict is the run's, not a
+  // rejection's, and the second flow is never called.
+  it.each([
+    ["marks as something other than validation", { errorKind: "subprocess" }],
+    ["leaves unset, as a pre-signal server does", {}],
+  ])("stops the batch on a server error the signal %s", async (_case, signal) => {
     toolsClientMock.callTool.mockRejectedValueOnce(
-      new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
+      new ToolInvocationError("simulator boot failed", signal)
     );
 
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ did not finish (run error)");
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
   });
 
