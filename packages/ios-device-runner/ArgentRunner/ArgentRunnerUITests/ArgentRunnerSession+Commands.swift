@@ -22,76 +22,63 @@ extension ArgentRunnerSession {
     }
 
     /// Executes one command on the main thread. Runs XCTest work inside the
-    /// exception guard, retries read-only commands once, and audits mutating
-    /// commands against XCTest's failure and suppressed-issue counters.
+    /// exception guard and audits mutating commands against XCTest's failure
+    /// and suppressed-issue counters. It never retries: the one runner-side
+    /// retry is the snapshot capture's, in captureSnapshot, where the failure
+    /// is known; the host retries read-only sends on top of that.
     func performOnMain(_ request: CommandRequest) -> Envelope {
-        var attempts = 0
-
-        while true {
-            attempts += 1
-
-            let failuresBefore = recordedFailureCount()
-            let suppressedBefore = currentSuppressedIssueCount()
-            var envelope: Envelope?
-            // Stale accessibility elements throw NSExceptions. The guard turns
-            // them into a failure envelope instead of a process crash.
-            let exceptionDescription = ArgentExceptionGuard.runCatching {
-                envelope = self.performCommand(request)
-            }
-
-            if let exceptionDescription {
-                if request.command.isReadOnly && attempts == 1 {
-                    NSLog(
-                        "ARGENT_RUNNER_RETRY command=%@ reason=exception",
-                        request.command.rawValue
-                    )
-                    Thread.sleep(forTimeInterval: 0.2)
-                    continue
-                }
-
-                return .failure(
-                    .commandFailed,
-                    exceptionDescription,
-                    hint:
-                        "The target UI likely changed mid-command; re-observe the screen and retry."
-                )
-            }
-
-            guard var result = envelope else {
-                return .failure(
-                    .commandFailed,
-                    "\(request.command.rawValue) produced no response"
-                )
-            }
-
-            // An XCTest failure recorded during a mutating command means the
-            // action may not have been performed, so an ok result is demoted.
-            if !request.command.isReadOnly, result.ok,
-                recordedFailureCount() > failuresBefore
-            {
-                result = .failure(
-                    .xctestRecordedFailure,
-                    "XCTest recorded a failure while executing \(request.command.rawValue); "
-                        + "the action may not have been performed.",
-                    hint:
-                        "Re-observe the screen to confirm the effect before retrying."
-                )
-            }
-
-            // Checked after the demotion above, so a reply that flipped to failure
-            // never also warns. A grown suppressed-issue count stays advisory on an
-            // ok mutation. See the suppression comment in ArgentRunnerSession.swift.
-            if !request.command.isReadOnly, result.ok,
-                currentSuppressedIssueCount() > suppressedBefore
-            {
-                result = result.withWarning(
-                    "accessibility noise was suppressed during this gesture; "
-                        + "re-observe the screen to confirm the effect."
-                )
-            }
-
-            return result
+        let failuresBefore = recordedFailureCount()
+        let suppressedBefore = currentSuppressedIssueCount()
+        var envelope: Envelope?
+        // Stale accessibility elements throw NSExceptions. The guard turns
+        // them into a failure envelope instead of a process crash.
+        let exceptionDescription = ArgentExceptionGuard.runCatching {
+            envelope = self.performCommand(request)
         }
+
+        if let exceptionDescription {
+            return .failure(
+                .commandFailed,
+                exceptionDescription,
+                hint:
+                    "The target UI likely changed mid-command; re-observe the screen and retry."
+            )
+        }
+
+        guard var result = envelope else {
+            return .failure(
+                .commandFailed,
+                "\(request.command.rawValue) produced no response"
+            )
+        }
+
+        // An XCTest failure recorded during a mutating command means the
+        // action may not have been performed, so an ok result is demoted.
+        if !request.command.isReadOnly, result.ok,
+            recordedFailureCount() > failuresBefore
+        {
+            result = .failure(
+                .xctestRecordedFailure,
+                "XCTest recorded a failure while executing \(request.command.rawValue); "
+                    + "the action may not have been performed.",
+                hint:
+                    "Re-observe the screen to confirm the effect before retrying."
+            )
+        }
+
+        // Checked after the demotion above, so a reply that flipped to failure
+        // never also warns. A grown suppressed-issue count stays advisory on an
+        // ok mutation. See the suppression comment in ArgentRunnerSession.swift.
+        if !request.command.isReadOnly, result.ok,
+            currentSuppressedIssueCount() > suppressedBefore
+        {
+            result = result.withWarning(
+                "accessibility noise was suppressed during this gesture; "
+                    + "re-observe the screen to confirm the effect."
+            )
+        }
+
+        return result
     }
 
     /// XCTest's cumulative recorded-failure count for this session.

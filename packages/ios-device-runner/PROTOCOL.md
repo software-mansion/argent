@@ -107,7 +107,9 @@ launch, and launching is launch-app's job, never a command side effect):
   no labeled key to prefer, and one command deletes one character.
 - `snapshot` → `{nodes, quality}`: one-shot accessibility tree (below).
   `APP_BACKGROUNDED` when the target is alive but backgrounded: observation
-  never re-fronts (see above).
+  never re-fronts (see above). The capture itself is retried once on the
+  runner after a 0.4 s pause when it throws; no other command retries on
+  the runner, and the host's read-only send retry sits on top.
 
 Device-scoped:
 

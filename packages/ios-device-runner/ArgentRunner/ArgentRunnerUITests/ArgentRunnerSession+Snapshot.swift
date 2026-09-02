@@ -27,22 +27,38 @@ extension ArgentRunnerSession {
     private static let emittedDepthLimit = 60
 
     /// Captures the app's accessibility tree and flattens it into a snapshot
-    /// payload.
+    /// payload. The capture is retried once after a short pause: this is the
+    /// one runner-side retry, kept here because the capture can read its own
+    /// failure, a thrown error or an accessibility exception from a tree
+    /// that moved mid-capture, and a moment is usually enough for the tree
+    /// to settle. performOnMain only guards; the host retries read-only sends.
     func captureSnapshot(of app: XCUIApplication) -> Envelope {
         var root: XCUIElementSnapshot?
         var lastError = ""
 
         for attempt in 0..<2 {
-            if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-
-            do {
-                // One XPC round trip captures the whole tree. Flattening it in-process
-                // avoids per-element AX queries and their stalls.
-                root = try app.snapshot()
-                break
-            } catch {
-                lastError = String(describing: error)
+            if attempt > 0 {
+                NSLog("ARGENT_RUNNER_RETRY command=snapshot reason=%@", lastError)
+                Thread.sleep(forTimeInterval: 0.4)
             }
+
+            // One XPC round trip captures the whole tree. Flattening it in-process
+            // avoids per-element AX queries and their stalls. The capture can throw
+            // a Swift error or raise an accessibility NSException; the guard turns
+            // the exception into a description instead of a crash.
+            let exceptionDescription = ArgentExceptionGuard.runCatching {
+                do {
+                    root = try app.snapshot()
+                } catch {
+                    lastError = String(describing: error)
+                }
+            }
+
+            if let exceptionDescription {
+                lastError = exceptionDescription
+            }
+
+            if root != nil { break }
         }
 
         guard let root else {
