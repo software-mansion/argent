@@ -195,6 +195,25 @@ export async function simctlTargetForUdid(
 }
 
 /**
+ * Target for taking argent's own injection back out of a simulator, without the
+ * capability gate the other resolvers apply.
+ *
+ * Deliberately ungated and the only resolver that is. Every other one asks
+ * whether a provider lets argent drive its device. This one runs in the case
+ * where the answer is no and the whole point is to undo a write argent made
+ * before the claim existed. Refusing it would leave our dylib in the
+ * simulator's launchd environment for the rest of the boot, injected into the
+ * provider's app. The withheld grant would cause the harm it exists to prevent.
+ * It reads no device state and issues no command of its own, the one caller is
+ * `withdrawNativeDevtoolsEnvLocal`.
+ */
+export async function simctlTargetForWithdrawal(
+  udid: string
+): Promise<{ nativeId: string; prefix: string[] }> {
+  return { nativeId: externalNativeId(udid), prefix: simctlPrefix(await deviceSetForUdid(udid)) };
+}
+
+/**
  * Synchronous sibling of {@linkcode simctlTargetForUdid}, from the cached verdict.
  */
 export function simctlTargetForUdidSync(

@@ -13,12 +13,13 @@ import { assertExternalCapability, externalClaimForAnyId } from "../utils/extern
 import {
   pickIosHost,
   buildDyldInsertLibraries,
+  withdrawDyldInsertLibraries,
   processCarriesInjection,
   type IosEndpoint,
 } from "../utils/ios-host";
 
-// Re-exported for native-devtools-env.test.ts, which imports it from here.
-export { buildDyldInsertLibraries };
+// Re-exported for native-devtools-env.test.ts, which imports them from here.
+export { buildDyldInsertLibraries, withdrawDyldInsertLibraries };
 
 type NativeDevtoolsTransport = "unix" | "tcp";
 
@@ -450,6 +451,22 @@ export interface NativeDevtoolsApi {
    * idempotent, so this is a cheap no-op when the env is already correct.
    */
   reverifyEnv(): Promise<void>;
+  /**
+   * Whether this service arms the simulator's injection itself. False in attach
+   * mode, where a device provider armed it and lends us its agent, so the
+   * launchd environment is none of our business.
+   */
+  readonly armsEnv: boolean;
+  /**
+   * Take our bootstrap and endpoint back out of the simulator's launchd
+   * environment. A no-op in attach mode and it removes only what still names
+   * us, so a provider that has already armed over us keeps its own injection.
+   *
+   * Disposing is not enough on its own. launchd keeps the variables for the
+   * rest of the boot, so the next app to launch would load our dylib and dial a
+   * socket nothing is listening on.
+   */
+  withdrawEnv(): Promise<void>;
   getInitFailure(): NativeDevtoolsInitFailure | null;
 
   isConnected(bundleId: string): boolean;
@@ -952,6 +969,17 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       socketPath: lentSocketPath ?? socketPath,
       ensureEnvReady: lentSocketPath ? () => Promise.resolve() : ensureEnvReady,
       reverifyEnv: lentSocketPath ? () => Promise.resolve() : reverifyEnv,
+      armsEnv: !lentSocketPath,
+      withdrawEnv: lentSocketPath
+        ? () => Promise.resolve()
+        : async () => {
+            await host.withdrawNativeDevtoolsEnv(udid, endpoint);
+            /**
+             * Drop the latch too: what it recorded is no longer on the device,
+             * so a later re-arm must do the work rather than skip it.
+             */
+            envSetup = false;
+          },
       getInitFailure: () => initFailure,
 
       isConnected: (bundleId) => connections.has(bundleId),

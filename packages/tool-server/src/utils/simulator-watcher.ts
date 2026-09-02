@@ -93,8 +93,12 @@ export function startSimulatorWatcher(registry: Registry): {
    * the watcher never asks. Skipped UDIDs never enter `trackedServices`, so the
    * dispose-on-unboot loop below is unaffected.
    */
-  function withoutForeignSimulators(booted: Set<string>): Set<string> {
+  function withoutForeignSimulators(booted: Set<string>): {
+    ours: Set<string>;
+    claimed: Set<string>;
+  } {
     const ours = new Set<string>();
+    const claimed = new Set<string>();
 
     for (const udid of booted) {
       const claim = externalClaimForNativeId(udid);
@@ -104,6 +108,8 @@ export function startSimulatorWatcher(registry: Registry): {
         ours.add(udid);
         continue;
       }
+
+      claimed.add(udid);
 
       if (!reportedSkips.has(udid)) {
         reportedSkips.add(udid);
@@ -118,13 +124,14 @@ export function startSimulatorWatcher(registry: Registry): {
       if (!booted.has(udid)) reportedSkips.delete(udid);
     }
 
-    return ours;
+    return { ours, claimed };
   }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
+    let claimed: Set<string>;
     try {
-      booted = withoutForeignSimulators(await getBootedUdids());
+      ({ ours: booted, claimed } = withoutForeignSimulators(await getBootedUdids()));
     } catch {
       // xcrun unavailable or transient error — skip this tick
       return;
@@ -146,11 +153,32 @@ export function startSimulatorWatcher(registry: Registry): {
     if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
     else pendingAttempts.forEach((p) => p.catch(() => {}));
 
-    for (const udid of [...trackedServices.keys()]) {
-      if (!booted.has(udid)) {
-        trackedServices.delete(udid);
-        registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
+    for (const [udid, service] of [...trackedServices]) {
+      if (booted.has(udid)) continue;
+      trackedServices.delete(udid);
+
+      /**
+       * A provider claimed a simulator we had already armed, it booted the
+       * device before it could publish and we got a tick in between. Letting go
+       * is not enough, launchd holds `DYLD_INSERT_LIBRARIES` for the rest of
+       * the boot, so the provider's next app launch would load our dylib and
+       * dial the socket we are about to close, leaving the provider's own
+       * devtools with no agent. Hand the environment back first.
+       *
+       * Best-effort and one attempt, the UDID leaves `trackedServices` either
+       * way, so there is nothing to retry against and a failure only leaves
+       * what was already there.
+       */
+      if (claimed.has(udid) && service.armsEnv) {
+        await service.withdrawEnv().catch((err: unknown) => {
+          process.stderr.write(
+            `[simulator-watcher] could not hand ${udid}'s devtools environment back to its ` +
+              `provider: ${String(err)}\n`
+          );
+        });
       }
+
+      registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
     }
   }
 

@@ -43,6 +43,7 @@ import {
   simctlArgsForUdidSync,
   simctlTargetForUdid,
   simctlTargetForUdidSync,
+  simctlTargetForWithdrawal,
 } from "../src/utils/ios-device-sets";
 
 const ANDROID_SERIAL = "emulator-5554";
@@ -1222,6 +1223,26 @@ describe("simctl argv for a provider device", () => {
     });
 
     await expect(simctlTargetForUdid(deviceId)).rejects.toThrow(/'simctl' capability/);
+  });
+
+  /**
+   * The one resolver that must work on a device whose provider grants nothing.
+   * It exists to remove Argent's own injection from a simulator the provider
+   * has claimed and the withheld grant is what puts us in that position. Gating
+   * it would strand our dylib in the provider's app.
+   */
+  it("resolves the withdrawal target however little the provider grants", async () => {
+    useDescriptors(await liveDescriptor({}, { capabilities: [] }));
+    const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+
+    await expect(simctlTargetForUdid(deviceId, { granted: "native-devtools" })).rejects.toThrow(
+      /'native-devtools' capability/
+    );
+
+    await expect(simctlTargetForWithdrawal(deviceId)).resolves.toEqual({
+      nativeId: IOS_UDID,
+      prefix: ["simctl", "--set", "/tmp/acme/Devices/iOS"],
+    });
   });
 
   it("leaves an ordinary udid and the default set untouched", async () => {
