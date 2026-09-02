@@ -326,9 +326,9 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("gone");
 
     expect(result.steps[0]).toMatchObject({ status: "fail", kind: "script" });
-    expect(result.steps[0]!.reason).toContain('script "../../scripts/gone.mjs" does not exist');
+    expect(result.steps[0]!.reason).toContain('Script "../../scripts/gone.mjs" does not exist');
     expect(result.steps[0]!.reason).toMatch(
-      /resolved to \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\)$/
+      /Resolved path: \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\.$/
     );
   });
 
@@ -405,9 +405,9 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/CreateUser.mjs"'
+      'Script path "../../scripts/CreateUser.mjs" has the wrong letter case'
     );
-    expect(result.steps[0]!.reason).toContain('write it as "../../scripts/createUser.mjs"');
+    expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.mjs"');
   });
 
   it("refuses a mis-cased spelling of a script reached through a cross-directory symlink", async () => {
@@ -424,7 +424,7 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/createUser.mjs"'
+      'Script path "../../scripts/createUser.mjs" has the wrong letter case'
     );
   });
 
@@ -435,8 +435,8 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("noncase");
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
-    expect(result.steps[0]!.reason).toContain('rename "ALT.MJS" to "alt.mjs" to run it');
-    expect(result.steps[0]!.reason).not.toContain("write it as");
+    expect(result.steps[0]!.reason).toContain('Rename "ALT.MJS" to "alt.mjs"');
+    expect(result.steps[0]!.reason).not.toContain("Use");
   });
 
   it("treats a hyphen difference as an ordinary missing file, not a casing problem", async () => {
@@ -446,7 +446,7 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("hyphen");
 
     expect(result.steps[0]!.reason).toContain("does not exist");
-    expect(result.steps[0]!.reason).not.toContain("mis-cased");
+    expect(result.steps[0]!.reason).not.toContain("wrong letter case");
   });
 });
 

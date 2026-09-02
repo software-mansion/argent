@@ -1262,9 +1262,8 @@ next gesture pay a fresh window, and it warns again if the source is still down.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
-A flow whose first step other than \`echo\`/\`script\` is a \`launch\` is a self-contained e2e flow (so a
-leading setup script keeps it e2e, and it still must not declare an executionPrerequisite); one that
-doesn't runs against the device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
+A flow is self-contained when its first non-\`echo\`/\`script\` step is \`launch\`; it must not declare
+\`executionPrerequisite\`. Other flows use the device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
 than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is

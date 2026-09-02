@@ -21,9 +21,7 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
-`flow-add-script` runs a local `.mjs` file and records it as a `script:` step. **Call it only when the user asks for a script in the prompt.** Its `path` resolves against the flow file being recorded, not against `project_root`. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) for the rest of the syntax. The file runs the way a replay of this flow runs it. A flow under another project root that composes this one with `run:` gives the script that root as its working directory.
-
-**Argent does not undo what a failed script did.** Read `message`: it says whether anything ran, or that the runner cannot tell. A transport error returns no `message`, and the call can have run the script more than one time. Check the state that the script touches before you retry.
+When the user requests a script, call `flow-add-script` at the point where it must run. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
 
 Obey these lifecycle rules:
 
@@ -32,7 +30,7 @@ Obey these lifecycle rules:
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
 4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. `flow-add-script` is the exception: a failed script returns normally and appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
+6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `flow-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
 7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
 
 ## Start in the correct order
@@ -43,7 +41,7 @@ Obey these lifecycle rules:
 2. Record a plain `restart-app` as the first action that is neither an echo nor a script. Pass only the device id and app id. The recorder converts it to `launch:`.
 3. Record `await-ui-element` for the real first screen immediately after restart.
 
-When the user asks for a setup script, record it before the restart that it prepares state for. That is where it runs at replay.
+Record a requested setup script before the restart that needs its state.
 
 Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment.
 

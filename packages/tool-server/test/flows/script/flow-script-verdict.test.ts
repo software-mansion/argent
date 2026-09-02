@@ -131,20 +131,20 @@ const RAN: Record<FlowScriptFailureKind, ScriptRan> = {
 
 /** The move each answer asks the author to make. */
 const NEXT_MOVE: Record<ScriptRan, string> = {
-  yes: "Whatever the script did before it stopped is still done",
-  no: "Nothing ran, so there is nothing to clean up",
-  unknown: "the script may never have started",
+  yes: "Check or restore its changes before you retry",
+  no: "Fix the reason before you retry",
+  unknown: "Check its changes before you retry",
 };
 
 /** How the same answer opens, anchored so a later "failed" cannot match it. */
 const LEAD: Record<ScriptRan, string> = {
   yes: "failed",
-  no: "could not be run",
-  unknown: "did not report a result",
+  no: "did not run",
+  unknown: "may have run",
 };
 
 function headline(ran: ScriptRan): string {
-  return `The script "../../scripts/seed.mjs" ${LEAD[ran]} —`;
+  return `Script "../../scripts/seed.mjs" ${LEAD[ran]};`;
 }
 
 describe("which side of the fail/error line a script failure lands on", () => {
@@ -165,7 +165,7 @@ describe("which side of the fail/error line a script failure lands on", () => {
 
     expect(await runScript()).toMatchObject({
       status: "error",
-      reason: "The script produced no verdict.",
+      reason: "Script failed without a reason.",
     });
   });
 });

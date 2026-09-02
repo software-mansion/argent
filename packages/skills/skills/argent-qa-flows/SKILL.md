@@ -43,10 +43,10 @@ Make repeated runs deterministic:
 3. After setup navigation, echo the named baseline and hard-check it before the first scenario mutation. Use `assert:` or a destination `await:` that fully proves the baseline.
 4. Prefer to restore the baseline at the end.
 
-A flow has two fixture mechanisms and no others:
+A flow has two fixture mechanisms:
 
 - `run:` replays a separately recorded reset or seed flow.
-- `script:` does setup or cleanup that no recorded flow can do. **Add one only when the user asks for a script in the prompt.** Record it live with `flow-add-script`, at the point in the walkthrough where it belongs.
+- `script:` runs requested local setup or cleanup. Record it with `flow-add-script` where it belongs in the walkthrough.
 
 Ask before cleanup that creates or deletes meaningful user data outside the request.
 

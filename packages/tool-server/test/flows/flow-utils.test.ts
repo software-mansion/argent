@@ -1078,10 +1078,10 @@ describe("output references", () => {
   ];
 
   it.each(REFUSALS)("refuses one in %s", (_label, yaml) => {
-    expect(() => parseFlow(yaml)).toThrow(/output reference/);
+    expect(() => parseFlow(yaml)).toThrow(/unsupported template syntax/);
   });
 
-  it("names the field and says the syntax arrives later", () => {
+  it("names the field and asks for a literal value", () => {
     let message = "";
     try {
       parseFlow('steps:\n  - type: { into: { id: name }, text: "{{output:user.name}}" }\n');
@@ -1090,7 +1090,7 @@ describe("output references", () => {
     }
     expect(message).toContain("`type.text`");
     expect(message).toContain("{{output:");
-    expect(message).toContain("arrives with a later release");
+    expect(message).toContain("Replace it with the literal value the step needs");
   });
 
   it("addresses a condition's selector and its expectation apart", () => {
@@ -1098,7 +1098,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /`([^`]+)` holds an output reference/.exec(
+        return /`([^`]+)` uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1129,7 +1129,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /\): (.*?) holds an output reference/.exec(
+        return /\): (.*?) uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1153,7 +1153,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /\): (.*?) holds an output reference/.exec(
+        return /\): (.*?) uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1185,7 +1185,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /\): (.*?) holds an output reference/.exec(
+        return /\): (.*?) uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1208,7 +1208,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /\): (.*?) holds an output reference/.exec(
+        return /\): (.*?) uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }
@@ -1265,7 +1265,7 @@ describe("output references", () => {
       parseFlow(
         'steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n      text: "{{output:code}}"\n'
       )
-    ).toThrow(/output reference/);
+    ).toThrow(/unsupported template syntax/);
   });
 
   it("reaches a leaf inside the two containers own properties do not show", () => {
@@ -1273,12 +1273,12 @@ describe("output references", () => {
       parseFlow(
         '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args:\n      inner: !!set\n        ? "{{output:x}}"\n'
       )
-    ).toThrow(/`args.inner` holds an output reference/);
+    ).toThrow(/`args.inner` uses unsupported template syntax/);
     expect(() =>
       parseFlow(
         '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args: !!omap\n      - k: "{{output:x}}"\n'
       )
-    ).toThrow(/`args.k` holds an output reference/);
+    ).toThrow(/`args.k` uses unsupported template syntax/);
   });
 
   it("leaves fields off the supported list alone", () => {
@@ -1318,7 +1318,7 @@ describe("output references", () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    const quoted = /Remove it and write the value the flow needs: "(.*)"$/s.exec(message)?.[1];
+    const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
     expect(quoted!.endsWith("…")).toBe(true);
     // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
@@ -1351,7 +1351,7 @@ describe("output references", () => {
       try {
         parseFlow(yaml);
       } catch (err) {
-        return /`([^`]+)` holds an output reference/.exec(
+        return /`([^`]+)` uses unsupported template syntax/.exec(
           err instanceof Error ? err.message : ""
         )![1]!;
       }

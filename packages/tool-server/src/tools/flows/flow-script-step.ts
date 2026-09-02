@@ -65,17 +65,13 @@ export async function runFlowScriptStep(
   // reported below, and an unreadable listing vouches for nothing.
   if (spelling.state === "case_folded") {
     const recovery = spelling.addressable
-      ? `write it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
-      : `rename "${spelling.actual}" to "${suppliedBase}" to run it — a script filename must ` +
-        `match ${SCRIPT_FILE_NAME_PATTERN}`;
+      ? `Use "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}".`
+      : `Rename "${spelling.actual}" to "${suppliedBase}".`;
     return {
       ran: "no",
       outcome: {
         status: "error",
-        reason:
-          `mis-cased script path "${target}": the directory holds "${spelling.actual}", not ` +
-          `"${suppliedBase}" — a case-sensitive checkout (Linux CI) fails this step with ` +
-          `ENOENT — ${recovery}`,
+        reason: `Script path "${target}" has the wrong letter case. ${recovery}`,
       },
     };
   }
@@ -86,7 +82,7 @@ export async function runFlowScriptStep(
       ran: "no",
       outcome: {
         status: "fail",
-        reason: `script "${target}" ${missing} (resolved to ${canonical})`,
+        reason: `Script "${target}" ${missing}. Resolved path: ${canonical}.`,
       },
     };
   }
@@ -283,7 +279,7 @@ export function scriptVerdict(
   const notes = result.notes.join(" ");
   if (result.ok) return { status: "pass", ...(notes ? { reason: notes } : {}) };
   const failure = result.failure;
-  const message = failure?.message ?? "The script produced no verdict.";
+  const message = failure?.message ?? "Script failed without a reason.";
   return {
     status: failure ? scriptFailureStatus(failure.kind) : "error",
     reason: notes ? `${message} ${notes}` : message,

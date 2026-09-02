@@ -101,9 +101,8 @@ Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
 For a name and for a file path alike, the
 filename (minus .yaml) names the run's report and artifacts, so it must
 contain only letters, numbers, "_", or "-" — the same charset a name must
-match. A flow whose first step other than \`echo\`/\`script\` is a \`launch\` runs
-its app from scratch; any other flow (a fragment) runs against the device's
-current state — handy while authoring one. Exception: a fragment whose first step \`run:\`s a chromium e2e
+match. A flow is e2e when its first non-\`echo\`/\`script\` step is \`launch\`.
+Other flows are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium e2e
 flow boots that flow's app before step 1 — when that launch is unambiguously
 chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
