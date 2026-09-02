@@ -148,10 +148,23 @@ export async function clearSimulatorServer(
     // happened" and types over a field that is now shorter. Measured on a booted
     // sim: `kill -9` of the simulator-server 50ms in delivered 9 of 200 keys.
     throw new FailureError(
-      `the clear burst did not finish on ${device.id}, and the focused field may be PARTIALLY ` +
-        `emptied — the ${CLEAR_KEY_PAIRS * 2} delete keys are written one at a time and the ` +
-        "transport stopped accepting them partway. Read the field back (`describe`) before " +
-        "clearing or typing again. Underlying failure: " +
+      // `keysSent` is what the caller has to act on, and the two ends of it are
+      // opposite instructions. With the transport's `pipeDead` guard the FIRST
+      // `pressKey` can throw with nothing delivered — a `stop-simulator-server`
+      // or a simulator shutdown between resolving the api and writing to it —
+      // and asserting partial emptying there sends the caller to re-read a field
+      // nothing touched. The Android and Vega bursts already split the same way
+      // (utils/android-input.ts, utils/vega-input.ts).
+      (keysSent === 0
+        ? `the clear burst never reached ${device.id}: the transport refused the very first of ` +
+          `the ${CLEAR_KEY_PAIRS * 2} delete keys, so NO delete key was sent and the focused ` +
+          "field is unchanged. Nothing needs to be read back — retry the clear once " +
+          "simulator-server is back. "
+        : `the clear burst did not finish on ${device.id}, and the focused field may be ` +
+          `PARTIALLY emptied — ${keysSent} of the ${CLEAR_KEY_PAIRS * 2} delete keys had been ` +
+          "written one at a time when the transport stopped accepting them. Read the field back " +
+          "(`describe`) before clearing or typing again. ") +
+        "Underlying failure: " +
         (err instanceof Error ? err.message.split("\n")[0] : String(err)),
       {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,

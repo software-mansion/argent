@@ -360,8 +360,36 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(signal?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
       expect(signal?.failure_stage).toBe("keyboard_clear_simulator_burst");
       expect(err?.message).toMatch(/PARTIALLY emptied/);
+      // The count the caller acts on, not just the fact of a failure. Ten KEY
+      // presses, which is the twenty Down/Up events the recorder saw.
+      expect(err?.message).toContain("10 of the 200 delete keys");
       // It stopped where the transport did rather than writing the rest.
       expect(events.length).toBe(20);
+    });
+
+    it("says the field is UNCHANGED when the transport refused the first key", async () => {
+      // The other end of the same count, and the opposite instruction. The
+      // blueprint's pipe guard latches on the child's stdin `close`, so an api
+      // resolved just before a `stop-simulator-server` throws on the FIRST
+      // `pressKey` with nothing delivered — and "may be PARTIALLY emptied" sends
+      // the caller to re-read a field nothing touched. The Android and Vega
+      // bursts already split this way.
+      const { events, api } = hidRecorder();
+      const dead = {
+        ...api,
+        pressKey: () => {
+          throw new Error("the simulator-server input pipe closed");
+        },
+      };
+      const err = await clearSimulatorServer(registryWith(dead), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(err?.message).toContain("NO delete key was sent");
+      expect(err?.message).toContain("the focused field is unchanged");
+      expect(err?.message).not.toMatch(/PARTIALLY/);
+      expect(events).toEqual([]);
     });
 
     it("settles after the burst, so the auto-screenshot cannot race the deletions", async () => {
