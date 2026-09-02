@@ -851,13 +851,15 @@ describe("keyboard `clear` — the refusals reach a caller through the tool", ()
     expect(err.message.length).toBeLessThan(600);
   });
 
-  it("a document-wide editing host is refused with the focus code and its own wording", async () => {
-    // designMode / <body contenteditable>: the repair IS "tap the field", so it
-    // shares the focus code — but the reason a caller needs to read is that the
-    // clear would have emptied the entire page.
+  it("a document-wide editing host is refused as a FIELD problem, not a focus one", async () => {
+    // designMode / <body contenteditable>: every element on such a page reports
+    // `isContentEditable`, so the walk to the outermost editable ancestor
+    // reaches <body> for whatever the caller taps — and the old "tap the field
+    // first" tail loops. Measured on Chrome 152: tap a <div>, clear, tap it
+    // again, clear again, two byte-identical refusals.
     const registry = new Registry();
     vi.spyOn(registry, "resolveService").mockResolvedValue({
-      evaluate: vi.fn(async () => ({ cleared: false, focus: "body", reason: "document-editable" })),
+      evaluate: vi.fn(async () => ({ cleared: false, focus: "div", reason: "document-editable" })),
     } as never);
     const err = await makeChromiumImpl(registry)
       .handler({}, { udid: chromiumDevice.id, clear: true }, chromiumDevice)
@@ -867,8 +869,14 @@ describe("keyboard `clear` — the refusals reach a caller through the tool", ()
         },
         (e: unknown) => e as Error
       );
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_NO_EDITABLE_FOCUS);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNSUPPORTED_FIELD);
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_clear_chromium_document_editable");
     expect(err.message).toMatch(/ENTIRE page/);
-    expect(err.message).toMatch(/Tap the field first/);
+    // The tail the other unclearable fields get, and the loop it replaces.
+    expect(err.message).toMatch(/select the text with `gesture-drag`/);
+    expect(err.message).not.toMatch(/Tap the field first/);
+    // A native control is the one tap that CAN help here, and the message says
+    // so — it is exempt from the editing-host walk in the script.
+    expect(err.message).toMatch(/native <input> or <textarea>/);
   });
 });

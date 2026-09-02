@@ -621,24 +621,42 @@ async function clearChromium(api: ChromiumCdpApi): Promise<KeyboardResult> {
         `keyboard_clear_chromium_${reason.replace(/-/g, "_")}`
       );
     }
-    // Caller input error → 400: the fix is a `gesture-tap` on the field, not a
-    // retry of this call. The page is untouched either way — the script returns
-    // before it selects anything, so no page-wide selection is left behind.
-    // Same code and same repair for a document-wide editing host, which is a
-    // clear that has not been aimed at a field yet.
-    throw new InvalidToolInputError(
-      (reason === "document-editable"
-        ? "the whole document is editable here (`designMode` is on, or <body> carries " +
+    // A document-wide editing host is NOT a focus problem, and it used to share
+    // the focus code's "tap the field first" tail. On such a page EVERY element
+    // reports `isContentEditable === true`, so the script's walk to the
+    // outermost editable ancestor reaches <body>/<html> for whatever the caller
+    // taps: a rich-text region tapped on purpose refuses exactly as <body> does,
+    // and the repair loops. Measured on Chrome 152 against a `designMode` page —
+    // tap a <div>, clear, tap it again, clear again: two byte-identical
+    // refusals. Only a native <input>/<textarea> is exempt from that walk (it
+    // holds its own value), so that is the one tap worth trying, and the
+    // select-and-type fallback every other unclearable field gets belongs here
+    // too.
+    if (reason === "document-editable") {
+      throw unclearableField(
+        "the whole document is editable here (`designMode` is on, or <body> carries " +
           "`contenteditable`) and keyboard focus is " +
           // Naming the focused element matters here: the editing host swallows
           // every descendant, so this refusal fires for a focused <button> or
           // link just as it does for <body> itself, and the two look nothing
           // alike from the caller's side.
           (focus ? `on <${focus}>, inside that editing host` : "on the host itself") +
-          " rather than on a field, so clearing would have emptied the ENTIRE page"
-        : focus
-          ? `nothing editable has keyboard focus (it is on <${focus}>)`
-          : "no element has keyboard focus") +
+          " rather than on a field, so clearing would have emptied the ENTIRE page — nothing was " +
+          "cleared, and nothing was selected. Tapping again helps ONLY if the field you want is a " +
+          "native <input> or <textarea>, which this clear treats as its own field even on such a " +
+          "page; every other element on it belongs to the page-wide editing host and refuses " +
+          "identically however many times it is tapped. For those, select the text with " +
+          "`gesture-drag` and type over the selection, or empty it through the app's own control.",
+        "keyboard_clear_chromium_document_editable"
+      );
+    }
+    // Caller input error → 400: the fix is a `gesture-tap` on the field, not a
+    // retry of this call. The page is untouched either way — the script returns
+    // before it selects anything, so no page-wide selection is left behind.
+    throw new InvalidToolInputError(
+      (focus
+        ? `nothing editable has keyboard focus (it is on <${focus}>)`
+        : "no element has keyboard focus") +
         " — nothing was cleared. Tap the field first (`gesture-tap`), then clear it. " +
         // Without this the repair loops forever on the commonest cause: a
         // `disabled` control cannot become `document.activeElement` at all
