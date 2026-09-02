@@ -327,6 +327,34 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(webview?.identifier).toBe("host_web_view");
   });
 
+  it("keeps a flag only the OUTER half of the WebView pair carried", () => {
+    // The union runs both ways, and only one direction has a case above. This
+    // is the other one, and the one an overflowing page produces: the app's own
+    // WebView view is marked scrollable while Chromium's root web area reports
+    // scrollable="false". Assigning the inner half's flags over the outer's
+    // would tell the agent the page region does not scroll.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.webkit.WebView" resource-id="com.example:id/webview" scrollable="true" clickable="true" long-clickable="true" checkable="true" checked="true" enabled="false" bounds="[0,200][1080,2000]">
+    <node class="android.webkit.WebView" text="Login Page" scrollable="false" bounds="[0,200][1080,2000]">
+      <node class="android.widget.Button" resource-id="login" text="Login" clickable="true" bounds="[40,400][300,470]"/>
+    </node>
+  </node>
+</hierarchy>`;
+    const webview = flatten(parseUiAutomatorDump(xml, 1080, 2400)).find(
+      (n) => n.role === "WebView"
+    );
+    expect(webview?.scrollable).toBe(true);
+    // Every flag the union carries, so replacing the whole block at once is
+    // caught as surely as replacing one line of it.
+    expect(webview?.clickable).toBe(true);
+    expect(webview?.longClickable).toBe(true);
+    expect(webview?.checkable).toBe(true);
+    expect(webview?.checked).toBe(true);
+    expect(webview?.disabled).toBe(true);
+    expect(webview?.label).toBe("Login Page");
+  });
+
   it("does not let a web list clip content positioned outside its box", () => {
     // Chromium maps a <ul> onto android.widget.ListView, which is a scroll
     // class — but a web list does not scroll, the WebView does. Treating it as
