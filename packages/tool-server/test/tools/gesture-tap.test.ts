@@ -86,7 +86,7 @@ describe("gesture-tap", () => {
     const taps = run.mock.calls.filter(([req]) => req.command === "tap");
     expect(taps).toHaveLength(1);
     expect(taps[0][0]).toMatchObject({ numberOfTaps: 3 });
-    expect(gestureTapTool.zodSchema.shape.clickCount.description).toContain("separate taps");
+    expect(gestureTapTool.zodSchema!.shape.clickCount.description).toContain("separate taps");
   });
 
   it("physical iOS: a single tap keeps its pre-numberOfTaps wire shape", async () => {
