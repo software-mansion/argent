@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+import { connect } from "node:net";
+import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { z } from "zod";
 import { Registry, type ToolCapability } from "@argent/registry";
@@ -55,6 +57,36 @@ function harness(
     execute,
   });
   return { registry, execute, listDevices, app: createHttpApp(registry, options).app };
+}
+
+/**
+ * POST a chunked body with no `content-length`, which no client in this suite
+ * can express — superagent derives the header from the payload either way.
+ */
+async function postChunked(
+  app: ReturnType<typeof createHttpApp>["app"],
+  path: string,
+  body: string
+): Promise<number> {
+  const server = app.listen(0);
+  try {
+    const { port } = server.address() as AddressInfo;
+    return await new Promise<number>((resolve, reject) => {
+      const socket = connect(port, "127.0.0.1", () => {
+        socket.write(
+          `POST ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\n` +
+            `Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n` +
+            `${body.length.toString(16)}\r\n${body}\r\n0\r\n\r\n`
+        );
+      });
+      let raw = "";
+      socket.on("data", (chunk) => (raw += chunk.toString()));
+      socket.on("error", reject);
+      socket.on("end", () => resolve(Number(raw.slice(9, 12))));
+    });
+  } finally {
+    server.close();
+  }
 }
 
 describe("the advertised schema relaxes `udid` while the zod schema keeps it", () => {
@@ -284,23 +316,20 @@ describe("which registered tools auto-target", () => {
     expect(stillRequired).toEqual([]);
   });
 
-  it("has no other param whose name the near-miss guard would catch", () => {
-    // http.ts refuses to auto-target a call carrying a key that merely looks
-    // like `udid`, so a tool introducing one would lose auto-targeting — loudly,
-    // but for a reason nobody would think to look for.
-    const collisions = registeredTools().flatMap((def) =>
-      Object.keys((def.inputSchema as { properties?: object })?.properties ?? {})
-        .filter(
-          (k) =>
-            k !== "udid" &&
-            k
-              .toLowerCase()
-              .replace(/[^a-z]/g, "")
-              .includes("udid")
-        )
-        .map((k) => `${def.id}.${k}`)
-    );
-    expect(collisions).toEqual([]);
+  it("advertises every key its zod schema declares, so none reads as undeclared", () => {
+    // http.ts refuses to auto-target a call carrying a key the tool does not
+    // declare. A param advertised but absent from the enforced schema would
+    // therefore lose auto-targeting for anyone who used it — loudly, but for a
+    // reason nobody would think to look for.
+    const drift = registeredTools()
+      .filter((def) => def.autoDeviceTargetParam !== undefined)
+      .flatMap((def) => {
+        const declared = new Set(Object.keys(def.zodSchema?.shape ?? {}));
+        return Object.keys((def.inputSchema as { properties?: object })?.properties ?? {})
+          .filter((k) => !declared.has(k))
+          .map((k) => `${def.id}.${k}`);
+      });
+    expect(drift).toEqual([]);
   });
 
   it("never touches a `device_id` tool", () => {
@@ -336,18 +365,60 @@ describe("a call that named a device is never re-targeted", () => {
   // Zod strips unknown keys, so before auto-targeting each of these was a
   // "udid is required" 400. Resolving a different device instead would run the
   // action somewhere the caller never mentioned and report success.
-  it.each(["UDID", "udids", "device_udid", "deviceUdid"])(
-    "refuses rather than resolving past a `%s` key",
-    async (key) => {
-      const { app, execute } = harness([iphone()]);
-      const res = await request(app)
-        .post("/tools/poke")
-        .send({ [key]: ANDROID });
-      expect(res.status).toBe(400);
-      expect(execute).not.toHaveBeenCalled();
-      expect(res.body.message).toContain(key);
-    }
-  );
+  //
+  // `serial` and `id` are the keys `list-devices` prints the value under for
+  // Android and Chromium, and `device_id` is what 24 sibling tools call it, so
+  // these are the spellings a caller reaches for, not exotic typos.
+  it.each([
+    "UDID",
+    "udids",
+    "device_udid",
+    "deviceUdid",
+    "serial",
+    "id",
+    "device_id",
+    "deviceId",
+    "devices",
+    "uuid",
+    "target",
+  ])("refuses rather than resolving past a `%s` key", async (key) => {
+    const { app, execute } = harness([iphone()]);
+    const res = await request(app)
+      .post("/tools/poke")
+      .send({ [key]: ANDROID });
+    expect(res.status).toBe(400);
+    expect(execute).not.toHaveBeenCalled();
+    expect(res.body.message).toContain(key);
+  });
+
+  it("refuses on any undeclared key, not just one that looks like a device", async () => {
+    // The rule is "every key is one this tool declares", so it needs no list of
+    // device spellings to stay current.
+    const { app, execute } = harness([iphone()]);
+    const res = await request(app).post("/tools/poke").send({ somethingElse: "x" });
+    expect(res.status).toBe(400);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("still resolves when every key the caller sent is one the tool declares", async () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: async () => ({ devices: [iphone()] }),
+    });
+    const execute = vi.fn(async (_s: unknown, params: { udid: string }) => ({ saw: params.udid }));
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z.object({ udid: z.string().describe("Target device id."), x: z.number() }),
+      services: () => ({}),
+      execute,
+    });
+    const res = await request(createHttpApp(registry).app).post("/tools/poke").send({ x: 1 });
+    expect(res.status).toBe(200);
+    expect(execute.mock.calls[0]![1].udid).toBe(IPHONE);
+  });
 
   it("refuses when a body was sent but no parser claimed it", async () => {
     // What `curl -d '{"udid":"..."}'` sends: `-d` defaults to form-urlencoded,
@@ -358,6 +429,18 @@ describe("a call that named a device is never re-targeted", () => {
       .set("Content-Type", "application/x-www-form-urlencoded")
       .send(JSON.stringify({ udid: ANDROID }));
     expect(res.status).toBe(400);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unparsed body that was streamed, which carries no content-length", async () => {
+    // `curl -T -`, and any client sending a body of unknown length, frames it
+    // chunked. Keying only off `content-length` reads that as "no body at all"
+    // and resolves a device for a call whose own id was thrown away. Driven over
+    // a raw socket: every HTTP client in the suite adds a `content-length`,
+    // which is exactly the header this case does not have.
+    const { app, execute } = harness([iphone()]);
+    const status = await postChunked(app, "/tools/poke", JSON.stringify({ udid: ANDROID }));
+    expect(status).toBe(400);
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -379,6 +462,59 @@ describe("a call that named a device is never re-targeted", () => {
     const res = await request(app).post("/tools/poke");
     expect(res.status).toBe(200);
     expect(execute.mock.calls[0]![1].udid).toBe(IPHONE);
+  });
+});
+
+describe("a caller who gave up is not acted on anyway", () => {
+  it("does not drive the device when the client disconnected during the enumeration", async () => {
+    // The enumeration is the one stretch that can run for seconds before
+    // anything is done, and it cannot be cancelled — `list-devices` takes no
+    // `ToolContext`. The MCP client gives up at 30s and re-sends, so without
+    // the check the abandoned attempt taps the device the retry is about to tap.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let listStarted!: () => void;
+    const started = new Promise<void>((r) => (listStarted = r));
+    const registry = new Registry();
+    registry.registerTool({
+      id: "list-devices",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      execute: async () => {
+        listStarted();
+        await gate;
+        return { devices: [iphone()] };
+      },
+    });
+    const execute = vi.fn(async () => ({}));
+    registry.registerTool({
+      id: "poke",
+      zodSchema: z.object({ udid: z.string().describe("Target device id.") }),
+      services: () => ({}),
+      execute,
+    });
+
+    const server = createHttpApp(registry).app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const socket = connect(port, "127.0.0.1", () => {
+        socket.write(
+          "POST /tools/poke HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+            "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+        );
+      });
+      socket.on("error", () => {});
+      await started;
+      socket.destroy();
+      // Let the server observe the closed connection before the enumeration
+      // resolves — the check is on `signal.aborted`, which `res.on("close")` sets.
+      await new Promise((r) => setTimeout(r, 50));
+      release();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      server.close();
+    }
   });
 });
 

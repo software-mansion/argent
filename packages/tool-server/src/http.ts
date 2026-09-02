@@ -697,9 +697,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         throw err;
       }
 
-      // Above the auto-target rather than at the invoke, so the device enumeration
-      // it does is cancelled too: that fans out to simctl/adb/vega under a 25s
-      // deadline, and the MCP client gives up at 30s and retries.
+      // Above the auto-target, so one controller covers the whole request. It
+      // does not stop the device enumeration below — `list-devices` takes no
+      // `ToolContext`, and its per-branch `withDeadline` is a deadline rather
+      // than cancellation — so that fan-out runs to its 25s bound either way.
+      // What the abort does buy is the check after the enumeration: the MCP
+      // client gives up at 30s and retries, and without it the abandoned attempt
+      // would still go on to drive the device the retry is about to drive again.
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -713,31 +717,34 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       //
       // Two ways a caller who DID name a device looks like one who did not, each
       // a "udid is required" 400 before this and a silent run on some other
-      // device after it: a near-miss key, since zod strips unknown ones, and a
-      // body express never parsed — what `curl -d` sends, its default being
-      // form-urlencoded.
+      // device after it: a key the tool does not declare, since zod strips
+      // unknown ones, and a body express never parsed.
       const isPlainArgs =
         typeof bodyArgs === "object" && bodyArgs !== null && !Array.isArray(bodyArgs);
-      const misspelledTarget =
+      // Any undeclared key blocks the fill-in, rather than a list of spellings to
+      // keep up to date. The device is the one argument a caller can name under
+      // another key and never learn they did: `serial` and `id` are what
+      // `list-devices` prints for Android and Chromium, `device_id` is what 24
+      // sibling tools call the same value, and each of them is dropped before the
+      // parse. Falling through to that parse is the refusal — it already reports
+      // the required `udid` and names what was sent instead.
+      const declaredParams = new Set(Object.keys(def.zodSchema?.shape ?? {}));
+      const undeclaredKeys =
         def.autoDeviceTargetParam !== undefined && isPlainArgs
-          ? Object.keys(bodyArgs).find(
-              (k) =>
-                k !== def.autoDeviceTargetParam &&
-                k
-                  .toLowerCase()
-                  .replace(/[^a-z]/g, "")
-                  .includes(def.autoDeviceTargetParam!)
-            )
-          : undefined;
+          ? Object.keys(bodyArgs).filter((k) => !declaredParams.has(k))
+          : [];
       // `req.body` is undefined (not `{}`) exactly when no body parser claimed the
       // request, so a declared payload that never became args is detectable here.
+      // A streamed body carries no `content-length` — `curl -T -` and any client
+      // sending one of unknown length — so the transfer encoding has to count too.
       const droppedBody =
-        req.body === undefined && Number.parseInt(req.headers["content-length"] ?? "0", 10) > 0;
-
+        req.body === undefined &&
+        (Number.parseInt(req.headers["content-length"] ?? "0", 10) > 0 ||
+          req.headers["transfer-encoding"] !== undefined);
       // `null` and `""` name no device either, and a client with a required-shaped
-      // field is apt to send one of them for "absent". Unlike a near-miss key they
-      // carry no device to run against instead — `""` classifies as an Android
-      // serial and reaches `adb -s ''` — so resolving is strictly better.
+      // field is apt to send one of them for "absent". Unlike an undeclared key
+      // they carry no device to run against instead — `""` classifies as an
+      // Android serial and reaches `adb -s ''` — so resolving is strictly better.
       const namedNoTarget =
         def.autoDeviceTargetParam !== undefined &&
         isPlainArgs &&
@@ -746,7 +753,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           (typeof bodyArgs[def.autoDeviceTargetParam] === "string" &&
             bodyArgs[def.autoDeviceTargetParam].trim() === ""));
 
-      const wantsAutoTarget = namedNoTarget && misspelledTarget === undefined && !droppedBody;
+      const wantsAutoTarget = namedNoTarget && undeclaredKeys.length === 0 && !droppedBody;
       // Echoed back because the MCP adapter scopes its artifact directory and its
       // post-action screenshot/describe by device, reading only the args it sent.
       let autoResolvedDevice: string | undefined;
@@ -797,6 +804,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         };
         try {
           autoResolvedDevice = await resolveAutoDeviceTarget(registry, def, subCtx);
+          // The enumeration is the one stretch of a request that can run for
+          // seconds before anything is done, and it cannot be cancelled from
+          // here. A client that gave up during it has already sent the retry, so
+          // going on would drive the device twice for one requested action —
+          // and write the result of the first to a socket nobody is reading.
+          if (controller.signal.aborted) return;
           bodyArgs = { ...bodyArgs, [def.autoDeviceTargetParam!]: autoResolvedDevice };
         } catch (err) {
           if (err instanceof AutoDeviceTargetError) {
