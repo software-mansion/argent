@@ -2120,10 +2120,9 @@ describe("argent flow run <dir>", () => {
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
   });
 
-  // The two signals a rejection reaches here with that are not scoped to the
-  // one call: a kind other than validation, and the absent kind a pre-signal
-  // server sends. Both end the batch, so the verdict is the run's, not a
-  // rejection's, and the second flow is never called.
+  // Two signals leave a rejection unscoped to the one call - a kind other than
+  // validation, and the absent kind a pre-signal server sends. Each stops the
+  // batch, so the verdict is the run's rather than a rejection's.
   it.each([
     ["marks as something other than validation", { errorKind: "subprocess" }],
     ["leaves unset, as a pre-signal server does", {}],
