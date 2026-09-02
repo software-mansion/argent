@@ -40,9 +40,12 @@ fail() { echo "FAIL: $*"; FAILURES+=("$*"); }
 group() { echo "::group::$*"; }
 endg() { echo "::endgroup::"; }
 
-# post_tool <id> <json-args> — prints the raw response.
+# post_tool <id> <json-args> [max-time] — prints the raw response. `max-time`
+# defaults to 60s; a tool whose OWN budget is longer must be given more, or
+# curl's give-up looks like a tool failure — and, because the server aborts the
+# request when the client disconnects (src/http.ts), actually cancels the call.
 post_tool() {
-  curl -fsS -m 60 -X POST "${TOOLS_URL}/tools/$1" \
+  curl -fsS -m "${3:-60}" -X POST "${TOOLS_URL}/tools/$1" \
     -H 'Content-Type: application/json' -d "$2" 2>/dev/null
 }
 
@@ -277,7 +280,11 @@ fi
 # reaches the device and the tool reports the presses it issued. The field-level
 # proof (250 characters -> 50 against a focused TextInput) is not something CI
 # can set up without an app fixture, so it stays a manual E2E result.
-clear_resp="$(post_tool keyboard "$(printf '{"udid":"%s","clear":true}' "$SERIAL")")" || clear_resp=""
+# 100s, not the default 60: the tool's own budget is VEGA_CLEAR_TIMEOUT_MS (90s,
+# packages/tool-server/src/utils/vega-input.ts). A VVD image that ignores
+# `holdDuration` runs the 200 presses at the default hold — 57s measured — so a
+# 60s curl lands in the gap, cancels the burst, and blames the tool for it.
+clear_resp="$(post_tool keyboard "$(printf '{"udid":"%s","clear":true}' "$SERIAL")" 100)" || clear_resp=""
 clear_keys="$(jget "$clear_resp" keys)"
 clear_flag="$(jget "$clear_resp" cleared)"
 echo "clear response: ${clear_resp:0:200}"
