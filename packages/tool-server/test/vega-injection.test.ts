@@ -246,6 +246,25 @@ describe("injectVegaClear — the delete burst", () => {
     expect(lastScript()).toContain("ARGENT_VEGA_INJECTED=%s");
   });
 
+  it("carries adb's OWN error_kind rather than assuming a subprocess fault", async () => {
+    // Every `adbFailure` fixture here says "subprocess", which is also the
+    // re-statement's `?? "subprocess"` fallback — so a hardcoded literal was
+    // indistinguishable from the read. `runAdb` answers "timeout" for a child
+    // the clear's own 90s budget SIGKILLed, and that is the verdict a caller
+    // needs to tell a dead device from a slow one.
+    adbShell.mockRejectedValueOnce(
+      new FailureError("adb -s vega-0 shell inputd-cli … failed: adb: killed", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      })
+    );
+    const err = await captureError(injectVegaClear());
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(getFailureSignal(err)?.error_kind).toBe("timeout");
+  });
+
   it("fails when the device performed NONE of the presses", async () => {
     // The silent failure this verification exists for: adb accepted the command,
     // the channel was live, and the field is untouched. Reported as a success it

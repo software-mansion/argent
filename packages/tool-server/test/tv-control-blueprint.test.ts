@@ -530,6 +530,12 @@ describe("tvControlBlueprint — clear()", () => {
     // or 191 just as well.
     expect(err?.message).toContain("7 of the 200 delete keys had been written");
     expect(hidLines()).toHaveLength(7);
+    // The one arm this wrapper's `getFailureSignal(err)?.error_kind ??
+    // "subprocess"` can actually reach: `sendLine`/`sendJson` reject with plain
+    // Errors on every path (timeout, socket error, non-JSON reply), so the read
+    // half is dead code here. Asserted so the reachable answer is pinned, and so
+    // a future FailureError source shows up as a change rather than silently.
+    expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
   });
 
   it("says the field is UNCHANGED when the daemon refused the connection", async () => {

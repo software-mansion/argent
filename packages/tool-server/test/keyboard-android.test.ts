@@ -998,6 +998,10 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(signal?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
     expect(signal?.failure_command).toBe("adb");
     expect(signal?.failure_signal).toBe("SIGKILL");
+    // The KIND is `runAdb`'s own verdict, not the wrapper's `?? "subprocess"`
+    // fallback: a burst SIGKILLed by the 90s cap is a timeout, and hardcoding
+    // the fallback passed every other case on this backend.
+    expect(signal?.error_kind).toBe("timeout");
     // And still no `cause`: the message chain reaches agent context, and the adb
     // error quotes the whole 200-keycode command line that `firstLine` exists to
     // strip. The metadata is what carries the diagnosis.

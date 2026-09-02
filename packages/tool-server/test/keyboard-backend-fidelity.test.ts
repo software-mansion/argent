@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import {
   CLEAR_KEY_CADENCE_MS,
   CLEAR_SETTLE_MS,
@@ -371,6 +371,48 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(err?.message).toContain("10 of the 200 delete keys");
       // It stopped where the transport did rather than writing the rest.
       expect(events.length).toBe(20);
+    });
+
+    it("re-states the transport's OWN error_kind, and only falls back to subprocess", async () => {
+      // The blueprint's pipe guard throws a `FailureError` once the child's
+      // stdin has closed, and the burst copies its `error_kind` rather than
+      // assuming a subprocess fault. Every other case on this backend throws a
+      // PLAIN Error, so the guard's signal never reached this wrapper and a
+      // hardcoded `"subprocess"` passed them all.
+      const { api } = hidRecorder();
+      const withSignal = {
+        ...api,
+        pressKey: () => {
+          throw new FailureError("the simulator-server is no longer accepting key events", {
+            error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+            failure_stage: "simulator_server_key_write",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          });
+        },
+      };
+      const carried = await clearSimulatorServer(registryWith(withSignal), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(carried)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+      expect(getFailureSignal(carried)?.error_kind).toBe("timeout");
+      // The guard's own verdict is still reachable through the cause chain.
+      expect(getFailureSignal(carried?.cause)?.error_code).toBe(
+        FAILURE_CODES.SIMULATOR_SERVER_TERMINATED
+      );
+
+      const plain = {
+        ...api,
+        pressKey: () => {
+          throw new Error("write EPIPE");
+        },
+      };
+      const fell = await clearSimulatorServer(registryWith(plain), IOS_SIM).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+      expect(getFailureSignal(fell)?.error_kind).toBe("subprocess");
     });
 
     it("says the field is UNCHANGED when the transport refused the first key", async () => {
