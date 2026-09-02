@@ -1683,6 +1683,38 @@ describe("argent flow run", () => {
     expect(logs).toEqual([]);
   });
 
+  // The --json-stream half of the same guard: streaming owns stdout, and the
+  // error record already carries the classification the verdict spells out.
+  it.each([
+    [
+      "is rejected",
+      new ToolInvocationError("nope", { errorCode: "FLOW_FILE_INVALID", errorKind: "validation" }),
+      "process.exit:1",
+      {
+        event: "error",
+        error: "nope",
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ],
+    [
+      "produces no report",
+      { data: { flow: "checkout", notice: "prereq" } },
+      "process.exit:2",
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ],
+  ])(
+    "keeps stdout NDJSON-only under --json-stream when the run %s",
+    async (_case, outcome, exitCode, record) => {
+      if (outcome instanceof Error) toolsClientMock.callTool.mockRejectedValue(outcome);
+      else toolsClientMock.callTool.mockResolvedValue(outcome);
+
+      await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(exitCode);
+
+      expect(logs.map((line) => JSON.parse(line))).toEqual([record]);
+    }
+  );
+
   it("exits 2 on an unknown subcommand", async () => {
     await expect(flow(["frobnicate"], opts)).rejects.toThrow("process.exit:2");
     expect(errs.join("\n")).toContain('Unknown flow subcommand "frobnicate"');
@@ -1724,6 +1756,8 @@ describe("argent flow run <dir>", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
+  /** Both streams in the order a terminal or a `2>&1` log interleaves them. */
+  let merged: ["out" | "err", string][];
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errSpy: ReturnType<typeof vi.spyOn>;
 
@@ -1760,8 +1794,15 @@ describe("argent flow run <dir>", () => {
     toolsClientMock.callTool.mockResolvedValue({ data: report() });
     logs = [];
     errs = [];
-    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => void logs.push(a.join(" ")));
-    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => void errs.push(a.join(" ")));
+    merged = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => {
+      logs.push(a.join(" "));
+      merged.push(["out", a.join(" ")]);
+    });
+    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => {
+      errs.push(a.join(" "));
+      merged.push(["err", a.join(" ")]);
+    });
     exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit:${code}`);
     }) as typeof process.exit);
@@ -1898,20 +1939,40 @@ describe("argent flow run <dir>", () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
 
     const lines = logs.join("\n").split("\n");
-    expect(lines).toContain("  ✗ not run (invalid flow)");
-    // stdout on its own is a complete ledger: every `[i/n]` header is followed
-    // by an indented outcome. Without one, a redirected stdout log shows this
-    // flow's header immediately followed by the next flow's — the entry reads
-    // as though it never ran, while the tally still counts a failure and names
-    // no flow.
-    const headers = lines.filter((l) => /^\[\d+\/\d+] /.test(l));
-    expect(headers).toHaveLength(2);
-    for (const header of headers) {
-      expect(lines[lines.indexOf(header) + 1]).toMatch(/^ {2}\S/);
-    }
-    // A ledger nobody can read backwards: a ✗ appears only for the flow that
-    // earned one, so completeness above cannot be met by verdicting everything.
+    // stdout on its own is a complete ledger: each flow's outcome sits directly
+    // under its `[i/n]` header. Without one, a redirected stdout log shows this
+    // flow's header immediately followed by the next flow's — an entry that
+    // reads as though it never ran, while the tally still counts a failure and
+    // names no flow. Matched exactly: an indented line under a header is as
+    // likely to be a failing step as an outcome.
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ not run (invalid flow)");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toMatch(/^ {2}PASS /);
+    // Only the flow that earned a verdict carries one, so the completeness
+    // above is not met by verdicting everything. The count discriminates only
+    // because the other flow passes cleanly: renderStepLine gives a failed step
+    // the same `  ✗ ` prefix, which no count tells apart from a verdict.
     expect(lines.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+  });
+
+  // One merged ledger: both runners print the verdict under the header and the
+  // stderr detail after it, so `2>&1` on a batch reads like `2>&1` on one run.
+  it("prints a rejected flow's verdict ahead of the stderr detail", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(merged.slice(0, 3)).toEqual([
+      ["out", "[1/2] a-login.yaml"],
+      ["out", "  ✗ not run (invalid flow)"],
+      ["err", "flow file is not valid YAML"],
+    ]);
   });
 
   // The batch continuing past a rejection is the point of the feature, so the
@@ -1953,6 +2014,8 @@ describe("argent flow run <dir>", () => {
 
     const lines = logs.join("\n").split("\n");
     expect(lines).toContain(`  ✗ ${verdict}`);
+    // The batch's only ✗. It counts because the other flow passes cleanly: a
+    // failing step line carries the same prefix.
     expect(lines.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
   });
 
@@ -1976,6 +2039,29 @@ describe("argent flow run <dir>", () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
 
     expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (no run report)");
+  });
+
+  // The aggregate is what a CI job reads for a batch, so the classification the
+  // verdict is chosen from reaches it as data, under the names --json-stream
+  // publishes. Without the two fields both rows below are one `status: "fail"`
+  // with the same key set and a message assembled per failure.
+  it.each([
+    ["a rejection", { errorCode: "FLOW_DEVICE_RESOLUTION", errorKind: "validation" }],
+    ["an infra failure", { errorCode: "CHROMIUM_ELECTRON_SPAWN_FAILED", errorKind: "subprocess" }],
+  ])("carries the failure signal of %s into the --json aggregate", async (_case, signal) => {
+    toolsClientMock.callTool.mockRejectedValueOnce(new ToolInvocationError("nope", signal));
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    // One document: the verdict is prose, and --json owns stdout.
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]).flows[0]).toEqual({
+      path: "a-login.yaml",
+      status: "fail",
+      error: "nope",
+      error_code: signal.errorCode,
+      error_kind: signal.errorKind,
+    });
   });
 
   // Every verdict is stdout prose, so --json must emit the aggregate alone —

@@ -109,8 +109,8 @@ a running instance.
 A directory run prints each flow's failing steps and its outcome, then a final
 flow summary; --recursive walks subdirectories too (dot-directories and
 node_modules are skipped). A flow the server rejects up front — an invalid file,
-or a device it cannot resolve — fails alone and the batch continues; an infra
-error stops the batch and counts the remaining flows skipped.
+or a device it cannot resolve — fails alone and the batch continues; any other
+failure stops the batch and counts the remaining flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -965,15 +965,19 @@ function writeJsonStreamRecord(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
 
+/** A failure's machine-readable half, under the names JSON output carries it by. */
+function failureSignal(err: unknown): { error_code?: string; error_kind?: string } {
+  if (!(err instanceof ToolInvocationError)) return {};
+  return {
+    ...(err.errorCode ? { error_code: err.errorCode } : {}),
+    ...(err.errorKind ? { error_kind: err.errorKind } : {}),
+  };
+}
+
 /** Mirror a tool invocation failure without putting human text on stdout. */
 function writeJsonStreamError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  writeJsonStreamRecord({
-    event: "error",
-    error: message,
-    ...(err instanceof ToolInvocationError && err.errorCode ? { error_code: err.errorCode } : {}),
-    ...(err instanceof ToolInvocationError && err.errorKind ? { error_kind: err.errorKind } : {}),
-  });
+  writeJsonStreamRecord({ event: "error", error: message, ...failureSignal(err) });
 }
 
 /**
@@ -1025,20 +1029,27 @@ function rejectionVerdict(code: string | undefined): string {
  * down the whole ledger rather than one line of it — hence the elements are
  * checked too. A non-array `steps` throws on `for (… of report.steps)` and a
  * nullish element on the first field read off it; a primitive element throws
- * nowhere, which is worse — every field reads `undefined`, so the run renders
- * a step line of them, summarises as PASS and exits 0.
+ * nowhere, which is worse — the verdict is the report's own `ok`, so `ok: true`
+ * exits 0 over steps no renderer can read: renderReport prints a line of
+ * `undefined` fields for each, and the batch's renderFailedSteps prints none.
  */
 function isFlowReport(data: unknown): data is FlowReport {
   const steps = (data as FlowReport | undefined)?.steps;
   return Array.isArray(steps) && steps.every((step) => !!step && typeof step === "object");
 }
 
-/** One flow's outcome in a directory run — also the --json aggregate entry. */
+/**
+ * One flow's outcome in a directory run — also the --json aggregate entry. The
+ * failure signal keeps --json-stream's spelling, so one consumer reads both;
+ * `error` is prose assembled per failure, never a classification.
+ */
 interface BatchFlowResult {
   path: string;
   status: "pass" | "fail" | "skip";
   report?: FlowReport;
   error?: string;
+  error_code?: string;
+  error_kind?: string;
 }
 
 /**
@@ -1046,8 +1057,8 @@ interface BatchFlowResult {
  * steps and its outcome (no live step lines), then a flow-level summary; a flow
  * failing its steps — or one the tool-server rejects up front (a bad YAML, an
  * unparseable step, a device it cannot resolve) — lets the batch continue,
- * while an infra error (transport throw, unclassified failure, non-report
- * result) stops it and counts the remaining flows skipped.
+ * while anything else (a transport throw, a failure of any other kind, a result
+ * that is not a report) stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1078,9 +1089,9 @@ async function runFlowDirectory(
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
   // A validation rejection is scoped to the one call, so the batch keeps
-  // going. Anything else — transport death, or a failure the server didn't
-  // classify — could make every remaining flow burn a device run against the
-  // same wall, so stop.
+  // going. Any other kind — a boot failure, a timeout — stops it, as does a
+  // transport throw carrying no kind at all: each remaining flow would burn a
+  // run against the same wall.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
@@ -1099,15 +1110,14 @@ async function runFlowDirectory(
       if (isFlowReport(resp.data)) report = resp.data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(message);
-      results.push({ path: rel, status: "fail", error: message });
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
-      // already carries. The detail above goes to stderr, so without this line
-      // a redirected stdout log shows this flow's header followed by the next
+      // already carries. The detail goes to stderr, so without this line a
+      // redirected stdout log shows this flow's header followed by the next
       // flow's — an entry that reads as if it never ran, while the final tally
-      // still counts it failed and names nothing.
+      // still counts it failed and names nothing. Verdict before detail, as the
+      // single-flow runner prints them, so a merged log reads the same way.
       if (!args.json) {
         console.log(
           `  ${STATUS_GLYPH.error} ` +
@@ -1116,14 +1126,16 @@ async function runFlowDirectory(
               : "did not finish (run error)")
         );
       }
+      console.error(message);
+      results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
       if (!rejectedThisFlowOnly) stopped = true;
       continue;
     }
     if (!report) {
       const message = `"${rel}" did not produce a run report.`;
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
       console.error(message);
       results.push({ path: rel, status: "fail", error: message });
-      if (!args.json) console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
       stopped = true;
       continue;
     }
