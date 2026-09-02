@@ -143,9 +143,10 @@ describe("a raw tool: keyboard step the read-back failed", () => {
   });
 
   // A pass is not the whole verdict, and this is the spelling the recorder
-  // writes. Nothing renders a step's `result` — the CLI prints the step line and
-  // the warning under it — so without this a repair that backspaced the field, or
-  // a type nothing checked, is an unqualified green in a recorded flow.
+  // writes. The CLI renders no step `result` — it prints the step line and the
+  // warning under it — so without this a repair that backspaced the field, or a
+  // type nothing checked, is an unqualified green in a recorded flow, which is
+  // the surface those flows are replayed on.
   it("warns when a passing result carries the read-back's note", async () => {
     const note =
       "The typed text is in the field, but not from the first attempt: Android's key-event burst " +

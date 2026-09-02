@@ -344,14 +344,22 @@ describe("redactSecretsFromError", () => {
     // The repair raises its cancellation with the failed adb call as the cause,
     // and `formatErrorForAgent` flattens every cause into the one message that
     // reaches the agent - so the head alone is not the whole exposure.
-    const cause = new Error(
-      "adb -s emulator-5554 shell input text 'hunter2' failed: device offline"
-    );
-    const err = new Error("keyboard repair aborted - the device call failed", { cause });
+    // As deep as the renderer reads, not just the head's own cause: a wrapper
+    // between the two is one `new Error(msg, { cause })` away, and every level
+    // the renderer flattens is a level the scrub has to reach.
+    const chain = [
+      new Error("adb -s emulator-5554 shell input text 'hunter2' failed: device offline"),
+    ];
+    for (let depth = 1; depth <= 7; depth++) {
+      chain.push(new Error(`wrapper ${depth}`, { cause: chain[depth - 1] }));
+    }
+    const err = new Error("keyboard repair aborted - the device call failed", {
+      cause: chain[chain.length - 1],
+    });
 
     redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
 
-    expect(cause.message).toContain("{{secret:APP_PASSWORD}}");
+    expect(chain[0]!.message).toContain("{{secret:APP_PASSWORD}}");
     expect(formatErrorForAgent(err)).not.toContain("hunter2");
   });
 
@@ -424,7 +432,7 @@ describe("keyboard tool with secret placeholders", () => {
       "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` " +
         "this field to inspect it: unless the app marks the field as a password field, both hand " +
         "the plaintext back. Submit or navigate away first, then verify the resulting screen. " +
-        "Disregard any advice below to read this field back. " +
+        "Disregard the rest of this note where it says to read this field back. " +
         "the field holds 4 characters where 7 were typed"
     );
     // The warning comes FIRST, so it is read before the advice it overrides.

@@ -220,8 +220,10 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:fail"]);
-    // The tool's own note becomes the step's reason, so the report says what the
-    // read-back measured instead of a generic "type failed".
+    // The verdict leads and the tool's own note follows it, as the raw `tool:`
+    // and `run-sequence` gates write it: the CLI prints the reason inline on the
+    // step line, where a note that opens with the secret warning would bury it.
+    expect(result.steps[0]!.reason).toMatch(/^typed text did not land: /);
     expect(result.steps[0]!.reason).toContain("7 characters were typed and the field now holds 3");
     // And the submitting Enter must NOT fire: submitting a field holding the
     // wrong value is worse than not submitting at all.

@@ -103,7 +103,7 @@ const SECRET_READ_BACK_WARNING =
   "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` this " +
   "field to inspect it: unless the app marks the field as a password field, both hand the " +
   "plaintext back. Submit or navigate away first, then verify the resulting screen. Disregard " +
-  "any advice below to read this field back. ";
+  "the rest of this note where it says to read this field back. ";
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },

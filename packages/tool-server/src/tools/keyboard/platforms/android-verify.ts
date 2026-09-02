@@ -740,6 +740,19 @@ const FOCUS_MOVED_REASON =
   "its `resource-id` could not identify it — absent, shared with a neighbour as an OTP form's boxes " +
   "are, or unprovable because the capture was truncated. Read the screen with `describe` before continuing.";
 
+// The after-read twin of `unrecognisedFocusNote`, and separate from the reason
+// below it for the same reason: something DOES hold focus, so "no editable field
+// held it" is a different screen and "tap the field" the wrong next move.
+const UNRECOGNISED_FOCUS_AFTER_PREFIX = "the view holding input focus once the text had been typed";
+
+function unrecognisedFocusAfterReason(className: string): string {
+  return (
+    `${UNRECOGNISED_FOCUS_AFTER_PREFIX} (\`${className}\`) is not one this check can read back ` +
+    "— a custom editor or a `WebView` that does not expose its inputs can be one — so the field " +
+    "it started in could not be checked. Read the screen with `describe` before continuing."
+  );
+}
+
 // Separate from the above: nothing editable holds focus at all now. There is no
 // second field for the text to have been split across, so claiming focus "moved"
 // would send the agent looking for one.
@@ -815,9 +828,12 @@ function blockedNote(reason: string, deleted: number | null): string {
 /**
  * `adb input` goes to whatever holds focus at the moment it runs, so a focus
  * change that happened before the repair sent the backspaces and the retype
- * somewhere else. That is the worst state this module can leave behind and these
- * are the only notes that can name it — `retypedClause` above them asserts the
- * field was modified, which holds only if the repair reached it.
+ * somewhere else. That is the worst state this module can leave behind, and
+ * `retypedClause` beside these asserts the field WAS modified, which holds only
+ * where the repair reached it — so every reason that leaves focus unaccounted
+ * for says so. The two that do not are the two that found the field again: a
+ * capture truncated before it reached the field, and a field that masks its
+ * input now.
  */
 function misdirected(reason: string): string {
   if (reason === FOCUS_MOVED_REASON) {
@@ -830,6 +846,24 @@ function misdirected(reason: string): string {
     return (
       " If focus was already gone when the repair ran, those key events reached whatever the app " +
       "had focused instead, or nothing at all."
+    );
+  }
+  if (reason.startsWith(UNRECOGNISED_FOCUS_AFTER_PREFIX)) {
+    return (
+      " If that view held focus before the repair rather than taking it during the read, those " +
+      "key events reached it rather than the field the text was typed into."
+    );
+  }
+  if (reason === CONTENDED_FOCUS_AFTER_REASON) {
+    return (
+      " If the second window held focus while the repair ran, those key events reached its field " +
+      "rather than the one the text was typed into."
+    );
+  }
+  if (reason === EMPTY_CAPTURE_AFTER_REASON) {
+    return (
+      " The read that would have shown where those key events went held no window at all, so it " +
+      "does not place them in that field either."
     );
   }
   return "";
@@ -1206,9 +1240,9 @@ async function verifyAgainstDevtools(
  * Re-read the field the call started in, or the reason it cannot be compared:
  * the read failed, came back empty or was truncated before reaching the field,
  * two windows both report a focused editable, nothing editable has focus any
- * more, focus is on a DIFFERENT field than the baseline (which makes both the
- * comparison and a deletion-based repair meaningless — see `isSameField`), or
- * the field masks its input now.
+ * more, focus is on a view this check cannot read back, focus is on a DIFFERENT
+ * field than the baseline (which makes both the comparison and a deletion-based
+ * repair meaningless — see `isSameField`), or the field masks its input now.
  *
  * `deleted` is what the repair removed before retyping, or null when this is the
  * read that precedes any repair.
@@ -1235,21 +1269,26 @@ async function readAfter(
   });
 
   let field: FocusedField | null;
+  let focusedClass: string | null;
   let contendedFocus: boolean;
   let empty: boolean;
   let truncated: boolean;
   try {
-    ({ field, contendedFocus, empty, truncated } = await readFocusedField(devtools));
+    ({ field, focusedClass, contendedFocus, empty, truncated } = await readFocusedField(devtools));
   } catch {
     return blocked(READ_FAILED_REASON);
   }
   if (contendedFocus) return blocked(CONTENDED_FOCUS_AFTER_REASON);
   if (!field) {
     // Neither an empty capture nor a truncated one reached the field, so
-    // "nothing has focus" is not a conclusion either supports — the same
-    // distinction the baseline read draws.
+    // "nothing has focus" is not a conclusion either supports; and a focused view
+    // this check cannot read is not "nothing has focus" at all. The same three
+    // distinctions the baseline read draws.
     if (empty) return blocked(EMPTY_CAPTURE_AFTER_REASON);
-    return blocked(truncated ? TRUNCATED_AFTER_REASON : FOCUS_LOST_REASON);
+    if (truncated) return blocked(TRUNCATED_AFTER_REASON);
+    return blocked(
+      focusedClass === null ? FOCUS_LOST_REASON : unrecognisedFocusAfterReason(focusedClass)
+    );
   }
   if (!isSameField(before, field)) {
     return blocked(FOCUS_MOVED_REASON);

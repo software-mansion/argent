@@ -42,11 +42,12 @@ function hierarchy(
     /** A SECOND focused editable node, listed after the first in document order. */
     alsoFocused?: { text?: string; rid?: string; bounds?: string };
     /**
-     * A second window's subtree holding a focused editable, appended after the
-     * first — the shape the helper writes when `getWindows()` returns more than
-     * one root, which is a dialog over an app.
+     * A second window's subtree, appended after the first — the shape the helper
+     * writes when `getWindows()` returns more than one root. Focused unless
+     * `focused: false` says otherwise: a dialog over an app when it is, the IME
+     * and the system bars (which is every real capture) when it is not.
      */
-    secondWindow?: { text?: string; rid?: string; bounds?: string };
+    secondWindow?: { text?: string; rid?: string; bounds?: string; focused?: boolean };
   } = {}
 ): string {
   const {
@@ -59,10 +60,10 @@ function hierarchy(
     alsoFocused,
     secondWindow,
   } = opts;
-  const field = (t: string, r: string, b: string, pw: boolean) =>
+  const field = (t: string, r: string, b: string, pw: boolean, isFocused = focused) =>
     `<node index="0" text="${t}" resource-id="${r}" class="${cls}" package="com.example" ` +
     `content-desc="" checkable="false" checked="false" clickable="true" enabled="true" ` +
-    `focusable="true" focused="${focused}" scrollable="false" long-clickable="true" ` +
+    `focusable="true" focused="${isFocused}" scrollable="false" long-clickable="true" ` +
     `password="${pw}" selected="false" bounds="${b}" />`;
   // One subtree per window, as the helper writes it: `<hierarchy>`'s top-level
   // children are the windows `getWindows()` returned.
@@ -91,7 +92,8 @@ function hierarchy(
             secondWindow.text ?? "",
             secondWindow.rid ?? "",
             secondWindow.bounds ?? "[126,1400][1080,1526]",
-            false
+            false,
+            secondWindow.focused ?? focused
           )
         )
       : "") +
@@ -908,6 +910,16 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(res.note).toContain("more than one editable view reported input focus");
   });
 
+  it("verifies through the windows a real capture always has", async () => {
+    // The IME and the system bars are windows of their own, so every capture taken
+    // while typing holds several. Only where they hold FOCUS is there anything to
+    // tell apart - counting the windows would decline every read-back on a device.
+    const withIme = (text: string) =>
+      hierarchy({ text, secondWindow: { text: "", focused: false } });
+    const { registry } = registryServing([withIme(""), withIme("abc")]);
+    expect(await type(registry, "abc")).toMatchObject({ verified: true });
+  });
+
   it("declines when the second window appears while the text is being typed", async () => {
     // An autofill or a permission dialog can take focus mid-burst. The baseline
     // read is clean, so the field was identified; the read after it cannot say
@@ -1097,6 +1109,20 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
+  it("names the view holding focus after typing rather than reporting focus lost", async () => {
+    // A `WebView` input or a custom PIN box takes focus without being readable
+    // here, and "no editable field held input focus" is a different screen with
+    // the opposite advice - the distinction the baseline read already draws.
+    const { registry } = registryServing([
+      hierarchy({ text: "" }),
+      hierarchy({ cls: "android.webkit.WebView", text: "" }),
+    ]);
+    const res = await type(registry, "abc");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/`android.webkit.WebView`\) is not one this check can read back/);
+    expect(res.note).not.toMatch(/no editable field held input focus/);
+  });
+
   /**
    * A stub whose reads carry their own `truncated` flag, so the read-BACK can be
    * made to truncate. `registryServing` never sets it, which is why every case
@@ -1233,32 +1259,67 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   it("fails the call on every way the confirming read can be blocked", async () => {
     // One case per blocked cause, all after a repair: a read that throws (the
     // stub throws once its queue runs out), one truncated before it reached the
-    // field, a lost focus, focus on another field, and a field that has started
-    // masking. Each leaves the pre-repair failure as the last measurement, so
-    // none of them may report "not checked".
+    // field, one with no window in it, a lost focus, focus on a view this check
+    // cannot read, two windows both holding focus, focus on another field, and a
+    // field that has started masking. Each leaves the pre-repair failure as the
+    // last measurement, so none of them may report "not checked".
+    //
+    // `misdirected` is where they divide: the repair's backspaces and retype went
+    // wherever focus was, so every cause that leaves focus unaccounted for has to
+    // say so, and the two that found the field again must not.
     const baseline = { xml: hierarchy({ text: "XY" }) };
     const partial = { xml: hierarchy({ text: "XYabcdefgh" }) };
-    const blocked: Array<{ label: string; reads: Array<{ xml: string; truncated?: boolean }> }> = [
+    const blocked: Array<{
+      label: string;
+      reads: Array<{ xml: string; truncated?: boolean }>;
+      misdirected?: RegExp;
+    }> = [
       { label: "read throws", reads: [baseline, partial] },
       {
         label: "truncated",
         reads: [baseline, partial, { xml: hierarchy({ focused: false }), truncated: true }],
       },
-      { label: "focus lost", reads: [baseline, partial, { xml: hierarchy({ focused: false }) }] },
-      {
-        label: "focus moved",
-        reads: [baseline, partial, { xml: hierarchy({ rid: "com.example:id/other" }) }],
-      },
       {
         label: "masks now",
         reads: [baseline, partial, { xml: hierarchy({ text: "••••", password: true }) }],
       },
+      {
+        label: "focus lost",
+        reads: [baseline, partial, { xml: hierarchy({ focused: false }) }],
+        misdirected: /whatever the app had focused instead/,
+      },
+      {
+        label: "focus moved",
+        reads: [baseline, partial, { xml: hierarchy({ rid: "com.example:id/other" }) }],
+        misdirected: /reached the field that holds focus now/,
+      },
+      {
+        label: "focus unreadable",
+        reads: [baseline, partial, { xml: hierarchy({ cls: "android.webkit.WebView" }) }],
+        misdirected: /reached it rather than the field the text was typed into/,
+      },
+      {
+        label: "two windows focused",
+        reads: [
+          baseline,
+          partial,
+          { xml: hierarchy({ text: "XYabcdefgh", secondWindow: { text: "" } }) },
+        ],
+        misdirected: /reached its field rather than the one the text was typed into/,
+      },
+      {
+        label: "no windows",
+        reads: [baseline, partial, { xml: EMPTY_CAPTURE }],
+        misdirected: /held no window at all/,
+      },
     ];
-    for (const { label, reads } of blocked) {
+    for (const { label, reads, misdirected } of blocked) {
       adbShell.mockClear();
       const res = await type(registryServingReads(reads), "abcdefghijkl");
       expect(res.verified, label).toBe(false);
       expect(res.note, label).toMatch(/modified beyond the original typing/);
+      if (misdirected) expect(res.note, label).toMatch(misdirected);
+      else expect(res.note, label).not.toMatch(/key events reached|held no window at all/);
     }
   });
 

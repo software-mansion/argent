@@ -253,7 +253,9 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
     const last = result.steps[1] as { tool: string; error?: string };
     expect(last.tool).toBe("keyboard");
-    expect(last.error).toMatch(/did not land/i);
+    // The verdict leads: `flow-add-step`'s recorder gate matches this prefix to
+    // find a failed keyboard step inside a recorded sequence.
+    expect(last.error).toMatch(/^typed text did not land: /);
     expect(last.error).toMatch(/the field now holds 0 in total/);
     expect(result.completed).toBe(1);
   });
