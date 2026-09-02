@@ -1573,7 +1573,8 @@ describe("argent flow run", () => {
   // stdout left empty — a nullish value on the `steps` read, a non-array
   // `steps` on the first iteration, a nullish element on the first field read
   // off it. The fourth is quieter and worse: a primitive element throws
-  // nowhere, so the run reports PASS and exits 0 on a report it never got.
+  // nowhere, so the verdict falls to the value's own `ok`, which the rows below
+  // set true: a PASS and an exit 0 on a report the run never got.
   it.each([
     ["a null", null],
     ["an absent", undefined],

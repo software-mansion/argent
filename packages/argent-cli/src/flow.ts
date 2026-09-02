@@ -110,9 +110,9 @@ A directory run prints each flow's failing steps and warnings, then its outcome,
 then a final flow summary; --recursive walks subdirectories too (dot-directories
 and node_modules are skipped). A flow that fails its steps keeps the batch
 running, as does one the server rejects up front — an invalid file, or a device
-it cannot resolve. A transport failure, a rejection of any other kind, or a
-reply that is not a report stops the batch and counts the remaining flows
-skipped.
+it cannot resolve. A transport failure, a rejection the server does not mark as
+validation, or a reply that is not a report stops the batch and counts the
+remaining flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -137,8 +137,8 @@ Options (run):
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the flow's JSON report, or a directory run's JSON
                          aggregate
-  --json-stream          Print each step and the outcome as NDJSON (single flow
-                         only, never with --json)
+  --json-stream          Print each step and the final report as NDJSON (single
+                         flow only, never with --json)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -1061,8 +1061,9 @@ interface BatchFlowResult {
  * steps and warnings, then its outcome (no live step lines), then a flow-level
  * summary; a flow failing its steps — or one the tool-server rejects up front
  * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection of any other kind, or a
- * reply that is not a report stops it and counts the remaining flows skipped.
+ * batch continue, while a transport throw, a rejection the server does not mark
+ * as validation, or a reply that is not a report stops it and counts the
+ * remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1093,9 +1094,9 @@ async function runFlowDirectory(
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
   // A validation rejection is scoped to the one call, so the batch keeps
-  // going. Any other kind — a boot failure, a timeout — stops it, as does a
-  // transport throw carrying no kind at all: each remaining flow would burn a
-  // run against the same wall.
+  // going. Anything the server does not mark that way — another kind, or none
+  // at all — stops it, as does a transport throw: each remaining flow would
+  // burn a run against the same wall.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);

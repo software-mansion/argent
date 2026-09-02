@@ -271,7 +271,7 @@ The file name without `.yaml` names the report and the artifacts. It contains on
 
 A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
 
-A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure, a rejection of another kind, or a reply that is not a report ends the directory run. Argent counts the flows after it as skipped.
+A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
 
 The outcome line of a flow that produced a report gives the result and the step counts of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
 
@@ -284,9 +284,9 @@ The outcome line of a flow that produced a report gives the result and the step 
 | `did not finish (no run report)` | The tool-server answered without a run report                   |
 | `not run (batch stopped)`        | An earlier failure ended the directory run. Directory runs only |
 
-`--json` and `--json-stream` print no header, no outcome line and no summary. A run in these modes writes only JSON to stdout.
+`--json` and `--json-stream` print no header, no outcome line and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one. An entry holds `error` when Argent did not get a report from the tool-server. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one. An entry holds `error` when Argent called the tool-server for that flow and got no report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
 A single flow run with `--json` writes the report of that flow. When such a run produces no report, Argent writes nothing to stdout and puts the reason on stderr. Use `--json-stream` to get the failure as a record.
 
