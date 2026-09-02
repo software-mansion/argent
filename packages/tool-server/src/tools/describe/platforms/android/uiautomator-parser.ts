@@ -7,23 +7,12 @@ interface ParsedXmlNode {
   children: ParsedXmlNode[];
 }
 
-/**
- * Minimal XML parser tuned for `uiautomator dump` output. The dump is always
- * well-formed and shallow (attributes only, no CDATA), so a full XML parser would
- * be overkill and add a dependency.
- */
+/** Minimal XML parser for `uiautomator dump`: attributes only, no CDATA, no dependency. */
 export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
   const body = xml.replace(/^\s*<\?xml[^?]*\?>\s*/, "");
-  // The attr block must allow `>` inside quoted attribute values: XML §2.4
-  // requires only `<` and `&` to be escaped, so `text="A > B"` is legal and
-  // does occur in real uiautomator dumps. The previous `[^<>]*?` rejected
-  // those tags entirely and silently reparented the dropped subtree onto the
-  // root. The unquoted-character class also excludes `/` so the trailing
-  // `\s*(\/?)` still recognises self-closing tags (`<node ... />`); without
-  // that exclusion the `/` was consumed into the attr block and self-closing
-  // tags were mistaken for openers, leaking unbalanced nesting downstream.
-  // `s` flag keeps newline tolerance for builds that wrap dumps at ~1 KB
-  // boundaries.
+  // Quoted attribute values may hold `>` (XML escapes only `<` and `&`), so the
+  // attr block matches quoted runs; its unquoted class excludes `/` so the
+  // trailing `\s*(\/?)` still recognises self-closing tags.
   const tagRe = /<(\/?)([A-Za-z_][\w.-]*)((?:"[^"]*"|'[^']*'|[^"'/<>])*?)\s*(\/?)>/gs;
   const stack: ParsedXmlNode[] = [];
   let root: ParsedXmlNode | null = null;
@@ -31,11 +20,6 @@ export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
   while ((match = tagRe.exec(body)) !== null) {
     const [, closing, tag, rawAttrs, selfClose] = match;
     if (closing) {
-      // Guard against a stray `</node>` with no matching opener: an unguarded
-      // pop on an empty stack returns undefined, but worse — it leaves the
-      // next opening tag treated as a root candidate. The root-once guard
-      // below also handles the related case where a malformed dump emits
-      // multiple top-level elements.
       if (stack.length > 0) stack.pop();
       continue;
     }
@@ -47,9 +31,8 @@ export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
     } else if (root === null) {
       root = node;
     } else {
-      // Malformed input lost its stack context (typically: an extra `</node>`
-      // popped the real parent). Re-attach the orphan to the existing root so
-      // subsequent siblings stay reachable instead of being silently dropped.
+      // Malformed input lost the stack context (typically an extra `</node>`);
+      // re-attach the orphan to the root so later siblings stay reachable.
       root.children.push(node);
     }
     if (!selfClose) stack.push(node);
@@ -67,11 +50,8 @@ function parseAttributes(raw: string): Record<string, string> {
   return attrs;
 }
 
-// Single-pass decoder. Chained per-entity `.replace` calls double-decode:
-// `&amp;lt;` (correct XML encoding of the literal string `&lt;`) becomes `&lt;`
-// after the first pass and then `<` after the second — wrong per XML §4.6.
-// A single regex alternation scans left-to-right and consumes each match
-// once, so a decoded `&` produced by one step never feeds the next step.
+// One alternation, not chained per-entity replaces: those double-decode
+// `&amp;lt;` (the encoding of the literal `&lt;`) all the way down to `<`.
 function decodeXmlEntities(s: string): string {
   return s.replace(
     /&(?:#x([0-9A-Fa-f]+)|#(\d+)|(amp|lt|gt|quot|apos));/g,
@@ -97,9 +77,8 @@ function decodeXmlEntities(s: string): string {
 }
 
 function safeFromCodePoint(n: number): string {
-  // Numeric character references can encode values outside the valid Unicode
-  // range (or surrogate halves). Fall back to an empty string rather than
-  // throwing — the parsed tree is still usable without the broken glyph.
+  // Numeric references can name values outside Unicode, or surrogate halves;
+  // drop the glyph rather than throw.
   if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return "";
   if (n >= 0xd800 && n <= 0xdfff) return "";
   try {
@@ -123,9 +102,9 @@ export function parseUiAutomatorBounds(
 
 /**
  * Intersect a uiautomator-pixel rect with the screen rect. `parseUiAutomatorBounds`
- * preserves negative origins and out-of-range corners so callers can detect
- * partially-off-screen views; this helper produces the visible portion only,
- * which is what `describe` needs to normalise into the [0,1] contract.
+ * keeps negative origins and out-of-range corners so callers can spot
+ * partially-off-screen views; this returns the visible portion `describe`
+ * normalises into [0,1].
  */
 export function clipBoundsToScreen(
   b: { x: number; y: number; w: number; h: number },
@@ -143,8 +122,7 @@ export function clipBoundsToScreen(
 export function deriveUiAutomatorRole(className: string): string {
   const short = className.split(".").pop() ?? className;
   const lower = short.toLowerCase();
-  // Order matters: RadioButton and CheckBox both contain "button"/"box" as substrings
-  // of more specific classes, so check the specific cases first.
+  // `radiobutton` contains `button`, so the specific classes must match first.
   if (lower.includes("radiobutton")) return "RadioButton";
   if (lower.includes("checkbox")) return "CheckBox";
   if (lower.includes("button")) return "Button";
@@ -158,17 +136,12 @@ export function deriveUiAutomatorRole(className: string): string {
   return short || "View";
 }
 
-// ---------- v2 interactables-only trim ------------------------------------
-//
-// On the Bluesky post-thread screen the trimmer cuts the parsed tree from 64
-// nodes (`uiautomator dump --compressed`) to ~41 actionable / labelled nodes
-// while preserving every clickable, every text label, every content-desc, and
-// every resource-id we care about.
+// v2 interactables-only trim: drop scaffolding and decoration, keep every
+// clickable, text label, content-desc and resource-id.
 
 const NOISY_CLASSES = new Set([
-  // React Native Skia/SVG icon internals: never tappable, parent already
-  // carries the icon's content-desc, and a single icon can balloon a dump by
-  // 40+ leaf nodes. Drop the entire subtree.
+  // react-native-svg icon internals: never tappable, and the parent already
+  // carries the icon's content-desc.
   "com.horcrux.svg.PathView",
   "com.horcrux.svg.GroupView",
   "com.horcrux.svg.SvgView",
@@ -180,10 +153,8 @@ export function isNoisyUiAutomatorClass(className: string): boolean {
 }
 
 const SYSTEM_PACKAGES = new Set([
-  // Status bar / nav bar / quick settings — these exist on every dump but
-  // rarely matter for app-level navigation. Note we deliberately do NOT drop
-  // the foreground-app's own package even when the foreground IS a system app
-  // (settings, permission dialog), so permission prompts still surface.
+  // Status bar / nav bar / quick settings. Only systemui is listed on purpose:
+  // a foreground system app (settings, permission dialog) must still surface.
   "com.android.systemui",
 ]);
 
@@ -200,8 +171,8 @@ const LAYOUT_CONTAINERS = new Set([
   "androidx.constraintlayout.widget.ConstraintLayout",
   "androidx.coordinatorlayout.widget.CoordinatorLayout",
   "android.view.ViewGroup",
-  // Bare android.view.View is what Compose emits when a semantics node has
-  // no widget mapping; treat it as a scaffold and walk through.
+  // Compose emits bare android.view.View for semantics nodes with no widget
+  // mapping.
   "android.view.View",
 ]);
 
@@ -218,11 +189,10 @@ const SCROLL_CLASSES = new Set([
 ]);
 
 /**
- * Whether a node scrolls its content — a known scroll class, or anything the
- * framework marks `scrollable` (RN's ScrollView dumps as a scrollable
- * ViewGroup). Such a node's bounds become the clip window for the scroll-clip
- * prune. Shared with the flow tree adapter (`flow-android-tree`) so both trees
- * agree on which containers clip.
+ * Whether a node scrolls its content — a known scroll class, or anything marked
+ * `scrollable` (RN's ScrollView dumps as a scrollable ViewGroup). Its bounds become
+ * the clip window for the scroll-clip prune. Shared with `flow-android-tree` so
+ * both trees agree on which containers clip.
  */
 export function isUiAutomatorScrollable(attrs: Record<string, string>): boolean {
   return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
@@ -237,10 +207,8 @@ interface PixelRect {
   h: number;
 }
 
-// Internal representation kept during the trim pass. Carries pixel bounds so
-// the duplicate-wrapper / scroll-clip checks can use exact equality and
-// inclusion math (normalising to [0,1] first risks drift on the equality
-// check and would force a denormalise-then-compare round trip).
+// Internal representation for the trim pass. Pixel bounds rather than [0,1] so
+// the duplicate-wrapper and scroll-clip checks can use exact equality.
 interface UiNode {
   role: string;
   pixelBounds: PixelRect | null;
@@ -277,19 +245,14 @@ function isInteractive(attrs: Record<string, string>): boolean {
   ) {
     return true;
   }
-  // A focusable node only counts as interactive when it has a label —
-  // otherwise it's just a focus-trap on a layout wrapper.
+  // Focusable without a label is just a focus trap on a layout wrapper.
   if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
   return false;
 }
 
 export function labelOf(attrs: Record<string, string>): string {
-  // The DescribeNode contract surfaces the screen-reader-meaningful label and
-  // the user-typed text separately, so we prefer `content-desc` (the role
-  // description / placeholder) and let `text` come through as `value` when
-  // the two diverge — e.g. an EditText with content-desc="Email" + text="x@y"
-  // emits label="Email", value="x@y" so an agent can see both pieces.
-  // For nodes with only one populated, the order doesn't matter.
+  // Prefer `content-desc` so an EditText with content-desc="Email" text="x@y"
+  // emits label="Email" and (via `makeUiNode`) value="x@y".
   const cd = (attrs["content-desc"] ?? "").trim();
   if (cd) return cd;
   return (attrs.text ?? "").trim();
@@ -314,9 +277,8 @@ function rectsEqual(a: PixelRect, b: PixelRect): boolean {
 
 /**
  * Whether a rect lies entirely outside a clip window — the scroll-clip test
- * `pruneSubtree` applies to drop views a scrolling container has scrolled out
- * of its viewport. Exported for the flow tree adapters (`flow-tree-flatten`),
- * which must agree with the agent-facing describe on what "scrolled out" means.
+ * `pruneSubtree` applies to views scrolled out of their container's viewport.
+ * Exported so `flow-tree-flatten` agrees with describe on what "scrolled out" means.
  */
 export function rectFullyOutside(
   kid: { x: number; y: number; w: number; h: number },
@@ -331,11 +293,9 @@ export function rectFullyOutside(
 }
 
 /**
- * Concatenate every non-empty `text` / `content-desc` reachable from `parsed`,
- * deduped and capped, so a clickable container without its own label can
- * borrow its descendants' labels (the "row-as-tap-target" pattern: tapping a
- * profile cell where the cell itself has no content-desc but contains the
- * user's name + handle + bio).
+ * Concatenate every non-empty `text` / `content-desc` under `parsed`, deduped and
+ * capped, so a clickable container with no label of its own can borrow its
+ * descendants' (the "row-as-tap-target" pattern).
  */
 function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const parts: string[] = [];
@@ -343,10 +303,8 @@ function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const stack: ParsedXmlNode[] = [parsed];
   while (stack.length > 0) {
     const x = stack.pop()!;
-    // A password field's `text` is the secret. Never mine it — or its subtree —
-    // into a borrowed container label; this walk reads the raw XML and would
-    // otherwise bypass the "[password]" redaction the rest of the parser
-    // applies to a password node's own label. Substitute the redacted marker.
+    // A password field's `text` is the secret, and this walk reads the raw XML,
+    // bypassing the "[password]" redaction applied to the node's own label.
     if (attrIsTrue(x.attrs, "password")) {
       if (!seen.has("[password]")) {
         seen.add("[password]");
@@ -394,12 +352,9 @@ function makeUiNode(
   if (label) out.label = label;
   const rid = attrs["resource-id"];
   if (rid) out.identifier = rid;
-  // Match the existing contract: when text and the user-facing label diverge,
-  // expose `text` separately so consumers can still read e.g. an EditText's
-  // current value while the placeholder lives in `content-desc`/`label`.
-  // Skip for password fields — `label` has already been redacted to
-  // "[password]" but the raw `attrs.text` still holds the secret, and
-  // `text !== label` would otherwise smuggle it through under `value`.
+  // Expose a diverging `text` as `value` (an EditText's content while the
+  // placeholder lives in `content-desc`). Skipped for password fields: `label` is
+  // redacted but `attrs.text` still holds the secret.
   if (!out.password) {
     const text = (attrs.text ?? "").trim();
     if (text && text !== label) out.value = text;
@@ -408,19 +363,15 @@ function makeUiNode(
 }
 
 /**
- * Apply the v2 trim rules to `parsed`'s subtree, returning the list of
- * UiNodes that should appear in the output where `parsed` currently sits.
- * Returns:
- *   []        — node fully dropped (nothing replaces it)
- *   [n]       — node kept, possibly with collapsed/aggregated form
- *   [a,b,...] — node was a passthrough wrapper; its kept children inline
- *               directly into the parent's child list
+ * Apply the v2 trim rules to `parsed`'s subtree, returning the UiNodes that take
+ * its place in the output:
+ *   []        — dropped
+ *   [n]       — kept, possibly collapsed/aggregated
+ *   [a,b,...] — passthrough wrapper; its kept children inline into the parent
  */
 function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
-  // Iterative post-order walk. Each frame records the scrollClip the parent
-  // wants this node to enforce on its own children — see the python
-  // reference for why the filter fires at the parent of the clipped node,
-  // not at the scroll itself.
+  // Iterative post-order. Each frame carries the clip this node must enforce on
+  // its own children, so the filter fires at the parent of the clipped node.
   type Frame = { parsed: ParsedXmlNode; scrollClip: PixelRect | null; visited: boolean };
   const stack: Frame[] = [{ parsed: root, scrollClip: null, visited: false }];
   const outputs = new Map<ParsedXmlNode, UiNode[]>();
@@ -432,8 +383,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
       const attrs = top.parsed.attrs;
       const myBounds = parseUiAutomatorBounds(attrs.bounds ?? "");
       const isScroll = isUiAutomatorScrollable(attrs);
-      // Children inherit either MY bounds (if I'm a scroll) or whatever clip
-      // I was handed. They'll filter their own kids against this rect.
+      // Children inherit my bounds if I scroll, else the clip I was handed.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;
       for (let i = top.parsed.children.length - 1; i >= 0; i--) {
         const c = top.parsed.children[i]!;
@@ -464,7 +414,6 @@ function computeNodeOutput(
   const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
   const visible = isVisibleRect(bounds, opts.screenW, opts.screenH);
 
-  // Collect child outputs, filtering against my inherited scroll clip.
   let keptChildren: UiNode[] = [];
   let hiddenInScroll = 0;
   for (const c of parsed.children) {
@@ -480,8 +429,8 @@ function computeNodeOutput(
     }
   }
 
-  // WebView: DOM is opaque to uiautomator, so emit a single sentinel leaf
-  // and discard the (always misleading) accessibility scaffold underneath.
+  // The DOM is opaque to uiautomator: emit one sentinel leaf and discard the
+  // misleading accessibility scaffold underneath.
   if (WEBVIEW_CLASSES.has(cls)) {
     if (!visible) return [];
     const own = labelOf(attrs);
@@ -491,35 +440,28 @@ function computeNodeOutput(
   const interactive = isInteractive(attrs);
   let label = labelOf(attrs);
 
-  // Password fields: keep the ref but never leak the value. Redact HERE, at the
-  // point the label is derived, not just before `makeUiNode` — the collapse
-  // sites below copy this node's `label` onto a surviving child and return
-  // early, so a late redaction would be bypassed and the secret would ride out
-  // on the collapsed tap target. Redacting at the source covers every path.
+  // Redact where the label is derived, not at `makeUiNode`: the collapse sites
+  // below copy this label onto a surviving child and return early, so a later
+  // redaction would be bypassed.
   if (attrIsTrue(attrs, "password")) {
     label = "[password]";
   }
 
-  // Decorative ImageView (no clickable, no label) — drop, pass through any
-  // surviving descendants. Most decorative images have zero kept children
-  // and the entire branch evaporates.
+  // Decorative ImageView — drop it, passing surviving descendants through.
   if (cls.endsWith(".ImageView") && !interactive && !label) {
     return keptChildren;
   }
 
-  // Layout container with no own info — pass children through. With
-  // --compressed dumps this is what flattens FrameLayout > LinearLayout >
-  // ConstraintLayout chains down to their actual content.
+  // Layout container with no own info — pass children through, flattening the
+  // FrameLayout > LinearLayout > ConstraintLayout chains --compressed leaves.
   if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
     return keptChildren;
   }
 
-  // Off-screen and contributes nothing → drop entirely.
   if (!visible && keptChildren.length === 0) return [];
 
-  // Compound clickable: borrow descendant labels so the agent has something
-  // to read. Skips pure scrollables (their descendants are usually a screen
-  // worth of text).
+  // Compound clickable with no label of its own: borrow descendant labels. Pure
+  // scrollables are excluded — their descendants are a screenful of text.
   if (
     (attrIsTrue(attrs, "clickable") || attrIsTrue(attrs, "long-clickable")) &&
     !label &&
@@ -529,17 +471,14 @@ function computeNodeOutput(
     if (agg) label = agg;
   }
 
-  // Duplicate-wrapper collapse: a clickable parent whose only kept descendant
-  // is also clickable and has identical bounds is just an extra layer of the
-  // same tap target. Keep the inner (typically more specific) node.
+  // Duplicate-wrapper collapse: a clickable parent whose only kept descendant is
+  // clickable with identical bounds is the same tap target twice; keep the inner.
   if (interactive && bounds && keptChildren.length === 1) {
     const c = keptChildren[0]!;
     if (c.clickable && c.pixelBounds && rectsEqual(c.pixelBounds, bounds)) {
-      // The inner node is usually the more specific one, so prefer its own
-      // label/identifier. But the accessibility label can live ONLY on the
-      // outer wrapper (an RN `Pressable accessibilityLabel` wrapping a bare
-      // clickable native view) — fall back to the wrapper's values so the
-      // collapsed tap target isn't left anonymous instead of dropping them.
+      // The label can live ONLY on the outer wrapper (an RN `Pressable
+      // accessibilityLabel` around a bare clickable native view), so fall back to
+      // the wrapper's values instead of dropping them.
       if (!c.label && label) c.label = label;
       const rid = attrs["resource-id"];
       if (!c.identifier && rid) c.identifier = rid;
@@ -547,9 +486,8 @@ function computeNodeOutput(
     }
   }
 
-  // If I have a label, drop child Text nodes whose label is already a
-  // substring of mine. Stops the agent seeing both "Like (634 likes)" and a
-  // bare "634" inside it as separate items.
+  // Drop child Text nodes whose label is already inside mine, so the agent doesn't
+  // see both "Like (634 likes)" and a bare "634" as separate items.
   if (interactive && label) {
     const lower = label.toLowerCase();
     keptChildren = keptChildren.filter(
@@ -569,10 +507,8 @@ function computeNodeOutput(
 }
 
 /**
- * Lower a UiNode tree to the public DescribeNode contract. Iterative post-order
- * so that very deep trees (RN screens stacked ~30 levels deep, ListView item
- * recyclers, etc.) don't risk a stack overflow even though the trim has
- * already shortened most chains.
+ * Lower a UiNode tree to the public DescribeNode contract. Iterative post-order so
+ * deep trees (RN screens stacked ~30 levels) can't overflow the stack.
  */
 function describeFromUiTree(root: UiNode, sw: number, sh: number): DescribeNode | null {
   const out = new Map<UiNode, DescribeNode | null>();
@@ -606,12 +542,9 @@ function finalizeUiNode(
 ): DescribeNode | null {
   let frame: DescribeFrame;
   if (n.pixelBounds) {
-    // Clip the rectangle against the screen BEFORE normalising. Independently
-    // clamping `x` and `width` to [0,1] lets `x + width` exceed 1 (e.g. an
-    // off-screen item at bounds=[1090,0][1280,200] on a 1080-wide screen
-    // produces x=1, width≈0.176 → tap centre lands off-screen). Clipping the
-    // edges first guarantees the visible portion is what we normalise and the
-    // rect always satisfies the describe-frame contract.
+    // Clip before normalising: clamping `x` and `width` to [0,1] independently
+    // lets `x + width` exceed 1 (bounds=[1090,0][1280,200] on a 1080-wide screen
+    // gives x=1, width≈0.176, so the tap centre lands off-screen).
     const clipped = clipBoundsToScreen(n.pixelBounds, sw, sh);
     frame = {
       x: sw > 0 ? clipped.x / sw : 0,
@@ -620,15 +553,10 @@ function finalizeUiNode(
       height: sh > 0 ? clipped.h / sh : 0,
     };
   } else {
-    // No bounds: drop empty wrappers, pass through single-child scaffold
-    // wrappers, and synthesise a union frame for 2+ children. Replacing the
-    // whole subtree with `null` silently dropped every child on Compose
-    // hierarchies that emit bounds-less group containers — preserved here for
-    // that case. A single-child wrapper that carries its OWN label/identifier
-    // (e.g. a bounds-less Compose group container with a content-desc) must NOT
-    // be flattened into its child: doing so discards that accessibility label.
-    // Keep it as a node whose frame is the union of its (here, sole) child so
-    // neither the wrapper's nor the child's label is dropped.
+    // Bounds-less Compose group containers: drop empty wrappers, pass through a
+    // single-child scaffold, union the children's frames otherwise. A single-child
+    // wrapper with its own label/identifier is kept, not flattened, so that label
+    // survives.
     if (children.length === 0) return null;
     if (children.length === 1 && !n.label && !n.identifier) return children[0]!;
     const x1 = Math.min(...children.map((c) => c.frame.x));
@@ -657,14 +585,11 @@ function finalizeUiNode(
 }
 
 /**
- * Parse a full `uiautomator dump` output into a DescribeNode tree matching the
- * iOS describe contract, so the same agent guidance about frames + tap points
- * applies. Applies the v2 interactables-only trim defined above.
+ * Parse `uiautomator dump` output into a DescribeNode tree matching the iOS
+ * describe contract, so the same agent guidance about frames + tap points applies.
+ * Applies the v2 interactables-only trim above.
  *
- * `includeSystem` defaults to false: status bar / nav bar / SystemUI chrome
- * is dropped because it's noise on app-level tasks. Pass `true` when working
- * with a multi-window dump (uiautomator2) where systemui owns the IME or the
- * notification shade.
+ * `includeSystem` defaults to false: SystemUI chrome is noise on app-level tasks.
  */
 export function parseUiAutomatorDump(
   rawOutput: string,

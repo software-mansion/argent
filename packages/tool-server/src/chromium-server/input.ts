@@ -2,8 +2,6 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ButtonType, KeyDirection, Point, Rotation, TouchType, ViewportSize } from "./types";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 function clampPx(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     throw new FailureError(`Chromium input: non-finite coordinate ${value}`, {
@@ -23,11 +21,6 @@ function toCssPixels(point: Point, viewport: ViewportSize): { x: number; y: numb
   };
 }
 
-/**
- * Forward a sim-server-style touch into a CDP mouse event. Single-touch is
- * trivial; multi-touch (secondPoint) maps to `Input.dispatchTouchEvent` which
- * Chromium supports for emulated mobile.
- */
 export async function sendTouch(
   cdp: CDPClient,
   viewport: ViewportSize,
@@ -69,12 +62,6 @@ export async function sendTouch(
   await cdp.send("Input.dispatchMouseEvent", payload);
 }
 
-/**
- * Forward a key event. The contract is union-style: callers can pass a
- * USB HID code (matches the sim-server protocol) OR a browser-style descriptor
- * (`key`, `text`, `codeName`). Most callers in the tool-server use the
- * browser-style fields because translating HID → DOM keycodes is lossy.
- */
 export async function sendKey(
   cdp: CDPClient,
   direction: KeyDirection,
@@ -89,30 +76,14 @@ export async function sendKey(
   await cdp.send("Input.dispatchKeyEvent", payload);
 }
 
-/**
- * Send a CDP key event AND, when typing a printable character with `Down`,
- * also dispatch a `char` event so the renderer actually receives the
- * codepoint in focused inputs. Sim-server callers expect typing to "just
- * work"; the bare keyDown alone doesn't insert text in modern Chromium.
- */
-export async function sendCharInsert(cdp: CDPClient, text: string): Promise<void> {
-  await cdp.send("Input.dispatchKeyEvent", { type: "char", text });
-}
-
-/**
- * Best-effort hardware-button translation. Only `Back` has a sane
- * desktop-renderer equivalent (Alt+Left to walk navigation history). The
- * others throw; callers that rely on them on Chromium should switch to a
- * dedicated tool.
- */
+/** Only `Back` has a Chromium equivalent: Alt+Left walks the navigation history. */
 export async function sendButton(
   cdp: CDPClient,
   button: ButtonType,
   direction: KeyDirection
 ): Promise<void> {
   if (button === "Back") {
-    // Single keystroke composite: Alt+Left. We only send the modified key on
-    // Down and the release on Up to match sim-server's two-phase contract.
+    // Split across Down/Up to honour the caller's two-phase button contract.
     if (direction === "Down") {
       await cdp.send("Input.dispatchKeyEvent", {
         type: "keyDown",
@@ -145,22 +116,16 @@ export async function sendButton(
     }
     return;
   }
-  // No FailureError classification here: sendButton is only reached via the
-  // chromium-server WebSocket `button` handler, which catches and reformats the
-  // error into a plain `{ status: "error", message }` before any registry
-  // boundary — and the registered `button` tool is apple+android only. A
-  // classified code would never reach telemetry, so this stays a plain Error.
+  // Plain Error: the only caller is the WS `button` handler, which flattens it
+  // into `{ status: "error", message }`, and the registered `button` tool
+  // excludes chromium — a classified code would never reach telemetry.
   throw new Error(
     `Chromium does not support the "${button}" hardware button. ` +
       `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`
   );
 }
 
-/**
- * Wheel scroll at a point. CDP's mouseWheel event accepts deltaX / deltaY in
- * CSS pixels. We forward as a single event — sim-server's multi-step ramp is
- * only useful for native gesture simulation, which Chromium doesn't expose.
- */
+/** One wheel event; `dx`/`dy` are CSS pixels, unlike the normalized `point`. */
 export async function sendWheel(
   cdp: CDPClient,
   viewport: ViewportSize,
@@ -189,12 +154,6 @@ export async function sendWheel(
   });
 }
 
-/**
- * Rotate the viewport via Emulation.setDeviceMetricsOverride. Chromium only
- * supports rotation values of 0 / 90 / 180 / 270, applied as a CSS transform
- * around the page centre. We persist the current rotation so it can be
- * read back via getRotation().
- */
 const ROTATION_DEGREES: Record<Rotation, 0 | 90 | 180 | 270> = {
   Portrait: 0,
   LandscapeLeft: 270,
@@ -226,7 +185,3 @@ export async function sendRotate(
     },
   });
 }
-
-// Re-exported for tests + downstream callers that want to convert without
-// duplicating the math.
-export const __test = { toCssPixels, clampPx, sleep };

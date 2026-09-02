@@ -12,10 +12,7 @@ const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
 const NO_RENDERERS_ERROR = "no renderers attached to hook";
 const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-// See `react-profiler-renders.ts` for the rationale — branch on the actual
-// error code so "hook missing" (rebuild in dev mode) and "renderers not
-// attached" (wait for first render / let start bootstrap) get accurate
-// remediation instead of being collapsed into one misleading message.
+// Rationale for the per-code split: `react-profiler-renders.ts`.
 function messageForHookError(code: string): string {
   if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
   if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
@@ -133,7 +130,6 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
-    // Bump owner heartbeat only when this tool-server owns the active session.
     if (api.profilingActive && api.ownerToolServerPid === process.pid) {
       await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
     }
@@ -175,7 +171,6 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
 
     let parsed = JSON.parse(result.result.value) as unknown;
 
-    // Re-inject hook once if missing and retry
     if (
       typeof parsed === "object" &&
       parsed !== null &&

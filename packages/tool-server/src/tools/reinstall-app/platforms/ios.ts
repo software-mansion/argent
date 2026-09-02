@@ -17,7 +17,7 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
     try {
       await execFileAsync("xcrun", [...prefix, "uninstall", udid, bundleId]);
     } catch {
-      // App may not be installed — continue to install
+      // App may not be installed
     }
     try {
       await execFileAsync("xcrun", [...prefix, "install", udid, absolute]);

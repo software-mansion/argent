@@ -42,11 +42,9 @@ Returns the evaluation result as a JSON-serializable value, along with deviceNam
     try {
       result = await api.cdp.evaluate(params.expression);
     } catch (err) {
-      // The agent-supplied expression throwing is not a tool malfunction — the
-      // evaluate round-trip worked. Re-code it so telemetry can separate
-      // "agent's JS threw" from genuine CDP faults; the message (with the JS
-      // stack the agent needs) is preserved verbatim. getFailureSignal is
-      // breadth-first, so the outer signal wins over the inner one.
+      // The agent's expression throwing is not a tool malfunction, so re-code it
+      // to keep it separable from genuine CDP faults in telemetry. getFailureSignal
+      // is breadth-first, so this outer signal wins over the cause's.
       if (
         err instanceof Error &&
         getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION

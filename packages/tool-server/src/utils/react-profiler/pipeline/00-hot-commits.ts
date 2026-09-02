@@ -1,10 +1,6 @@
 /**
- * Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
- * and hot commit indices determined by react-profiler-stop.
- *
- * Groups commits by commitIndex, marks hot vs margin using hotCommitIndices set,
- * identifies root cause component per commit using preprocess annotations,
- * groups same-named components (e.g. list items) for compact display.
+ * Stage 00-hot-commits: HotCommitSummary[] from preprocessed commits, with hot vs
+ * margin decided by the hotCommitIndices set react-profiler-stop produced.
  */
 import type { DevToolsFiberCommit } from "../types/input";
 import type { HotCommitSummary, HotCommitComponentEntry, ReRenderReason } from "../types/output";
@@ -12,7 +8,7 @@ import { deriveReason } from "./utils";
 
 const ABSOLUTE_HOT_MS = 50;
 const ABSOLUTE_WARM_MS = 16;
-const MAX_COMPONENT_ENTRIES = 15; // cap cascade display; store total count separately
+const MAX_COMPONENT_ENTRIES = 15; // cap display; totalComponentCount carries the real size
 
 export function buildHotCommitSummaries(
   commits: DevToolsFiberCommit[],
@@ -30,7 +26,7 @@ export function buildHotCommitSummaries(
     }
   }
 
-  // Group commits by commitIndex (includes both hot and margin entries)
+  // Commits here include margin (neighbour) commits, not just hot ones
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const commit of commits) {
     if (!commit.didRender) continue;
@@ -56,17 +52,14 @@ export function buildHotCommitSummaries(
           ? "warm"
           : null; // defensive; floor already applied in react-profiler-stop
 
-    // Get commit timestamp from first entry
     const timestampMs = entries[0]?.timestamp ?? 0;
 
-    // Filter out first-mounts for the cascade display
     const rerenderEntries = entries.filter((e) => {
       const cd = e.changeDescription;
       return !(cd === null || cd.isFirstMount === true);
     });
 
-    // Group by component name within this commit, accumulate self-duration
-    // Include ALL entries (re-renders + first mounts) so navigation mount cost is visible
+    // All entries, first mounts included, so navigation mount cost stays visible
     const componentMap = new Map<
       string,
       {
@@ -85,7 +78,6 @@ export function buildHotCommitSummaries(
         existing.totalSelf += e.selfDuration ?? 0;
         existing.totalActual += e.actualDuration ?? 0;
         existing.count++;
-        // If any instance is a re-render, mark as not first-mount
         if (!isFirstMount) existing.isFirstMount = false;
       } else {
         componentMap.set(e.componentName, {
@@ -100,7 +92,6 @@ export function buildHotCommitSummaries(
 
     const totalComponentCount = componentMap.size;
 
-    // Build component entries sorted by total self-duration DESC, cap at MAX_COMPONENT_ENTRIES
     const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
@@ -108,7 +99,6 @@ export function buildHotCommitSummaries(
         const cd = firstEntry.changeDescription;
         const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
-        // Build changed hook names for re-render entries only
         let topChangedHookNames: string[] | undefined;
         if (!isFirstMount && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
           const seen = new Set<string>();
@@ -139,19 +129,18 @@ export function buildHotCommitSummaries(
         return entry;
       });
 
-    // Determine if this commit is dominated by first-mount (initial render) activity
     const firstMountMs = Array.from(componentMap.values())
       .filter((v) => v.isFirstMount)
       .reduce((sum, v) => sum + v.totalSelf, 0);
     const isInitialRender = firstMountMs > totalRenderMs * 0.5;
 
-    // Find root cause: the non-parent, non-mount component with highest self-duration
     let rootCauseComponent: string | undefined;
     let rootCauseReason: ReRenderReason | undefined;
     let rootCauseChangedProps: string[] | undefined;
     let rootCauseChangedHookNames: string[] | undefined;
 
     if (!isInitialRender) {
+      // componentEntries is self-duration DESC, so the first match is the heaviest
       const rootCauseEntry = componentEntries.find(
         (e) => !e.isFirstMount && e.reason && e.reason !== "parent"
       );
@@ -161,7 +150,7 @@ export function buildHotCommitSummaries(
         rootCauseChangedProps = rootCauseEntry.topChangedProps;
         rootCauseChangedHookNames = rootCauseEntry.topChangedHookNames;
       } else {
-        // All parent cascades — check rootCauseParent annotation from preprocess
+        // Nothing but parent cascades — fall back to the preprocess annotation
         const withRootCause = rerenderEntries.find((e) => e.rootCauseParent && e.rootCauseReason);
         if (withRootCause) {
           rootCauseComponent = withRootCause.rootCauseParent;
@@ -169,8 +158,7 @@ export function buildHotCommitSummaries(
           if (withRootCause.rootCauseProps && withRootCause.rootCauseProps.length > 0) {
             rootCauseChangedProps = withRootCause.rootCauseProps.slice(0, 3);
           }
-          // rootCauseHookTypes are the full hookTypes of the root cause component;
-          // rootCauseHooks are the changed indices — map them
+          // rootCauseHooks are indices into the root cause's full rootCauseHookTypes
           if (withRootCause.rootCauseHooks && withRootCause.rootCauseHookTypes) {
             const hookNames: string[] = [];
             const seen = new Set<string>();
@@ -215,6 +203,5 @@ export function buildHotCommitSummaries(
     });
   }
 
-  // Sort by commitIndex ascending
   return summaries.sort((a, b) => a.commitIndex - b.commitIndex);
 }

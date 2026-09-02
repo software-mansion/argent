@@ -1,29 +1,17 @@
 /**
- * Help handling for the installer subcommands (init / install / update /
- * uninstall / remove).
- *
- * These commands forward their argv straight to the side-effecting installer
- * functions, which do not themselves short-circuit on `--help`. Without an
- * explicit guard `argent uninstall --help` runs the real uninstall — it even
- * opens the destructive "Remove argent configuration from this workspace?"
- * prompt. The dispatcher checks `installerHelpRequested` before dispatching so
- * a help request prints usage and returns without loading or invoking any
- * installer code.
- *
- * The other subcommands (run / tools / server / link / flags / …) handle
- * `--help` themselves, so they are deliberately excluded here — intercepting
- * them would swallow their own command-specific help.
- *
- * This module is also the single source of truth for each installer command's
- * help text: the top-level `argent --help` table in cli.ts reads the summary
- * and detail lines from `INSTALLER_COMMAND_META` so the two can't drift.
+ * Help for the subcommands that cannot serve `--help` themselves (see
+ * `INSTALLER_COMMANDS`), and the single source of truth for their help text:
+ * the top-level `argent --help` table in cli.ts renders the summary and detail
+ * lines from `INSTALLER_COMMAND_META`, so the two can't drift.
  */
 
 /**
  * Subcommands whose argv never reaches a `--help` handler. The installers
- * forward theirs to side-effecting functions that do not check it; `mcp` is
- * handed no argv at all — `startMcpServer` takes only its paths — so a help
- * flag there starts the stdio server and blocks reading JSON-RPC from stdin.
+ * forward theirs to side-effecting functions that ignore it, so `argent
+ * uninstall --help` would run the real uninstall, destructive prompt included;
+ * `mcp` is handed no argv at all — `startMcpServer` takes only its paths — so a
+ * help flag there starts the stdio server and blocks reading JSON-RPC from
+ * stdin. Every other subcommand parses `--help` itself.
  */
 export const INSTALLER_COMMANDS = [
   "init",
@@ -41,23 +29,19 @@ export function isInstallerCommand(command: string | undefined): command is Inst
 }
 
 /**
- * True when `arg` is a help flag. Accepted spellings, all case-insensitive:
- * `--help`, `-h`, `--help=<anything>`, single-dash `-help`, and an em/en-dash
- * `—help` (smart-dash editors rewrite a pasted `--` into one). Anything else —
- * e.g. `/help` or `--helpme` — is NOT treated as help and falls through to the
- * real command, where uninstall's interactive confirmation still guards the
- * destructive path (unless `--yes` was also passed).
+ * True when `arg` is a help flag: `--help`, `-h`, `--help=<anything>`,
+ * single-dash `-help`, or em/en-dash `—help` (smart-dash editors rewrite a
+ * pasted `--` into one), all case-insensitive. Anything else — `/help`,
+ * `--helpme` — falls through to the real command, where uninstall's
+ * confirmation still guards the destructive path unless `--yes` was passed.
  */
 function isHelpFlag(arg: string): boolean {
-  // Smart-dash normalization: a leading em/en dash stands for the `--` it was
-  // rewritten from.
   const lower = arg.toLowerCase().replace(/^[—–]/, "--");
   return lower === "--help" || lower === "-h" || lower === "-help" || lower.startsWith("--help=");
 }
 
 /**
- * Flags that consume the next argv token, mirroring the real parsers
- * (`extractFlag` in init-args.ts, the lookahead loops in update.ts). A
+ * Flags that consume the next argv token, mirroring the real parsers: a
  * bareword `help` immediately after one of these is that flag's value, not a
  * help request. `--project-root` (update) is agent-internal — parsed but
  * deliberately absent from the help text. Kept in sync with the parsers by
@@ -69,23 +53,20 @@ export const VALUE_TAKING_FLAGS: Record<InstallerCommand, readonly string[]> = {
   update: ["--version", "--project-root"],
   uninstall: [],
   remove: [],
-  // `mcp` parses nothing, so no argument can be a flag's value and a bareword
-  // `help` anywhere is unambiguously a help request.
+  // `mcp` parses nothing, so a bareword `help` in any position is a help request.
   mcp: [],
 };
 
 /**
- * True when `command` is an installer subcommand and `rest` requests help. Pure
- * — the dispatcher uses it to short-circuit before running any side-effecting
- * installer code.
+ * True when `command` is an installer subcommand and `rest` requests help.
+ * Pure, so the dispatcher can short-circuit before loading installer code.
  *
- * Help is recognised from a help flag anywhere in `rest` (see `isHelpFlag`) or
- * the bareword `help` (case-insensitive) in any position — EXCEPT directly
- * after a value-taking flag, where it is that flag's value: `argent init
- * --from help` names a package literally called `help` and must reach the
- * installer. The bareword matters on the destructive path: `argent uninstall
- * --yes help` would otherwise run a prompt-free uninstall (`--yes` skips the
- * confirmation).
+ * Matches a help flag anywhere in `rest` (see `isHelpFlag`), or the bareword
+ * `help` (case-insensitive) in any position EXCEPT directly after a
+ * value-taking flag, where it is that flag's value: `argent init --from help`
+ * names a package literally called `help`. The bareword matters on the
+ * destructive path — `argent uninstall --yes help` would otherwise run a
+ * prompt-free uninstall (`--yes` skips the confirmation).
  */
 export function installerHelpRequested(command: string | undefined, rest: string[]): boolean {
   if (!isInstallerCommand(command)) return false;
@@ -106,24 +87,23 @@ interface InstallerCommandMeta {
   /**
    * One-line summary shared with the top-level `argent --help` table. No
    * trailing period — cli.ts renders it inline in a command list, and
-   * `printInstallerHelp` appends its own.
+   * `printInstallerHelp` appends one.
    */
   summary: string;
   /**
    * Extra lines rendered indented under the summary in the top-level command
-   * table (cli.ts). Per-command `--help` conveys the same information through
-   * the option descriptions instead.
+   * table (cli.ts) only; per-command `--help` conveys the same through its
+   * option descriptions.
    */
   details?: string[];
   /**
-   * Prose rendered under the summary in this command's own `--help` only —
-   * the mirror of `details`, which appears only in the top-level table. Used
-   * where the option list cannot carry what the reader needs to know.
+   * Prose rendered under the summary in this command's own `--help` only — the
+   * mirror of `details`. For what the option list cannot carry.
    */
   notes?: string[];
   /** Usage line, e.g. `argent init [options]`. */
   usage: string;
-  /** Real flags this command parses. Empty for aliases (see `aliasOf`). */
+  /** Flags listed in this command's help. Empty for aliases (see `aliasOf`). */
   options: InstallerOption[];
   /** When set, this command is an alias; its help defers to the target's. */
   aliasOf?: InstallerCommand;
@@ -139,12 +119,11 @@ const NO_TELEMETRY_OPTION: InstallerOption = {
 };
 
 /**
- * How each installer subcommand is described in help — its summary and detail
- * lines (the sole copy, also rendered by the top-level table in cli.ts), usage,
- * and options. The option lists mirror the flags each installer actually parses
- * (init-args.ts, update.ts, uninstall.ts, install-targets.ts in
- * packages/argent-installer); test/installer-flags-sync.test.ts fails when they
- * drift from the parsers.
+ * Help copy per subcommand. The summary and detail lines are the sole copy, also
+ * rendered by the top-level table in cli.ts. The option lists mirror the flags
+ * the installers parse (init-args.ts, update.ts, uninstall.ts,
+ * install-targets.ts in packages/argent-installer);
+ * test/installer-flags-sync.test.ts fails when they drift.
  */
 export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMeta> = {
   init: {
@@ -225,8 +204,6 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
     aliasOf: "uninstall",
   },
   mcp: {
-    // Byte-identical to the row the top-level table printed by hand, so moving
-    // that row onto this meta changes no output.
     summary: "Start the MCP stdio server (used by editors)",
     usage: "argent mcp",
     notes: [
@@ -249,9 +226,8 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
 };
 
 /**
- * Print the usage block for an installer subcommand — usage line, summary, the
- * command's options (or a pointer to the aliased command), and a footer.
- * Read-only: no network, no wizard, no prompt.
+ * Print a subcommand's usage block. Read-only: no network, no wizard, no
+ * prompt.
  */
 export function printInstallerHelp(command: InstallerCommand): void {
   const meta = INSTALLER_COMMAND_META[command];

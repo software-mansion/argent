@@ -34,20 +34,22 @@ const zodSchema = z
     if ((params.name === undefined) === (params.flow_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Pass exactly one flow source: name or flow_path.",
-        path: ["flow_path"],
+        message:
+          params.name !== undefined
+            ? "Pass exactly one flow source: name or flow_path."
+            : "Pass exactly one flow source: name or flow_path. flow-read-prerequisite needs " +
+              "the flow's name in `name` — it resolves <project_root>/.argent/flows/<name>.yaml.",
+        // The ROOT, matching flow-execute: the rule spans both source fields,
+        // so it must not be anchored on one of them.
+        path: [],
       });
     }
   });
 
-// Mirror of flow-execute's specs, field for field: the documented pre-flight is
-// "read the prerequisite, then run", so both tools must resolve the same source
-// under the same boundary rules. A spec that diverged — e.g. one that silently
-// dropped flow_path — would have this tool answer for the saved flow of the
-// same stem while flow-execute runs the explicit file: same flow identity, two
-// contracts. See flow-run.ts for why a dual-source wire is unwrapped
-// (caller-authored flow_path beside name) or dropped (client-derived flow_file
-// beside flow_path) rather than resolved.
+// Must stay field-for-field identical to flow-execute's specs, or the same
+// params resolve to different files here and there — e.g. dropping flow_path
+// would answer for the saved flow of the same stem. flow-run.ts explains the
+// unwrapWhenSet/skipWhenSet choices.
 const fileInputs: FileInputSpec[] = [
   {
     target: "flow_path",
@@ -76,22 +78,22 @@ export const flowReadPrerequisiteTool: ToolDefinition<
       `Failed to read flow prerequisite: ${failureSignal.error_code}`,
   },
   description: `Read the execution prerequisite of a flow without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
-Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
-Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
-source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
-the flow that will actually run.
+Returns { flow, executionPrerequisite }: the logical name, plus the precondition its author recorded
+verbatim. Empty when none was declared, which is always so for a self-contained scenario: one opening
+on a launch may declare no prerequisite, because it builds its own start state.
+Use when deciding whether the device already sits where a fragment expects it (correct app foregrounded,
+correct account, correct screen) before committing to a run, or when relaying that requirement to a human.
+Touches no device: nothing is launched, tapped, dispatched or torn down, and no simulator or emulator
+needs booting, so calling this costs nothing but a file read.
 Fails if the flow file does not exist.
-Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
+Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected. The name goes in \`name\`, which resolves <project_root>/.argent/flows/<name>.yaml.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {
-    // The same resolver flow-execute uses, gates included: the prerequisite
-    // reported here must be the contract of exactly the file flow-execute
-    // would run for these params — flow_path clears the statVerified
-    // co-location boundary (never uploads, never raw server paths) and reports
-    // its basename-derived logical name, while the name branch keeps the
-    // flow_file containment under project_root.
+    // The same resolver flow-execute uses, gates included, so the prerequisite
+    // reported is the contract of exactly the file flow-execute would run for
+    // these params.
     const { filePath, flowName } = await resolveFlowSource(
       params,
       ctx?.fileInputs?.flow_file,

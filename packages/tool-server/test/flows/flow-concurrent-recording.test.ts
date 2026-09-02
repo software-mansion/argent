@@ -1112,9 +1112,9 @@ describe("appending to a recording whose file was hand-edited", () => {
     expect(await readMarkers(root, "alpha")).toEqual(["echo:s1", "echo:s2"]);
 
     // Removing a bad step by editing the .yaml is what both recording tools'
-    // descriptions tell the agent to do. It only survives because the host-mode
-    // append re-reads from disk; serializing the in-memory copy instead would
-    // silently resurrect the deleted step on the very next append.
+    // descriptions tell the agent to do after the finish, not during. It only
+    // survives because the host-mode append re-reads from disk. Serializing the
+    // in-memory copy would resurrect the deleted step on the next append.
     await fs.writeFile(
       flowPath(root, "alpha"),
       'executionPrerequisite: ""\nsteps:\n  - echo: s2\n',
@@ -1245,7 +1245,7 @@ describe("restarting a recording on one key", () => {
   });
 
   it("counts the steps the FILE held, not the ones this session appended", async () => {
-    // Hand-editing the .yaml mid-recording is a documented workflow, and in
+    // A mid-recording hand edit is advised against and not prevented, and in
     // host mode the file is the take: every other host-mode operation re-reads
     // it, and the in-memory copy only catches up on the next append. The
     // restart is the one destructive operation, so counting from memory would
@@ -1479,7 +1479,10 @@ describe("a finish that lands while a step is still running", () => {
     const onDisk = await readMarkers(root, "alpha");
     expect(markers(parseFlow(report.flowFile).steps)).toEqual(onDisk);
     expect(report.steps).toBe(onDisk.length);
-    expect(report.summary).toHaveLength(onDisk.length);
+    // A step with a cross-tree verdict adds a second, indented `warning:` line,
+    // so lines and steps are not always 1:1. These fixtures hold no
+    // `await-ui-element`, but count the step lines rather than rely on that.
+    expect(report.summary.filter((line) => /^\d+\. /.test(line))).toHaveLength(onDisk.length);
     expect(report.path).toBe(flowPath(root, "alpha"));
     expect(report.savedTo).toBe(flowPath(root, "alpha"));
     expect(await getRecordingSession(root, "alpha")).toBeUndefined();
@@ -1599,8 +1602,8 @@ describe("a finish that lands while a step is still running", () => {
 // ── A finish whose file a hand-edit broke ────────────────────────────
 
 describe("a finish on a flow file that no longer parses", () => {
-  // Hand-editing the .yaml mid-recording is a documented workflow, so parseFlow
-  // can legitimately throw inside flow-finish-recording's critical section. The
+  // Nothing prevents a mid-recording hand edit, so parseFlow can legitimately
+  // throw inside flow-finish-recording's critical section. The
   // session must survive that: clearing the key first leaves the agent unable to
   // retry the finish after repairing the file — flow-finish-recording answers
   // "No active recording", and the only tool that re-establishes the key,
@@ -1962,9 +1965,9 @@ describe("finishing a recording whose YAML was hand-edited into an unrenderable 
     await start(root, "alpha");
     await addStep(root, "alpha", "a1");
 
-    // Hand-editing mid-recording is a documented workflow, and `args:` is the
-    // one step body the parser does not constrain — a cyclic YAML anchor
-    // reaches the summarizer as a cyclic object, which JSON.stringify throws on.
+    // A hand edit can land mid-recording, and `args:` is the one step body the
+    // parser does not constrain. A cyclic YAML anchor reaches the summarizer as
+    // a cyclic object, which JSON.stringify throws on.
     await fs.writeFile(
       flowPath(root, "alpha"),
       'executionPrerequisite: ""\nsteps:\n  - tool: keyboard\n    args: &a\n      self: *a\n',

@@ -3,16 +3,15 @@ import { track } from "./index.js";
 import type { Platform } from "./events.js";
 import { aiTelemetryFromMeta, type AiTelemetryProps } from "./ai-identity.js";
 
-// HTTP captures request-only metadata here so registry lifecycle events can
-// include platform context (and the coarse AI client) without carrying raw params.
-export interface InvocationMeta extends AiTelemetryProps {
+// Filled by the HTTP layer so registry lifecycle events carry platform and
+// coarse AI-client context without raw params.
+interface InvocationMeta extends AiTelemetryProps {
   platform?: Platform;
 }
 
 interface AttachHandle {
   /** Idempotent unsubscribe. */
   detach: () => void;
-  /** Register metadata for a known invocation id. */
   recordInvocation: (toolInvocationId: string, meta: InvocationMeta) => () => void;
   /** Counter exposed for the `toolserver:stop` payload. */
   getTotalToolCalls: () => number;

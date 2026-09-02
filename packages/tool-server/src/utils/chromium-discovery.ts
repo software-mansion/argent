@@ -6,17 +6,17 @@ import { ensureCdpReachable, discoverPrimaryPage } from "../blueprints/chromium-
 
 export interface ChromiumDevice {
   platform: "chromium";
-  /** Canonical Argent device id, e.g. "chromium-cdp-19222". */
+  /** Device id, e.g. "chromium-cdp-19222". */
   id: string;
-  /** CDP debugging port the Chromium process exposed. */
+  /** CDP debugging port. */
   port: number;
   /** Title of the primary page target. */
   title: string;
-  /** URL the primary page is showing. */
+  /** URL of the primary page target. */
   url: string;
   /** Browser version string from /json/version. */
   browser: string | null;
-  /** Always "Running" — list-devices only surfaces Chromium processes whose CDP endpoint is responsive. */
+  /** Always "Running": ports whose CDP endpoint does not answer are not listed. */
   state: "Running";
 }
 
@@ -34,20 +34,16 @@ function parsePortList(raw: string | undefined): number[] {
   return out;
 }
 
-// Process-local set of Chromium CDP ports the tool-server has booted. The
-// kernel hands out arbitrary high ports, so we cannot rediscover them by
-// blind scanning without producing a lot of spurious probes against unrelated
-// services. `list-devices` always probes whatever lives in this set plus the
-// well-known 9222 and the user-provided env list.
+// Chromium CDP ports this process booted. The kernel assigns them, so they
+// cannot be rediscovered by scanning — only ports recorded here (or named by
+// 9222 / the env list / the persisted file) are ever probed.
 const TRACKED_PORTS = new Set<number>();
 
 /**
- * Tracked ports are also mirrored to a small file so they survive tool-server
- * restarts. Booted Chromium apps are detached and deliberately outlive the
- * tool-server (which auto-exits on idle), so without persistence every
- * restart makes running apps invisible to `list-devices` — the agent then
- * boots a duplicate instance. Dead ports are pruned on probe failure, so the
- * file self-heals after the app quits.
+ * Tracked ports are mirrored to a file: booted apps are detached and outlive
+ * the tool-server (which auto-exits on idle), so without persistence a restart
+ * hides running apps from `list-devices` and the agent boots a duplicate.
+ * Failed probes prune the file, so it self-heals after the app quits.
  */
 function portsFilePath(): string {
   return (
@@ -85,18 +81,16 @@ export function trackChromiumPort(port: number): void {
   persistPorts((ports) => ports.add(port));
 }
 
-/** Remove a port. Optional — list-devices auto-prunes ports that fail to probe. */
+/** Remove a port. Optional: a failed probe prunes it anyway. */
 export function untrackChromiumPort(port: number): void {
   TRACKED_PORTS.delete(port);
   persistPorts((ports) => ports.delete(port));
 }
 
 /**
- * Candidate ports to probe for a running Chromium CDP endpoint.
- * - Always includes 9222 (the Chromium default).
- * - Honours `ARGENT_CHROMIUM_PORTS` (comma-separated list) so users can register custom ports.
- * - Includes ports `boot-device` opened in this server process via `trackChromiumPort`.
- * - Includes ports persisted by previous tool-server processes (apps outlive the server).
+ * Ports to probe: 9222 (Chromium's default), `ARGENT_CHROMIUM_PORTS`
+ * (comma-separated), ports booted in this process, and ports persisted by
+ * earlier tool-server processes.
  */
 export function getCandidateChromiumPorts(): number[] {
   const fromEnv = parsePortList(process.env.ARGENT_CHROMIUM_PORTS);
@@ -119,10 +113,10 @@ async function probePort(port: number, timeoutMs: number): Promise<ChromiumDevic
       state: "Running",
     };
   } catch {
-    // Drop dead tracked ports so list-devices doesn't keep probing a closed app.
+    // Drop dead tracked ports so list-devices stops probing a closed app.
     TRACKED_PORTS.delete(port);
-    // Only touch the file when this port was actually persisted — failed
-    // probes of 9222 / env ports must not create or rewrite it.
+    // Only touch the file when this port was persisted — a failed probe of
+    // 9222 or an env port must not create or rewrite it.
     if (loadPersistedPorts().includes(port)) {
       persistPorts((ports) => ports.delete(port));
     }
@@ -133,9 +127,8 @@ async function probePort(port: number, timeoutMs: number): Promise<ChromiumDevic
 }
 
 /**
- * Probe known Chromium CDP ports in parallel. Returns one entry per port that
- * responded with a usable page target. Failures are silent — non-responsive
- * ports are simply not in the result.
+ * Probe candidate CDP ports in parallel; ports that fail to answer with a
+ * usable page target are silently omitted.
  */
 export async function discoverChromiumDevices(options?: {
   timeoutMs?: number;

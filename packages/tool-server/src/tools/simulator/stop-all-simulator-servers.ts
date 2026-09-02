@@ -18,17 +18,12 @@ const zodSchema = z
         "Device ids (iOS UDID / Android serial / Chromium id) to scope the teardown to — pass the devices THIS session actually used. Omit only for a deliberate machine-wide cleanup: one tool-server serves every agent using this argent install, so an unscoped stop also kills devices another agent is mid-session on."
       ),
   })
-  // `.strict()` because omitting `devices` is the machine-wide sweep, so a
-  // misspelled key must not be silently stripped down to it. `udids` is the
-  // natural slip — every sibling tool in this directory spells the device
-  // parameter `udid`, and this is the only one that spells it `devices` — and
-  // under a stripping schema that typo tears down every other agent's devices
-  // while the caller believes it scoped, with `unmatched` unreachable on that
-  // path so nothing in the response says otherwise. Strict makes it a
-  // validation error instead, matching `stop-simulator-server`, where the same
-  // typo already fails loudly because `udid` is required. This also puts
-  // `additionalProperties: false` in the schema advertised by `GET /tools`, so
-  // MCP, `argent run` and raw HTTP callers all get the rejection.
+  // `.strict()` because omitting `devices` is the machine-wide sweep: a
+  // misspelled key must be a validation error, not be stripped down to it.
+  // `udids` is the natural slip — sibling tools spell the device parameter
+  // `udid` — and under a stripping schema it would tear down every other
+  // agent's devices while the caller believed it scoped, with `unmatched`
+  // unreachable on that path so nothing in the response says otherwise.
   .strict();
 
 export function createStopAllSimulatorServersTool(
@@ -41,8 +36,7 @@ export function createStopAllSimulatorServersTool(
     id: "stop-all-simulator-servers",
     interaction: {
       // "all" only holds for the unscoped sweep; a scoped call touches just the
-      // ids it was given, and saying otherwise would misreport a teardown that
-      // deliberately left another agent's devices running.
+      // ids it was given.
       startedMsg: ({ params }) => {
         const devices = params?.devices;
         return devices
@@ -52,10 +46,8 @@ export function createStopAllSimulatorServersTool(
       completedMsg: ({ result }) => {
         const n = result.stopped.length;
         const base = `Stopped ${n} simulator ${n === 1 ? "server" : "servers"}`;
-        // `unmatched` is the whole point of the scoped stop: a mistyped id must
-        // not read as a clean machine. Omitting it here would report exactly
-        // that — "Stopped 0 simulator servers" for a teardown that reaped
-        // nothing because every id was wrong.
+        // Without this, a teardown that reaped nothing because every id was
+        // mistyped reads as "Stopped 0 simulator servers" on a clean machine.
         const unmatched = result.unmatched;
         const notes: string[] = [];
         if (unmatched?.length) {
@@ -63,9 +55,8 @@ export function createStopAllSimulatorServersTool(
             `${unmatched.length} supplied ${unmatched.length === 1 ? "id" : "ids"} matched no service`
           );
         }
-        // Same reason as `unmatched`: a debugger session keyed by an id no
-        // device scope can name is still a session left holding a CDP socket
-        // and a bound port, and silence about it reads as a clean machine.
+        // Same reason: a session no device scope can name still holds a CDP
+        // socket and a bound port.
         const left = result.left_running;
         if (left?.length) {
           notes.push(
@@ -86,25 +77,19 @@ Returns { stopped } - the URNs of the services that were actually live and got s
     async execute(_services, params, ctx) {
       const devices = params.devices;
       // Present-but-empty scopes to nothing rather than falling back to the
-      // machine-wide sweep: a caller that computed a device list and got none
-      // must not accidentally tear down every other agent's services.
+      // machine-wide sweep, which would tear down other agents' services.
       const scoped = devices !== undefined;
       const snapshot = registry.getSnapshot();
       const stopped: string[] = [];
       const matchedIds = new Set<string>();
-      // Live device-owned services this scope did NOT claim. Only the port-keyed
-      // ones are ever reported (see `unnameableSessionUrns`) — the rest are
-      // other agents' devices, which a scoped stop leaves alone by design.
+      // Live port-keyed services this scope did NOT claim; unclaimed services
+      // of any other namespace are other agents' devices, left alone by design.
       const survivors: string[] = [];
       let aborted = false;
       for (const [urn, entry] of snapshot.services) {
-        // A sweep is a loop of awaited disposals — thirteen namespaces, each
-        // reaping spawned processes and sockets — so a caller that has given up
-        // (an MCP client timing out, a cancelled CLI run) would otherwise be
-        // billed for the whole of it. Checked between disposals rather than
-        // inside one: a dispose already under way finishes, since abandoning a
-        // blueprint mid-teardown is what leaks the handles this tool exists to
-        // free.
+        // Checked between disposals rather than inside one: a dispose already
+        // under way finishes, since abandoning a blueprint mid-teardown leaks
+        // the handles this tool exists to free.
         if (ctx?.signal?.aborted) {
           aborted = true;
           break;
@@ -115,17 +100,14 @@ Returns { stopped } - the URNs of the services that were actually live and got s
         const matches = scoped
           ? matchedId !== undefined
           : isDeviceServiceUrn(urn, DEVICE_OWNED_NAMESPACES);
-        // Ownership is recorded regardless of state. `disposeService` moves a
-        // node to IDLE without removing it, so a device this session already
-        // stopped would otherwise be reported as unmatched by the next scoped
-        // call — turning the routine "stop one, then stop the rest" sequence
-        // into a false alarm about a mistyped id.
+        // Ownership counts regardless of state: `disposeService` leaves the
+        // node in place as IDLE, so a device this session already stopped would
+        // otherwise be reported unmatched by the next scoped call.
         if (matchedId !== undefined) matchedIds.add(matchedId.toLowerCase());
         if (matches && entry.state !== ServiceState.IDLE) {
-          // Dispose any non-IDLE node (this also clears ERROR/TERMINATING
-          // nodes), but only report the ones that were actually live — an
-          // ERROR node (e.g. a tvOS SimulatorServer that refused to start)
-          // was never a running server.
+          // An ERROR node (e.g. a tvOS SimulatorServer that refused to start)
+          // is disposed too, but was never a running server, so it is not
+          // reported stopped.
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
           if (wasLive) stopped.push(urn);
@@ -137,19 +119,16 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           survivors.push(urn);
         }
       }
-      // An abort left the rest of the snapshot untouched, so neither `unmatched`
-      // nor `left_running` can be computed — an id whose only service the sweep
-      // never reached would read as a typo, and every namespace past the break
-      // would read as unreachable. Report the partial teardown as partial.
+      // The rest of the snapshot was never visited, so `unmatched` would read
+      // an id the sweep never reached as a typo, and `left_running` would miss
+      // sessions still up. Report the partial teardown as partial.
       if (aborted) return { stopped, aborted: true };
       if (!scoped) return { stopped };
-      // A scoped stop that named an id owning nothing is indistinguishable from
-      // a clean machine unless we say so — and when that id is a typo, or a
-      // device NAME passed where an id belongs, its simulator-server, devtools
-      // and (on tvOS) two --timeout 3600 daemons are being left running.
-      // Compared AND de-duplicated case-insensitively, to match the lookup: two
-      // spellings of one id are one mistake, reported in the caller's first
-      // spelling.
+      // A scoped stop that named an id owning nothing is indistinguishable
+      // from a clean machine unless we say so — and when that id is a typo, its
+      // device's services are being left running. Compared AND de-duplicated
+      // case-insensitively to match the lookup: two spellings of one id are one
+      // mistake, reported in the caller's first spelling.
       const seen = new Set<string>();
       const unmatched = devices.filter((id) => {
         const key = id.toLowerCase();
@@ -160,8 +139,7 @@ Returns { stopped } - the URNs of the services that were actually live and got s
       // A debugger session opened against a multi-device Metro is keyed by the
       // `logicalDeviceId` Metro echoed, which no `list-devices` id equals — so
       // no `devices` scope can reap it, and the ids that DID match keep it out
-      // of `unmatched`. Name it, so the caller can pass that id (which does
-      // reap it) instead of reading silence as a clean machine.
+      // of `unmatched`. Name it so the caller can re-call with that id.
       const leftRunning = unnameableSessionUrns(survivors);
       const result: { stopped: string[]; unmatched?: string[]; left_running?: string[] } = {
         stopped,

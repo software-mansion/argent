@@ -89,7 +89,7 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     );
   }
 
-  // Fast path: use pre-built index from analyze if available
+  // Fast path: index already built by react-profiler-analyze.
   if (sessionPaths.cpuSampleIndexPath) {
     try {
       const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
@@ -101,11 +101,10 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
       }
       return { index, commitTree };
     } catch {
-      // Fall through to building from raw profile
+      // Fall through to building from the raw profile.
     }
   }
 
-  // Slow path: build index from raw CPU profile
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
   let commitTree = null;
   if (sessionPaths.commitsPath) {
@@ -117,14 +116,9 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
 }
 
 /**
- * Explain a window that produced no ranked functions.
- *
- * "No CPU hotspots found" was indistinguishable from "this commit was cheap",
- * which is what made the documented drill-down a dead end (#619). Each way of
- * finding nothing has a different meaning and a different next step, so each
- * says so — in particular a window that IS covered by samples but contains only
- * idle frames, which on real Hermes data is the common case (99% of samples in
- * the reported session were idle).
+ * Explain a window that produced no ranked functions: a coverage gap, an empty
+ * capture and a covered-but-idle window each mean something different and need
+ * a different next step, so a bare "no hotspots" was a dead end (#619).
  */
 function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number): string {
   const range = `${res.sampleRangeMs.start.toFixed(1)}–${res.sampleRangeMs.end.toFixed(1)}ms`;
@@ -147,7 +141,6 @@ function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number
   }
 
   if (res.samplesInWindow > 0) {
-    // Covered, but nothing was running: the honest and useful answer.
     return (
       `_${res.samplesInWindow} sample(s) covering ${res.coveredMs.toFixed(1)}ms fell inside ` +
       `${window}, and all of them were idle — the JS thread was not executing during this window. ` +
@@ -164,7 +157,7 @@ function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number
   );
 }
 
-/** Coverage line: what the numbers below are actually a measurement of. */
+/** States what the numbers below are a measurement of. */
 function coverageNote(res: CpuWindowResult, startMs: number, endMs: number): string {
   const widthMs = endMs - startMs;
   const lines = [
@@ -221,7 +214,6 @@ function renderCallTree(
 ): string {
   const { nodeMap, sampleNodeIds, timestampsMs } = index;
 
-  // Find all nodes matching the function name
   const matchingNodeIds: number[] = [];
   for (const [id, node] of nodeMap) {
     if (node.callFrame.functionName === functionName) {
@@ -235,7 +227,6 @@ function renderCallTree(
 
   const matchingSet = new Set(matchingNodeIds);
 
-  // Count self hits
   let selfHits = 0;
   for (const nodeId of sampleNodeIds) {
     if (matchingSet.has(nodeId)) selfHits++;
@@ -253,7 +244,6 @@ function renderCallTree(
     "",
   ];
 
-  // Find callees: children of matching nodes
   const calleeHits = new Map<string, { hits: number; node: HermesProfileNode }>();
   for (const nodeId of matchingNodeIds) {
     const node = nodeMap.get(nodeId);
@@ -289,7 +279,6 @@ function renderCallTree(
   }
 
   if (includeCallers) {
-    // Build parent map
     const childToParent = new Map<number, number>();
     for (const node of nodeMap.values()) {
       for (const childId of node.children ?? []) {
@@ -351,7 +340,7 @@ function renderComponentCpu(
   }
 
   // The report prints display names (wrappers stripped), so accept those too —
-  // otherwise the tool refuses the name analyze just told the caller to use.
+  // otherwise the tool refuses the name analyze told the caller to use.
   const resolution = resolveComponentName(
     componentName,
     commitTree.commits.map((c) => c.componentName)
@@ -371,7 +360,6 @@ function renderComponentCpu(
     return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
-  // Group by commitIndex to get unique commit windows
   const commitWindows = new Map<number, { start: number; end: number; duration: number }>();
   for (const c of componentCommits) {
     if (!commitWindows.has(c.commitIndex)) {
@@ -383,7 +371,6 @@ function renderComponentCpu(
     }
   }
 
-  // Aggregate CPU across all commit windows
   const aggregated = new Map<
     string,
     { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
@@ -462,8 +449,7 @@ Use when investigating JS CPU hotspots or correlating CPU cost with specific com
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
-  // RN-only: reads Hermes-format CPU profiles. Chromium's V8 sample format is
-  // different — see the PR description for the follow-up scope.
+  // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {

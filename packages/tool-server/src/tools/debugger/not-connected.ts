@@ -12,10 +12,10 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 
 /**
  * Structured result debugger-status and debugger-log-registry return instead of
- * failing when the JS debugger cannot be reached. Precondition failures (Metro
- * down, no app attached, wrong device id, CDP unreachable) are expected states
- * an agent must handle, not tool malfunctions — reporting them as errors is what
- * drove these tools' 37%/24% telemetry failure rates and agent retry storms.
+ * failing when the JS debugger cannot be reached. Preconditions (Metro down, no
+ * app attached, wrong device id, CDP unreachable) are expected states an agent
+ * must handle, not tool malfunctions — reporting them as errors inflated these
+ * tools' failure rates and invited agent retry storms.
  */
 export interface DebuggerNotConnectedResult {
   status: "not_connected";
@@ -23,17 +23,15 @@ export interface DebuggerNotConnectedResult {
   /** Omitted for Chromium ids — their CDP port lives in the device id and the `port` param is ignored. */
   port?: number;
   reason: DebuggerNotConnectedReason;
-  /** Original error message, preserved for agents that match on its text. */
+  /** Original error message; guidance strings point agents at its text. */
   detail: string;
   guidance: string;
 }
 
 /**
- * Guidance strings for Metro-backed targets (iOS / Android / Vega). Chromium
- * ids get platform-corrected overrides below — on Chromium, launch-app cannot
- * start anything (its handler is a documented no-op) and it re-resolves the
- * very CDP service that just failed, so pointing an agent at it from a
- * cdp_unreachable result would manufacture a guaranteed second failure.
+ * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
+ * live in CHROMIUM_GUIDANCE: there launch-app is a no-op that re-resolves the
+ * CDP service that just failed, so pointing an agent at it only fails again.
  */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
@@ -72,16 +70,15 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
-  // Reachable from the connect pipeline's enable/binding sends when the target
-  // accepts the socket but its JS runtime never answers (frozen, or paused at a
-  // breakpoint). Post-connect hangs are different: an OPEN socket still reports
-  // status "connected" (see the socket-state gate comment in debugger-status).
+  // Raised by the connect pipeline's enable/binding sends when the target
+  // accepts the socket but its JS runtime never answers. A post-connect hang
+  // differs: the OPEN socket still reports status "connected" (see the
+  // socket-state gate in debugger-status).
   [FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT]: "runtime_unresponsive",
   [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE]: "cdp_unreachable",
-  // "Reached but not CDP / malformed answer" — a non-CDP server squatting the
-  // debug port, an HTTP error status, or a non-JSON body. Same precondition
-  // class as the Metro arm's non-Metro-port-occupant (detail names what
-  // actually answered), so it must not escape as a thrown tool failure.
+  // Reached but not CDP: a squatter on the debug port, an HTTP error status, or
+  // a non-JSON body — the same precondition class as the Metro arm's non-Metro
+  // occupant, so it must not escape as a thrown tool failure.
   [FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE]: "cdp_unreachable",
   [FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET]: "cdp_unreachable",
   [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING]: "reconnecting",
@@ -89,18 +86,14 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
 
 /**
  * Map an error thrown while resolving the debugger service to a not-connected
- * reason, or undefined when the fault is unexpected and must keep failing
- * loudly (payload bugs, console-server binds, plain Errors, ...).
+ * reason, or undefined when the fault is unexpected and must keep failing loudly.
  */
 export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason | undefined {
   const code = getFailureSignal(err)?.error_code;
   return code ? NOT_CONNECTED_CODE_MAP[code] : undefined;
 }
 
-/**
- * Reason guidance that must read differently on a Chromium target. Keyed
- * sparsely: reasons without an override fall back to GUIDANCE.
- */
+/** Chromium overrides; reasons without one fall back to GUIDANCE. */
 const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
   cdp_unreachable:
     "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
@@ -131,9 +124,8 @@ export function buildNotConnected(
 }
 
 /**
- * Emit the debugger:tool_outcome event — exactly once per invocation, from the
- * connected return, the socket-state-gate branch, and the classified catch
- * alike. Coded values only; joins tool:invoke/tool:complete via
+ * Emit debugger:tool_outcome exactly once per invocation, on every returned
+ * result. Coded values only; joins tool:invoke/tool:complete via
  * tool_invocation_id.
  */
 export function trackDebuggerOutcome(
@@ -145,10 +137,8 @@ export function trackDebuggerOutcome(
   let platform;
   try {
     // Classify the id the caller CONNECTED with, not the raw param: a forwarded
-    // Metro logicalDeviceId (an opaque hex handle) fails the iOS-UDID shape
-    // test and would misreport every iOS Metro session as "android". The alias
-    // map (learned at connect) rewrites it back to the UDID/serial; ids with no
-    // learned alias pass through unchanged, keeping the old behavior.
+    // Metro logicalDeviceId fails the iOS-UDID shape test and would misreport
+    // every iOS Metro session as "android".
     const deviceId = canonicalDeviceId(params.device_id);
     platform = deviceId ? classifyDeviceForTelemetry(deviceId) : undefined;
   } catch {
@@ -165,7 +155,7 @@ export function trackDebuggerOutcome(
 /**
  * Resolve the shared debugger service for a status-style tool, preserving the
  * connect-on-first-call contract. Passes ref.options through — the Chromium
- * wrapper factory requires the resolved DeviceInfo and hard-fails without it.
+ * factory hard-fails without the resolved DeviceInfo.
  */
 export async function resolveDebuggerService(
   registry: Registry,
@@ -178,9 +168,9 @@ export async function resolveDebuggerService(
 }
 
 /**
- * Flow integration: a not_connected result is a successful tool return, but a
- * recorded flow step that used these tools as a connectivity gate must not
- * silently green-pass on it. Mirrors isUnmetUiWaitResult for await-ui-element.
+ * A not_connected result is a successful tool return, but a flow step using
+ * these tools as a connectivity gate must not green-pass on it. Mirrors
+ * isUnmetUiWaitResult for await-ui-element.
  */
 export function isDebuggerNotConnectedResult(
   toolId: string,

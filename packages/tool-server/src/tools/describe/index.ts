@@ -9,7 +9,7 @@ import type {
 import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
-import { iosRequires, describeIos } from "./platforms/ios";
+import { iosRequires, describeIos, withBootCaveatOncePerDevice } from "./platforms/ios";
 import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
@@ -19,11 +19,8 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
 
-// In-between layer between the per-platform adapters (which still own all
-// pruning — the Android v2 trimmer in uiautomator-parser stays untouched) and
-// the public DescribeResult. The internal `tree` is converted to a token-
-// efficient text rendering here and then dropped, so the caller (LLM) never
-// pays for the JSON tree.
+// Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
+// never pays for the JSON tree. Pruning stays in the per-platform adapters.
 function withDescription(data: DescribeTreeData): DescribeResult {
   const out: DescribeResult = {
     description: formatDescribeTree(data.tree, { source: data.source }),
@@ -65,23 +62,16 @@ interface ChromiumServices {
   chromium: ChromiumCdpApi;
 }
 
-// `describe` doesn't fit dispatchByPlatform's standard service-typed
-// signature because the iOS handler resolves AX / native-devtools through
-// `registry` (closed over here) rather than via the registry's services()
-// declaration. We still feed `iosRequires` / `androidRequires` to the
-// dispatcher so the per-branch host-binary preflight fires uniformly. The
-// Chromium branch *does* go through services() since the CDP session lives in
-// the registry as a normal service blueprint.
+// The service type params are untyped because the iOS handler resolves AX /
+// native-devtools through the closed-over `registry` rather than the
+// registry's services() declaration; only the Chromium CDP session is a normal
+// service blueprint. `iosRequires` / `androidRequires` still go through the
+// dispatcher so the per-branch host-binary preflight fires uniformly.
 //
-// TV targets are handled *inside* the platform branches rather than as a
-// fourth branch: TV is not a `platform` (a tvOS sim classifies as "ios" and an
-// Android TV emulator as "android" by id shape), it's a `runtimeKind` that
-// spans both. So each platform branch runtime-probes its own TV kind and
-// delegates to the shared focus-driven `describeTv` (in platforms/tv.ts) —
-// returning the focused / focusable view instead of the iOS ax-service or
-// Android uiautomator tree, which a focus-driven UI either can't serve or
-// shouldn't be tapped from. One `describe` thus covers phones, tablets, and
-// TVs through the normal dispatch.
+// TV is not a `platform` but a `runtimeKind` spanning two (a tvOS sim
+// classifies as "ios", an Android TV emulator as "android" by id shape), so
+// instead of a fourth branch the iOS and Android branches runtime-probe their
+// own TV kind and delegate to the shared focus-driven `describeTv`.
 function makeDescribeExecute(
   registry: Registry
 ): (
@@ -105,23 +95,31 @@ function makeDescribeExecute(
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+          : withDescription(
+              withBootCaveatOncePerDevice(
+                device.id,
+                await describeIos(registry, device, params, { isTvOs: false })
+              )
+            ),
     },
     iosRemote: {
-      // describeIos already handles both ax-service (TCP) and native-devtools
-      // fallback — both blueprints route through sim-remote when the device is
-      // ios-remote. Only the preflight dep differs. Remote sims are iOS-only
-      // (never tvOS), so the isTvOs verdict is always false.
+      // Both the ax-service and native-devtools blueprints route through
+      // sim-remote for an ios-remote device, so only the preflight dep differs
+      // from the ios branch.
       requires: ["sim-remote"],
       handler: async (_services, params, device) =>
-        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+        withDescription(
+          withBootCaveatOncePerDevice(
+            device.id,
+            await describeIos(registry, device, params, { isTvOs: false })
+          )
+        ),
     },
     android: {
       requires: androidRequires,
       handler: async (_services, params, device) =>
-        // Resolve the form factor once and route on it: a TV goes to the
-        // focus-driven describe, a phone to the uiautomator tree — and pass the
-        // known `isTv: false` through so describeAndroid doesn't re-probe.
+        // Resolve the form factor once and thread the known `isTv: false`
+        // through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
           ? describeTv(registry, device)
           : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),

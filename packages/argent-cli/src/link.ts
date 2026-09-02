@@ -8,7 +8,8 @@ import {
   parseLinkTarget,
   type LinkConfig,
 } from "@argent/tools-client";
-import { parsePort, StartFlagError } from "./server.js";
+import { parsePort, parseOrStartFlagError, StartFlagError } from "./server.js";
+import { parseCommandArgs, type OptionSpecs } from "./command-args.js";
 
 interface LinkFlags {
   host: string | null;
@@ -43,8 +44,7 @@ function validateHost(raw: string): string {
 }
 
 function validateConnectPort(raw: string): number {
-  // Reuse parsePort for digits/range, then additionally reject 0 — you can
-  // bind to "pick a free port" but never connect to port 0.
+  // parsePort allows 0 (bind = "pick a free port"); you can't connect to port 0.
   const port = parsePort(raw);
   if (port === 0) {
     throw new StartFlagError(`--port must be 1..65535 for a connect target, got "${raw}"`);
@@ -52,101 +52,73 @@ function validateConnectPort(raw: string): number {
   return port;
 }
 
+const LINK_OPTIONS = {
+  "help": { kind: "boolean", alias: "h" },
+  "yes": { kind: "boolean", alias: "y" },
+  "no-verify": { kind: "boolean" },
+  "host": { kind: "value" },
+  "port": { kind: "value", alias: "p" },
+  "token": { kind: "value" },
+} as const satisfies OptionSpecs;
+
 export function parseLinkFlags(argv: string[]): LinkFlags {
+  const { positionals, options } = parseOrStartFlagError(() =>
+    parseCommandArgs(argv, LINK_OPTIONS)
+  );
   const flags: LinkFlags = {
     host: null,
     port: null,
     token: null,
     url: null,
-    yes: false,
-    noVerify: false,
-    help: false,
+    yes: options.yes === true,
+    noVerify: options["no-verify"] === true,
+    help: options.help === true,
   };
 
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    const takeValue = (name: string): string => {
-      const v = argv[i + 1];
-      if (v === undefined) throw new StartFlagError(`${name} requires a value`);
-      i += 1;
-      return v;
-    };
-    if (tok === "--help" || tok === "-h") {
-      flags.help = true;
-      continue;
-    }
-    if (tok === "--yes" || tok === "-y") {
-      flags.yes = true;
-      continue;
-    }
-    if (tok === "--no-verify") {
-      flags.noVerify = true;
-      continue;
-    }
-    if (tok === "--host") {
-      flags.host = validateHost(takeValue("--host"));
-      continue;
-    }
-    if (tok.startsWith("--host=")) {
-      flags.host = validateHost(tok.slice("--host=".length));
-      continue;
-    }
-    if (tok === "--port" || tok === "-p") {
-      flags.port = validateConnectPort(takeValue("--port"));
-      continue;
-    }
-    if (tok.startsWith("--port=")) {
-      flags.port = validateConnectPort(tok.slice("--port=".length));
-      continue;
-    }
-    if (tok === "--token") {
-      flags.token = takeValue("--token");
-      continue;
-    }
-    if (tok.startsWith("--token=")) {
-      flags.token = tok.slice("--token=".length);
-      continue;
-    }
-    // Positional target: an argent://[<token>@]<host>:<port> pairing string or a
-    // full http(s):// URL (for a reverse proxy / tunnel). parseLinkTarget throws
-    // on a malformed recognized URL and returns null for anything else.
-    if (!tok.startsWith("-")) {
-      const parsed = parseLinkTarget(tok);
-      if (!parsed) {
-        throw new StartFlagError(
-          `Unrecognized argument "${tok}". Expected an argent://… pairing string, ` +
-            `an http(s):// URL, or flags (see --help).`
-        );
-      }
-      flags.host = validateHost(parsed.host);
-      flags.port = validateConnectPort(String(parsed.port));
-      flags.url = parsed.url;
-      if (parsed.token) flags.token = parsed.token;
-      continue;
-    }
-    throw new StartFlagError(`Unknown flag: ${tok}`);
+  // The one optional positional is a pairing string / URL. parseLinkTarget
+  // throws on a malformed argent:// or http(s):// target and returns null for
+  // anything it doesn't recognize.
+  if (positionals.length > 1) {
+    throw new StartFlagError(`Unexpected argument "${positionals[1]}"`);
   }
+  const target = positionals[0];
+  if (target !== undefined) {
+    const parsed = parseLinkTarget(target);
+    if (!parsed) {
+      throw new StartFlagError(
+        `Unrecognized argument "${target}". Expected an argent://… pairing string, ` +
+          `an http(s):// URL, or flags (see --help).`
+      );
+    }
+    flags.host = validateHost(parsed.host);
+    flags.port = validateConnectPort(String(parsed.port));
+    flags.url = parsed.url;
+    if (parsed.token) flags.token = parsed.token;
+  }
+  // Explicit flags refine the target.
+  if (options.host !== undefined) flags.host = validateHost(options.host as string);
+  if (options.port !== undefined) flags.port = validateConnectPort(options.port as string);
+  if (options.token !== undefined) flags.token = options.token as string;
 
   return flags;
 }
+
+const UNLINK_OPTIONS = {
+  help: { kind: "boolean", alias: "h" },
+  yes: { kind: "boolean", alias: "y" },
+} as const satisfies OptionSpecs;
 
 export function parseUnlinkFlags(argv: string[]): UnlinkFlags {
-  const flags: UnlinkFlags = { yes: false, help: false };
-  for (const tok of argv) {
-    if (tok === "--help" || tok === "-h") {
-      flags.help = true;
-      continue;
-    }
-    if (tok === "--yes" || tok === "-y") {
-      flags.yes = true;
-      continue;
-    }
-    throw new StartFlagError(`Unknown flag: ${tok}`);
+  const { positionals, options } = parseOrStartFlagError(() =>
+    parseCommandArgs(argv, UNLINK_OPTIONS)
+  );
+  if (positionals.length > 0) {
+    throw new StartFlagError(`Unexpected argument "${positionals[0]}"`);
   }
-  return flags;
+  return { yes: options.yes === true, help: options.help === true };
 }
 
-export function printLinkHelp(): void {
+function printLinkHelp(): void {
   console.log(`Usage: argent link [<target>] [flags]
 
 Route argent client requests (argent tools / run / mcp) to a remote tool-server
@@ -210,7 +182,7 @@ Notes:
 `);
 }
 
-export function printUnlinkHelp(): void {
+function printUnlinkHelp(): void {
   console.log(`Usage: argent unlink [flags]
 
 Remove the persisted remote tool-server link (~/.argent/link.json) and return
@@ -289,9 +261,9 @@ async function preflightHealth(
       signal: controller.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    // Drain the (large) /tools body so undici frees the keep-alive socket
-    // immediately; an unread body otherwise keeps the socket ref'd until the
-    // server's idle keepAliveTimeout (~5s), lingering the command after it's done.
+    // Cancel the (large) /tools body so undici frees the keep-alive socket now;
+    // an unread body keeps it ref'd until the server's ~5s idle keepAliveTimeout,
+    // delaying process exit.
     await res.body?.cancel().catch(() => {});
     if (!res.ok) {
       const hint =
@@ -320,8 +292,6 @@ function printSecurityCaveat(host: string, token: string | undefined, url: strin
   if (isLoopback(host)) return;
   const tls = url.startsWith("https://");
   if (tls) {
-    // TLS handles transport security; nothing alarming to add beyond the
-    // (already required) token for a public endpoint.
     if (!token) {
       process.stderr.write(
         pc.yellow(
@@ -376,7 +346,6 @@ export async function link(argv: string[]): Promise<void> {
 
   const existing = await readLinkConfig();
 
-  // Resolve host
   let host: string;
   if (flags.host !== null) {
     host = flags.host;
@@ -388,29 +357,25 @@ export async function link(argv: string[]): Promise<void> {
     host = await promptHost(existing);
   }
 
-  // Resolve port
   let port: number;
   if (flags.port !== null) {
     port = flags.port;
   } else if (flags.yes) {
-    // --yes with --host but no --port → default 3001
     port = 3001;
   } else {
     port = await promptPort(existing);
   }
 
-  // Resolve token: an explicit --token / argent:// URL wins; otherwise reuse
-  // the existing link's token when re-pointing at the same target, so a bare
-  // `argent link` re-run doesn't silently drop authentication.
+  // Reuse the existing link's token when re-pointing at the same target, so a
+  // bare `argent link` re-run doesn't silently drop authentication.
   const token: string | undefined =
     flags.token ??
     (existing && existing.host === host && existing.port === port ? existing.token : undefined);
 
-  // A full http(s):// / argent:// target carries its own canonical URL (scheme,
-  // optional path); the --host/--port path builds a plain http://host:port.
+  // A full http(s):// target keeps its own scheme and path prefix; --host/--port
+  // builds a plain http://host:port.
   let url = flags.url ?? formatToolsServerUrl(host, port);
 
-  // Overwrite confirmation (interactive only)
   if (!flags.yes && existing) {
     if (existing.url === url) {
       p.log.info(`Already linked to ${pc.cyan(url)}.`);
@@ -427,7 +392,6 @@ export async function link(argv: string[]): Promise<void> {
     }
   }
 
-  // Pre-flight health check (unless --no-verify)
   if (!flags.noVerify) {
     while (true) {
       const spinnerActive = !flags.yes;
@@ -446,7 +410,7 @@ export async function link(argv: string[]): Promise<void> {
       const detail = result.error ? ` (${result.error})` : "";
 
       if (flags.yes) {
-        // Non-interactive: can't prompt, keep original fail-fast behaviour.
+        // Non-interactive: can't prompt, so fail fast.
         console.error(
           `Error: pre-flight GET ${url}/tools failed${detail}. ` +
             `Make sure the remote tool-server is running, or pass --no-verify to skip.`
@@ -477,7 +441,6 @@ export async function link(argv: string[]): Promise<void> {
         port = await promptPort(existing, port);
         url = formatToolsServerUrl(host, port);
       }
-      // "retry" (or after "modify") loops and re-runs preflightHealth.
     }
   }
 

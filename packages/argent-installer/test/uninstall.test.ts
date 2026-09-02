@@ -57,6 +57,7 @@ vi.mock("@clack/prompts", () => ({
 
 let tmpDir: string;
 let originalCwd: string;
+let savedAgent: string | undefined;
 
 function writeFile(filePath: string, contents = "test"): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -66,6 +67,13 @@ function writeFile(filePath: string, contents = "test"): void {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
   originalCwd = process.cwd();
+  // detectPackageManager() reads npm_config_user_agent, so the uninstall
+  // command these tests assert on is whichever package manager runs the suite.
+  // Unset it to pin the npm shape — otherwise the execFileSync mock below,
+  // which throws only for "npm", never fires and the failure-path tests
+  // silently exercise the success path.
+  savedAgent = process.env.npm_config_user_agent;
+  delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
   childProcessMock.execSync.mockImplementation(() => "/usr/local/bin/argent\n");
   childProcessMock.execFileSync.mockImplementation(() => undefined);
@@ -73,6 +81,8 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(originalCwd);
+  if (savedAgent === undefined) delete process.env.npm_config_user_agent;
+  else process.env.npm_config_user_agent = savedAgent;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

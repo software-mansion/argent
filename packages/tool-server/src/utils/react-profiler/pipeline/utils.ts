@@ -1,11 +1,7 @@
 import type { DevToolsChangeDescription } from "../types/input";
 import type { ReRenderReason } from "../types/output";
 
-/**
- * Derive the re-render reason from a commit's change description.
- * hookTypes (fiber._debugHookTypes) is used to distinguish 'state' from 'hooks'.
- * Shared between 00-preprocess and 01-reduce to avoid duplication.
- */
+/** hookTypes (fiber._debugHookTypes) is what separates 'state' from 'hooks'. */
 export function deriveReason(
   cd: DevToolsChangeDescription | null,
   hookTypes?: string[] | null
@@ -13,7 +9,6 @@ export function deriveReason(
   if (cd === null) return "unknown";
   if (cd.props !== null && cd.props.length > 0) return "props";
   if (cd.didHooksChange || (cd.hooks !== null && cd.hooks.length > 0)) {
-    // Distinguish state-driven hook changes from generic hook changes
     if (hookTypes && cd.hooks) {
       const isState = cd.hooks.some((idx) => {
         const ht = hookTypes[idx];

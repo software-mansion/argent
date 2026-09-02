@@ -45,7 +45,11 @@ beforeAll(async () => {
   chmodSync(join(stubDir, "ps"), 0o755);
   bundlePath = join(stubDir, "tool-server.cjs");
   copyFileSync(FIXTURE_BUNDLE, bundlePath);
+  // os.homedir() — which STATE_DIR is built from — reads USERPROFILE on Windows
+  // and HOME elsewhere, so pin both or the redirect is inert there and these
+  // tests operate on the real ~/.argent.
   process.env.HOME = stubDir;
+  process.env.USERPROFILE = stubDir;
   ambientPath = process.env.PATH;
   // The stub dir first so `ps` resolves to it; node's own dir because
   // spawnToolsServer launches `node` off PATH. Neither holds a real `ps`.

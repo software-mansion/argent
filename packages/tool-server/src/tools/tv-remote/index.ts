@@ -9,10 +9,8 @@ import { vegaImpl } from "./platforms/vega";
 
 const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
-// `button` accepts a single button OR a path of buttons. A path runs in ONE
-// tool call (and, on Vega, one device round-trip), so it is strongly preferred
-// for any multi-step move. Some MCP clients serialize array arguments as a JSON
-// (or comma-separated) string, so coerce those back to an array before validating.
+// Some MCP clients serialize array arguments as a JSON (or comma-separated)
+// string, so coerce those back to an array before validating.
 const buttonSchema = z
   .preprocess(
     (val) => {
@@ -71,13 +69,10 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// `tv-remote` drives the directional remote on every TV platform through
-// `dispatchByPlatform`: Apple TV (tvOS HID daemon) and Android TV (`adb input
-// keyevent`) share the focus-engine subset of buttons; Vega (Fire TV) injects
-// the full remote vocabulary over `inputd-cli`. The ios/android branches
-// runtime-probe their TV kind inside resolveTvApi (a tvOS sim is "ios", an
-// Android TV emulator "android" by id shape) and reject non-TV targets there.
-// No eager service: the backend is resolved lazily per platform.
+// `capability` can't tell a TV apart from a phone, so the ios/android branches
+// accept any Apple/Android target and `resolveTvApi` rejects the non-TV ones at
+// call time — which is also why `services()` is empty: the backend can only be
+// resolved lazily, per device.
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
   return {
     id: "tv-remote",
@@ -96,10 +91,8 @@ Multi-step navigation: pass a path as { button: ["up","right","right","select"] 
 Read the screen with \`describe\` before and after to see where focus landed.
 Returns { pressed, count }.`,
     alwaysLoad: true,
-    // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses that
-    // settle apart in one held device session — minutes of wall-clock. Mark
-    // long-running so the MCP adapter doesn't abort it at its per-request fetch
-    // timeout and the idle-shutdown timer is kept warm for the call's duration.
+    // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses, sent
+    // one round-trip at a time on the Apple/Android path — minutes of wall-clock.
     longRunning: true,
     searchHint:
       "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",

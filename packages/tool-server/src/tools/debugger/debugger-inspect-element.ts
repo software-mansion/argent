@@ -15,30 +15,26 @@ export interface InspectItem {
   skipReason?: string;
 }
 
-// A raw bundle URL (e.g. http://localhost:8081/index.bundle) is not an openable
-// source: readSourceFragment rejects it and `code` stays null. The symbolication
-// fallback assigns such a URL as `source` when Metro cannot map a frame, so for
-// skip-filter purposes it must count as "no source" — otherwise every framework
-// wrapper it touches would survive Pass 1 / Pass 3 and flood the result in
-// exactly the symbolication-failure mode the fallback exists to handle.
+// When Metro cannot map a frame, the fallback stores the raw bundle URL as
+// `source`, but readSourceFragment rejects it and `code` stays null. It must
+// count as "no source" here, or every framework wrapper survives Pass 1 / Pass 3.
 function hasRealSource(item: InspectItem): boolean {
   return item.source !== null && !/^https?:\/\//.test(item.source.file);
 }
 
 /**
- * Filters and deduplicates the raw inspect-element hierarchy.
- * Applied after source resolution, before maxItems truncation.
+ * Filters and deduplicates the raw inspect-element hierarchy, after source
+ * resolution and before maxItems truncation.
  *
- * When includeSkipped is true, filtered items are kept in the result
- * with `skipped: true` and a `skipReason` string instead of being removed.
+ * With includeSkipped, filtered items stay in the result carrying
+ * `skipped: true` and a `skipReason` instead of being removed.
  */
 export function filterInspectItems(items: InspectItem[], includeSkipped = false): InspectItem[] {
   function skip(item: InspectItem, reason: string): InspectItem {
     return includeSkipped ? { ...item, skipped: true, skipReason: reason } : item;
   }
 
-  // Deduplicate consecutive AnimatedComponent(X) / Animated(X) that wrap the
-  // immediately preceding host component.
+  // Drop AnimatedComponent(X) / Animated(X) that wraps an immediately preceding X.
   const animDeduped: InspectItem[] = [];
   for (const item of items) {
     const inner = item.name.startsWith("AnimatedComponent(")
@@ -59,9 +55,8 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     animDeduped.push(item);
   }
 
-  // Pass 1: Source-aware skip-rule filter.
-  // Remove items that match skip patterns ONLY when they have no source file.
-  // Always keep index 0 (the leaf / tapped element) regardless of skip rules.
+  // Pass 1: skip rules apply only to items with no source file.
+  // Index 0 (the tapped leaf) is kept regardless.
   const skipFiltered: InspectItem[] = [];
   for (let i = 0; i < animDeduped.length; i++) {
     const item = animDeduped[i];
@@ -79,8 +74,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     skipFiltered.push(item);
   }
 
-  // Pass 2: Same-source deduplication.
-  // When consecutive items share the exact same source file:line, keep only the first.
+  // Pass 2: of consecutive items sharing one source file:line, keep the first.
   const srcDeduped: InspectItem[] = [];
   let lastKeptSource: InspectItem["source"] = null;
   for (const item of skipFiltered) {
@@ -100,8 +94,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     srcDeduped.push(item);
   }
 
-  // Pass 3: Anonymous host element pruning.
-  // Remove "View" items with no source (keep the leaf at index 0).
+  // Pass 3: drop source-less "View" wrappers, except the first kept item.
   const result: InspectItem[] = [];
   let keptCount = 0;
   for (const item of srcDeduped) {
@@ -192,10 +185,8 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
 Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
-  // RN-only: uses React Native's internal getInspectorDataForViewAtPoint and
-  // Metro's /symbolicate endpoint. Chromium's CDP has DOM.getNodeForLocation
-  // for "what's here?" but the source-map flow would need a complete rewrite —
-  // out of scope for this port.
+  // RN-only: needs React Native's internal getInspectorDataForViewAtPoint and
+  // Metro's /symbolicate; the Chromium session has no source resolver.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
@@ -269,8 +260,7 @@ Use when you need the source file and line for a component at a tap coordinate. 
 
     const deduped = filterInspectItems(items, params.includeSkipped);
 
-    // maxItems counts only non-skipped items toward the limit;
-    // skipped items between kept items are included in the output.
+    // maxItems counts non-skipped items only; skipped items before the cutoff stay.
     let truncated: InspectItem[];
     let totalKept: number;
     if (params.includeSkipped) {

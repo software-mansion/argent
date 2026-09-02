@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generic tool-server E2E driver shared by every cell of e2e-device-smoke.yml
-# (iOS sim / Android emulator / Chromium-Electron, on macOS or Linux). It boots
-# ONE device through an already-running tool-server, then asserts the core
-# interaction pipeline works headlessly:
+# Generic tool-server E2E driver for the e2e-device-smoke.yml jobs (iOS sim on
+# macOS, Chromium/Electron on Linux and macOS). It boots ONE device through an
+# already-running tool-server, then asserts the core interaction pipeline:
 #   1. boot-device reports booted:true
 #   2. screenshot returns real (non-blank) pixels
 #   3. gesture-tap round-trips
-# This mirrors the three assertions inlined in wayland-e2e.yml, but parameterised
-# so each platform job stays a few lines. Every tool takes the device id as
-# `udid` and screenshots come back as the same ArtifactHandle envelope
-# (data.image.hostPath) regardless of platform, so the body is uniform.
+# The same three assertions wayland-e2e.yml inlines for the Android emulator,
+# parameterised: screenshot and gesture-tap take the device as `udid` and answer
+# in the same shapes on every platform, so the body is uniform.
 #
 # Inputs (env):
-#   BOOT_JSON          required  JSON body for POST /boot-device
-#   DEVICE_ID          required  id/udid/serial for screenshot + gesture-tap
-#                                (e.g. emulator-5554, an iOS UDID, chromium-cdp-<port>)
-#   BASE_URL           optional  default http://127.0.0.1:3033/tools
-#   MIN_SHOT_BYTES     optional  default 20000 (all-zero framebuffer PNGs are ~3-7 KB)
-#   SLEEP_BEFORE_SHOT  optional  default 0  (Android needs ~15s for SurfaceFlinger)
-#   BOOT_CURL_TIMEOUT  optional  default 900 (curl -m seconds; > the boot budget)
-#   ARTIFACT_DIR       optional  default ${RUNNER_TEMP:-/tmp}; screenshot copied here
+#   BOOT_JSON          JSON body for POST /boot-device
+#   DEVICE_ID          udid for screenshot + gesture-tap
+#                      (an iOS UDID, chromium-cdp-<port>, an adb serial)
+#   BASE_URL           tool-server /tools endpoint
+#   MIN_SHOT_BYTES     screenshot size floor; all-zero framebuffers are ~3-7 KB
+#   SLEEP_BEFORE_SHOT  settle time before the first capture
+#   BOOT_CURL_TIMEOUT  curl -m for boot-device; must exceed the boot budget
+#   ARTIFACT_DIR       screenshot and raw response land here
 
 : "${BOOT_JSON:?BOOT_JSON is required}"
 : "${DEVICE_ID:?DEVICE_ID is required}"
@@ -52,16 +50,13 @@ fi
 
 echo "::group::screenshot"
 SHOT_JSON="$ARTIFACT_DIR/smoke-shot.json"
-# Retry a few times: a fresh-spawn streaming-screenshot race (issue #391) can
-# briefly return an error envelope before the first frame is available. A tiny
-# loop is cheap belt-and-suspenders for this one-shot smoke.
+# Retry: a fresh-spawn streaming-screenshot race (issue #391) can briefly return
+# an error envelope before the first frame is available.
 HOST_PATH=""
 for attempt in 1 2 3; do
   curl -sS -m 60 -X POST "${BASE_URL}/screenshot" \
     -H 'Content-Type: application/json' \
     -d "{\"udid\":\"${DEVICE_ID}\"}" >"$SHOT_JSON" || true
-  # Surface a tool-side error as a clean annotation instead of letting the
-  # hostPath extraction blow up with a raw python KeyError traceback.
   ERR=$(python3 -c "import json,sys;
 try:
     d=json.load(open('$SHOT_JSON'))
@@ -73,8 +68,8 @@ print(d.get('error','') if isinstance(d,dict) else '')")
     sleep 2
     continue
   fi
-  # The screenshot tool returns an ArtifactHandle ({ image: { hostPath, ... } });
-  # the job runs co-located with the tool-server so hostPath is readable here.
+  # hostPath is a tool-server-local path; this job is co-located, so it is
+  # readable here.
   HOST_PATH=$(python3 -c "import json;print(json.load(open('$SHOT_JSON')).get('data',{}).get('image',{}).get('hostPath',''))")
   [ -n "$HOST_PATH" ] && break
   echo "screenshot attempt ${attempt}/3 returned no hostPath"
@@ -86,25 +81,21 @@ if [ -z "$HOST_PATH" ]; then
 fi
 SHOT_PNG="$ARTIFACT_DIR/smoke-shot.png"
 cp "$HOST_PATH" "$SHOT_PNG"
-# `wc -c` instead of `stat` so the script is identical on macOS and Linux
-# (BSD stat uses -f%z, GNU stat uses -c%s).
+# `wc -c`, not `stat`: BSD stat uses -f%z, GNU stat uses -c%s.
 SZ=$(wc -c <"$SHOT_PNG" | tr -d '[:space:]')
 echo "screenshot=${SHOT_PNG} size=${SZ}B (floor ${MIN_SHOT_BYTES}B)"
 echo "::endgroup::"
-# An all-zero / uniform framebuffer PNG-compresses to a few KB; a real painted
-# screen is reliably larger. Guards against the boot "succeeding" but the
-# device never actually rendering.
+# Catches a boot that "succeeds" while the device never renders: a uniform
+# framebuffer PNG-compresses to a few KB, a painted screen is reliably larger.
 test "$SZ" -gt "$MIN_SHOT_BYTES" || {
   echo "::error::screenshot too small (${SZ}B) — likely a blank/all-zero framebuffer"
   exit 1
 }
 
 echo "::group::gesture-tap"
-# Mirror the screenshot retry above: the successful screenshot already proves the
-# device is painted, so a tap race (#391) is unlikely here — but a tiny loop keeps
-# the tap symmetric with the screenshot and avoids an unguarded hard-fail if the
-# same transport race ever surfaces. A non-JSON / error response just retries
-# instead of spewing a raw python traceback.
+# Symmetric with the screenshot retry: a successful screenshot already proves the
+# device is painted, so a tap race (#391) is unlikely — but a non-JSON or error
+# response retries instead of hard-failing on the first attempt.
 TAPPED=""
 for attempt in 1 2 3; do
   TAP_RESP=$(curl -sS -m 30 -X POST "${BASE_URL}/gesture-tap" \

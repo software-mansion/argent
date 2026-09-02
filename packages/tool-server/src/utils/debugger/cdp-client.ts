@@ -51,12 +51,10 @@ interface CDPExceptionDetails {
 }
 
 function formatExceptionDetails(details: CDPExceptionDetails): string {
-  // exception.description already contains the JS Error message + its own JS stack
   const description =
     details.exception?.description ?? details.text ?? "Script evaluation threw an exception";
 
-  // If the description already embeds a stack trace (Error: msg\n  at ...) use it as-is.
-  // Otherwise append the CDP-reported call frames.
+  // Append the CDP call frames only when the description lacks its own stack.
   if (description.includes("\n    at ") || description.includes("\n  at ")) {
     return description;
   }
@@ -104,20 +102,15 @@ export class CDPClient {
 
   constructor(wsUrl: string, options?: { sendOrigin?: boolean }) {
     this.wsUrl = wsUrl;
-    // Default true matches Metro / Expo. Chromium's devtools-target rejects
-    // upgrade requests that carry an Origin header (since the protocol is
-    // meant for IDE clients, not pages), so Chromium CDP callers must pass
-    // `sendOrigin: false`.
+    // Default true matches Metro / Expo. Chromium's devtools target rejects an
+    // upgrade carrying an Origin header, so those callers pass `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
   }
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // RN >= 0.85 Metro requires an Origin header. Expo's dev server does an
-      // exact match against its serverBaseUrl (127.0.0.1), so we normalize
-      // localhost → 127.0.0.1 in the Origin to satisfy both servers.
-      // For Chromium CDP (Chromium), the same header triggers a 403, so we
-      // honour the constructor's `sendOrigin: false`.
+      // RN >= 0.85 Metro requires an Origin header; Expo matches it exactly
+      // against its serverBaseUrl (127.0.0.1), hence the localhost rewrite.
       let headers: Record<string, string> | undefined;
       if (this.sendOrigin) {
         const { protocol, host } = new URL(this.wsUrl);
@@ -193,24 +186,17 @@ export class CDPClient {
   }
 
   /**
-   * Re-point this client at a different CDP WebSocket target (e.g. switching
-   * the active browser tab) WITHOUT emitting `disconnected`.
-   *
-   * Object identity is preserved, so existing references to this client
-   * (`server.cdp`, `api.cdp`, and every closure that captured it) automatically
-   * target the new tab after the swap — no rewiring needed. Callers that wire
-   * `disconnected` to teardown/termination therefore do not see a tab switch as
-   * a device loss.
-   *
-   * In-flight requests are rejected and per-connection state (enabled domains,
-   * parsed scripts) is reset — the new target starts fresh, so the caller must
+   * Re-point this client at another CDP target (e.g. a new browser tab) without
+   * emitting `disconnected`, which callers treat as a device loss. Object
+   * identity is preserved, so existing references need no rewiring. In-flight
+   * requests are rejected and per-connection state is reset, so the caller must
    * re-enable any domains it needs.
    */
   async reconnect(newWsUrl: string): Promise<void> {
     const old = this.ws;
     if (old) {
-      // Drop our handlers BEFORE closing so the impending close/error does not
-      // fire the `disconnected` event (which callers treat as a fatal teardown).
+      // Drop our handlers before closing so the impending close/error does not
+      // fire `disconnected`.
       old.removeAllListeners();
       this.ws = null;
       try {
@@ -219,8 +205,6 @@ export class CDPClient {
         /* already closing */
       }
     }
-    // Reject in-flight requests and clear per-connection caches, but keep this
-    // client object alive to receive the new socket.
     this.cleanup();
     this.wsUrl = newWsUrl;
     await this.connect();
@@ -250,10 +234,9 @@ export class CDPClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(
-          // The message carries its own recovery guidance so skills don't have
-          // to re-explain this state: the runtime is reachable but not
-          // answering, which agents otherwise read as a transient worth
-          // retry-looping (each loop iteration waits out this full timeout).
+          // The message carries its own recovery guidance: agents otherwise read
+          // this state as transient and retry-loop, each pass waiting out the
+          // full timeout.
           new FailureError(
             `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
               `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
@@ -286,14 +269,9 @@ export class CDPClient {
     expression: string,
     options?: { timeout?: number; returnByValue?: boolean; awaitPromise?: boolean }
   ): Promise<unknown> {
-    // returnByValue must default to true: without it CDP returns a RemoteObject
-    // reference (objectId + preview) for any object/array result and leaves
-    // `result.value` undefined, so the caller silently gets nothing back for
-    // non-primitive expressions. awaitPromise defaults to true so an expression
-    // that evaluates to a Promise resolves to its value instead of returning a
-    // bare Promise handle. Callers that drive a script via a side binding (see
-    // evaluateWithBinding) opt out of both to keep their fire-and-forget wire
-    // shape unchanged.
+    // Both default on: without returnByValue CDP answers a non-primitive with a
+    // RemoteObject reference and leaves `result.value` undefined, and without
+    // awaitPromise a Promise expression yields a bare Promise handle.
     const returnByValue = options?.returnByValue ?? true;
     const awaitPromise = options?.awaitPromise ?? true;
     const result = (await this.send(
@@ -320,22 +298,18 @@ export class CDPClient {
   async addBinding(name: string): Promise<void> {
     await this.send("Runtime.addBinding", { name });
 
-    // The legacy Hermes inspector (RN <= 0.72 — what Vega/Kepler serves, but also
-    // any older iOS/Android project) ACKs Runtime.addBinding and never installs
-    // the binding: no Runtime.bindingCalled ever fires, so anything waiting on one
-    // would hang for the full timeout. Probe once, here, so evaluateWithBinding
-    // can say so immediately instead.
-    //
-    // Only a POSITIVE observation of absence disables it. A probe that throws, or
-    // answers anything unexpected, leaves the binding assumed working — a healthy
-    // runtime must never lose these tools to a flaky probe.
+    // The legacy Hermes inspector ACKs Runtime.addBinding and never installs the
+    // binding: no Runtime.bindingCalled fires, so waiters hang for the full
+    // timeout. Probe once here so evaluateWithBinding can fail fast. Only a
+    // positive observation of absence disables it — a probe that throws or
+    // answers unexpectedly leaves the binding assumed working.
     const probe = await this.evaluate(`typeof ${name}`).catch(() => undefined);
     this.bindingUnavailable = probe === "undefined";
   }
 
   /**
-   * Inject a script that will push a result via the binding using a unique requestId.
-   * Returns the parsed payload when the matching binding call arrives.
+   * Inject a script that pushes its result over the binding tagged with a
+   * requestId; resolves with the payload of the matching binding call.
    */
   evaluateWithBinding(
     expression: string,
@@ -377,9 +351,8 @@ export class CDPClient {
 
       this.pendingBindings.set(id, { resolve, reject, timer });
 
-      // The script delivers its payload through the side binding, not through
-      // the Runtime.evaluate return value — keep returnByValue/awaitPromise off
-      // so we don't serialize or block on the script's own (ignored) result.
+      // The payload arrives over the binding, not as the evaluate result — keep
+      // returnByValue/awaitPromise off so we neither serialize nor block on it.
       this.evaluate(expression, { timeout, returnByValue: false, awaitPromise: false }).catch(
         (err) => {
           this.pendingBindings.delete(id);
@@ -500,8 +473,8 @@ export class CDPClient {
   }
 
   private cleanup(): void {
-    // NOTE: a request rejected here was already delivered to the runtime and may
-    // have taken effect — callers must NOT blindly retry side-effectful sends.
+    // A request rejected here was already delivered and may have taken effect —
+    // callers must not blindly retry side-effectful sends.
     const connectionClosed = () =>
       new FailureError("CDP connection closed", {
         error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,

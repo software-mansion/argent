@@ -1,11 +1,8 @@
-// Schema-driven read/write for scoped configuration values.
-//
-// This is the layer the rest of argent should use to read a configuration:
-// instead of poking at a single global config.json, `getConfigValue` reads
-// every scope the value's schema entry allows, merges them under the entry's
-// policy, and falls back to the entry's default. `setConfigValue` /
+// Schema-driven read/write for scoped configuration values: `getConfigValue`
+// reads every scope the value's schema entry allows, merges them under the
+// entry's policy and falls back to its default; `setConfigValue` /
 // `unsetConfigValue` validate against the schema before writing. `argent config`
-// and the migrated lens getters are both thin wrappers over these.
+// and the lens getters wrap these.
 
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
@@ -31,9 +28,8 @@ function readScopeValue<T>(
 }
 
 /**
- * The effective value of a configuration: the project and global scopes read,
- * validated, merged under the entry's policy, then defaulted. This is what a
- * runtime consumer (e.g. the simctl device-set reader) should call.
+ * The effective value: the project and global scopes read, validated, merged
+ * under the entry's policy, then defaulted.
  */
 export function getConfigValue<T>(
   def: ConfigDefinition<T>,
@@ -99,10 +95,8 @@ export class ConfigScopeError extends Error {
 }
 
 /**
- * Thrown when a value fails the schema's `parse` validator.
- *
- * Carries what the key accepts and an example of it, so a caller can tell the
- * user what to type instead of only that they were wrong.
+ * Thrown when a value fails the schema's `parse` validator. Carries what the key
+ * accepts and an example, so a caller can tell the user what to type instead.
  */
 export class ConfigValidationError extends Error {
   constructor(
@@ -135,10 +129,9 @@ export class ConfigManagedElsewhereError extends Error {
 
 /**
  * Validate and persist a configuration value at a scope. `rawValue` is a
- * pre-parsed JSON value (the CLI coerces its string argument first); it is run
- * through the schema's validator, and the normalized result is stored. Returns
- * the normalized value that was written, so callers can report exactly what
- * landed on disk rather than the raw input.
+ * pre-parsed JSON value (the CLI coerces its string argument first). Returns the
+ * normalized value written, so callers can report what landed on disk rather
+ * than the raw input.
  */
 export function setConfigValue(
   key: string,
@@ -158,8 +151,8 @@ export function setConfigValue(
 }
 
 /**
- * Remove a configuration value at a scope. Returns true when an entry was
- * removed. Refuses keys delegated to a dedicated command.
+ * Remove a value at a scope. Returns true when an entry was removed. Refuses
+ * keys delegated to a dedicated command.
  */
 export function unsetConfigValue(
   key: string,
@@ -170,11 +163,9 @@ export function unsetConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  // Fast path for a no-op: if the key is absent at this scope there is nothing
-  // to remove, so skip the write path entirely. Otherwise `updateConfig` would
-  // mkdir the scope's `.argent` dir and rewrite an unchanged config.json —
-  // materializing a project file (and dirtying git status) for an unset that
-  // removed nothing.
+  // Skip the write path when the key is absent: `updateConfig` would mkdir the
+  // scope's `.argent` dir and rewrite an unchanged config.json, materializing a
+  // project file (and dirtying git status) for an unset that removed nothing.
   if (getAtPath(readConfigObject(scope, options), key) === undefined) return false;
   let removed = false;
   updateConfig(
@@ -224,9 +215,9 @@ export function listConfig(
 }
 
 /**
- * Coerce a raw CLI string into a JSON value for `setConfigValue`. Tries JSON
- * first (so `true`, `42`, `["a","b"]` parse to their types) and falls back to
- * the literal string (so bare paths like `/tmp/set` don't need quoting).
+ * Coerce a raw CLI string into a JSON value for `setConfigValue`. JSON first (so
+ * `true`, `42`, `["a","b"]` keep their types), falling back to the literal
+ * string so bare paths like `/tmp/set` don't need quoting.
  */
 export function coerceCliValue(raw: string): unknown {
   try {
@@ -235,12 +226,6 @@ export function coerceCliValue(raw: string): unknown {
     return raw;
   }
 }
-
-// ── Argent Lens preferences (migrated onto the schema) ────────────────────
-// `lens.agent` is a real schema entry now, so these wrappers demonstrate the
-// merged reader on a live consumer: a project can pin the agent, falling back
-// to the user's global remembered choice. The public surface is unchanged so
-// `argent lens` keeps working without edits.
 
 const LENS_AGENT_KEY = "lens.agent";
 
@@ -260,21 +245,13 @@ export function clearRememberedAgent(options: ConfigPathOptions = {}): void {
   unsetConfigValue(LENS_AGENT_KEY, "global", options);
 }
 
-// ── iOS additional device sets ────────────────────────────────────────────
-// `ios.additionalDeviceSets` is the first *additive* entry: instead of one
-// scope shadowing the other, the union of both applies — a repo can commit the
-// device sets its tooling needs and they extend (never replace) the user's
-// global ones. This reader is the runtime surface iOS tooling should call.
-
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**
- * The extra CoreSimulator device-set directories argent should consider, as
- * normalized absolute paths. Entries are read per scope so relative paths keep
- * their intuitive base — the project root for the project scope, the home
- * directory for global — and `~`/`~/…` expands to home in either. Order
- * matches the `union` merge preset (global baseline first, project extras
- * after) with post-normalization duplicates dropped. Empty when unset.
+ * The extra CoreSimulator device-set directories, as normalized absolute paths.
+ * Relative entries resolve per scope — project root for project, home for global
+ * — and `~`/`~/…` expands to home in either. Order follows the `union` preset
+ * (global first, project after), duplicates dropped after normalization.
  */
 export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
   const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
@@ -297,9 +274,9 @@ export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): str
   return Array.from(new Set([...global, ...project]));
 }
 
-/** Resolve one scope's entries against its base. `path.resolve` (rather than
- * join/normalize) in every branch so trailing separators are stripped and the
- * post-resolution dedup actually collapses equivalent spellings. */
+/** Resolve one scope's entries against its base. `path.resolve` rather than
+ * join/normalize in every branch, so trailing separators are stripped and the
+ * post-resolution dedup collapses equivalent spellings. */
 function resolveDeviceSetEntries(
   entries: string[] | undefined,
   baseDir: string,

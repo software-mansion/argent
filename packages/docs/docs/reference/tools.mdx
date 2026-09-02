@@ -1,0 +1,140 @@
+---
+sidebar_position: 2
+sidebar_label: Tools
+title: Tools reference
+sidebar_custom_props:
+  icon: wrench
+---
+
+Argent exposes its capabilities to the coding agent as MCP tools. You rarely call these by hand, but knowing what exists tells you what you can ask for.
+
+Run `argent tools` to list them from the terminal, `argent tools describe <name>` for the full schema of one, and `argent run <name>` to invoke one directly.
+
+## Devices and apps
+
+| Tool                         | Description                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
+| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
+| `restart-app`                | Terminate then relaunch an app                                                                |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
+| `open-url`                   | Open a URL or URL scheme on the device                                                        |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                    |
+| `shake`                      | Shake the device                                                                              |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch                                |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+
+## Inspecting the screen
+
+| Tool                | Description                                                                      |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `screenshot`        | Capture the device screen                                                        |
+| `describe`          | Get the accessibility / DOM element tree for the current screen                  |
+| `screenshot-diff`   | Compare two PNG screenshots and return a visual-diff summary                     |
+| `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
+| `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
+
+## Interacting
+
+| Tool                     | Description                                                     |
+| ------------------------ | --------------------------------------------------------------- |
+| `gesture-tap`            | Tap at normalized coordinates                                   |
+| `gesture-swipe`          | Smooth swipe or drag between two points                         |
+| `gesture-scroll`         | Scroll a Chromium app by dispatching mouse-wheel events         |
+| `gesture-drag`           | Press, move, and release the mouse in a Chromium app            |
+| `gesture-pinch`          | Pinch to zoom around a center point                             |
+| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content          |
+| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures |
+| `keyboard`               | Type text or press special keys                                 |
+| `paste`                  | Put text on the device clipboard and paste it (sim/emu only)    |
+| `run-sequence`           | Execute several interaction steps in a single call              |
+| `screen-recording-start` | Start recording the screen to an h264 mp4                       |
+| `screen-recording-stop`  | Stop the recording and retrieve the video                       |
+
+## JavaScript runtime debugging
+
+| Tool                           | Description                                                               |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `debugger-connect`             | Connect to the JS runtime CDP debugger                                    |
+| `debugger-status`              | Report connection status and diagnostics                                  |
+| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium |
+| `debugger-component-tree`      | Fetch the current screen as a compact React component text tree           |
+| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate              |
+| `debugger-log-registry`        | Summarize console logs captured from the app                              |
+| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process            |
+| `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
+| `view-network-request-details` | Get full details of one request by its `requestId`                        |
+
+## Native devtools
+
+| Tool                                     | Description                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                |
+| `native-full-hierarchy`                  | Get the complete UIKit view tree                                      |
+| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`    |
+| `native-view-at-point`                   | Inspect the deepest visible view at a native window point             |
+| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input    |
+| `native-network-logs`                    | Retrieve requests captured at the native `NSURLProtocol` level        |
+
+## Chromium and Electron
+
+| Tool               | Description                                                           |
+| ------------------ | --------------------------------------------------------------------- |
+| `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s                |
+| `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
+| `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
+
+## Profiling
+
+| Tool                              | Description                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
+| `react-profiler-status`           | Check the profiler session state without side effects                        |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
+| `react-profiler-renders`          | Collect component render counts and durations from the live fiber tree       |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                   |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
+| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+
+## Flows
+
+| Tool                     | Description                                                       |
+| ------------------------ | ----------------------------------------------------------------- |
+| `flow-start-recording`   | Start recording a new flow, resetting `.argent/flows/<name>.yaml` |
+| `flow-add-step`          | Execute a tool call and record it as a step in the open recording |
+| `flow-add-echo`          | Record an echo step that prints a message during replay           |
+| `flow-finish-recording`  | Finish the recording and write the flow to disk                   |
+| `flow-execute`           | Run a saved flow                                                  |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it           |
+
+## Design variants
+
+Staged through [Argent Lens](/docs/features/lens) so you can compare proposals against the running app. These tools require the `argent-lens` flag and macOS. The flag is off by default, so `argent tools` omits them until you enable it.
+
+| Tool                   | Description                                        |
+| ---------------------- | -------------------------------------------------- |
+| `propose_variant`      | Stage one design variant for one on-screen element |
+| `await_user_selection` | Block until you pick among the staged variants     |
+
+## Workspace and maintenance
+
+| Tool                    | Description                                                |
+| ----------------------- | ---------------------------------------------------------- |
+| `gather-workspace-data` | Fetch a structured snapshot of the app project's workspace |
+| `update-argent`         | Apply a pending Argent update                              |
+| `dismiss-update`        | Silence update reminders for a number of hours             |

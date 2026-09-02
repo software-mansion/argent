@@ -1,24 +1,17 @@
 #!/usr/bin/env node
 /**
  * Re-point the `next` npm dist-tag at the highest published version of
- * @swmansion/argent — whether that highest version is a prerelease or a
- * stable release.
+ * @swmansion/argent, prerelease or stable.
  *
- * Why this exists: `npm publish` (stable) only moves `latest`, and
- * `npm publish --tag next` only moves `next` when a *prerelease* is shipped.
- * So once a prerelease was tagged `next`, every later stable release left
- * `next` frozen on an old prerelease (e.g. next=0.7.0-next.4 while
- * latest=0.11.0). Running this after every publish makes `next` self-heal to
- * the true maximum, so users who track `next` always get the newest build.
- *
- * Idempotent: if `next` already points at the maximum, it does nothing.
+ * A stable publish only moves `latest`, so `next` stays frozen on the last
+ * prerelease (e.g. next=0.7.0-next.4 while latest=0.11.0). Running this after
+ * every publish makes `next` self-heal to the true maximum.
  *
  * Usage:
  *   node scripts/sync-next-dist-tag.mjs [package] [--dry-run]
  *     package    npm package name (default: @swmansion/argent)
- *     --dry-run  compute and report, but do not mutate the dist-tag
- *                (also honoured via DRY_RUN=1). `npm dist-tag add` needs auth;
- *                use --dry-run to exercise the logic without NODE_AUTH_TOKEN.
+ *     --dry-run  report without mutating the dist-tag (also DRY_RUN=1);
+ *                `npm dist-tag add` needs NODE_AUTH_TOKEN, --dry-run does not
  */
 
 import { execFileSync } from "node:child_process";
@@ -27,10 +20,9 @@ import { pathToFileURL } from "node:url";
 
 const TAG = "next";
 
-// --- SemVer 2.0.0 precedence (build metadata ignored) ------------------------
-// Self-contained so this script has zero npm dependencies: it must run in a
-// lightweight CI job without `npm ci`. Verified against the `semver` library in
-// scripts/sync-next-dist-tag.test.mjs.
+// Self-contained SemVer 2.0.0 precedence (build metadata ignored): the script
+// must run in a CI job without `npm ci`, so it takes zero npm dependencies.
+// Verified against the `semver` library in scripts/sync-next-dist-tag.test.mjs.
 
 export function parseSemver(version) {
   const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
@@ -46,10 +38,10 @@ export function parseSemver(version) {
 function compareIdentifiers(a, b) {
   const an = /^\d+$/.test(a);
   const bn = /^\d+$/.test(b);
-  if (an && bn) return Math.sign(Number(a) - Number(b)); // numeric: compare value
+  if (an && bn) return Math.sign(Number(a) - Number(b));
   if (an) return -1; // numeric identifiers rank lower than alphanumeric
   if (bn) return 1;
-  return a < b ? -1 : a > b ? 1 : 0; // alphanumeric: ASCII order
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Returns <0 if va < vb, 0 if equal, >0 if va > vb. */
@@ -68,29 +60,21 @@ export function compareSemver(va, vb) {
     const c = compareIdentifiers(a.pre[i], b.pre[i]);
     if (c !== 0) return c;
   }
-  // All shared identifiers equal: the longer set of fields has higher precedence.
+  // All shared identifiers equal: the longer set of fields wins.
   return Math.sign(a.pre.length - b.pre.length);
 }
 
 /**
- * Decide whether `next` should be re-pointed at `max`. Only ever *advances*:
- * returns true iff `max` is strictly newer than the current tag, or the current
- * tag is unset/unparseable.
- *
- * This never moves `next` backward. The post-publish sync can momentarily read a
- * stale (CDN-cached) packument that omits the version just published — so the
- * computed `max` can lag behind the freshly-tagged release. A plain
- * `current === max` check would then re-point `next` at the older `max`,
- * demoting the new build. Requiring a strict advance keeps the sync idempotent
- * and self-healing without that regression.
+ * Only ever advances `next`, never moves it backward: a post-publish sync can
+ * read a CDN-stale packument that omits the version just published, so `max`
+ * can lag the freshly-tagged release and a `current !== max` check would demote
+ * it.
  */
 export function shouldAdvanceTag(max, current) {
   if (current === undefined || current === null) return true;
   if (parseSemver(current) === null) return true;
   return compareSemver(max, current) > 0;
 }
-
-// --- npm registry I/O --------------------------------------------------------
 
 function npmJson(args) {
   const out = execFileSync("npm", [...args, "--json"], {
@@ -115,16 +99,11 @@ function getDistTags(name) {
   }
 }
 
-// --- main --------------------------------------------------------------------
-
 function main() {
   const argv = processArgv.slice(2);
   const dryRun = argv.includes("--dry-run") || env.DRY_RUN === "1";
-  // First real package-name arg. Skip flags (anything starting with "-", so a
-  // stray "-x" isn't handed to npm as a flag) and blank tokens (an empty/
-  // whitespace arg must NOT become the package name — `npm view ""` silently
-  // resolves to the squatted "undefined" package rather than erroring). When no
-  // usable arg is present we fall back to the scoped default below.
+  // Skip flags, and blank tokens: a whitespace-only arg must not reach `npm view`
+  // as the package name.
   const pkg = argv.find((a) => a.trim() !== "" && !a.startsWith("-")) ?? "@swmansion/argent";
 
   const versions = getVersions(pkg);

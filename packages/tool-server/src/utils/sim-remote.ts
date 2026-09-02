@@ -6,14 +6,9 @@ const execFileAsync = promisify(execFile);
 /**
  * Thin wrapper around the `sim-remote` CLI.
  *
- * All commands shell out to `sim-remote` and propagate exit-code failures as
- * thrown errors with the CLI's stderr appended to the message — so auth and
- * orchestrator-side errors reach the agent verbatim instead of being smoothed
- * over here.
- *
- * Each function strips the `remote:` prefix off device ids if present, so
- * callers don't have to remember whether the id they're holding has been
- * normalised yet.
+ * Failures throw with the CLI's stderr appended, so auth and orchestrator-side
+ * errors reach the agent verbatim. Commands taking a device id strip a
+ * `remote:` prefix, so callers need not normalise first.
  */
 
 import { stripRemotePrefix } from "./device-info";
@@ -31,7 +26,6 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
       timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
-      // sim-remote pipes stdin through to pbcopy etc.
       input: options?.stdin,
     } as Parameters<typeof execFileAsync>[2]);
     return { stdout: typeof stdout === "string" ? stdout : stdout.toString("utf8") };
@@ -44,13 +38,11 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
   }
 }
 
-// ── simctl ──
-
 /**
- * Shape of `sim-remote simctl list devices --json`. Mirrors Apple's
- * `xcrun simctl list devices --json` output: `{ devices: { <runtime>: [ ... ] } }`.
+ * Shape of `sim-remote simctl list devices --json`, mirroring Apple's
+ * `xcrun simctl list devices --json`.
  */
-export interface SimRemoteDevice {
+interface SimRemoteDevice {
   udid: string;
   name: string;
   state: string; // "Booted" | "Shutdown" | ...
@@ -58,7 +50,7 @@ export interface SimRemoteDevice {
   deviceTypeIdentifier?: string;
 }
 
-export interface SimRemoteListDevicesResult {
+interface SimRemoteListDevicesResult {
   devices: Record<string, SimRemoteDevice[]>;
 }
 
@@ -75,21 +67,20 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
 }
 
 // A simulator's runtime kind is fixed at creation, so memoize it per-UDID and
-// keep the `sim-remote simctl list` round-trip off repeated calls. Mirrors
-// `runtimeKindCache` in ios-devices.ts; only successful lookups are cached.
+// keep the `sim-remote simctl list` round-trip off repeated calls. Only
+// successful lookups are cached.
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
  * True when a remote UDID is a tvOS (Apple TV) simulator.
  *
- * The remote analogue of `isTvOsSimulator`: `resolveDevice` classifies remote
- * ids by shape alone, and iOS and tvOS simulators are both 8-4-4-4-12 UUIDs
- * tagged `platform: "ios-remote"`. The runtime is only knowable from the
- * orchestrator's device list, whose keys carry the runtime identifier.
+ * `resolveDevice` classifies remote ids by shape alone, and iOS and tvOS sims
+ * are both `platform: "ios-remote"` UUIDs, so the runtime is only knowable
+ * from the orchestrator's device list, whose keys name the runtime.
  *
- * Unreachable orchestrator / logged-out CLI resolves to `false` rather than
- * throwing: callers use this to *narrow* an already-supported device, so a
- * lookup failure must not turn a working phone simulator into an error.
+ * A failed lookup resolves to `false` rather than throwing: callers use this
+ * to narrow an already-supported device, so it must not turn a working phone
+ * simulator into an error.
  */
 export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
   const id = stripRemotePrefix(udid);
@@ -104,7 +95,7 @@ export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
       return kind === "tv";
     }
   } catch {
-    // fall through — treat an unknown runtime as non-TV
+    // unknown runtime — treat as non-TV
   }
   return false;
 }
@@ -118,10 +109,9 @@ export async function simctlShutdown(udid: string): Promise<void> {
 }
 
 export async function simctlBootstatus(udid: string, opts?: { boot?: boolean }): Promise<void> {
-  const args = ["simctl", "bootstatus"];
+  const args = ["simctl", "bootstatus", stripRemotePrefix(udid)];
   if (opts?.boot) args.push("-b");
-  args.push(stripRemotePrefix(udid));
-  // Bootstatus may take a long while on cold boot; give it 5 min.
+  // Cold boot can take minutes.
   await run(args, { timeoutMs: 5 * 60_000 });
 }
 
@@ -138,8 +128,7 @@ export async function simctlTerminate(udid: string, bundleId: string): Promise<v
 }
 
 export async function simctlInstall(udid: string, localAppPath: string): Promise<void> {
-  // sim-remote uploads the local .app to the orchestrator over QUIC.
-  // Large bundles can take a while; give 5 min.
+  // Uploading a large .app to the orchestrator can take minutes.
   await run(["simctl", "install", stripRemotePrefix(udid), localAppPath], {
     timeoutMs: 5 * 60_000,
   });
@@ -155,9 +144,7 @@ export async function simctlOpenUrl(udid: string, url: string): Promise<void> {
 
 /**
  * Remote analogue of `xcrun simctl privacy <udid> <action> <service> <bundleId>`
- * — edits the remote simulator's TCC store. Throws (via `run`) on a non-zero
- * exit; the settings-permissions iOS handler wraps that into its classified
- * FailureError with the same boot / list-services hints as the local path.
+ * — edits the remote simulator's TCC store.
  */
 export async function simctlPrivacy(
   udid: string,
@@ -168,19 +155,12 @@ export async function simctlPrivacy(
   await run(["simctl", "privacy", stripRemotePrefix(udid), action, service, bundleId]);
 }
 
-/** Copy the given text into the simulator's pasteboard (sim-remote streams stdin). */
+/** Copy text into the simulator's pasteboard (streamed over stdin). */
 export async function simctlPbcopy(udid: string, text: string): Promise<void> {
   await run(["simctl", "pbcopy", stripRemotePrefix(udid)], { stdin: text });
 }
 
-export async function simctlPbpaste(udid: string): Promise<string> {
-  const { stdout } = await run(["simctl", "pbpaste", stripRemotePrefix(udid)]);
-  return stdout;
-}
-
-// ── generic in-simulator primitives ──
-
-export interface SpawnResult {
+interface SpawnResult {
   /** Set when spawned detached. */
   pid?: number;
   /** Set when run to completion (non-detached). */
@@ -193,7 +173,7 @@ export interface SpawnResult {
  * Run `simctl spawn` on the remote simulator. With `binPath`, the binary is
  * uploaded and run as argv[0] with `args` appended; otherwise `args` is the
  * full in-simulator argv (e.g. `["launchctl", "list"]`). `detach` leaves the
- * process running and returns its pid instead of waiting.
+ * process running and returns its pid.
  */
 export async function simctlSpawn(
   udid: string,
@@ -202,15 +182,12 @@ export async function simctlSpawn(
   const cmd = ["spawn", stripRemotePrefix(udid)];
   if (opts.binPath) cmd.push("--bin", opts.binPath);
   if (opts.detach) cmd.push("--detach");
-  // Force the one-shot `{exit_code,stdout,stderr}` (or `{pid}` when detached)
-  // JSON object. Without `--json`, a non-detached `sim-remote spawn` streams the
-  // child's raw output live, which we then fail to `JSON.parse` below. `--detach`
-  // happens to emit JSON regardless, but the non-detached callers (bootstrapAx's
-  // `defaults write`, listRunningBundleIds' `launchctl list`) need this flag.
+  // Without `--json` a non-detached spawn streams the child's raw output live
+  // instead of the one-shot `{exit_code,stdout,stderr}` object parsed below.
   cmd.push("--json");
   const args = opts.args ?? [];
   if (args.length > 0) cmd.push("--", ...args);
-  // Uploading a binary can take a moment; allow more than the default.
+  // Allow for a binary upload.
   const { stdout } = await run(cmd, { timeoutMs: 60_000 });
   try {
     const parsed = JSON.parse(stdout) as {
@@ -234,8 +211,8 @@ export async function simctlSpawn(
 
 /**
  * Upload a dylib to the remote simulator. With `insert`, it is added to
- * `DYLD_INSERT_LIBRARIES`; otherwise it is only staged (co-located so a primary
- * dylib can `@loader_path`-resolve it).
+ * `DYLD_INSERT_LIBRARIES`; otherwise it is only staged, co-located so a
+ * primary dylib can `@loader_path`-resolve it.
  */
 export async function injectDylib(
   udid: string,
@@ -246,20 +223,13 @@ export async function injectDylib(
   await run(args, { timeoutMs: 60_000 });
 }
 
-export async function removeDylib(udid: string, filename: string): Promise<void> {
-  await run(["dylib", "remove", stripRemotePrefix(udid), filename]);
-}
-
 /** Set a launchd environment variable inside the remote simulator. */
 export async function setSimulatorEnv(udid: string, key: string, value: string): Promise<void> {
   await run(["setenv", stripRemotePrefix(udid), key, value]);
 }
 
-// ── proxy ──
-
 /**
- * Start a TCP tunnel: incoming connections on the host's `localhost:<port>`
- * are forwarded by the daemon to the same port inside the remote simulator.
+ * Start a TCP tunnel on `<port>` between the host and the remote simulator.
  *
  * Idempotent: re-running with the same (udid, port) tolerates "already
  * started" errors so blueprints don't have to track tunnel ownership across
@@ -282,8 +252,6 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
     // best-effort cleanup
   }
 }
-
-// ── moq ──
 
 export interface MoqInfo {
   url: string;

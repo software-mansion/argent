@@ -6,10 +6,9 @@ import type { SettingsPermissionsResult, SettingsPermissionsServices } from "./t
 import { iosImpl, iosRemoteImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
-// Mirror launch-app / restart-app: the leading-letter rule keeps a value like
-// `--user` from masquerading as a flag, and the safe alphabet keeps the value
-// inert when interpolated into an `adb shell` string (shellQuote is the real
-// guard; this is defense in depth).
+// Mirrors launch-app / restart-app: the leading-letter rule stops a bundleId
+// like `--user` masquerading as a flag in `pm …`. shellQuote is the real
+// injection guard; this is defense in depth.
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
@@ -44,12 +43,11 @@ const permissionAction = {
 } as const;
 
 const capability: ToolCapability = {
-  // `simctl privacy` edits the simulator's TCC store — physical iPhones have no
-  // equivalent host-side switch, so no `device: true` on apple.
+  // `simctl privacy` edits the simulator's TCC store; physical iPhones have no
+  // equivalent host-side switch, hence no `device: true`.
   apple: { simulator: true },
-  // sim-remote runs the same `simctl privacy` verb on a remote simulator, so a
-  // sim-remote setup can pre-set permissions too — matching the rest of the
-  // launch-app / restart-app / reinstall-app / open-url family.
+  // sim-remote exposes the same `simctl privacy` verb, so remote sims can
+  // pre-set permissions too.
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };

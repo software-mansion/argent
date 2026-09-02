@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createKeyboardTool } from "../src/tools/keyboard";
-import { pasteTool } from "../src/tools/paste";
+import { createPasteTool } from "../src/tools/paste";
 import {
   availableSecretNames,
   redactSecretsFromError,
@@ -14,10 +14,17 @@ import { InvalidToolInputError } from "../src/utils/capability";
 
 vi.mock("../src/utils/simulator-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/simulator-client")>();
-  return { ...actual, sendCommand: vi.fn() };
+  return { ...actual, sendCommand: vi.fn(), setSimulatorClipboardText: vi.fn() };
 });
+// The paste tool probes the runtime kind before touching the simulator-server;
+// stub it so the test never shells out to `simctl`.
+vi.mock("../src/utils/ios-devices", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
+  return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
+});
+vi.mock("../src/utils/check-deps", () => ({ ensureDeps: vi.fn(async () => {}) }));
 
-import { sendCommand } from "../src/utils/simulator-client";
+import { sendCommand, setSimulatorClipboardText } from "../src/utils/simulator-client";
 
 // The chromium branch resolves its CDP api via registry.resolveService, so a
 // stub registry + a chromium-shaped udid exercises the tool's full `execute`
@@ -324,29 +331,30 @@ describe("keyboard tool with secret placeholders", () => {
 });
 
 describe("paste tool with secret placeholders", () => {
+  function pasteRegistry() {
+    const api = { apiUrl: "http://127.0.0.1:1", pressKey: vi.fn() };
+    return { api, tool: createPasteTool(registryWith(api)) };
+  }
+
   it("pastes the resolved value without echoing it", async () => {
     vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const { api, tool } = pasteRegistry();
 
-    const result = await pasteTool.execute(
-      { simulatorServer: {} },
-      { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" }
-    );
+    const result = await tool.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" });
 
-    expect(vi.mocked(sendCommand)).toHaveBeenCalledWith({}, { cmd: "paste", text: "hunter2" });
+    expect(vi.mocked(setSimulatorClipboardText)).toHaveBeenCalledWith(api, "hunter2");
     expect(JSON.stringify(result)).not.toContain("hunter2");
   });
 
   it("scrubs the resolved value from backend errors", async () => {
     vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
-    vi.mocked(sendCommand).mockImplementationOnce(() => {
+    vi.mocked(setSimulatorClipboardText).mockImplementationOnce(async () => {
       throw new Error("paste failed for: hunter2");
     });
+    const { tool } = pasteRegistry();
 
     await expect(
-      pasteTool.execute(
-        { simulatorServer: {} },
-        { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" }
-      )
+      tool.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" })
     ).rejects.toThrow(/paste failed for: \{\{secret:APP_PASSWORD\}\}/);
   });
 });

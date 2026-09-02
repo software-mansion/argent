@@ -28,32 +28,28 @@ export function createStopSimulatorServerTool(
     services: () => ({}),
     async execute(_services, params) {
       const udid = (params as { udid: string }).udid;
-      // A single device id can back more than one service: the transport
-      // (SimulatorServer / ChromiumCdp) and — for a TV target — the focus-driven
-      // TvControl daemon, which owns the spawned tvos-ax/tvos-hid processes.
-      // Shape narrows the set; see `transportNamespacesForPlatform` for why it
-      // stops there rather than draining everything this device owns.
+      // A device id can back more than one service: the transport
+      // (SimulatorServer / ChromiumCdp) and, on a TV target, the TvControl
+      // daemon owning the spawned tvos-ax/tvos-hid processes. See
+      // `transportNamespacesForPlatform` for why the set stops there rather than
+      // draining everything this device owns.
       const platform = resolveDevice(udid).platform;
       const namespaces = transportNamespacesForPlatform(platform);
 
       const snapshot = registry.getSnapshot();
       let stopped = false;
-      // Scanned rather than looked up by exact URN, so this agrees with
-      // `stop-all-simulator-servers` on which services a device id owns — in
-      // particular the match is case-insensitive, where an exact
-      // `services.get()` would silently no-op on a lower-cased UDID. (The shared
-      // matcher also understands the `:tcp` suffix, which no namespace in this
-      // tool's set currently emits — it costs nothing and keeps one grammar.)
+      // Scanned rather than fetched by exact URN, so ids resolve through the
+      // same case-insensitive matcher as `stop-all-simulator-servers`;
+      // `services.get()` would silently no-op on a mis-cased UDID.
       const urns = [...snapshot.services.keys()].filter(
         (urn) => deviceIdOwningUrn(urn, namespaces, [udid]) !== undefined
       );
       for (const urn of urns) {
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
-        // A non-live node (ERROR / TERMINATING) holds no running process — e.g.
-        // a tvOS UDID, where the SimulatorServer blueprint throws on start and
-        // the node settles into ERROR. Clean it up, but don't claim we stopped a
-        // server that was never running.
+        // ERROR / TERMINATING nodes hold no process — e.g. a tvOS UDID, which
+        // the SimulatorServer factory rejects on start. Clean it up, but don't
+        // report it as stopped.
         if (isLiveServiceState(entry.state)) stopped = true;
         await registry.disposeService(urn);
       }

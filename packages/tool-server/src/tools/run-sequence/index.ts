@@ -1,12 +1,16 @@
 import { z } from "zod";
+
 import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
-const ALLOWED_TOOLS = new Set([
+// No tool here returns an image or an artifact handle — that is what keeps a
+// sequence to the single capture the MCP layer appends after the last step.
+// Gated by test/run-sequence-observation-gate.test.ts.
+export const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
   "gesture-scroll",
@@ -16,13 +20,13 @@ const ALLOWED_TOOLS = new Set([
   "gesture-rotate",
   "button",
   "keyboard",
+  // Sequenceable for the same reason `keyboard` is: the focus tap, the paste
+  // and the submit are one user action.
+  "paste",
   "rotate",
-  // Sequencing matters for shake: the interesting cases are races (shake while
-  // a sheet is dismissing, shake right after typing), which need the steps
-  // dispatched back-to-back rather than across separate round-trips.
+  // Shake's interesting cases are races (shake while a sheet is dismissing,
+  // shake right after typing), which need back-to-back dispatch.
   "shake",
-  // `tv-remote` drives the D-pad on a TV target (Apple TV / Android TV / Vega);
-  // `keyboard` types into the focused field there.
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
@@ -39,7 +43,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -66,20 +70,16 @@ type RunSequenceResult = {
   steps: StepResult[];
 };
 
-// run-sequence is platform-neutral by construction: every step is dispatched
-// through `registry.invokeTool`, and each step's tool runs its own
-// `dispatchByPlatform` against `params.udid`. The capability here just gates
-// the *outer* invocation, mirroring the inner tools' support matrix so the
-// failure mode is consistent.
+// Gates only the *outer* invocation: every step resolves its own platform from
+// `params.udid` and is gated separately in `execute`.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   // Vega (Fire TV) is a valid target: its `tv-remote` / `keyboard` steps are
-  // supported, and the description advertises it. Without this key the outer
-  // capability gate (HTTP layer's assertSupported) would reject a Vega udid
-  // before any step runs — each step's own capability is still enforced below.
+  // supported. Without this key the HTTP layer's `assertSupported` would reject
+  // a Vega udid before any step runs.
   vega: { vvd: true },
 };
 
@@ -98,7 +98,8 @@ export function createRunSequenceTool(
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-No screenshot is captured automatically — call screenshot separately after the sequence if needed.
+One screenshot is captured automatically after the whole sequence (not per step) — call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
+That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
 
 ONLY use this when every step is known in advance. If any step depends on the
 result of a previous one (e.g. tapping a menu item that only appears after
@@ -107,15 +108,16 @@ a prior tap), use individual tool calls instead.
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
   gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
+  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android]
   gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [chromium only]
+  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (key pressed after text; TV: text only)            [ios/android/chromium/vega/tv]
+  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
                   text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file — credentials never enter agent context
+  paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP — keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
@@ -129,9 +131,10 @@ Example — scroll down three times (use gesture-scroll with positive deltaY on 
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
-Example — type text and submit (one step: the key is pressed after the text is typed):
+Example — type text and submit (two keyboard steps; one call cannot carry both):
   { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world", "key": "enter" } }
+    { "tool": "keyboard", "args": { "text": "hello world" } },
+    { "tool": "keyboard", "args": { "key": "enter" } }
   ]}
 
 Example — TV: move focus right twice then activate (one tv-remote step with a path is cheaper):
@@ -154,26 +157,19 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
-    // No eagerly-declared service: each step resolves its own services through
-    // `invokeSubTool` below (simulator-server for iOS/Android, CDP for
-    // Chromium), so run-sequence itself needs none. An eager resolver can't be
-    // used here because a tvOS udid shape-classifies as `ios` (there is no
-    // `tvos` platform) — declaring simulator-server for it would spawn a
-    // controller it can't drive and hang on the ready timeout before any tv-*
-    // step could run. The sub-tool invocations still pay only their own
-    // first-step spawn cost, and `ctx` is threaded through so nested steps keep
-    // the outer request's telemetry attribution.
+    // Each step resolves its own services. An eager resolver can't be used
+    // because a tvOS udid shape-classifies as `ios` (there is no `tvos`
+    // platform), so declaring simulator-server would spawn a controller it
+    // can't drive and hang on the ready timeout before any tv-remote step runs.
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
-      // The HTTP layer aborts `signal` when the client disconnects. run-sequence
-      // is `longRunning` (and a single `tv-remote` step can fire dozens of
-      // daemon/adb round-trips), so the MCP adapter won't abort it for us — honour
-      // the signal between steps and on the inter-step delay so a cancelled
-      // request stops promptly instead of running the rest of the sequence at the
-      // device. Each sub-tool also receives `signal` via `ctx`.
+      // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
+      // drops the MCP adapter's own fetch timeout — so honour the signal between
+      // steps and on the inter-step delay instead of running the rest of the
+      // sequence at the device.
       const signal = ctx?.signal;
 
       for (const step of steps) {
@@ -187,11 +183,10 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           break;
         }
 
-        // Pre-flight the sub-tool's capability gate. Registry.invokeTool does
-        // NOT call assertSupported (the HTTP layer does), so without this
-        // check a mobile-only step like `button` on a Chromium device would
-        // descend into the simulator-server blueprint factory and surface as
-        // a generic 500 instead of a clean "not supported on chromium".
+        // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
+        // layer does), so pre-flight here: otherwise a mobile-only step like
+        // `button` on a Chromium device fails inside the simulator-server
+        // service factory instead of with a clean "not supported" error.
         const subTool = registry.getTool(step.tool);
         if (subTool?.capability) {
           try {
@@ -205,8 +200,9 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
         }
 
+        const toolArgs = { ...step.args, udid };
+
         try {
-          const toolArgs = { ...step.args, udid };
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetUiWaitResult(step.tool, result)) {
             const note = (result as { note?: string }).note;
@@ -218,9 +214,16 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          const reframed = describeNestedParamError(
+            registry,
+            err,
+            step.tool,
+            toolArgs,
+            step.args ?? {}
+          );
           results.push({
             tool: step.tool,
-            error: err instanceof Error ? err.message : String(err),
+            error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
         }

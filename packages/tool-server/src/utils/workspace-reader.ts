@@ -3,8 +3,6 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { parse as parseDotenv } from "dotenv";
 
-// ── Types ────────────────────────────────────────────────────────────
-
 export interface EnvFileInfo {
   name: string;
   keys: string[];
@@ -42,8 +40,6 @@ export interface WorkspaceSnapshot {
 
   config_files_found: string[];
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -91,11 +87,7 @@ async function listDir(path: string): Promise<string[] | null> {
 
 const COMMAND_TIMEOUT_MS = 3_000;
 
-export function runVersionCommand(
-  cmd: string,
-  args: string[],
-  cwd: string
-): Promise<string | null> {
+function runVersionCommand(cmd: string, args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { cwd, timeout: COMMAND_TIMEOUT_MS }, (err, stdout) => {
       if (err) {
@@ -107,8 +99,6 @@ export function runVersionCommand(
     child.on("error", () => resolve(null));
   });
 }
-
-// ── Metro port extraction ────────────────────────────────────────────
 
 const METRO_PORT_PATTERNS = [/server\s*:\s*\{[^}]*?port\s*:\s*(\d+)/s, /port\s*:\s*(\d+)/];
 
@@ -123,18 +113,12 @@ export function extractMetroPort(configText: string): number | null {
   return null;
 }
 
-// ── .env key extraction ──────────────────────────────────────────────
-
 export function extractEnvKeys(content: string): string[] {
-  // dotenv handles the .env grammar the previous hand-rolled split missed:
-  // `export` prefixes, quoted values containing `=`, and multi-line quoted
-  // values whose continuation lines would otherwise be mistaken for keys.
-  // We only surface the variable *names*, and keep the identifier filter so
-  // dotenv's looser key grammar (dots, dashes) can't leak non-env names.
+  // dotenv covers `export` prefixes, quoted values containing `=`, and
+  // multi-line quoted values; the identifier filter stops dotenv's looser key
+  // grammar (dots, dashes) from leaking non-env names.
   return Object.keys(parseDotenv(content)).filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
 }
-
-// ── Makefile target extraction ───────────────────────────────────────
 
 export function extractMakefileTargets(content: string): string[] {
   const targets: string[] = [];
@@ -144,8 +128,6 @@ export function extractMakefileTargets(content: string): string[] {
   }
   return targets;
 }
-
-// ── Lockfile detection ───────────────────────────────────────────────
 
 const LOCKFILES = [
   "yarn.lock",
@@ -167,16 +149,12 @@ async function detectLockfile(workspacePath: string): Promise<LockfileName | nul
   return checks.find((c) => c.exists)?.name ?? null;
 }
 
-// ── iOS workspace detection ──────────────────────────────────────────
-
 async function findIosWorkspace(iosDir: string): Promise<string | null> {
   const entries = await listDir(iosDir);
   if (!entries) return null;
   const ws = entries.find((e) => e.endsWith(".xcworkspace"));
   return ws ?? null;
 }
-
-// ── CI config detection ──────────────────────────────────────────────
 
 const CI_CONFIGS = [
   { path: ".github/workflows", label: "github-actions" },
@@ -191,8 +169,6 @@ async function detectCiConfig(workspacePath: string): Promise<string | null> {
   }
   return null;
 }
-
-// ── lint-staged config ───────────────────────────────────────────────
 
 const LINT_STAGED_FILES = [
   ".lintstagedrc",
@@ -225,8 +201,6 @@ async function detectLintStagedConfig(
   }
   return null;
 }
-
-// ── Config file existence scan ───────────────────────────────────────
 
 const CONFIG_FILES = [
   "metro.config.js",
@@ -272,8 +246,6 @@ async function detectConfigFiles(workspacePath: string): Promise<string[]> {
     .map((r) => r.value);
 }
 
-// ── Tool versions ────────────────────────────────────────────────────
-
 const VERSION_COMMANDS: [string, string, string[]][] = [
   ["node", "node", ["--version"]],
   ["npm", "npm", ["--version"]],
@@ -301,8 +273,6 @@ async function detectToolVersions(cwd: string): Promise<Record<string, string | 
   return versions;
 }
 
-// ── .env files ───────────────────────────────────────────────────────
-
 async function detectEnvFiles(workspacePath: string): Promise<EnvFileInfo[]> {
   const entries = await listDir(workspacePath);
   if (!entries) return [];
@@ -318,8 +288,6 @@ async function detectEnvFiles(workspacePath: string): Promise<EnvFileInfo[]> {
   );
   return results;
 }
-
-// ── Main reader ──────────────────────────────────────────────────────
 
 export async function readWorkspaceSnapshot(workspacePath: string): Promise<WorkspaceSnapshot> {
   const [

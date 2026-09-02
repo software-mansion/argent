@@ -262,18 +262,25 @@ describe("update-checker", () => {
 describe("update-checker — suppression persistence", () => {
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.resetModules();
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "argent-suppress-test-"));
+    // The suppression file is resolved from os.homedir(), which reads
+    // USERPROFILE on Windows and HOME elsewhere — pin both.
     process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
   });
 
   afterEach(() => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     fs.rmSync(tmpHome, { recursive: true, force: true });
     vi.useRealTimers();
     vi.restoreAllMocks();

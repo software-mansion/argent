@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { FAILURE_CODES, Registry, type FailureSignal } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
 import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
+import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 
 const failureSignal: FailureSignal = {
   error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
@@ -31,6 +36,50 @@ describe("tool interaction messages", () => {
         result: {},
       })
     ).toBe("Double-tapped at (50%, 25%)");
+
+    // `keyboard` picks its wording from which of `text` / `key` was given, and
+    // the two formatters see DIFFERENT sets of shapes. `startedMsg` renders
+    // before `execute` runs, so it still sees a combined call — the one
+    // `execute` is about to reject — and has to word four: text alone, key
+    // alone, both, and neither. `completedMsg` runs only after a call that
+    // succeeded, so the combined shape never reaches it and it words three. In
+    // both, "neither" is a documented no-op returning { typed:"", keys:0 }
+    // rather than an error (see keyboard-android.test.ts).
+    const keyboard = definitions.get("keyboard")!.interaction!;
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi" } })).toBe(
+      "Entering text"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", key: "enter" } })).toBe(
+      "Pressing a key"
+    );
+    // The combined shape, which only THIS formatter reaches: `startedMsg` runs
+    // before the rejection. Without it, a `startedMsg` reduced to the two-way
+    // text/key split would still satisfy every other assertion here while
+    // announcing a rejected text+enter call as plain "Entering text".
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" } })).toBe(
+      "Entering text and pressing a key"
+    );
+    // The empty request, on this formatter too. `completedMsg` appears in no
+    // other test file, `startedMsg` only in this file's secret-leak check (which
+    // every branch string satisfies), so neither empty-request branch is pinned
+    // anywhere else. Narrowing BOTH to `params.text === undefined &&
+    // params.key !== undefined` — so `keyboard {}` falls through to "Entering
+    // text" / "Entered text" — stays green across the whole suite once this
+    // assertion and its `completedMsg` twin below are removed. Both are
+    // load-bearing.
+    expect(keyboard.startedMsg!({ params: { udid: "device-1" } })).toBe("Pressing a key");
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", text: "hi" }, result: {} })).toBe(
+      "Entered text"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", key: "enter" }, result: {} })).toBe(
+      "Pressed a key"
+    );
+    // The third shape. "Pressed a key" for a call that pressed nothing is
+    // inherited, not introduced here — pinned so the wording and the no-op
+    // contract can only diverge deliberately.
+    expect(keyboard.completedMsg!({ params: { udid: "device-1" }, result: {} })).toBe(
+      "Pressed a key"
+    );
 
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
@@ -190,6 +239,48 @@ describe("tool interaction messages", () => {
         i.failedMsg!({ params, error: new Error("raw error"), failureSignal }),
         `${id}.failedMsg`
       ).toContain(name);
+    }
+  });
+
+  it("does not announce a recorded step on the paths that record nothing", () => {
+    const completedMsg =
+      definitionsById(createRegistry()).get("flow-add-step")!.interaction!.completedMsg!;
+    const params = { name: "checkout", project_root: "/tmp/proj", command: "echo" };
+
+    expect(
+      completedMsg({ params, result: { message: "", toolResult: undefined, stepCount: 0 } })
+    ).toBe("Recorded no echo step in flow checkout");
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", toolResult: undefined, stepCount: 1, recorded: "1. echo: hi" },
+      })
+    ).toBe("Added echo step to flow checkout");
+  });
+
+  it("joins the record-nothing RESULT to the line the registry actually logs", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "interaction-msg-"));
+    try {
+      await flowStartRecordingTool.execute(
+        {},
+        { name: "checkout", project_root: tmpDir, executionPrerequisite: "on the form" }
+      );
+
+      const registry = new Registry();
+      registry.registerTool(createFlowAddStepTool(registry) as never);
+      const completions: string[] = [];
+      registry.events.on("toolCompleted", (_id, _callId, _ms, msg) => completions.push(msg));
+
+      const result = await registry.invokeTool<{ recorded?: string }>("flow-add-step", {
+        name: "checkout",
+        project_root: tmpDir,
+        command: "echo",
+      });
+
+      expect(result.recorded).toBeUndefined();
+      expect(completions).toEqual(["Recorded no echo step in flow checkout"]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 

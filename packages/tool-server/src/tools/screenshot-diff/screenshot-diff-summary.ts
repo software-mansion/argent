@@ -9,15 +9,12 @@ type TextSummaryChange = TextChange & {
   appearanceChange?: TextChange;
 };
 /**
- * `resized_no_change` is the normalized comparison's green: the inputs differed
- * in resolution, one was resampled, and nothing differed afterwards. It is a
- * distinct status because "unchanged" claims the two images are the same, while
- * this claims they are the same once resolution was discarded from one of them —
- * a difference a regression gate cannot see from the status alone (#617).
+ * `resized_no_change`: the inputs differed in resolution, one was resampled, and
+ * nothing differed afterwards — kept distinct from `unchanged`, which claims the
+ * two images are the same at their own resolutions (#617).
  *
- * Deliberately not named `unchanged_after_resize`: that string CONTAINS
- * "unchanged", so the one naive gate this protects — `includes("status:
- * unchanged")` — would still read it as a plain pass.
+ * Not named `unchanged_after_resize`: that string contains "unchanged", so a
+ * gate matching `includes("status: unchanged")` would read it as a plain pass.
  */
 type SummaryStatus =
   | "unchanged"
@@ -41,10 +38,8 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   lines.push(`- status: ${status}`);
 
   if (result.sizeNormalization) {
-    // Placed directly under the status so it frames every figure below it, and
-    // worded to stay true on both paths: when nothing differed there are no
-    // pixel or text differences to caveat, and when something did they may be
-    // resampling artifacts rather than real changes.
+    // Placed directly under the status so it frames every figure below it; the
+    // wording holds whether or not anything differed.
     const { baseline, current, comparedAt } = result.sizeNormalization;
     lines.push(
       `- size_normalized: baseline=${formatSize(baseline)} current=${formatSize(current)} compared_at=${formatSize(comparedAt)}`,
@@ -69,7 +64,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
 
   if (result.diffPath || result.contextDiffPath) {
     // Reference the result fields instead of embedding the paths: the client
-    // rewrites `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw
+    // rewrites `diffPath`/`contextDiffPath` to paths on its own machine, so a
     // server path inlined here would dangle when the tool-server runs remotely.
     lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
     lines.push(
@@ -127,9 +122,8 @@ function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus
   if (result.textAnalysis?.status === "ok" && result.textAnalysis.changes.length > 0) {
     return "changed";
   }
-  // Checked last on purpose: a normalized comparison that DID find a difference
-  // is still a plain `changed`, because the caveat must never soften a real
-  // regression into a status that reads like a caveat.
+  // Checked last: a normalized comparison that did find a difference stays a
+  // plain `changed`, so the caveat never softens a real regression.
   if (result.sizeNormalization) return "resized_no_change";
   return "unchanged";
 }

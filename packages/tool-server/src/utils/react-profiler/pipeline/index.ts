@@ -19,11 +19,10 @@ export async function runPipeline(
 
   const sessionContext = await detectSessionContext(input);
 
-  // Stage 0: Preprocess — annotate parent-cascade commits with root cause
+  // Annotate parent-cascade commits with their root cause
   const preprocessed = preprocess(input.commitTree.commits);
 
-  // Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
-  // Uses hotCommitIndices from sessionMeta (pre-computed in react-profiler-stop)
+  // hotCommitIndices was pre-computed in react-profiler-stop
   const hotCommitIndices = input.sessionMeta.hotCommitIndices ?? [];
   const rawHotCommitSummaries = buildHotCommitSummaries(
     preprocessed,
@@ -31,14 +30,11 @@ export async function runPipeline(
     input.sessionMeta.unattributedByCommit
   );
 
-  // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows.
-  // Both sides count ms from the start of profiling, so no correlation input is
-  // needed — the index used to take the first commit's timestamp and align the
-  // samples to it, which displaced every one of them by that value (#619).
+  // Both sides count ms from the start of profiling, so samples need no offset (#619)
   const cpuSampleIndex = input.flamegraph ? buildCpuSampleIndex(input.flamegraph) : null;
   const hotCommitSummaries = correlateCpuWithCommits(rawHotCommitSummaries, cpuSampleIndex);
 
-  // Stage 1: Reduce — O(n) over React commits
+  // O(n) over React commits
   const preprocessedCommitTree = { ...input.commitTree, commits: preprocessed };
   const reduceOutput = reduce(
     preprocessedCommitTree,
@@ -60,14 +56,14 @@ export async function runPipeline(
 
   if (debugDumps) await writeDump(debugDir, "01_reduce.json", reduceOutput);
 
-  // Stage 2: Enrich — O(k) derive stats from Welford accumulators
+  // O(k) over the per-component accumulators
   const enrichOutput = enrich(reduceOutput);
 
-  // Stage 3: Tag — O(k) false-positive context flags
+  // O(k) false-positive flags
   const tagOutput = tag(enrichOutput);
   if (debugDumps) await writeDump(debugDir, "03_tag.json", tagOutput);
 
-  // Stage 4: Filter, rank, serialize — O(k log k)
+  // O(k log k)
   const componentFindings = rank(tagOutput);
   if (debugDumps) await writeDump(debugDir, "04_component_findings.json", componentFindings);
 
@@ -79,7 +75,7 @@ export async function runPipeline(
     allClear: input.sessionMeta.allClear ?? false,
     maxCommitMs: input.sessionMeta.maxCommitMs,
     anyRuntimeCompilerDetected: tagOutput.anyRuntimeCompilerDetected,
-    // Use stored total from react-profiler-stop when available (all-clear path has no commits to count)
+    // The all-clear path keeps no commits, so tagOutput.reactCommits is 0
     reactCommits: input.sessionMeta.totalReactCommits ?? tagOutput.reactCommits,
     fiberRenders: tagOutput.fiberRenders,
     totalFirstMounts: tagOutput.totalFirstMounts,

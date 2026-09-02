@@ -4,19 +4,16 @@ import { ensureAutomationToolkitEnabled } from "../../../utils/vega-automation";
 import type { RestartAppParams, RestartAppResult, RestartAppVegaServices } from "../types";
 
 /**
- * Restart on Vega is terminate-then-launch by app id. `terminate-app` is
- * non-fatal when the app isn't running (the CLI just force-stops nothing), so
- * a "restart" of a not-yet-started app still ends up launching it. `activity`
- * is Android-only and ignored.
+ * `activity` is Android-only and ignored.
  *
- * The toolkit enable flag is (re)asserted before relaunch (best-effort) so a
- * restart is the canonical way to make an app introspectable by `describe`.
+ * The automation-toolkit enable flag is only consulted at app launch, so it is
+ * set first (best-effort) for `describe` to have an introspection server after
+ * the relaunch.
  *
- * Requires both `vega` (the CLI that performs terminate/launch) and `adb` (used
- * by `ensureAutomationToolkitEnabled`). Declaring `adb` fails fast with a clean
- * install hint instead of silently skipping the toolkit-enable step; the
- * `.catch` below still tolerates non-dep hiccups (e.g. VVD console-port
- * discovery).
+ * `adb` is declared even though only `ensureAutomationToolkitEnabled` uses it: a
+ * missing install then fails fast with an install hint instead of silently
+ * leaving the app un-introspectable, while the `.catch` still tolerates non-dep
+ * hiccups (e.g. VVD console-port discovery).
  */
 export const vegaImpl: PlatformImpl<RestartAppVegaServices, RestartAppParams, RestartAppResult> = {
   requires: ["vega", "adb"],

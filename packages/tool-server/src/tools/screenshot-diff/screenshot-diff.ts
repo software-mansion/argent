@@ -55,11 +55,9 @@ export interface PngDiffResult {
     actual: Size;
   };
   /**
-   * Set only when the inputs differed in resolution and were resampled to a
-   * common size in order to compare. Absent when the sizes already matched, so
-   * its presence IS the signal that the comparison carries resampling
-   * uncertainty — and that a green result means "equal after rescaling one of
-   * them", not "equal".
+   * Present only when the inputs were resampled to a common size to compare, so
+   * its presence is the signal that a green result means "equal after
+   * rescaling", not "equal".
    */
   sizeNormalization?: {
     baseline: Size;
@@ -105,10 +103,9 @@ interface DiffArtifactPaths {
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
-// Sized for a baseline PNG stored across sessions, machines and OS versions,
-// so it absorbs real drift. flow-pixels' PIXEL_THRESHOLD deliberately does NOT
-// mirror it (it compares two captures from one live session, a far lower noise
-// floor) — the two are independent by design; see the rationale there.
+// Sized for a baseline PNG stored across sessions, machines and OS versions, so
+// it absorbs real drift. flow-pixels' PIXEL_THRESHOLD is deliberately tighter
+// (one live session, a far lower noise floor); see the rationale there.
 const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
@@ -150,11 +147,10 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
     decodePngFile(options.currentPath),
   ]);
 
-  // Same-aspect screenshots saved at different scales (e.g. a 0.3x baseline vs
-  // a 1.0x live capture) are uniform scalings of one framebuffer, so normalize
-  // them to a common size and compare instead of failing on the resolution
-  // mismatch. Genuinely different aspect ratios still hard-fail below — and
-  // with normalizeSizes: false, so does ANY dimension difference.
+  // Same-aspect screenshots saved at different scales are uniform scalings of
+  // one framebuffer, so resample them to a common size instead of failing on
+  // the resolution mismatch. Different aspect ratios still hard-fail below —
+  // and with normalizeSizes: false, so does ANY dimension difference.
   const normalized =
     options.normalizeSizes === false
       ? sameDimensionsOrNull(decodedBaseline, decodedCurrent)
@@ -170,9 +166,8 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const baseline = normalized.baseline;
   const current = normalized.current;
 
-  // Both operands are still in hand here, so the rescale can be reported without
-  // widening normalizeToCommonSize's contract. Undefined when nothing was
-  // resampled — callers key off presence, not a flag.
+  // Reported from here because normalizeToCommonSize does not return the
+  // original sizes.
   const sizeNormalization =
     decodedBaseline.width === decodedCurrent.width &&
     decodedBaseline.height === decodedCurrent.height
@@ -210,13 +205,9 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
-  // The OCR pass re-reads the two files from disk, so each image's text bounds
-  // come back in its own original coordinate space. When the inputs were
-  // normalized to a common size, rescale those bounds into that shared space
-  // (and hand the font-geometry pass the normalized images to match) so the
-  // cross-image comparison and the summary share the same coordinates the pixel
-  // diff uses. The scale factors are 1/1 when the inputs already match, and the
-  // top cutoff is derived from the normalized height for the same reason.
+  // OCR re-reads the two files from disk, so its bounds come back in each
+  // image's own coordinate space; the scales rebase them onto the normalized
+  // space the pixel diff and summary use (1/1 when the sizes already matched).
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
@@ -255,7 +246,6 @@ function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult 
   return { ...result, summary: formatScreenshotDiffSummary(result) };
 }
 
-// normalizeSizes: false — compare as-is when dims match exactly, else bail.
 function sameDimensionsOrNull(
   baseline: DecodedPng,
   current: DecodedPng
@@ -322,7 +312,6 @@ function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number
 }
 
 // Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
-// Both dimensions are 1 when the sizes match, so same-size inputs are untouched.
 function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
   return {
     x: from.width === 0 ? 1 : to.width / from.width,

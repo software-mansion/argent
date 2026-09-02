@@ -24,7 +24,6 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 // Keep credentials, paths, query parameters, and fragments out of the event log.
-// Web URLs are reduced to their hostname; custom URLs are reduced to their scheme.
 function safeDestination(value: string): string {
   try {
     const url = new URL(value);
