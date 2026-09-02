@@ -326,7 +326,7 @@ export async function flowRunToMcpContent(
 /**
  * One text block listing a step's artifacts, plus the annotated diff image
  * inline when the step failed — otherwise the agent cannot see WHAT differed.
- * Only that diff is materialized; baseline and current are full-res PNGs nobody
+ * Only that diff is materialized; baseline and current are saved PNGs nobody
  * renders, so their handles print as paths without pulling bytes over the wire.
  * Lines carry the step's depth indent so they stay attached to a nested step's
  * label, matching the CLI renderer.

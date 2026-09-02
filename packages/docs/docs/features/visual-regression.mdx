@@ -24,15 +24,15 @@ The agent can compare two saved screenshots, or one saved screenshot and a live 
 
 Argent does more than count different pixels. The summary contains three parts.
 
-| Part           | Content                                                                                            |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| Overall status | Unchanged or changed, and the percentage of pixels that are different                              |
-| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area |
-| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color    |
+| Part           | Content                                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Overall status | `unchanged`, `changed`, `resized_no_change` or `dimension_mismatch`, and the percentage of pixels that are different |
+| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area                   |
+| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color                      |
 
 Argent reads the text of both screenshots with OCR. Thus the agent knows that the label "Save" became "Saved", or that a heading moved down by the height of one line. Argent also compares the shape and the stroke of the glyphs. Thus the agent sees a font change even when the words are the same.
 
-Argent writes a diff image. The image marks the pixels that became brighter, the pixels that became darker, and the outline of each changed area. The agent shows you this image when you ask for it.
+Argent writes a diff image for each comparison that runs. The image marks the pixels that became brighter, the pixels that became darker, and the outline of each changed area. The agent shows you this image when you ask for it. Argent writes no diff image on the status `dimension_mismatch`, because Argent compares nothing there.
 
 Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
 
@@ -53,7 +53,10 @@ Thus you can keep visual checks in the repository and run them in CI.
 
 - The comparison needs two stable screens. Animation, a live clock, an advertisement or random data makes the comparison noisy. Stop the animation or wait for a stable state first.
 - The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
-- The two screenshots must come from the same device class and the same orientation. When the resolution differs, Argent scales one screenshot down, and small differences can come from the scaling.
+- The two screenshots must come from the same device class and the same orientation.
+- Argent does not compare two screenshots with different aspect ratios. Argent reports the status `dimension_mismatch`.
+- When only the resolution differs, Argent scales the larger screenshot down to the size of the smaller one. Argent then reports a clean result as `resized_no_change` and not as `unchanged`.
+- The scaling can add a small difference. The scaling can also remove one, for example a hairline or a change in the subpixel text. A clean `resized_no_change` is thus weaker evidence than a clean `unchanged`.
 - The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
 - The comparison works on an iOS simulator or device, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps.
 
