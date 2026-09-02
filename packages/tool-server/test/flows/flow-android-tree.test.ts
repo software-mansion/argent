@@ -647,6 +647,58 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   // and used to be missing here, which splits what an `assert` decides: a
   // `visible` copied out of describe failed and a `hidden` passed on an element
   // describe reports on screen.
+  // The fallback frame reads the descendants the trim KEEPS, not the first
+  // usable box under the node. A bare wrapper `<div>` publishes as an
+  // `android.view.View` that describe hands its children up for, so stopping on
+  // it read the page's whole scroll height as the WebView's frame: describe put
+  // the landmark on a 400x60 box and this tree covered the screen, a tap centre
+  // 770px apart on the same node.
+  it("reads the fallback frame past a wrapper the trim drops", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.webkit.WebView" resource-id="com.example.app:id/webview" bounds="[0,200][1080,100]">
+    <node index="0" class="android.view.View" bounds="[0,0][1080,4800]">
+      <node index="0" class="android.widget.TextView" text="Body text" bounds="[100,400][500,460]"/>
+    </node>
+  </node>
+</hierarchy>`;
+    const flow = findAll(adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H), {
+      identifier: "com.example.app:id/webview",
+    });
+    const described = findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), {
+      identifier: "com.example.app:id/webview",
+    });
+    expect(described).toHaveLength(1);
+    expect(flow).toHaveLength(1);
+    expect(flow[0]!.frame).toEqual(described[0]!.frame);
+    // ...and it is the text's box, not the wrapper's 4800px scroll height.
+    expect(flow[0]!.frame.height).toBeCloseTo(60 / SCREEN_H, 5);
+  });
+
+  // The other input the trim's own union has: a descendant an ancestor scroller
+  // has scrolled out of view is not on screen, so it is not part of the region
+  // the node covers either.
+  it("leaves a scrolled-away descendant out of the fallback frame", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.ScrollView" resource-id="scroller" scrollable="true" bounds="[0,0][1080,600]">
+    <node index="0" class="android.view.ViewGroup" resource-id="card" content-desc="Card" bounds="[0,200][1080,100]">
+      <node index="0" class="android.widget.TextView" text="On screen" bounds="[100,100][500,160]"/>
+      <node index="1" class="android.widget.TextView" text="Scrolled away" bounds="[100,1800][500,1860]"/>
+    </node>
+  </node>
+</hierarchy>`;
+    const flow = findAll(adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H), {
+      identifier: "card",
+    });
+    const described = findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), {
+      identifier: "card",
+    });
+    expect(described).toHaveLength(1);
+    expect(flow).toHaveLength(1);
+    expect(flow[0]!.frame).toEqual(described[0]!.frame);
+  });
+
   it("keeps a node whose own box is unusable, as describe does", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">

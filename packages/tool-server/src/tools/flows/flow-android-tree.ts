@@ -9,6 +9,7 @@ import {
   isUiAutomatorWebView,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
+  regionOverDescendants,
 } from "../describe/platforms/android/uiautomator-parser";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -85,45 +86,6 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 }
 
 /**
- * The region a node's descendants cover, for a node whose own box is unusable —
- * clipped to zero or negative area. The describe trim publishes such a node at
- * that region (`boundsOverChildren`); without the same substitution here the
- * node is an addressable element there and absent from this tree, so an
- * `assert { visible: … }` an author copies out of `describe` fails and an
- * `assert { hidden: … }` passes on an element describe reports on screen.
- *
- * Descent stops at the first descendant whose own box IS usable, so the union
- * is over the topmost usable boxes — the level the describe trim's own
- * survivors sit at. Skipped subtrees contribute nothing, as they do there.
- */
-function rectOverDescendants(node: ParsedXmlNode): PixelRect | null {
-  let out: PixelRect | null = null;
-  const stack: ParsedXmlNode[] = childNodes(node);
-  while (stack.length > 0) {
-    const n = stack.pop()!;
-    if (isSystemChrome(n.attrs) || isNoisyUiAutomatorClass(n.attrs.class ?? "")) continue;
-    const r = parseUiAutomatorBounds(n.attrs.bounds ?? "");
-    if (!r || r.w <= 0 || r.h <= 0) {
-      for (const c of childNodes(n)) stack.push(c);
-      continue;
-    }
-    if (!out) {
-      out = { ...r };
-      continue;
-    }
-    const x = Math.min(out.x, r.x);
-    const y = Math.min(out.y, r.y);
-    out = {
-      x,
-      y,
-      w: Math.max(out.x + out.w, r.x + r.w) - x,
-      h: Math.max(out.y + out.h, r.y + r.h) - y,
-    };
-  }
-  return out;
-}
-
-/**
  * Project a uiautomator XML node for the shared flatten (`flow-tree-flatten`).
  * A password field never contributes its secret: its text is the `[password]`
  * placeholder and its raw `text` is never read into the leaf value.
@@ -196,11 +158,18 @@ function projectAndroidNode(
   if (!skip && !absorbedHalf && (identifier || label || hasSemanticRole || isFocused)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     // A box the node HAS but cannot use falls back to the region its
-    // descendants cover, exactly as the describe trim does. A node with no
-    // `bounds` at all keeps no frame: describe leaves that one to its own
-    // bounds-less rule rather than to this substitution.
+    // descendants cover, read by the trim's own rule so both trees publish the
+    // same box. A node with no `bounds` at all keeps no frame: describe leaves
+    // that one to its own bounds-less rule rather than to this substitution.
     if (!frame && rect) {
-      const over = rectOverDescendants(node);
+      const over = regionOverDescendants(node, {
+        screenW,
+        screenH,
+        inWebView,
+        // The window this node's children live under. Its own box is unusable,
+        // so it scrolls nothing and the window is the one it inherited.
+        scrollClip: ctx.scrollClip.get(node) ?? null,
+      });
       frame = over ? normalizeRect(over, screenW, screenH) : null;
     }
     if (frame) {
@@ -258,6 +227,13 @@ interface AndroidTreeContext {
   webViewPair: Map<ParsedXmlNode, ParsedXmlNode>;
   /** The inner halves, which emit no leaf of their own. */
   absorbedWebViewHalf: Set<ParsedXmlNode>;
+  /**
+   * The scroll-clip window each node's own children live under, computed as the
+   * describe trim computes it. Only the degenerate-box fallback reads it: the
+   * clip that prunes this tree is applied by `flattenHoisting`, which carries
+   * the window down its own walk.
+   */
+  scrollClip: Map<ParsedXmlNode, PixelRect | null>;
 }
 
 /**
@@ -295,15 +271,22 @@ function yieldsLeaf(node: ParsedXmlNode): boolean {
  * testID-only containers the trim drops. A child that yields no leaf at all is
  * the case the two agree on.
  */
-function readAndroidTree(root: ParsedXmlNode): AndroidTreeContext {
+function readAndroidTree(
+  root: ParsedXmlNode,
+  screenW: number,
+  screenH: number
+): AndroidTreeContext {
   const ctx: AndroidTreeContext = {
     inWebView: new Set<ParsedXmlNode>(),
     webViewPair: new Map<ParsedXmlNode, ParsedXmlNode>(),
     absorbedWebViewHalf: new Set<ParsedXmlNode>(),
+    scrollClip: new Map<ParsedXmlNode, PixelRect | null>(),
   };
-  const stack: Array<{ node: ParsedXmlNode; under: boolean }> = [{ node: root, under: false }];
+  const stack: Array<{ node: ParsedXmlNode; under: boolean; clip: PixelRect | null }> = [
+    { node: root, under: false, clip: null },
+  ];
   while (stack.length > 0) {
-    const { node, under } = stack.pop()!;
+    const { node, under, clip } = stack.pop()!;
     if (under) ctx.inWebView.add(node);
     const kids = childNodes(node);
     const hostsWeb = isUiAutomatorWebView(node.attrs.class ?? "");
@@ -315,7 +298,16 @@ function readAndroidTree(root: ParsedXmlNode): AndroidTreeContext {
         ctx.absorbedWebViewHalf.add(inner);
       }
     }
-    for (const c of kids) stack.push({ node: c, under: under || hostsWeb });
+    // A scroller clips its children to its own box; one whose box is unusable
+    // clips nothing and passes the window it was handed on, exactly as
+    // `scrollClipOf` does on the describe side.
+    const rect = parseUiAutomatorBounds(node.attrs.bounds ?? "");
+    const scrolls =
+      isUiAutomatorScrollable(node.attrs, under) &&
+      Boolean(rect && normalizeRect(rect, screenW, screenH));
+    const childClip = scrolls ? rect : clip;
+    ctx.scrollClip.set(node, childClip);
+    for (const c of kids) stack.push({ node: c, under: under || hostsWeb, clip: childClip });
   }
   return ctx;
 }
@@ -335,7 +327,7 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
-      const ctx = readAndroidTree(root);
+      const ctx = readAndroidTree(root, screenW, screenH);
       for (const c of childNodes(root)) {
         flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, ctx), children);
       }

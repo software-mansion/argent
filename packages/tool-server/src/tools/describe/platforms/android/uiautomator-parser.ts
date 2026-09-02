@@ -584,6 +584,84 @@ function boundsOverChildren(children: UiNode[]): PixelRect | null {
 }
 
 /**
+ * Whether the trim drops this node and hands its children up in its place, so
+ * the region below it stands for it. Reads the two passthrough arms of
+ * `computeNodeOutput` — the decorative `ImageView`, and the layout container
+ * with nothing of its own.
+ */
+function passesChildrenUp(attrs: Record<string, string>, cls: string): boolean {
+  if (isInteractive(attrs) || labelOf(attrs) !== "") return false;
+  return cls.endsWith(".ImageView") || LAYOUT_CONTAINERS.has(cls);
+}
+
+/**
+ * The region a node's descendants cover, read straight off the dump rather than
+ * off the trim's survivors. `boundsOverChildren` answers the same question for
+ * the trim, which has its survivors to hand; the flow selector tree
+ * (`flow-android-tree`) keeps a different set of nodes and still has to publish
+ * the same box, or a frame an author copies out of `describe` addresses a
+ * different region at replay.
+ *
+ * The descent follows the trim rather than stopping at the first usable box: a
+ * node the trim hands its children up for — a bare wrapper `<div>`, a
+ * decorative `ImageView`, a node whose own box is unusable — contributes those
+ * children in its place, a node the trim drops with its subtree contributes
+ * nothing, and a descendant an ancestor's scroll clip hides is not on screen to
+ * contribute at all. `scrollClip` is the window the node's own children live
+ * under, which is the one it inherited: a node with an unusable box scrolls
+ * nothing.
+ */
+export function regionOverDescendants(
+  node: ParsedXmlNode,
+  opts: { screenW: number; screenH: number; inWebView: boolean; scrollClip: PixelRect | null }
+): PixelRect | null {
+  const pruneOpts: PruneOptions = {
+    screenW: opts.screenW,
+    screenH: opts.screenH,
+    includeSystem: false,
+  };
+  type Frame = { node: ParsedXmlNode; clip: PixelRect | null; inWebView: boolean };
+  const stack: Frame[] = [];
+  const descend = (parent: ParsedXmlNode, clip: PixelRect | null, inWebView: boolean): void => {
+    for (const c of parent.children) {
+      if (c.tag === "node") stack.push({ node: c, clip, inWebView });
+    }
+  };
+  descend(node, opts.scrollClip, opts.inWebView);
+  let out: PixelRect | null = null;
+  while (stack.length > 0) {
+    const { node: n, clip, inWebView } = stack.pop()!;
+    const attrs = n.attrs;
+    const cls = attrs.class ?? "";
+    if (NOISY_CLASSES.has(cls) || isSystemChrome(attrs)) continue;
+    const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
+    if (bounds && clip && rectFullyOutside(bounds, clip)) continue;
+    if (!isVisibleRect(bounds, opts.screenW, opts.screenH) || passesChildrenUp(attrs, cls)) {
+      descend(
+        n,
+        scrollClipOf(attrs, bounds, inWebView, pruneOpts, clip),
+        inWebView || WEBVIEW_CLASSES.has(cls)
+      );
+      continue;
+    }
+    const b = bounds!;
+    if (!out) {
+      out = { ...b };
+      continue;
+    }
+    const x = Math.min(out.x, b.x);
+    const y = Math.min(out.y, b.y);
+    out = {
+      x,
+      y,
+      w: Math.max(out.x + out.w, b.x + b.w) - x,
+      h: Math.max(out.y + out.h, b.y + b.h) - y,
+    };
+  }
+  return out;
+}
+
+/**
  * The box a node publishes: its own, or — when it HAS one and that one is
  * unusable — the region its surviving children cover.
  *
