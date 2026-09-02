@@ -51,16 +51,18 @@ class IosDeviceControlError extends Error {
   }
 }
 
-/** Map devicectl failure output to an actionable hint. */
-function resolveDevicectlHint(output: string): string {
+/**
+ * Map devicectl failure output to an actionable hint. `bundleId` is the app a
+ * `process launch` targeted, when the command targeted one; it enables the
+ * not-installed hint, which names the app.
+ */
+function resolveDevicectlHint(output: string, bundleId?: string): string {
   const lower = output.toLowerCase();
 
-  // CoreDeviceError 10002 covers any failed preflight check: a locked screen
-  // is the common cause, but a pending system prompt blocks launches too.
-  if (lower.includes("failed to launch") || lower.includes("10002")) {
-    return "Unlock the device and keep the screen awake, then retry; if it is already unlocked, check the phone's screen: a pending system prompt (for example a default-app choice) also blocks launches.";
-  }
-
+  // devicectl wraps every `process launch` failure as "failed to launch" with
+  // CoreDeviceError 10002, so the specific causes are checked first; the
+  // hedged 10002 arm below is the fallback for a preflight failure that gives
+  // no other clue.
   if (lower.includes("developer disk image") || lower.includes("developer mode is disabled")) {
     return (
       "Enable Developer Mode on the device (Settings > Privacy & Security > " +
@@ -68,8 +70,27 @@ function resolveDevicectlHint(output: string): string {
     );
   }
 
+  // SpringBoard reports a bundle id it does not know as its app-info provider
+  // (FBSApplicationLibrary) returning nil; other toolchain versions say so
+  // directly. Scoped to commands that name an app so a "could not be found"
+  // about the device itself never reads as a missing app.
+  if (
+    bundleId !== undefined &&
+    (lower.includes("fbsapplicationlibrary") ||
+      lower.includes("could not be found") ||
+      lower.includes("not installed"))
+  ) {
+    return `${bundleId} is not installed on the device; install it with reinstall-app, then retry.`;
+  }
+
   if (lower.includes("must be paired") || lower.includes("pairing")) {
     return "Connect the device by cable, accept the Trust prompt, enter the device passcode, then retry.";
+  }
+
+  // CoreDeviceError 10002 covers any failed preflight check: a locked screen
+  // is the common cause, but a pending system prompt blocks launches too.
+  if (lower.includes("failed to launch") || lower.includes("10002")) {
+    return "Unlock the device and keep the screen awake, then retry; if it is already unlocked, check the phone's screen: a pending system prompt (for example a default-app choice) also blocks launches.";
   }
 
   if (lower.includes("device is busy") || lower.includes("connecting")) {
@@ -87,6 +108,8 @@ interface RunDevicectlOptions {
   timeoutMs?: number;
   /** When set, appends `--json-output <tmpfile>` and returns the parsed JSON. */
   json?: boolean;
+  /** The bundle id the command targets, when it targets one; enables the not-installed hint. */
+  bundleId?: string;
 }
 
 async function runDevicectl(
@@ -139,7 +162,7 @@ async function runDevicectl(
 
     throw withFailureSignal(
       new IosDeviceControlError(`Failed to ${action}: ${firstLine(e.stderr || e.message)}`, {
-        hint: resolveDevicectlHint(output),
+        hint: resolveDevicectlHint(output, opts.bundleId),
         cause: Object.assign(error as Error, { devicectlJson: errorJson }),
       }),
       {
@@ -311,7 +334,7 @@ export async function launchApp(
   }
 
   args.push(bundleId);
-  await runDevicectl(args, `launch ${bundleId}`);
+  await runDevicectl(args, `launch ${bundleId}`, { bundleId });
 }
 
 interface DeviceConnectionInfo {

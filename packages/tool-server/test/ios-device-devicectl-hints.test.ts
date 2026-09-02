@@ -47,6 +47,45 @@ describe("devicectl error hints are folded into the message", () => {
       "Connect the device by cable, accept the Trust prompt"
     );
   });
+
+  it("prefers the developer-mode guidance over the unlock hint for a 10002 launch failure", async () => {
+    // devicectl wraps every process launch failure as 10002, so the specific
+    // cause in the same output has to win over the hedged unlock guidance.
+    fake.stderr =
+      "ERROR: The application failed to launch. (com.apple.dt.CoreDeviceError error 10002 (0x2712))\n" +
+      "Developer Mode is disabled on this device.";
+
+    const error = await launchApp(UDID, "com.example.app").catch((caught: unknown) => caught);
+
+    expect((error as { hint?: string | null }).hint).toContain("Enable Developer Mode");
+    expect((error as Error).message).not.toContain("Unlock the device");
+  });
+
+  it("names the bundle id and reinstall-app when the app is not installed", async () => {
+    const notInstalled =
+      "com.example.missing is not installed on the device; install it with reinstall-app, then retry.";
+
+    // SpringBoard's shape, wrapped in the same 10002 launch failure.
+    fake.stderr =
+      "ERROR: The application failed to launch. (com.apple.dt.CoreDeviceError error 10002 (0x2712))\n" +
+      'Application info provider (FBSApplicationLibrary) returned nil for "com.example.missing"';
+    let error = await launchApp(UDID, "com.example.missing").catch((caught: unknown) => caught);
+    expect((error as { hint?: string | null }).hint).toBe(notInstalled);
+
+    // The plainer shape from other toolchain versions.
+    fake.stderr = "ERROR: The requested application com.example.missing could not be found.";
+    error = await launchApp(UDID, "com.example.missing").catch((caught: unknown) => caught);
+    expect((error as { hint?: string | null }).hint).toBe(notInstalled);
+  });
+
+  it("keeps the hedged unlock guidance for a bare 10002 failure", async () => {
+    fake.stderr =
+      "ERROR: The operation couldn't be completed. (com.apple.dt.CoreDeviceError error 10002 (0x2712))";
+
+    const error = await launchApp(UDID, "com.example.app").catch((caught: unknown) => caught);
+
+    expect((error as { hint?: string | null }).hint).toContain("Unlock the device");
+  });
 });
 
 describe("devicectl failures carry a structured failure signal", () => {
