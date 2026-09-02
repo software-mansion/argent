@@ -302,8 +302,9 @@ describe("launch pins the flow tree target", () => {
 
   it("back-to-back launches move the pin to the newest app", async () => {
     // No tool step between the launches, so the second one starts from a pin
-    // still set on the first app. Each assert reads once, so the run is one
-    // read per app, in launch order.
+    // still set on the first app. Each assert is a positive check, so it has to
+    // survive a second settled read before it passes - two reads per app, in
+    // launch order.
     const OTHER = "com.acme.other";
     await writeFlow("relaunched", {
       executionPrerequisite: "",
@@ -323,7 +324,12 @@ describe("launch pins the flow tree target", () => {
       "launch:pass",
       "assert:pass",
     ]);
-    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${OTHER}`]);
+    expect(labels()).toEqual([
+      `pinned:${APP}`,
+      `pinned:${APP}`,
+      `pinned:${OTHER}`,
+      `pinned:${OTHER}`,
+    ]);
   });
 
   it("a later launch re-arms the probe ride-out on a fresh, unanswered target", async () => {
@@ -341,8 +347,9 @@ describe("launch pins the flow tree target", () => {
       ],
     });
     // The marker appears only on the second poll of the first assert, so that
-    // step reads twice - read 2 proves the answer recorded on read 1 really
-    // does reach the next read of the same pin.
+    // step reads three times - read 2 proves the answer recorded on read 1
+    // really does reach the next read of the same pin, and read 3 is the second
+    // settled read every positive check must survive.
     treeData = () =>
       treeTargets.length <= 1
         ? {
@@ -362,7 +369,9 @@ describe("launch pins the flow tree target", () => {
     expect(treeTargets.map((t) => `${label(t)}:${t?.probeAnswered}`)).toEqual([
       `pinned:${APP}:false`,
       `pinned:${APP}:true`,
+      `pinned:${APP}:true`,
       `pinned:${OTHER}:false`,
+      `pinned:${OTHER}:true`,
     ]);
   });
 
@@ -403,9 +412,10 @@ describe("launch pins the flow tree target", () => {
       "run:skip",
     ]);
     expect(result.steps[2]?.reason).toContain("restart-app failed");
-    // The one read of the run is the first assert's, taken before the failed
-    // launch - no later read exists to carry a target, cleared or stale.
-    expect(labels()).toEqual([`pinned:${APP}`]);
+    // The only reads of the run are the first assert's - a positive check, so
+    // two - taken before the failed launch. No later read exists to carry a
+    // target, cleared or stale.
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${APP}`]);
   });
 
   it("a run with no launch step keeps the auto-resolve fallback (no target)", async () => {

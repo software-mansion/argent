@@ -232,8 +232,9 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "assert:pass",
     ]);
     expect(result.ok).toBe(true);
-    // One read per assert: the second one is the read the regression lost.
-    expect(hierarchyReads).toEqual([APP, APP]);
+    // Two reads per assert - a positive check must survive a second settled
+    // read - so the last pair is the read the regression lost.
+    expect(hierarchyReads).toEqual([APP, APP, APP, APP]);
   });
 
   it("retires an outage verdict proven while pinned when a tool step demotes the pin", async () => {
@@ -293,7 +294,8 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "launch:pass",
       "tap:pass",
       "tool:pass",
-      "assert:fail",
+      // `error`, not `fail`: an unreadable tree is not a verdict about the app.
+      "assert:error",
     ]);
     expect(result.ok).toBe(false);
     expect(result.steps[1].warning).toMatch(/is an Apple system app/);
@@ -330,7 +332,8 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "launch:pass",
       "tap:pass",
       "tool:pass",
-      "assert:fail",
+      // `error`, not `fail`: an unreadable tree is not a verdict about the app.
+      "assert:error",
     ]);
     expect(result.ok).toBe(false);
     expect(result.steps[1].warning).toMatch(/no foreground presence/);
@@ -368,7 +371,8 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "launch:pass",
       "tap:pass",
       "tool:pass",
-      "assert:fail",
+      // `error`, not `fail`: an unreadable tree is not a verdict about the app.
+      "assert:error",
     ]);
     expect(result.ok).toBe(false);
     expect(result.steps[3].reason).toMatch(/could not read the UI tree/);
@@ -392,12 +396,15 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "launch:pass",
       "assert:pass",
       "tool:pass",
-      "assert:fail",
+      // `error`, not `fail`: an unreadable tree is not a verdict about the app.
+      "assert:error",
     ]);
     expect(result.steps[3].reason).toMatch(/could not read the UI tree/);
     expect(result.steps[3].reason).toMatch(/RPC timed out/i);
-    // Only the pinned read before the tool step ever reached the hierarchy.
-    expect(hierarchyReads).toEqual([APP]);
+    // Only the pinned reads before the tool step ever reached the hierarchy -
+    // two of them, since that passing assert is a positive check and must
+    // survive a second settled read. Nothing after the demote gets there.
+    expect(hierarchyReads).toEqual([APP, APP]);
   });
 
   it("reads the screen aspect for a rotate after a foreground-neutral tool step", async () => {
@@ -426,8 +433,9 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "tool:pass",
       "rotate:pass",
     ]);
-    // assert, then the rotate's two settle reads, then the aspect read.
-    expect(hierarchyReads).toEqual([APP, APP, APP, APP]);
+    // The assert's two reads (a positive check must survive a second settled
+    // read), then the rotate's two settle reads, then the aspect read.
+    expect(hierarchyReads).toEqual([APP, APP, APP, APP, APP]);
     expect(result.steps[3]?.warning).toBeUndefined();
     const rotations = toolCalls.filter((c) => c.id === "gesture-rotate");
     expect(rotations).toHaveLength(1);
@@ -468,9 +476,10 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "assert:pass",
     ]);
     expect(result.ok).toBe(true);
-    // One read per assert; the second is the one the parent loses if the
-    // fragment's tool step drops the target.
-    expect(hierarchyReads).toEqual([APP, APP]);
+    // Two reads per assert - a positive check must survive a second settled
+    // read - and the second pair is what the parent loses if the fragment's
+    // tool step drops the target.
+    expect(hierarchyReads).toEqual([APP, APP, APP, APP]);
   });
 
   it("evaluates a when: guard after a tool step instead of stopping the run", async () => {
@@ -503,7 +512,9 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
       "assert:pass",
     ]);
     expect(result.ok).toBe(true);
-    // assert, the guard's probe read, then the trailing assert.
-    expect(hierarchyReads).toEqual([APP, APP, APP]);
+    // The assert's two reads, the guard's two probe reads, then the trailing
+    // assert's two - every one a positive check, each surviving a second
+    // settled read.
+    expect(hierarchyReads).toEqual([APP, APP, APP, APP, APP, APP]);
   });
 });

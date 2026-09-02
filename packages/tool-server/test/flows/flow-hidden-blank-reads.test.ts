@@ -95,7 +95,7 @@ describe("hidden timeout diagnostics", () => {
     const result = await run("blank-hidden");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/could not confirm/);
     expect(result.steps[0].reason).not.toMatch(/still visible/);
   });
@@ -127,7 +127,7 @@ describe("hidden timeout diagnostics", () => {
     const result = await run("dark-hidden");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/could not confirm/);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/still visible/);
@@ -163,7 +163,10 @@ describe("hidden timeout diagnostics", () => {
     const result = await run("never-seen-hidden");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    // `error`, not `fail`: the tree was never readable, so the app was never
+    // judged — scoring it a failure would report an environment outage as a
+    // regression.
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
     expect(result.steps[0].reason).toMatch(/no window attached to read/);
     // Must NOT read as a confirmed-hidden pass.
@@ -246,7 +249,7 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     const result = await run("dark-exists");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
@@ -272,7 +275,7 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     const result = await run("dark-await");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
@@ -316,7 +319,7 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     const result = await run("dark-text");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/Loading/);
@@ -1479,7 +1482,10 @@ describe("evidence and tree-source gaps the widened match set now reaches", () =
 
     const result = await run("folded-hidden");
 
-    expect(result.steps[0].status).toBe("fail");
+    // Scored `error`, not `fail`: an empty read cannot decide the assertion, and
+    // the indeterminate rule this PR adds reports that as an environment problem
+    // rather than a failed check. The reason is unchanged.
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/could not confirm/);
   });
 
