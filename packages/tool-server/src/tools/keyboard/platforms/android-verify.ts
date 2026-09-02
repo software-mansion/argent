@@ -47,7 +47,9 @@ import type { KeyboardVerification } from "../types";
  * paying its own `app_process` spawn, plus the inter-chunk pauses — 29 adb calls
  * for a 200-character repair and 85 for a 600-character one, which at the
  * ~200-400 ms per call quoted on `REPAIR_CHUNK_CHARS` plus 100 ms between chunks
- * is 8-14 s and 24-41 s respectively. The tool declares `longRunning` for that reason: past ~30 s the
+ * is 8-14 s and 24-41 s respectively. A `%` costs more: `injectAndroidText`
+ * starts a new `input text` call at each one, so a chunk full of them is a call
+ * per character. The tool declares `longRunning` for that reason: past ~30 s the
  * MCP adapter would abandon the request and replay it, and this tool is not
  * idempotent (see `../index.ts`).
  *
@@ -178,53 +180,71 @@ interface FocusedField {
  * They need different notes: the advice for the first is "tap the field", which
  * for the second is advice for a screen this is not.
  *
- * Walked in document order and takes the first match, with `multipleFocused` set
- * when the capture held more than one. Android focus is per window, so a second
- * one means the capture spans windows — see `readFocusedField`, which is where
- * that is decided, since only the helper's `windowCount` separates it from a dump
- * that reports two focused views inside one window.
+ * Walked in document order and takes the first match. The helper writes one
+ * subtree per window under `<hierarchy>`, so its top-level children ARE the
+ * windows, and that is what the two flags read:
+ *
+ *  - `contendedFocus`: focused editable views in more than one of them. Android
+ *    focuses one view per window, and `adb input text` reaches whichever window
+ *    really takes input, which no dump says — so the field this walk picked may
+ *    be a stale one behind a dialog. Two inside ONE window is a different shape,
+ *    the recycled row's twin, which `isSameField` handles.
+ *  - `empty`: no window at all. The helper emits a bare `<hierarchy/>` when
+ *    `getWindows()` yields nothing AND the active window has no root — a screen
+ *    mid-transition or a display gone off — and that supports no finding about
+ *    focus. The helper's own `windowCount` is not read for either: it counts
+ *    every interactive window, and the IME and the system bars make it 3 on the
+ *    plain Settings search box every read-back runs against (measured, API 34).
  */
 function findFocused(xml: string): {
   field: FocusedField | null;
   focusedClass: string | null;
-  multipleFocused: boolean;
+  contendedFocus: boolean;
+  empty: boolean;
 } {
-  const root = parseUiAutomatorXml(xml);
-  if (!root) return { field: null, focusedClass: null, multipleFocused: false };
-  const stack = [root];
+  const windows = parseUiAutomatorXml(xml)?.children ?? [];
+  if (windows.length === 0)
+    return { field: null, focusedClass: null, contendedFocus: false, empty: true };
   let focusedClass: string | null = null;
   let field: FocusedField | null = null;
-  let focusedEditables = 0;
+  let fieldWindow = -1;
+  let contendedFocus = false;
   // Counted over the whole capture, not stopped at the field: an id several
   // editable views share is a layout id, which `isSameField` must not trust.
   const idCounts = new Map<string, number>();
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    // Push children in reverse so they pop back in document order.
-    for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
-    const attrs = node.attrs;
-    const className = attrs.class ?? "";
-    const editable = EDITABLE_CLASS_RE.test(className);
-    const resourceId = attrs["resource-id"] ?? "";
-    if (editable && resourceId !== "")
-      idCounts.set(resourceId, (idCounts.get(resourceId) ?? 0) + 1);
-    if (!attrIsTrue(attrs, "focused")) continue;
-    if (focusedClass === null) focusedClass = className;
-    if (!editable) continue;
-    focusedEditables++;
-    if (field !== null) continue;
-    const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
-    field = {
-      text: attrs.text ?? "",
-      resourceId,
-      className,
-      bounds: rect,
-      password: attrIsTrue(attrs, "password"),
-      idShared: false,
-    };
+  for (let window = 0; window < windows.length; window++) {
+    const stack = [windows[window]!];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      // Push children in reverse so they pop back in document order.
+      for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
+      const attrs = node.attrs;
+      const className = attrs.class ?? "";
+      const editable = EDITABLE_CLASS_RE.test(className);
+      const resourceId = attrs["resource-id"] ?? "";
+      if (editable && resourceId !== "")
+        idCounts.set(resourceId, (idCounts.get(resourceId) ?? 0) + 1);
+      if (!attrIsTrue(attrs, "focused")) continue;
+      if (focusedClass === null) focusedClass = className;
+      if (!editable) continue;
+      if (field === null) {
+        const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
+        field = {
+          text: attrs.text ?? "",
+          resourceId,
+          className,
+          bounds: rect,
+          password: attrIsTrue(attrs, "password"),
+          idShared: false,
+        };
+        fieldWindow = window;
+      } else if (window !== fieldWindow) {
+        contendedFocus = true;
+      }
+    }
   }
   if (field !== null) field.idShared = (idCounts.get(field.resourceId) ?? 0) > 1;
-  return { field, focusedClass, multipleFocused: focusedEditables > 1 };
+  return { field, focusedClass, contendedFocus, empty: false };
 }
 
 /** The focused editable view, or null when none of the focused views is one. */
@@ -429,8 +449,20 @@ function replacedSelection(before: string, after: string, text: string): boolean
   }
   const first = Math.max(0, after.length - text.length - suffix);
   const last = Math.min(prefix, after.length - text.length);
+  // Capped like `plannedUndoDeletions`, and counting characters compared rather
+  // than offsets tried so only a genuinely quadratic reading pays: a field that
+  // is one character repeated keeps every offset matching almost to the end of
+  // `text`, measured at 925 ms for 200 kB against a 2,000-character string, while
+  // an ordinary field fails most offsets on their first character. Exhausting the
+  // cap answers "cannot rule this out", which reads as indeterminate and repairs
+  // nothing.
+  let steps = 0;
   for (let i = first; i <= last; i++) {
-    if (after.startsWith(text, i)) return true;
+    let matched = 0;
+    while (matched < text.length && after[i + matched] === text[matched]) matched++;
+    if (matched === text.length) return true;
+    steps += matched + 1;
+    if (steps > READING_SEARCH_STEPS) return true;
   }
   return false;
 }
@@ -726,6 +758,21 @@ const CONTENDED_FOCUS_NOTE =
   "dialog over another window looks like, and the dump does not say which of them takes typing. " +
   "The text was typed. Read the field with `describe` to see what it holds.";
 
+// A capture with no window in it at all. Distinct from a read that failed: the
+// call succeeded and returned a hierarchy holding nothing, which says as little
+// about focus as a truncated one does — and reporting it as "nothing has focus"
+// would send the agent to re-tap a field that may never have lost it.
+const EMPTY_CAPTURE_NOTE =
+  `${UNVERIFIED_PREFIX}: the screen read came back with no windows in it, which a screen ` +
+  "mid-transition or a display that has gone off does, so there was nothing to read the field " +
+  "from. This says nothing about whether the text landed — read the field with `describe` to " +
+  "confirm.";
+
+const EMPTY_CAPTURE_AFTER_REASON =
+  "the screen read came back with no windows in it once the text had been " +
+  "typed, so the field it started in could not be found again. Read the field with `describe` " +
+  "to see what it holds.";
+
 const CONTENDED_FOCUS_AFTER_REASON =
   "more than one editable view reported input focus once the text had been " +
   "typed, so the field it started in could not be told from another window's. Read the screen " +
@@ -965,22 +1012,26 @@ const READ_MAX_NODES = 12_000;
 async function readFocusedField(devtools: AndroidDevtoolsApi): Promise<{
   field: FocusedField | null;
   focusedClass: string | null;
-  contended: boolean;
+  contendedFocus: boolean;
+  empty: boolean;
   truncated: boolean;
 }> {
-  const { xml, truncated, windowCount } = await devtools.getHierarchy({
+  const { xml, truncated } = await devtools.getHierarchy({
     clearCache: true,
     maxNodes: READ_MAX_NODES,
   });
-  const { multipleFocused, ...found } = findFocused(xml);
+  const found = findFocused(xml);
   // A capture cut short cannot show an id to be unique: the helper writes nodes
   // in document order, so the view that shares it may be one it never reached.
+  // It cannot rule out a second focused view either — the walk breaks between
+  // windows as well as inside one, so a window it never reached is a window
+  // `contendedFocus` does not see. That leaves the dialog case above open on a
+  // screen dense enough to truncate, which takes more than 12,000 nodes. Below
+  // API 34 the helper emulates `clearCache` by refreshing each node and drops the
+  // subtree of any that fails, without the flag, so a field re-rendering under the
+  // burst can go missing from a capture that reports itself complete.
   if (found.field && truncated) found.field.idShared = true;
-  // Two focused editable views across two windows: `adb input text` goes to the
-  // one whose window really takes input, and nothing in the dump says which that
-  // is. Inside ONE window Android focuses one view, so a second focused view
-  // there is the shape a recycled row's twin makes, which `isSameField` handles.
-  return { ...found, contended: multipleFocused && windowCount > 1, truncated };
+  return { ...found, truncated };
 }
 
 /**
@@ -1024,6 +1075,9 @@ export async function typeAndroidTextVerified(
   signal?.throwIfAborted();
   if (!devtools) {
     await injectAndroidText(serial, text);
+    // The burst is long enough to be given up on even here, and a caller that is
+    // gone is owed the same skip the verified path gives it.
+    signal?.throwIfAborted();
     return { note: HELPER_UNAVAILABLE_NOTE };
   }
 
@@ -1050,41 +1104,40 @@ async function verifyAgainstDevtools(
   text: string,
   signal?: AbortSignal
 ): Promise<KeyboardVerification> {
+  // Every path that gives up on the read-back still types, then reports why. The
+  // signal is re-read after the burst on each of them, for the reason the verified
+  // path re-reads it: a run the caller abandoned is owed a skip, not a note.
+  const typedWithout = async (note: string): Promise<KeyboardVerification> => {
+    await injectAndroidText(serial, text);
+    signal?.throwIfAborted();
+    return { note };
+  };
   const baseline = await readFocusedField(devtools).catch(() => null);
   // A whole hierarchy dump stands between the check above and the first
   // keystroke, so the caller can give up inside it. Past this point the text is
   // typed on every path, including the one that gives up on reading the field.
   signal?.throwIfAborted();
-  if (!baseline) {
-    await injectAndroidText(serial, text);
-    return { note: blockedNote(READ_FAILED_REASON, null) };
-  }
+  if (!baseline) return typedWithout(blockedNote(READ_FAILED_REASON, null));
   const {
     field: before,
     focusedClass: beforeFocusedClass,
-    contended: beforeContended,
+    contendedFocus: beforeContended,
+    empty: beforeEmpty,
     truncated: beforeTruncated,
   } = baseline;
-  if (beforeContended) {
-    await injectAndroidText(serial, text);
-    return { note: CONTENDED_FOCUS_NOTE };
-  }
+  if (beforeContended) return typedWithout(CONTENDED_FOCUS_NOTE);
   if (!before) {
-    await injectAndroidText(serial, text);
-    if (beforeTruncated) return { note: TRUNCATED_READ_NOTE };
+    if (beforeEmpty) return typedWithout(EMPTY_CAPTURE_NOTE);
+    if (beforeTruncated) return typedWithout(TRUNCATED_READ_NOTE);
     // Something has focus, just not something readable: saying "tap the field
     // first" would be advice for a screen this is not.
-    return {
-      note:
-        beforeFocusedClass === null
-          ? NO_FOCUSED_FIELD_NOTE
-          : unrecognisedFocusNote(beforeFocusedClass),
-    };
+    return typedWithout(
+      beforeFocusedClass === null
+        ? NO_FOCUSED_FIELD_NOTE
+        : unrecognisedFocusNote(beforeFocusedClass)
+    );
   }
-  if (before.password) {
-    await injectAndroidText(serial, text);
-    return { note: PASSWORD_FIELD_NOTE };
-  }
+  if (before.password) return typedWithout(PASSWORD_FIELD_NOTE);
 
   await injectAndroidText(serial, text);
 
@@ -1151,10 +1204,11 @@ async function verifyAgainstDevtools(
 
 /**
  * Re-read the field the call started in, or the reason it cannot be compared:
- * the read failed, it was truncated before reaching the field, nothing editable
- * has focus any more, focus is on a DIFFERENT field than the baseline (which
- * makes both the comparison and a deletion-based repair meaningless — see
- * `isSameField`), or the field masks its input now.
+ * the read failed, came back empty or was truncated before reaching the field,
+ * two windows both report a focused editable, nothing editable has focus any
+ * more, focus is on a DIFFERENT field than the baseline (which makes both the
+ * comparison and a deletion-based repair meaningless — see `isSameField`), or
+ * the field masks its input now.
  *
  * `deleted` is what the repair removed before retyping, or null when this is the
  * read that precedes any repair.
@@ -1181,17 +1235,20 @@ async function readAfter(
   });
 
   let field: FocusedField | null;
-  let contended: boolean;
+  let contendedFocus: boolean;
+  let empty: boolean;
   let truncated: boolean;
   try {
-    ({ field, contended, truncated } = await readFocusedField(devtools));
+    ({ field, contendedFocus, empty, truncated } = await readFocusedField(devtools));
   } catch {
     return blocked(READ_FAILED_REASON);
   }
-  if (contended) return blocked(CONTENDED_FOCUS_AFTER_REASON);
+  if (contendedFocus) return blocked(CONTENDED_FOCUS_AFTER_REASON);
   if (!field) {
-    // A truncated capture never reached the field, so "nothing has focus" is not
-    // a conclusion it supports — the same distinction the baseline read draws.
+    // Neither an empty capture nor a truncated one reached the field, so
+    // "nothing has focus" is not a conclusion either supports — the same
+    // distinction the baseline read draws.
+    if (empty) return blocked(EMPTY_CAPTURE_AFTER_REASON);
     return blocked(truncated ? TRUNCATED_AFTER_REASON : FOCUS_LOST_REASON);
   }
   if (!isSameField(before, field)) {

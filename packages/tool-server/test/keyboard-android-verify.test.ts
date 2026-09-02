@@ -41,6 +41,12 @@ function hierarchy(
     bounds?: string;
     /** A SECOND focused editable node, listed after the first in document order. */
     alsoFocused?: { text?: string; rid?: string; bounds?: string };
+    /**
+     * A second window's subtree holding a focused editable, appended after the
+     * first — the shape the helper writes when `getWindows()` returns more than
+     * one root, which is a dialog over an app.
+     */
+    secondWindow?: { text?: string; rid?: string; bounds?: string };
   } = {}
 ): string {
   const {
@@ -51,52 +57,67 @@ function hierarchy(
     rid = FIELD_RID,
     bounds = "[126,149][1080,275]",
     alsoFocused,
+    secondWindow,
   } = opts;
   const field = (t: string, r: string, b: string, pw: boolean) =>
     `<node index="0" text="${t}" resource-id="${r}" class="${cls}" package="com.example" ` +
     `content-desc="" checkable="false" checked="false" clickable="true" enabled="true" ` +
     `focusable="true" focused="${focused}" scrollable="false" long-clickable="true" ` +
     `password="${pw}" selected="false" bounds="${b}" />`;
+  // One subtree per window, as the helper writes it: `<hierarchy>`'s top-level
+  // children are the windows `getWindows()` returned.
+  const window = (index: number, inner: string) =>
+    `<node index="${index}" text="" resource-id="" class="android.widget.FrameLayout" ` +
+    `package="com.example" content-desc="" focusable="false" focused="false" ` +
+    `password="false" bounds="[0,0][1080,2400]">${inner}</node>`;
   return (
     `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
-    `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" ` +
-    `package="com.example" content-desc="" focusable="false" focused="false" ` +
-    `password="false" bounds="[0,0][1080,2400]">` +
-    field(text, rid, bounds, password) +
-    (alsoFocused
-      ? field(
-          alsoFocused.text ?? "",
-          alsoFocused.rid ?? "",
-          alsoFocused.bounds ?? "[126,900][1080,1000]",
-          false
+    window(
+      0,
+      field(text, rid, bounds, password) +
+        (alsoFocused
+          ? field(
+              alsoFocused.text ?? "",
+              alsoFocused.rid ?? "",
+              alsoFocused.bounds ?? "[126,900][1080,1000]",
+              false
+            )
+          : "")
+    ) +
+    (secondWindow
+      ? window(
+          1,
+          field(
+            secondWindow.text ?? "",
+            secondWindow.rid ?? "",
+            secondWindow.bounds ?? "[126,1400][1080,1526]",
+            false
+          )
         )
       : "") +
-    `</node></hierarchy>`
+    `</hierarchy>`
   );
 }
+
+/** What the helper writes when no window reported a root at all. */
+const EMPTY_CAPTURE = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"></hierarchy>`;
 
 /**
  * A registry whose android-devtools service serves a scripted sequence of
  * hierarchies — one per `getHierarchy` call — so a corrupted read-back can be
  * injected at a chosen point in the type/verify/repair sequence.
  */
-function registryServing(
-  xmls: string[],
-  /** Windows per read, aligned with `xmls`; one window unless a case says otherwise. */
-  windowCounts: number[] = []
-): {
+function registryServing(xmls: string[]): {
   registry: Registry;
   getHierarchy: ReturnType<typeof vi.fn>;
   ping: ReturnType<typeof vi.fn>;
 } {
   const queue = [...xmls];
-  const windows = [...windowCounts];
   const ping = vi.fn(async () => ({ ok: true, idleMs: 0, protocol: "1" }));
   const getHierarchy = vi.fn(async (_opts?: unknown) => {
     const xml = queue.shift();
     if (xml === undefined) throw new Error("test: getHierarchy called more times than scripted");
-    const windowCount = windows.shift() ?? 1;
-    return { xml, captureMode: "active-window", windowCount, nodeCount: 2, elapsedMs: 1 };
+    return { xml, captureMode: "interactive-windows", windowCount: 3, nodeCount: 2, elapsedMs: 1 };
   });
   return {
     registry: {
@@ -283,6 +304,18 @@ describe("classifyTypedText", () => {
     expect(classifyTypedText(before, after, "ab")).toBe("indeterminate");
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+
+  it("stops the selection reading at the work cap the repair search uses", () => {
+    // The edges bound the offsets, not the comparisons at each one: a field that
+    // is one character repeated keeps every offset matching almost to the end of
+    // the typed string, which is 925 ms of synchronous CPU here (measured). An
+    // ordinary field never reaches the cap - its offsets fail on their first
+    // character - so only this shape gives up its verdict for the thread.
+    const field = "a".repeat(200_000);
+    const started = Date.now();
+    expect(classifyTypedText(field, field, `${"a".repeat(1_999)}b`)).toBe("indeterminate");
+    expect(Date.now() - started).toBeLessThan(300);
+  });
 });
 
 describe("plannedUndoDeletions", () => {
@@ -320,9 +353,10 @@ describe("plannedUndoDeletions", () => {
     // The other half of the same proof. Cursor at 0 of a field reading "abc",
     // typing "abc", the burst dropping everything but the final "c": the field
     // reads "cabc", which CONTAINS the text, but "abc" does not start "c", so no
-    // selection explains it and the repair must still run. `before.endsWith`
-    // proves the trailing-residue case ("abcac" below); this is the one only
-    // `before.startsWith` can rule out.
+    // selection explains it and the repair must still run. The common SUFFIX is
+    // what rules out the trailing-residue case ("abcac" below); this one is ruled
+    // out by the common PREFIX, which is empty here, leaving offset 0 as the only
+    // candidate and "cab" as what the field holds there.
     expect(classifyTypedText("abc", "cabc", "abc")).toBe("not-landed");
     expect(plannedUndoDeletions("abc", "cabc", "abc")).toBe(1);
   });
@@ -757,9 +791,9 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   it("declines when focus auto-advances between boxes sharing one layout id", async () => {
     // `<include>`d and RecyclerView-recycled views report the LAYOUT's id, so an
     // OTP form's boxes all read the same `resource-id`. Matching on that id alone
-    // made box 2 look like box 1 while focus auto-advanced between the two reads:
-    // the repair then typed into the box the caller never targeted and reported
-    // the result verified, with box 1 left holding the one character that landed.
+    // makes box 2 look like box 1 while focus auto-advances between the two reads:
+    // the repair would type into the box the caller never targeted and report the
+    // result verified, with box 1 left holding the one character that landed.
     const otpForm = (focusedIndex: number, texts: string[]) =>
       `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
       `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" ` +
@@ -864,9 +898,9 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // that shape, and nothing in the dump says which window takes typing.
     const bothFocused = hierarchy({
       text: "stale",
-      alsoFocused: { text: "", rid: "com.example:id/dialog_field" },
+      secondWindow: { text: "", rid: "com.example:id/dialog_field" },
     });
-    const { registry, getHierarchy } = registryServing([bothFocused], [2]);
+    const { registry, getHierarchy } = registryServing([bothFocused]);
     const res = await type(registry, "hello");
     expect(cmds()).toEqual(["input text 'hello'"]);
     expect(getHierarchy).toHaveBeenCalledTimes(1);
@@ -878,13 +912,10 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // An autofill or a permission dialog can take focus mid-burst. The baseline
     // read is clean, so the field was identified; the read after it cannot say
     // which window the keystrokes reached, which is the same unknown.
-    const { registry } = registryServing(
-      [
-        hierarchy({ text: "XY" }),
-        hierarchy({ text: "XY", alsoFocused: { text: "", rid: "com.example:id/autofill" } }),
-      ],
-      [1, 2]
-    );
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: "XY", secondWindow: { text: "", rid: "com.example:id/autofill" } }),
+    ]);
     const res = await type(registry, "abcdefghijkl");
     expect(cmds()).toEqual(["input text 'abcdefghijkl'"]);
     expect(res.verified).toBeUndefined();
@@ -1044,6 +1075,28 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
+  it("reports a capture with no windows as unknown, not as an empty focus", async () => {
+    // `getWindows()` can come back empty with the active window rootless too -
+    // a screen mid-transition, a display gone off - and the helper then writes a
+    // bare `<hierarchy/>`. It holds no node to have focus, so the read says
+    // nothing about focus and must not send the agent to re-tap the field.
+    const { registry } = registryServing([EMPTY_CAPTURE]);
+    const res = await type(registry, "abc");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no windows in it/);
+    expect(res.note).not.toMatch(/Tap the field first/);
+    expect(cmds()).toEqual(["input text 'abc'"]);
+  });
+
+  it("reports a read-BACK with no windows as unknown, not as a focus loss", async () => {
+    const { registry } = registryServing([hierarchy({ text: "" }), EMPTY_CAPTURE]);
+    const res = await type(registry, "abc");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no windows in it once the text had been typed/);
+    expect(res.note).not.toMatch(/no editable field held input focus/);
+    expect(cmds()).toEqual(["input text 'abc'"]);
+  });
+
   /**
    * A stub whose reads carry their own `truncated` flag, so the read-BACK can be
    * made to truncate. `registryServing` never sets it, which is why every case
@@ -1091,8 +1144,8 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
 
     expect(res.verified).toBeUndefined();
     expect(res.note).toMatch(/more elements than one capture returns/);
-    expect(res.note).not.toMatch(/moved to a different field/);
-    expect(res.note).not.toMatch(/split across both fields/);
+    expect(res.note).not.toMatch(/moved to another field/);
+    expect(res.note).not.toMatch(/split across both/);
   });
 
   it("reports focus lost outright without claiming a second field", async () => {
@@ -1107,7 +1160,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
 
     expect(res.verified).toBeUndefined();
     expect(res.note).toMatch(/no editable field held input focus once the text had been typed/);
-    expect(res.note).not.toMatch(/split across both fields/);
+    expect(res.note).not.toMatch(/split across both/);
   });
 
   it("retypes without deleting when the field received nothing at all", async () => {
@@ -1934,6 +1987,57 @@ describe("android keyboard read-back — cancellation", () => {
       )
     ).rejects.toThrow(/abort/i);
     expect(cmds()).toEqual([]);
+  });
+
+  it("rejects rather than reporting a note when the caller goes during an unchecked burst", async () => {
+    // The helper-unavailable path types the string like any other, and the burst
+    // is one adb call per %-terminated segment, so the caller can go inside it.
+    // A note reaches the gates as a pass; the abort reaches them as the skip the
+    // verified path already gives.
+    const controller = new AbortController();
+    const registry = {
+      resolveService: vi.fn(async () => {
+        throw new Error("adb install -t rejected");
+      }),
+    } as unknown as Registry;
+    adbShell.mockImplementation(async () => {
+      controller.abort();
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abc" } as KeyboardParams,
+        PHONE,
+        {
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toThrow(/abort/i);
+    expect(cmds()).toEqual(["input text 'abc'"]);
+  });
+
+  it("rejects on a read-back the baseline declined when the caller goes during the burst", async () => {
+    // Same rule one layer in: the password field is read, declined, and typed
+    // into anyway, so that path re-reads the signal after its burst too.
+    const controller = new AbortController();
+    const { registry } = registryServing([hierarchy({ password: true })]);
+    adbShell.mockImplementation(async () => {
+      controller.abort();
+      return "";
+    });
+
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, text: "abc" } as KeyboardParams,
+        PHONE,
+        {
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toThrow(/abort/i);
   });
 
   it("rejects rather than reporting a broken repair once the caller has gone", async () => {

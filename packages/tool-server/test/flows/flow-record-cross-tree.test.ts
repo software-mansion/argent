@@ -219,7 +219,8 @@ async function recordWait(
 }
 
 // A phone number typed into a field that dropped part of the key-event burst,
-// which the Android read-back measured and could not repair. (A field that
+// which the Android read-back measured, retyped in smaller chunks, and still
+// could not get in. (A field that
 // REFORMATS what it is given reads back as `indeterminate` instead, with no
 // `verified` — see keyboard/platforms/android-verify.ts — so it would not reach
 // this warning at all.)

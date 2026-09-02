@@ -1530,7 +1530,10 @@ async function runType(
   // reading that concludes nothing — so only an explicit `false` fails, carrying
   // the tool's own note as the reason.
   if (isUnlandedKeyboardTextResult("keyboard", typed)) {
-    return { ok: false, reason: typed.note ?? "the typed text did not land in the field" };
+    // Verdict first, as the raw `tool:` and `run-sequence` gates write it: the
+    // note can open with the secret warning, which would bury the finding in the
+    // one line the CLI prints for a failed step.
+    return { ok: false, reason: `typed text did not land${typed.note ? `: ${typed.note}` : ""}` };
   }
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1554,7 +1557,7 @@ async function runType(
   // conclude, or that it repaired the field to get there. A directive step carries
   // no `result`, so without this an unverified type step and a verified one are
   // indistinguishable in the report (`flow-run.ts` does the same for the raw
-  // `tool:` spellings, whose `result` nothing renders).
+  // `tool:` spellings, whose `result` the CLI does not render).
   const note = keyboardResultNote(typed);
   return note ? { ok: true, warning: note } : { ok: true };
 }

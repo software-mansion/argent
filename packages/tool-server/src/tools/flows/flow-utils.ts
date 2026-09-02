@@ -237,7 +237,7 @@ export interface RecordedStepWarning {
   /** The warning text `flow-add-step` raised on that step's `message`. */
   warning: string;
   /**
-   * WHICH question the warning answers, because the two are not the same news.
+   * WHICH question the warning answers, because they are not the same news.
    *
    * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
    *   verdict on converting the step to `await:`/`assert:`. A polish-time

@@ -11,6 +11,7 @@ import {
   type SecretSourceOptions,
 } from "../src/utils/secrets";
 import { InvalidToolInputError } from "../src/utils/capability";
+import { formatErrorForAgent } from "../src/utils/format-error";
 
 vi.mock("../src/utils/simulator-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/simulator-client")>();
@@ -321,7 +322,7 @@ describe("redactSecretsFromError", () => {
 
   it("scrubs an error whose message is a getter-only accessor", () => {
     // The abort a cancelled `keyboard` call raises is a DOMException, whose
-    // `message` and `stack` are prototype getters: assigning to one throws a
+    // `message` is a prototype getter with no setter: assigning to it throws a
     // TypeError out of this function, losing both the redaction and the abort.
     const controller = new AbortController();
     controller.abort(new DOMException("adb input text hunter2 was aborted", "AbortError"));
@@ -337,6 +338,28 @@ describe("redactSecretsFromError", () => {
     expect(out).toBe(err);
     expect((out as Error).name).toBe("AbortError");
     expect((out as Error).message).toBe("adb input text {{secret:APP_PASSWORD}} was aborted");
+  });
+
+  it("scrubs the cause chain, which is what the agent is shown", () => {
+    // The repair raises its cancellation with the failed adb call as the cause,
+    // and `formatErrorForAgent` flattens every cause into the one message that
+    // reaches the agent - so the head alone is not the whole exposure.
+    const cause = new Error(
+      "adb -s emulator-5554 shell input text 'hunter2' failed: device offline"
+    );
+    const err = new Error("keyboard repair aborted - the device call failed", { cause });
+
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+
+    expect(cause.message).toContain("{{secret:APP_PASSWORD}}");
+    expect(formatErrorForAgent(err)).not.toContain("hunter2");
+  });
+
+  it("terminates on a cause chain that points back at itself", () => {
+    const err = new Error("adb input text hunter2 failed");
+    (err as { cause?: unknown }).cause = err;
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+    expect(err.message).toBe("adb input text {{secret:APP_PASSWORD}} failed");
   });
 });
 

@@ -70,7 +70,7 @@ The result carries `verified`:
 | `false` | Argent read the field back, and the last measurement is a failure |
 | absent  | Argent did not check. This is not evidence either way             |
 
-Argent makes one repair when the read-back does not find the text. The repair covers only
+Argent makes one repair when the read-back proves the text did not land. The repair covers only
 the characters that Argent can prove are its own. It deletes those characters. It then
 types the text again in small pieces. A call that repairs can thus change the field by
 more than the text that it adds, and the app sees both rounds of key events. A `true`
@@ -100,7 +100,7 @@ passes with a `note` carries that note as the step warning. This covers a `type`
 raw `tool: keyboard` step, and a `run-sequence` that holds one.
 
 A cancelled call stops the typing. Argent types nothing when the cancel arrives before the
-first keystroke. The iOS simulator and Chromium backends stop between keys. An Android call
+first keystroke. The iOS and Chromium backends stop between keys. An Android call
 stops when the burst it is in has gone out. Argent sees a mid-typing cancel after the
 read-back that follows the burst, and a cancel inside a repair at the next chunk or batch of
 backspaces. A call that skips the read-back types the string and returns. A TV target and

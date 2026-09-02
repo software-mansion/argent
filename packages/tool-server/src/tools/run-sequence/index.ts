@@ -166,8 +166,9 @@ shape above halts at its first step — \`completed: 0\`, the Enter never sent a
 un-submitted — with that step's \`error\` carrying the tool's note. A halted step is never counted
 in \`completed\`. An absent \`verified\` never stops it.
 
-Stops on the first error, an unmet await-ui-element condition, or a keyboard read-back that
-proved the typed text did not land — and returns partial results.`,
+Stops on the first error, an unmet await-ui-element condition, a keyboard read-back that
+proved the typed text did not land, or the caller cancelling — which stops it with no error
+entry for the step it was in — and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
