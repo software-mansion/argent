@@ -39,9 +39,9 @@ Everything else fails with `not supported on ios device`. Do this instead:
 ## Gesture recipes
 
 - **Double-tap**: `gesture-tap` with `clickCount: 2` runs the native XCUITest double-tap as one gesture. Never send two separate taps.
-- **Scrolling**: `gesture-swipe`; `settle: true` works and gives a momentum-free, deterministic scroll distance.
+- **Scrolling**: `gesture-swipe`; `momentum: false` gives a momentum-free, deterministic scroll distance (`settle` is a retired alias and is rejected).
 - **Edge gestures** (for example the back-swipe): the start point must sit exactly at the edge, `fromX: 0`. A start a few thousandths in reports success without triggering the OS gesture.
-- **`gesture-custom` supports exactly two shapes**, always a `Down` followed by an `Up` (no `Move` waypoints, no second finger): same point = press-hold (set `delayMs` on the `Up`), different points = straight drag. Use `gesture-swipe` for scrolls.
+- **`gesture-custom` supports two shapes**, no second finger. A `Down` followed by an `Up`: same point = press-hold (set `delayMs` on the `Up`); different points = drag, where the `Up`'s `delayMs` is how long the finger rests at the `Down` point before it moves. To pick up a draggable item (list reordering) add one `Move` at the `Down` point in between: its `delayMs` is the long-press hold (500 ms or more) and the `Up`'s `delayMs` the movement time, for example `[{Down 0.5,0.6}, {Move 0.5,0.6, delayMs 800}, {Up 0.5,0.3, delayMs 500}]`. Other `Move` waypoints are rejected. Use `gesture-swipe` for scrolls.
 - **`button`** presses `home`, `volumeUp`, `volumeDown`, or `actionButton`. The runner checks the hardware first, so `actionButton` on a non-Pro iPhone is rejected instead of no-opping; `power` and `appSwitch` have no XCUITest API.
 
 ## Typing

@@ -146,8 +146,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
         bundleId,
         toPoints(viewport, params.fromX, params.fromY),
         toPoints(viewport, params.toX, params.toY),
-        duration,
-        momentumFree
+        { durationMs: duration, settle: momentumFree }
       );
       // Either leg can be the one that re-fronted a backgrounded target: the
       // viewport read fronts it first, so the drag then finds it foreground.

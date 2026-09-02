@@ -155,16 +155,19 @@ export async function longPressAt(
 /**
  * Drag from one point to another.
  *
- * @param settle rests the touch at the destination and skips the scroll-view fling.
+ * @param opts.holdMs how long the touch rests at `from` before it moves (runner
+ *   default 50 ms). A long-press pickup needs about 500 ms or more.
+ * @param opts.durationMs movement time, which the runner turns into a drag velocity.
+ * @param opts.settle rests the touch at the destination and skips the scroll-view fling.
  */
 export async function dragBetween(
   api: IosDeviceRunnerApi,
   bundleId: string,
   from: { x: number; y: number },
   to: { x: number; y: number },
-  durationMs?: number,
-  settle?: boolean
+  opts: { holdMs?: number; durationMs?: number; settle?: boolean } = {}
 ): Promise<MutationReply> {
+  const { holdMs, durationMs, settle } = opts;
   const data = await api.run(
     {
       command: "drag",
@@ -173,6 +176,7 @@ export async function dragBetween(
       fromY: from.y,
       toX: to.x,
       toY: to.y,
+      ...(holdMs != null ? { holdMs } : {}),
       ...(durationMs != null ? { durationMs } : {}),
       ...(settle ? { settle: true } : {}),
     },

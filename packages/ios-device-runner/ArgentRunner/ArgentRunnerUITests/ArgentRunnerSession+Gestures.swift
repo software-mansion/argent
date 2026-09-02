@@ -62,8 +62,8 @@ extension ArgentRunnerSession {
         return .success(MessagePayload(message: "long-pressed"))
     }
 
-    /// Drags between the wire coordinates, honoring the requested duration
-    /// and the `settle` release behavior.
+    /// Drags between the wire coordinates, honoring the requested hold before
+    /// the movement, the movement duration, and the `settle` release behavior.
     func performDrag(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope
     {
@@ -79,6 +79,10 @@ extension ArgentRunnerSession {
         let start = point(app, fromX, fromY)
         let end = point(app, toX, toY)
 
+        // The press before the movement. 50 ms is a plain drag; a long-press
+        // pickup needs the caller's holdMs, since a short press never lifts a
+        // draggable item no matter how slowly the finger then moves.
+        let startHold = max((request.holdMs ?? 50) / 1000, 0.05)
         // A `settle` drag rests at the destination before lifting, so the scroll
         // view reads near-zero release velocity and does not fling.
         let endHold = request.settle == true ? 0.3 : 0.05
@@ -102,7 +106,7 @@ extension ArgentRunnerSession {
         }
 
         start.press(
-            forDuration: 0.05,
+            forDuration: startHold,
             thenDragTo: end,
             withVelocity: velocity,
             thenHoldForDuration: endHold

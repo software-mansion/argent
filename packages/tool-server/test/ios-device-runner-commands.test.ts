@@ -52,6 +52,35 @@ describe("pressButton wire shape", () => {
   });
 });
 
+describe("dragBetween wire shape", () => {
+  it("sends holdMs, durationMs and settle only when given", async () => {
+    const run = vi.fn().mockResolvedValue({});
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    await dragBetween(api, "com.example.app", { x: 1, y: 2 }, { x: 3, y: 4 });
+    expect(run.mock.calls[0][0]).toMatchObject({
+      command: "drag",
+      appBundleId: "com.example.app",
+      fromX: 1,
+      fromY: 2,
+      toX: 3,
+      toY: 4,
+    });
+    for (const key of ["holdMs", "durationMs", "settle"]) {
+      expect(run.mock.calls[0][0]).not.toHaveProperty(key);
+    }
+
+    await dragBetween(
+      api,
+      "com.example.app",
+      { x: 1, y: 2 },
+      { x: 3, y: 4 },
+      { holdMs: 800, durationMs: 500, settle: true }
+    );
+    expect(run.mock.calls[1][0]).toMatchObject({ holdMs: 800, durationMs: 500, settle: true });
+  });
+});
+
 describe("captureSnapshot single-flight", () => {
   it("coalesces identical concurrent requests onto one runner command", async () => {
     let release!: (value: unknown) => void;

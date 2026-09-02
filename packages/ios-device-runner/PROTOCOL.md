@@ -58,6 +58,7 @@ set, so clean replies stay byte-identical on the wire.
 | `numberOfTaps`        | `tap`               | Taps in the one gesture (default 1; 2 = native double-tap).             |
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
+| `holdMs`              | `drag`              | Rest at the start point before moving (default 50 ms).                  |
 | `settle`              | `drag`              | Rest at the destination before lifting (~0 release velocity, no fling). |
 | `text`                | `type`              | Text for the focused input.                                             |
 | `button`              | `button`            | `home`, `volumeUp`, `volumeDown` or `actionButton`.                     |
@@ -80,7 +81,11 @@ launch, and launching is launch-app's job, never a command side effect):
   XCUICoordinate (public API; orientation-safe). `tap` executes
   `numberOfTaps` taps as one on-device gesture: 2 maps to the native
   `doubleTap()`, >2 to a tight tap loop (no native N-tap API; inter-tap
-  latency stays on-device, inside the OS multi-tap window).
+  latency stays on-device, inside the OS multi-tap window). `drag` presses
+  for `holdMs` at the start, moves at the velocity `durationMs` implies, and
+  rests `settle`-long before lifting; a long-press pickup of a draggable item
+  needs a `holdMs` of about 500 ms or more, since a short press never lifts
+  it however slowly the finger then moves.
 - `type` → `{message}`: types into the current first responder. The runner
   probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
   nothing has it. The probe is what makes that code real on hardware: there,

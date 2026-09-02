@@ -111,6 +111,10 @@ struct CommandRequest: Codable {
     let toY: Double?
     /// `longPress`: press duration. `drag`: duration of the movement.
     let durationMs: Double?
+    /// `drag`: how long the touch rests at the start point before it moves
+    /// (default 50 ms). A long-press pickup, the way a list item is lifted for
+    /// reordering, needs about 500 ms or more.
+    let holdMs: Double?
     /// `drag`: rest the touch at the destination before lifting so the release
     /// velocity is near zero and the scroll view does not fling. Mirrors the
     /// simulator's ease-out `settle` swipe.
