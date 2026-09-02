@@ -155,6 +155,9 @@ enum RunnerErrorCode: String {
     case appNotAvailable = "APP_NOT_AVAILABLE"
     case appBackgrounded = "APP_BACKGROUNDED"
     case textInputNotFocused = "TEXT_INPUT_NOT_FOCUSED"
+    /// Hardware or an API this device lacks: an absent button, a tap count
+    /// XCUICoordinate cannot execute as one gesture. An XCTest call that
+    /// throws mid-command is COMMAND_FAILED, never this.
     case unsupportedOperation = "UNSUPPORTED_OPERATION"
     case runnerBusy = "RUNNER_BUSY"
     case runnerWedged = "RUNNER_WEDGED"

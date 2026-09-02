@@ -94,10 +94,14 @@ launch, and launching is launch-app's job, never a command side effect):
   typing without a first responder RECORDS an XCTest failure instead of
   throwing, so without the probe the reply demotes to the generic
   `XCTEST_RECORDED_FAILURE`. Only a probe that positively finds no focus
-  refuses; a probe that itself fails does not block typing.
+  refuses; a probe that itself fails does not block typing. A typeText call
+  that throws for any other reason answers `COMMAND_FAILED`, here and in the
+  two keyboard commands below.
 - `keyboardReturn` → `{message}`: taps the visible submit key when a keyboard
-  is up; otherwise it types the return character behind the same focus probe,
-  so it answers `TEXT_INPUT_NOT_FOCUSED` the same way.
+  is up, found with one case-insensitive label query per key collection over
+  the UIReturnKeyType labels (return, enter, go, search, next, done, send,
+  join, continue); otherwise it types the return character behind the same
+  focus probe, so it answers `TEXT_INPUT_NOT_FOCUSED` the same way.
 - `keyboardDelete` → `{message}`: types the delete character behind the same
   focus probe, so it answers `TEXT_INPUT_NOT_FOCUSED` the same way. There is
   no labeled key to prefer, and one command deletes one character.
@@ -191,7 +195,8 @@ reasonCode?}`.
 `INVALID_REQUEST`, `APP_BUNDLE_ID_REQUIRED`, `APP_NOT_AVAILABLE`,
 `APP_BACKGROUNDED` (`snapshot` only: the target is alive but backgrounded, and
 observation never re-fronts it), `TEXT_INPUT_NOT_FOCUSED`,
-`UNSUPPORTED_OPERATION`, `RUNNER_BUSY` (the one
+`UNSUPPORTED_OPERATION` (hardware or an API the device lacks: an absent
+button, a tap count above 2), `RUNNER_BUSY` (the one
 retryable code), `RUNNER_WEDGED` (recycle the session),
 `XCTEST_RECORDED_FAILURE` (a mutation ran but XCTest recorded a real failure
 during it), `SNAPSHOT_FAILED`, `COMMAND_TIMED_OUT`, `COMMAND_FAILED`.
