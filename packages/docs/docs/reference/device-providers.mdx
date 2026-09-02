@@ -40,7 +40,7 @@ A provider writes one JSON file into `~/.argent/providers/`. The file lists the 
 }
 ```
 
-`apiUrl` and `streamUrl` must start with `http://`. The simulator-server sends plaintext on a local port. Argent also opens `/ws` on the same host and a WebSocket selects its scheme before it connects. `supportUrl` is a page for a person, thus it accepts `https://`.
+`apiUrl` and `streamUrl` must start with `http://`. The simulator-server sends plaintext on a local port. Argent also opens `/ws` on the same host. A WebSocket selects its scheme before it connects, thus `https://` promises a `wss://` endpoint that nothing serves. `supportUrl` is a page for a person, thus it accepts `http://` and `https://`.
 
 Argent reads the file again on every tool call. Argent keeps no cache. Thus a new grant, a smaller grant, or a withdrawal takes effect immediately.
 
@@ -93,7 +93,7 @@ Argent reads the file of the provider again on every call. A provider can narrow
 
 The next call uses the new declaration. Argent also removes the handles that it holds for the device, under both names. A narrowed grant takes effect immediately.
 
-Argent tries to remove every handle. If one handle does not close, Argent stops the call and reports an error. Argent does not send the call to a service that the provider took back.
+Argent tries to remove every handle. If one handle does not close, Argent stops the call and reports an error. Argent does not send the call to a service that the provider withdrew.
 
 ## Limits that Argent applies to itself
 
