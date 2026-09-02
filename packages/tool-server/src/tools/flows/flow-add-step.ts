@@ -41,6 +41,7 @@ import {
   deriveSelector,
   selectorToFrame,
   frameContains,
+  selectorSchema,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -72,6 +73,18 @@ const zodSchema = z.object({
     .optional()
     .describe(
       'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+    ),
+  selector: selectorSchema
+    .optional()
+    .describe(
+      "For a `gesture-tap` only: the selector to RECORD for this tap, when you already know it " +
+        "from the discovery call that gave you the coordinates. Give at least one of " +
+        "`identifier` / `text` / `role`. The coordinates still dispatch the tap; this only " +
+        "decides what the step matches on at replay, replacing what the recorder would otherwise " +
+        "infer from the tapped element (identifier, then text, then role). It is checked, not " +
+        "trusted: a selector that matches nothing on this screen, or that resolves to an element " +
+        "not covering the tapped point, is rejected and the step keeps coordinates with a warning " +
+        "naming the reason."
     ),
   delayMs: z
     .number()
@@ -605,7 +618,8 @@ async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  supplied?: Selector
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
@@ -615,28 +629,36 @@ async function captureTapSelector(
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
-    const node = nodeAtPoint(tree, point);
-    if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
-    if (!selector)
-      return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    // A supplied selector skips derivation but NOT the two checks below: the
+    // caller read it off the agent-facing describe tree, which is not the tree
+    // replay resolves against, so "I already know it" is not evidence it
+    // resolves here.
+    let selector = supplied;
+    if (!selector) {
+      const node = nodeAtPoint(tree, point);
+      if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
+      selector = deriveSelector(node) ?? undefined;
+      if (!selector)
+        return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    }
     // Replay resolves through selectorToFrame, whose ranking (exact match →
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
     // silently retarget and coordinates are safer.
+    const whose = supplied ? "the selector you passed" : "selector";
     const resolved = selectorToFrame(tree, selector);
     if (!resolved) {
-      // Defensive: a selector derived from a visible node matches that node
-      // under matchNode's semantics, so this should be unreachable. Kept in
-      // case derivation and matching drift apart again.
+      // Unreachable for a DERIVED selector — one taken from a visible node
+      // matches that node under matchNode's semantics — but the ordinary way a
+      // supplied one fails, since it was written against a different tree.
       return {
-        warning: `selector ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
+        warning: `${whose} ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
       };
     }
     if (!frameContains(resolved, point.x, point.y)) {
       return {
-        warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+        warning: `${whose} ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
     return { selector, warning: fallbackSourceWarning(source, device.platform) };
@@ -1132,9 +1154,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
+    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step: pass \`selector\` to say what it should match on (you already read it off the discovery call that gave you the coordinates), otherwise the recorder infers one from the tapped element - identifier, then text, then role. Either way it is checked against the replay tree and coordinates are kept with a warning if it matches nothing or lands on an element that does not cover the tapped point; a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
 A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
-Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
+Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Three calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, one naming a flow-file directive rather than a tool, and a \`selector\` passed with anything other than a tap that would capture one. Each answers with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
 If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
@@ -1188,12 +1210,30 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         typeof args.x === "number" &&
         typeof args.y === "number";
 
+      // Refused rather than ignored: `selector` only reaches the recorder on the
+      // tap path, so accepting it anywhere else would record a step that quietly
+      // matches on something the caller never asked for. `delayMs` is named
+      // because it is the non-obvious half — it suppresses selector capture, so
+      // a tap carrying one is not a tap for this purpose.
+      if (params.selector && !isTap) {
+        const why =
+          params.command !== "gesture-tap"
+            ? `\`selector\` applies to a recorded \`gesture-tap\`, not to \`${params.command}\`.`
+            : params.delayMs !== undefined
+              ? "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
+              : "`selector` needs a `gesture-tap` whose args carry `udid`, `x` and `y`.";
+        return recordNothing(session, why);
+      }
+
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          { x: args.x as number, y: args.y as number },
+          params.selector
+        );
       }
 
       let toolResult: unknown;

@@ -99,13 +99,17 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order — `id`, then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
+Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator.
+
+**Pass `selector` when you know which field is the stable one.** You just read the element off a discovery call, so you can say what the step should match on instead of letting the recorder infer it: `flow-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. The recorder is `id`-first, which is wrong whenever the id is positional (`row-3`) and the text is the durable part. A supplied selector is checked, not trusted — it runs through the same two guards below, so one that matches nothing on the replay tree, or that lands on an element not covering the tapped point, is rejected and the step keeps coordinates with a warning saying so. Passing `selector` with any other `command` - or with a `gesture-tap` carrying `delayMs`, which keeps its coordinates either way - records nothing and says which of the two it was.
+
+With no `selector`, the recorder reads the pre-tap tree and derives one in a fixed order — `id`, then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
 
 1. **`tap: { id: ... }` or `tap: { text: ... }`** — the good case.
 2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
 3. **A kept raw point**, with a warning naming the reason and the retarget.
 
-Treat outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
+Treat outcomes 2 and 3 alike. Re-record the tap with an explicit `selector` if the tree carries a stable field the derivation passed over; otherwise restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
 
 Never tap the on-screen keyboard through the recorder. Some platforms expose it as one large node, so replay can tap the wrong key while reporting success. Record text with `keyboard`.
 

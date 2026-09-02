@@ -2851,7 +2851,7 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
   //
   // So the guard lives on this side, where the schema is. If this fails,
   // update those three fixtures in the same change.
-  const CLI_FIXTURE_PROPERTIES = ["name", "project_root", "command", "args", "delayMs"];
+  const CLI_FIXTURE_PROPERTIES = ["name", "project_root", "command", "args", "selector", "delayMs"];
   const CLI_FIXTURE_REQUIRED = ["name", "project_root", "command"];
 
   it("still declares exactly the properties and required keys those fixtures encode", () => {
