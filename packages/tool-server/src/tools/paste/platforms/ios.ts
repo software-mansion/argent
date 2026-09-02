@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../../blueprints/simulator-server";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
@@ -36,13 +37,42 @@ function rejectTv(device: DeviceInfo): never {
  */
 async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<PasteResult> {
   await setSimulatorClipboardText(api, text);
+  // `pressKey` throws once the key transport is gone, and its message is written
+  // for the KEYBOARD burst — "this key press and any that follow it in the same
+  // burst … before typing or clearing again", words with no referent for a
+  // four-key chord. Re-stated for a paste, and wrapped so a failure between the
+  // ⌘ down and the ⌘ up cannot leave the modifier LATCHED on the simulator:
+  // that is the exact hazard the clear burst avoids by holding no modifier at
+  // all (../../keyboard/simulator-server-keys.ts).
   api.pressKey("Down", LEFT_GUI_KEYCODE);
-  await sleep(CHORD_STEP_MS);
-  api.pressKey("Down", V_KEYCODE);
-  await sleep(CHORD_STEP_MS);
-  api.pressKey("Up", V_KEYCODE);
-  await sleep(CHORD_STEP_MS);
-  api.pressKey("Up", LEFT_GUI_KEYCODE);
+  try {
+    await sleep(CHORD_STEP_MS);
+    api.pressKey("Down", V_KEYCODE);
+    await sleep(CHORD_STEP_MS);
+    api.pressKey("Up", V_KEYCODE);
+    await sleep(CHORD_STEP_MS);
+    api.pressKey("Up", LEFT_GUI_KEYCODE);
+  } catch (err) {
+    try {
+      api.pressKey("Up", LEFT_GUI_KEYCODE);
+    } catch {
+      /* the transport is gone; nothing can un-latch it from here */
+    }
+    throw new FailureError(
+      "the paste chord did not finish on the simulator: the key transport stopped accepting " +
+        "events partway through Cmd+V, so the text is on the device clipboard but may not have " +
+        "been pasted. Nothing was typed. Read the field back (`describe`) before pasting again. " +
+        "Underlying failure: " +
+        (err instanceof Error ? err.message.split("\n")[0] : String(err)),
+      {
+        error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+        failure_stage: "paste_ios_chord",
+        failure_area: "tool_server",
+        error_kind: getFailureSignal(err)?.error_kind ?? "subprocess",
+      },
+      { cause: err instanceof Error ? err : undefined }
+    );
+  }
   // `pressKey` only writes a line to the server's stdin, so the final Up needs
   // the same gap before success is reported — otherwise the caller's next action,
   // or the MCP auto-screenshot, precedes the completed chord.

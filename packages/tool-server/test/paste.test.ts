@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { createPasteTool } from "../src/tools/paste";
 import { UnsupportedOperationError } from "../src/utils/capability";
 
@@ -108,6 +108,61 @@ describe("paste tool", () => {
       expect((err as Error).message).toMatch(/no clipboard endpoint.*keyboard tool/s);
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED);
       expect(keys).toEqual([]);
+    });
+
+    it("re-states a mid-chord transport failure, and un-latches the modifier", async () => {
+      // `pressKey` now throws once the key transport is gone, and its message is
+      // written for the KEYBOARD burst — "this key press and any that follow it
+      // in the same burst … before typing or clearing again", words with no
+      // referent for a four-key chord. Worse, a throw between the ⌘ down and the
+      // ⌘ up leaves the modifier LATCHED on the simulator, which is the hazard
+      // the clear burst avoids by holding no modifier at all.
+      const events: Array<[string, number]> = [];
+      let sent = 0;
+      const api = {
+        apiUrl: API_URL,
+        pressKey: (direction: string, code: number) => {
+          events.push([direction, code]);
+          // The V down: after ⌘ is held and before it is released.
+          if (++sent === 2) {
+            // The blueprint's own words, verbatim: they are the ones with no
+            // referent for a chord.
+            throw new FailureError(
+              "the simulator-server for X is no longer accepting key events, so this key press " +
+                "and any that follow it in the same burst were NOT delivered. The device is " +
+                "fine; the helper process is gone. Read the field back before typing or " +
+                "clearing again — it may hold whatever the keys that DID land left.",
+              {
+                error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+                failure_stage: "simulator_server_key_write",
+                failure_area: "tool_server",
+                error_kind: "network",
+              }
+            );
+          }
+        },
+      };
+      fetchMock.mockResolvedValue(jsonResponse(200, { status: "ok" }));
+
+      const err = await toolFor(api)
+        .execute({}, { udid: IOS_UDID, text: "OTP-1234" })
+        .then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+      // The paste's own words lead, and its own repair is the prescribed one.
+      // The blueprint's sentence survives only after "Underlying failure:",
+      // where every other re-statement in the tool-server puts its cause.
+      expect(err?.message).toMatch(/^the paste chord did not finish/);
+      expect(err?.message).toMatch(/before pasting again/);
+      const prescribed = err!.message.split("Underlying failure:")[0]!;
+      expect(prescribed).not.toMatch(/in the same burst/);
+      expect(prescribed).not.toMatch(/typing or clearing again/);
+      expect(getFailureSignal(err)?.failure_stage).toBe("paste_ios_chord");
+      // The last thing attempted is the ⌘ release, so the modifier cannot stay
+      // held for whatever is sent to the device next.
+      expect(events[events.length - 1]).toEqual(["Up", 227]);
     });
 
     it("serializes concurrent pastes on one device so each fill precedes its own chord", async () => {
