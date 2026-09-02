@@ -93,7 +93,7 @@ describe("pinStatusBar (ios)", () => {
 
   it("skips a physical device without spawning anything and returns false", async () => {
     // `simctl` cannot address a hardware UDID: the override would fail, and the
-    // catch's restore would fail the same way — two wasted subprocesses per
+    // catch's restore would fail the same way, two wasted subprocesses per
     // flow run. `false` also means the caller schedules no run-end restore.
     expect(await pinStatusBar(IOS_PHYSICAL_DEVICE)).toBe(false);
     expect(execFileMock).not.toHaveBeenCalled();

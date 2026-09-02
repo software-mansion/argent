@@ -207,7 +207,7 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     // must return before the runner is resolved AND before the tracked-app
     // requirement: no launch-app ran here, so a branch that still called
     // requireCurrentIosDeviceApp would reject with "No app is under
-    // automation" — resolving at all is what pins the early return.
+    // automation". Resolving at all is what pins the early return.
     const simResult = await createKeyboardTool(registry()).execute(
       {},
       { udid: "809A848B-1671-4A72-B9C9-B1683D95973E" }
@@ -216,7 +216,7 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     const deviceResult = await createKeyboardTool(r).execute(
       {},
       // Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the iosDevice
-      // branch — see utils/device-info.ts.
+      // branch (see utils/device-info.ts).
       { udid: "00008110-000978540290401E" }
     );
     expect(deviceResult).toEqual({ typed: "", keys: 0 });

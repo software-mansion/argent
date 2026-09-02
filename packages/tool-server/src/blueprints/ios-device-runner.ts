@@ -13,6 +13,7 @@ import { ensureDeviceReady } from "../utils/ios-device/devicectl";
 import {
   assertXctestrunParses,
   ensureRunnerArtifact,
+  isProfileExpiredFailure,
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   killStaleRunnersForDevice,
@@ -238,7 +239,7 @@ async function startRunner(
 
 /**
  * Build the runner artifact and start it. Retries once per known recoverable
- * failure: a poisoned cache and a profile that is missing this device.
+ * failure: a poisoned cache, and a profile that is missing this device or has expired.
  */
 async function buildAndStartRunner(
   udid: string,
@@ -266,8 +267,9 @@ async function buildAndStartRunner(
     }
 
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
-    if (!isProfileMissingDeviceFailure(logText)) throw error;
-    // This device is not in the local profile. Rebuild against it. Signing then adds it. Retry once.
+    if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
+    // The profile lacks this device or has expired. Rebuild against the device:
+    // automatic signing registers it and mints a fresh profile. Retry once.
     return await startRunner(udid, await rebuildRunnerArtifactForDevice(udid, signing));
   }
 }

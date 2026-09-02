@@ -419,7 +419,7 @@ describe("statusBarMaskFraction", () => {
 
   it("masks the band on a physical iPhone without asking the simulator probe", async () => {
     // A physical device's UDID lives outside simctl's namespace, so the tvOS
-    // probe would answer from the wrong list — and a phone/tablet always
+    // probe would answer from the wrong list, and a phone/tablet always
     // paints a status bar anyway.
     await expect(
       statusBarMaskFraction({ platform: "ios", kind: "device", id: "00008120-000E6D0C0ABBA01E" })
@@ -656,7 +656,7 @@ describe("capturePixels routing", () => {
       expect.any(AbortSignal)
     );
     expect(isTvOsSimulator).not.toHaveBeenCalled();
-    // The temp PNG is scratch — removed as soon as it has been decoded.
+    // The temp PNG is scratch: removed as soon as it has been decoded.
     const file = vi.mocked(downscalePngInPlace).mock.calls[0][0];
     await expect(fs.access(file)).rejects.toThrow();
   });
@@ -870,7 +870,7 @@ describe("capturePixelsWithin", () => {
     expect(pixelCaptureTimeoutMs({ platform: "ios", kind: "simulator", id: "tv-udid" }, true)).toBe(
       FIRST_PIXEL_CAPTURE_TIMEOUT_MS
     );
-    // A physical iPhone captures through the on-device runner — an on-device
+    // A physical iPhone captures through the on-device runner: an on-device
     // PNG encode plus a usbmux transfer, slower than a warm stream on every
     // capture, so it keeps its own wider ceiling throughout.
     const physical = {

@@ -154,7 +154,7 @@ describe("physical-iOS route: the runner is the only capture path", () => {
   });
 });
 
-describe("downscalePngInPlace — shared device-route downscale", () => {
+describe("downscalePngInPlace: shared device-route downscale", () => {
   it("caps the longest actual side at the requested scale", async () => {
     const sips = mockSips({ width: 1920, height: 1080 });
     await downscalePngInPlace("/tmp/cap.png", 0.5);

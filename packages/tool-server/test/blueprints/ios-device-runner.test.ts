@@ -15,6 +15,7 @@ import {
 import {
   assertXctestrunParses,
   ensureRunnerArtifact,
+  isProfileExpiredFailure,
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
@@ -37,6 +38,7 @@ vi.mock("../../src/utils/ios-device/runner-build", async (importOriginal) => {
       derivedDataPath: "/tmp/argent-test/derived",
       fromCache: true,
     })),
+    isProfileExpiredFailure: vi.fn(() => false),
     isProfileMissingDeviceFailure: vi.fn(() => false),
     killRunnerProcess: vi.fn(),
     killStaleRunnersForDevice: vi.fn(async () => {}),
@@ -286,6 +288,16 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
 
     await expect(callFactory()).rejects.toThrow("No Accounts");
     expect(rebuildRunnerArtifactForDevice).not.toHaveBeenCalled();
+  });
+
+  it("re-signs and retries once when the launch log reports an expired profile", async () => {
+    const { child } = stubLaunch();
+    hangReadinessThenExit(child, 65);
+    vi.mocked(isProfileExpiredFailure).mockReturnValueOnce(true);
+
+    await callFactory();
+    expect(rebuildRunnerArtifactForDevice).toHaveBeenCalledWith(DEVICE_UDID, SIGNING_CONFIG);
+    expect(launchRunner).toHaveBeenCalledTimes(2);
   });
 
   it("proceeds straight to the profile-missing rebuild retry instead of waiting out the poll", async () => {

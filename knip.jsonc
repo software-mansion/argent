@@ -60,10 +60,7 @@
     // Knip analyzes JS and TS only, so the shell half of scripts/ — the whole
     // scripts/e2e-full/ harness included — is outside the gate however it runs.
     ".": {
-      // The physical-iOS E2E driver is invoked by hand against a connected
-      // iPhone (see packages/ios-device-runner/README.md), so nothing knip can parse
-      // reaches it either.
-      "entry": ["scripts/ci/windows-chromium-e2e.mjs", "scripts/e2e-ios-physical-device.mjs"],
+      "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
     },
 
     // @swmansion/argent is a thin dispatcher whose real payload is an esbuild

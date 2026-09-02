@@ -347,6 +347,63 @@ export function isProfileMissingDeviceFailure(logText: string): boolean {
 }
 
 /**
+ * True when a launch log reports an expired provisioning profile. Free-team
+ * profiles last about seven days. The fix is the same in-place re-sign the
+ * device-registration retry uses.
+ *
+ * The hex codes are installd's, surfaced as `0x... (text)` in the launch log and
+ * verified against MobileDevice.framework's error table (AMDCopyErrorText):
+ * 0xe8008011 "This provisioning profile has expired." and 0xe8008015 "A valid
+ * provisioning profile for this executable was not found.", which an expired
+ * profile also produces once it no longer matches. The wording arm covers
+ * both of those and Xcode's host-side "Provisioning profile "X" expired on
+ * Y." and "Profile expired on Y.".
+ */
+export function isProfileExpiredFailure(logText: string): boolean {
+  return (
+    logText.includes("0xe8008011") ||
+    logText.includes("0xe8008015") ||
+    /\bprofile\b.{0,120}\bexpired\b/i.test(logText)
+  );
+}
+
+/**
+ * A .mobileprovision is a CMS blob whose plist rides along as plain text, so
+ * the expiry reads without shelling out to `security cms`.
+ */
+const EXPIRY_RE = /<key>ExpirationDate<\/key>\s*<date>([^<]+)<\/date>/;
+
+/** Re-sign when less than this much of the profile's validity is left. */
+const PROFILE_RENEWAL_MARGIN_MS = 60 * 60 * 1000;
+
+/**
+ * Expiry of the profile embedded in the cached runner, or null when it cannot
+ * be read. Null never blocks a cache hit: a probe that fails must not cost a
+ * build.
+ */
+async function readRunnerExpiryDate(derivedDataPath: string): Promise<Date | null> {
+  const file = path.join(
+    derivedDataPath,
+    "Build",
+    "Products",
+    "Debug-iphoneos",
+    "ArgentRunnerUITests-Runner.app",
+    "embedded.mobileprovision"
+  );
+
+  const text = await fsp.readFile(file, "latin1").catch(() => null);
+  const match = text ? EXPIRY_RE.exec(text) : null;
+  const date = match ? new Date(match[1]!) : null;
+
+  return date && Number.isFinite(date.getTime()) ? date : null;
+}
+
+/** True when the profile expires within the renewal margin, or already has. */
+function profileNeedsRenewal(expiresAt: Date, now: Date): boolean {
+  return expiresAt.getTime() - now.getTime() < PROFILE_RENEWAL_MARGIN_MS;
+}
+
+/**
  * Rebuild the runner against a concrete device. Automatic signing then includes that device.
  */
 export async function rebuildRunnerArtifactForDevice(
@@ -364,7 +421,8 @@ async function withRunnerBuildLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Ensure the runner artifact matches the current sources, toolchain, and signing config.
+ * Ensure the runner artifact matches the current sources, toolchain, and signing config,
+ * and that its provisioning profile is not about to expire.
  *
  * @param opts.force skip the cache and rebuild.
  * @param opts.build test seam. Defaults to the real xcodebuild.
@@ -393,8 +451,10 @@ export async function ensureRunnerArtifact(
 
     if (!opts.force && stamped === cacheKey) {
       const cached = findBaseXctestrun(derivedDataPath);
+      const expiresAt = await readRunnerExpiryDate(derivedDataPath);
+      const needsRenew = expiresAt !== null && profileNeedsRenewal(expiresAt, new Date());
 
-      if (cached) {
+      if (cached && !needsRenew) {
         return {
           xctestrunPath: cached,
           derivedDataPath,
@@ -405,7 +465,10 @@ export async function ensureRunnerArtifact(
 
     if (stamped !== cacheKey) {
       // No stamp or a mismatched stamp means rebuild. Do not trust leftover files.
-      await fsp.rm(derivedDataPath, { recursive: true, force: true });
+      await fsp.rm(derivedDataPath, {
+        recursive: true,
+        force: true,
+      });
     }
 
     const built = await build(derivedDataPath, staticArgs, opts.destinationUdid);

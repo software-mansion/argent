@@ -21,7 +21,7 @@ import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 const touchServices = { simulatorServer: {} } as never;
 
 // Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the iosDevice
-// branch — see utils/device-info.ts.
+// branch (see utils/device-info.ts).
 const DEVICE_UDID = "00008110-000978540290401E";
 
 // The device branch reads the viewport first, then taps; everything rides
@@ -53,7 +53,7 @@ describe("gesture-tap", () => {
 
   it("physical iOS: a multi-tap rides ONE runner command carrying numberOfTaps", async () => {
     // Fake timers pin the no-sleep contract: the old device branch awaited
-    // one tapAt wire round-trip per tap with a 100ms sleep between — under
+    // one tapAt wire round-trip per tap with a 100ms sleep between. Under
     // fake timers that implementation never resolves. The runner owns the
     // inter-tap timing on-device, so no gap belongs on this side of the wire.
     vi.useFakeTimers();

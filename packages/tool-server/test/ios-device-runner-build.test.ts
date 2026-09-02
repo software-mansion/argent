@@ -10,6 +10,7 @@ import {
   assertXctestrunParses,
   computeRunnerCacheKey,
   ensureRunnerArtifact,
+  isProfileExpiredFailure,
   isProfileMissingDeviceFailure,
   killStaleRunnersForDevice,
   launchRunner,
@@ -287,6 +288,71 @@ describe("ensureRunnerArtifact", () => {
     });
   });
 
+  /** Plant a fake embedded profile where the cached runner app keeps it. */
+  async function writeFakeProfile(derivedDataPath: string, expiresAt: string): Promise<void> {
+    const app = path.join(
+      derivedDataPath,
+      "Build",
+      "Products",
+      "Debug-iphoneos",
+      "ArgentRunnerUITests-Runner.app"
+    );
+    await fsp.mkdir(app, { recursive: true });
+    // A real .mobileprovision is a CMS blob with the plist inline; the reader
+    // only needs the ExpirationDate pair to be present as plain text.
+    await fsp.writeFile(
+      path.join(app, "embedded.mobileprovision"),
+      `\u0000cms\u0000<plist><dict><key>ExpirationDate</key>\n\t<date>${expiresAt}</date></dict></plist>`,
+      "latin1"
+    );
+  }
+
+  it("re-signs in place when the cached profile is within an hour of expiry", async () => {
+    await withEnsureEnv("profile-expiring", async () => {
+      const counter = { builds: 0 };
+      const build = fakeBuild(counter);
+
+      const first = await ensureRunnerArtifact(CONFIG, { build });
+      const marker = path.join(first.derivedDataPath, "Build", "keep-me");
+      await fsp.writeFile(marker, "");
+      await writeFakeProfile(first.derivedDataPath, "2020-01-01T00:00:00Z");
+
+      const renewed = await ensureRunnerArtifact(CONFIG, { build });
+      expect(renewed.fromCache).toBe(false);
+      expect(counter.builds).toBe(2);
+      // The stamp still matched, so the tree was re-signed, not wiped.
+      await expect(fsp.access(marker)).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps the cache hit while the profile has more than an hour left", async () => {
+    await withEnsureEnv("profile-fresh", async () => {
+      const counter = { builds: 0 };
+      const build = fakeBuild(counter);
+
+      const first = await ensureRunnerArtifact(CONFIG, { build });
+      await writeFakeProfile(first.derivedDataPath, "2999-01-01T00:00:00Z");
+
+      const hit = await ensureRunnerArtifact(CONFIG, { build });
+      expect(hit.fromCache).toBe(true);
+      expect(counter.builds).toBe(1);
+    });
+  });
+
+  it("keeps the cache hit when the profile cannot be read", async () => {
+    await withEnsureEnv("profile-unreadable", async () => {
+      const counter = { builds: 0 };
+      const build = fakeBuild(counter);
+
+      const first = await ensureRunnerArtifact(CONFIG, { build });
+      await writeFakeProfile(first.derivedDataPath, "not a date");
+
+      const hit = await ensureRunnerArtifact(CONFIG, { build });
+      expect(hit.fromCache).toBe(true);
+      expect(counter.builds).toBe(1);
+    });
+  });
+
   it("serializes concurrent same-key ensures into exactly one build", async () => {
     await withEnsureEnv("same-key", async () => {
       const counter = { builds: 0 };
@@ -426,6 +492,32 @@ describe("isProfileMissingDeviceFailure", () => {
       expect(isProfileMissingDeviceFailure(text), text).toBe(true);
     }
     expect(isProfileMissingDeviceFailure("ld: symbol(s) not found")).toBe(false);
+  });
+});
+
+describe("isProfileExpiredFailure", () => {
+  it("recognizes installd's expiry codes and Xcode's expiry wording", () => {
+    const cases = [
+      // installd, as surfaced in the launch log (MobileDevice.framework error table).
+      "Failed to verify code signature of ArgentRunnerUITests-Runner.app : 0xe8008011 (This provisioning profile has expired.)",
+      "Failed to verify code signature of ArgentRunnerUITests-Runner.app : 0xe8008015 (A valid provisioning profile for this executable was not found.)",
+      // Xcode host-side wording (IDEFoundation).
+      'error: Provisioning profile "iOS Team Provisioning Profile: com.argent.runner" expired on 2026-09-02.',
+      "Profile expired on 2026-09-02.",
+    ];
+    for (const text of cases) {
+      expect(isProfileExpiredFailure(text), text).toBe(true);
+    }
+    // Device-missing shapes belong to isProfileMissingDeviceFailure, not here.
+    expect(
+      isProfileExpiredFailure(
+        "0xe8008012 (This provisioning profile cannot be installed on this device.)"
+      )
+    ).toBe(false);
+    expect(isProfileExpiredFailure("profile doesn't include the currently selected device")).toBe(
+      false
+    );
+    expect(isProfileExpiredFailure("ld: symbol(s) not found")).toBe(false);
   });
 });
 

@@ -20,7 +20,7 @@ const capabilityRemote: ToolCapability = {
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const iosRemoteUdid = `remote:${iosUdid}`;
-// Modern physical-iPhone shape (8+16 hex) — resolves to ios / device.
+// Modern physical-iPhone shape (8+16 hex): resolves to ios / device.
 const iosDeviceUdid = "00008110-000978540290401E";
 const androidUdid = "emulator-5554";
 
@@ -100,7 +100,7 @@ describe("dispatchByPlatform", () => {
   it("throws a 501 with corrected hardware guidance when a physical device hits a missing iosDevice branch", async () => {
     // Reaching this throw requires assertSupported to have already passed
     // apple: { device: true }, and the hardware file convention is
-    // platforms/ios-device.ts — so the appended hint must override the shared
+    // platforms/ios-device.ts, so the appended hint must override the shared
     // template's "fill in platforms/ios.ts + add the capability block" advice,
     // which is wrong on both counts for hardware.
     const execute = dispatchByPlatform<

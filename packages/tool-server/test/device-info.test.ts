@@ -64,7 +64,7 @@ describe("isIosPhysicalDevice", () => {
     expect(isIosPhysicalDevice(resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))).toBe(false);
   });
 
-  it("is false for physical Android hardware (kind 'device' too — the bare-kind hazard)", () => {
+  it("is false for physical Android hardware (kind 'device' too, the bare-kind hazard)", () => {
     const android = resolveDevice("HT82A0203045");
     expect(android.kind).toBe("device");
     expect(isIosPhysicalDevice(android)).toBe(false);
