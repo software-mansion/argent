@@ -3,9 +3,11 @@ import {
   describeTextExpectation,
   selectorToYaml,
   SELECTOR_RELATIONS,
+  swipeByLabel,
   type FlowFile,
   type FlowSelector,
   type FlowStep,
+  type GestureTarget,
   type WhenCondition,
 } from "./flow-utils";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
@@ -109,6 +111,37 @@ function conditionLabel(cond: UiCondition, renderSelector: (sel: FlowSelector) =
     return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
   }
   return `${cond.condition} ${sel}`;
+}
+
+/**
+ * A gesture's selector-or-point target, parameterized by selector spelling the
+ * way {@link conditionLabel} is, so the two surfaces share one shape.
+ */
+function gestureTargetLabel(
+  target: GestureTarget,
+  renderSelector: (sel: FlowSelector) => string
+): string {
+  return "selector" in target ? renderSelector(target.selector) : `(${target.x}, ${target.y})`;
+}
+
+/**
+ * Where a swipe travels and where from: the one of `direction`/`to`/`by` it
+ * carries, plus its optional `from` anchor.
+ *
+ * Undefined only for a step carrying no travel, which `parseFlow` rejects
+ * ("swipe needs exactly one of `direction`, `to`, or `by`") and nothing else
+ * builds — `swipe` has no recorder spelling.
+ */
+function swipeLabel(
+  step: Extract<FlowStep, { kind: "swipe" }>,
+  renderSelector: (sel: FlowSelector) => string
+): string | undefined {
+  let travel: string;
+  if (step.direction !== undefined) travel = step.direction;
+  else if (step.by !== undefined) travel = `by ${swipeByLabel(step.by)}`;
+  else if (step.to !== undefined) travel = `to ${gestureTargetLabel(step.to, renderSelector)}`;
+  else return undefined;
+  return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from, renderSelector)}` : ""}`;
 }
 
 /**
@@ -269,6 +302,23 @@ const FLOW_STEP_DEFINITIONS: {
   },
   "tap": POINT_GESTURE_STEP,
   "long-press": POINT_GESTURE_STEP,
+  "swipe": {
+    // `momentum` and `duration` change what replays, so the summary spells them
+    // as it spells tap's `times`. A report target names what the step acts on,
+    // so they ride the summary alone.
+    summary: (step) => {
+      // Present options only, so distinct gestures don't collapse into one line.
+      const options = [
+        ...(step.momentum === false ? ["momentum-free"] : []),
+        ...(step.duration !== undefined ? [`${step.duration}ms`] : []),
+      ];
+      const tail = options.length > 0 ? ` (${options.join(", ")})` : "";
+      // The summary runs over parsed steps only, where a travel spelling is
+      // always present (see swipeLabel).
+      return `${swipeLabel(step, yamlSelectorLabel)!}${tail}`;
+    },
+    target: (step) => swipeLabel(step, selectorLabel),
+  },
   "type": {
     summary: (step) => `${yamlSelectorLabel(step.into)} ← ${JSON.stringify(step.text)}`,
     // The typed text rides along, the way an await/assert target carries its

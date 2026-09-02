@@ -12,7 +12,7 @@ export interface CdpTarget {
   webSocketDebuggerUrl?: string;
 }
 
-export interface CdpVersionInfo {
+interface CdpVersionInfo {
   "Browser"?: string;
   "webSocketDebuggerUrl"?: string;
   "Protocol-Version"?: string;

@@ -382,7 +382,7 @@ function printSummary({
   }
 }
 
-export function printBanner(): void {
+function printBanner(): void {
   const lines = [
     " █████╗ ██████╗  ██████╗ ███████╗███╗   ██╗████████╗",
     "██╔══██╗██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",

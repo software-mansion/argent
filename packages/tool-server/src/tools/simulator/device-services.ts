@@ -164,7 +164,7 @@ export function isDeviceServiceUrn(urn: string, namespaces: readonly string[]): 
  * that namespace's own URN shape — {@link deviceIdOwningUrn}'s reading minus
  * the caller's id list. Undefined when no namespace in the set prefixes it.
  */
-export function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | undefined {
+function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | undefined {
   for (const namespace of namespaces) {
     const portion = deviceIdPortion(urn, namespace);
     if (portion !== undefined) return portion;

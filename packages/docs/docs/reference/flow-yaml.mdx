@@ -69,10 +69,10 @@ A bare string, for example `tap: Save`, is a loose selector. It tries `id` first
 
 When several elements match:
 
-| Directive type                                                       | Chosen element                                                                                                                     |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
-| Condition (`await`, `assert`)                                        | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+| Directive type                                                                | Chosen element                                                                                                                     |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
+| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
 
 ### Relational scopes
 
@@ -114,6 +114,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `launch`     | `<app id>` or `{ native, ios, android, vega, chromium }`           | Terminate and start the app, then wait until the app is ready                                     |
 | `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
+| `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
@@ -131,7 +132,7 @@ Each step contains one directive. A failed directive stops the flow.
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
-A coordinate `tap`, or a `pinch` or `rotate` without `on`, passes with a warning when the runner cannot read the UI tree. The warning says that Argent sent the gesture, not that the gesture reached the element.
+A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
 ### Launch map
 
@@ -145,6 +146,30 @@ Use the map form for a flow that runs on more than one platform:
 `native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
+
+### Swipe
+
+```yaml
+- swipe: left
+- swipe: { from: { id: story-card }, direction: left }
+- swipe: { by: { y: -0.4 }, duration: 600 }
+- swipe: { from: { id: drag-handle }, to: { id: drop-zone }, momentum: false }
+```
+
+A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
+
+| Option      | Value                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `from`      | The start point. A selector or `{ x, y }`. Argent selects the start when `from` is absent                                                  |
+| `direction` | `up`, `down`, `left` or `right`. Argent moves the finger a preset distance. With `from`, Argent clamps the travel on screen                |
+| `to`        | The end point. A selector or `{ x, y }`                                                                                                    |
+| `by`        | A signed delta `{ x, y }` in screen fractions. Argent delivers the exact delta. With `from`, a delta that leaves the screen fails the step |
+| `momentum`  | `false` removes the fling at the default `duration`. Default `true`                                                                        |
+| `duration`  | The travel time in milliseconds. Default 300, minimum 150, maximum 10000                                                                   |
+
+A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
+
+On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
 
 ## Conditions
 
@@ -217,11 +242,11 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ p
 
 A `run:` path resolves against the directory of the flow file that contains the step. The `.yaml` suffix is optional.
 
-| Platform     | Behavior                                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                     |
-| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. `pinch` and `rotate` are rejected |
-| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                       |
+| Platform     | Behavior                                                                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                                                          |
+| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected |
+| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                            |
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 

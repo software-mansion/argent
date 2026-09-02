@@ -6,7 +6,7 @@ import type { InstallMode } from "./install-record.js";
 // Shared init telemetry context: the orchestrator and step modules (notably
 // install-runner) reuse one install-mode dimension, editor count and finalize-once guard.
 
-export type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
 
 export const INSTALL_GLOBAL_PACKAGE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_GLOBAL_PACKAGE_FAILED,
@@ -61,7 +61,7 @@ export const INSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
-export type PackageActionName =
+type PackageActionName =
   | "fresh_install"
   | "already_installed"
   | "init_triggered_update"

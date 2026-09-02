@@ -13,7 +13,7 @@ import { isDeclaredLocally, readInstallRecord } from "./utils.js";
 import type { InstallMode } from "./install-record.js";
 import type { Scope } from "./init-scope.js";
 
-export interface McpWriteResult {
+interface McpWriteResult {
   /** Selected adapters minus the global-only ones local mode drops. */
   adapters: McpConfigAdapter[];
   /** One summary line per adapter. */

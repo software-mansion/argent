@@ -90,15 +90,15 @@ const TVOS_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
-// Apple system apps (`com.apple.*`) cannot be relied on to load argent's dylib,
-// so the native-devtools fallback can't read their view hierarchy and restarting
-// them would never help — returning `should_restart` here puts the agent in an
+// Apple system apps (`com.apple.*`) are not targets argent's native devtools
+// support, so the fallback can't read their view hierarchy and restarting them
+// would never help — returning `should_restart` here puts the agent in an
 // unbounded restart-app → describe loop. Reached only once the ax-service path
 // has already returned empty, so it leads with `screenshot`: re-recommending
 // `describe` would be circular.
 const NON_INJECTABLE_HINT =
-  "This is an Apple system app (com.apple.*), which cannot be relied on to load argent's native-devtools " +
-  "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
+  "This is an Apple system app (com.apple.*), which argent's native-devtools instrumentation " +
+  "does not support — the native view hierarchy is unavailable and restarting the app will NOT " +
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
@@ -110,11 +110,11 @@ function emptyTree(): DescribeNode {
   });
 }
 
-export interface DescribeIosParams {
+interface DescribeIosParams {
   bundleId?: string;
 }
 
-export interface DescribeIosOptions {
+interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
@@ -138,24 +138,35 @@ export async function describeIos(
     return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
 
-  let tree: DescribeNode;
+  let tree: DescribeNode = emptyTree();
   let degraded: boolean;
   // A resolver failure that names its own cause, which outranks the boot caveat.
   let resolverHint: string | undefined;
+  // The daemon came up but the read itself failed (a query timeout, an RPC
+  // error). That says nothing about how the sim was booted, so it must not be
+  // reported as the boot caveat — which prescribes a reboot the developer pays
+  // for and that would not have helped.
+  let readFailureHint: string | undefined;
 
+  let axApi: AXServiceApi | undefined;
   try {
     const axRef = axServiceRef(device);
-    const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
-    const response = await axApi.describe();
-    tree = adaptAXDescribeToDescribeResult(response);
+    axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
   } catch (err) {
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
     // one, so it must not read as degraded.
-    tree = emptyTree();
     resolverHint = tcpArtifactHint(err);
     degraded = resolverHint === undefined;
+  }
+
+  if (axApi) {
+    try {
+      tree = adaptAXDescribeToDescribeResult(await axApi.describe());
+    } catch (err) {
+      readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+    }
   }
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
@@ -167,7 +178,13 @@ export async function describeIos(
     : tree.children.length === 0
       ? DEGRADED_BLIND_HINT
       : DEGRADED_STANDING_HINT;
-  const hint = resolverHint ?? degradedHint;
+  const hint =
+    resolverHint ??
+    (readFailureHint
+      ? degradedHint
+        ? `${degradedHint}. ${readFailureHint}`
+        : readFailureHint
+      : degradedHint);
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
@@ -181,8 +198,8 @@ export async function describeIos(
   //
   // The gate sits BEFORE the native-devtools fallback: injectability is a static
   // property of the explicit bundle id, so the terminal hint must not depend on
-  // service resolution succeeding, and no service is spawned for an app that may
-  // never inject. Auto-resolution (no bundleId) needs no gate — it only ever
+  // service resolution succeeding, and no service is spawned for an app the gate
+  // refuses. Auto-resolution (no bundleId) needs no gate — it only ever
   // yields a connected, hence injected, app. A degraded ax-service keeps its
   // reboot guidance instead: a proper boot may let the ax-service read this
   // system app's tree, at which point `describe`, not a screenshot, is the

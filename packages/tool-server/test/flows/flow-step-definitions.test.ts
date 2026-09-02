@@ -168,6 +168,47 @@ const CASES = {
       target: "(0.4, 0.5)",
     },
   ],
+  "swipe": [
+    {
+      step: { kind: "swipe", direction: "left" },
+      summary: "1. swipe: left",
+      target: "left",
+    },
+    {
+      // A `from` anchor reads the same on both surfaces, each in its own
+      // selector spelling.
+      step: {
+        kind: "swipe",
+        from: { selector: { text: "Card", loose: true } },
+        direction: "right",
+      },
+      summary: '1. swipe: right from "Card"',
+      target: 'right from "Card"',
+    },
+    {
+      step: { kind: "swipe", by: { x: 0.25, y: -0.4 } },
+      summary: "1. swipe: by x=0.25, y=-0.4",
+      target: "by x=0.25, y=-0.4",
+    },
+    {
+      // The two target shapes crossed: a point anchor travelling to a selector.
+      step: {
+        kind: "swipe",
+        from: { x: 0.1, y: 0.2 },
+        to: { selector: { identifier: "destination" } },
+      },
+      summary: '1. swipe: to {"id":"destination"} from (0.1, 0.2)',
+      target: "to id=destination from (0.1, 0.2)",
+    },
+    {
+      // `momentum` and `duration` change what replays, so the summary spells
+      // them; the report's target names the travel alone, as the other
+      // gestures' targets do.
+      step: { kind: "swipe", direction: "left", momentum: false, duration: 800 },
+      summary: "1. swipe: left (momentum-free, 800ms)",
+      target: "left",
+    },
+  ],
   "type": [
     {
       step: { kind: "type", into: { identifier: "email" }, text: "a@b.c" },
