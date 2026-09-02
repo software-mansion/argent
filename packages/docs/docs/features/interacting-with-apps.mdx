@@ -85,7 +85,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
-- A screen can have very many elements. Argent then shows 500 of them: the first 400 and the last 100. Argent also gives the number of the elements that it does not show. The agent scrolls the missing part into view to read it. The agent can also wait for such an element, because the selector tools match against the full tree.
+- A screen can have very many elements, or very much text. Argent then shows 500 elements or 40,000 characters, whichever limit comes first. It keeps the start and the end of the screen and drops what is between them. Argent also gives the number of the elements that it does not show. The agent scrolls the missing part into view to read it. The agent can also wait for such an element, because the selector tools match against the full tree.
 - On Android and Chromium, a screen can hold more elements than one capture carries. The agent then gets a part of the tree. Android always sends a message that says so. Chromium sends the message for a page with too many elements. Chromium sends no message for a page that is too deep. The other platforms have no such limit and send no such message.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

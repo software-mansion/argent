@@ -160,22 +160,55 @@ const MAX_BODY_LINES = 500;
 // middle instead.
 const TAIL_BODY_LINES = 100;
 
+// The second budget, because a line carries no bound of its own: `formatLine`
+// passes a node's whole label and value through, and describe now reads a web
+// page's text runs verbatim. A page that grows in TEXT rather than in node
+// count went through the line budget untouched — measured on an emulator, 300
+// long paragraphs rendered 59 lines and 64,000 characters, more than twice what
+// a capped 510-line grid costs. 80 characters a line at the line budget, over
+// the 60 a dense live Android capture averages, so an ordinary screen is still
+// bound by lines and only a text-heavy one meets this.
+const MAX_BODY_CHARS = 40_000;
+const TAIL_BODY_CHARS = 8_000;
+
+/**
+ * How many lines from one end fit both budgets. Counts the newline the join
+ * adds back, so the number is what the payload actually costs.
+ */
+function runWithin(body: string[], maxLines: number, maxChars: number, fromEnd: boolean): number {
+  let chars = 0;
+  let count = 0;
+  while (count < body.length && count < maxLines) {
+    const line = fromEnd ? body[body.length - 1 - count]! : body[count]!;
+    if (chars + line.length + 1 > maxChars) break;
+    chars += line.length + 1;
+    count += 1;
+  }
+  return count;
+}
+
 // Cut the rendering at the budget and say what is missing, rather than hand
 // back a tree that reads complete.
 function capBody(body: string[]): string[] {
-  if (body.length <= MAX_BODY_LINES) return body;
-  const head = MAX_BODY_LINES - TAIL_BODY_LINES;
-  const dropped = body.length - MAX_BODY_LINES;
+  const tail = runWithin(body, TAIL_BODY_LINES, TAIL_BODY_CHARS, true);
+  // At least one line, so a single node whose text alone fills the budget still
+  // shows the agent an element rather than a notice on its own.
+  const head = Math.max(
+    Math.min(body.length, 1),
+    runWithin(body, MAX_BODY_LINES - TAIL_BODY_LINES, MAX_BODY_CHARS - TAIL_BODY_CHARS, false)
+  );
+  if (head + tail >= body.length) return body;
+  const dropped = body.length - head - tail;
   return [
     ...body.slice(0, head),
     "",
-    `... ${dropped} more elements are NOT shown. The rendering stops at ${MAX_BODY_LINES} lines: ` +
-      `it keeps the first ${head} and the last ${TAIL_BODY_LINES} of the walk and drops what is ` +
-      "between them. Scroll the missing part into view and describe again. An element in the gap " +
-      "is still addressable: await-ui-element and the flow selector directives match against the " +
-      "whole tree, not this rendering.",
+    `... ${dropped} more elements are NOT shown. The rendering stops at ${MAX_BODY_LINES} lines ` +
+      `or ${MAX_BODY_CHARS} characters, whichever comes first: it keeps the first ${head} lines ` +
+      `and the last ${tail} of the walk and drops what is between them. Scroll the missing part ` +
+      "into view and describe again. An element in the gap is still addressable: await-ui-element " +
+      "and the flow selector directives match against the whole tree, not this rendering.",
     "",
-    ...body.slice(body.length - TAIL_BODY_LINES),
+    ...body.slice(body.length - tail),
   ];
 }
 

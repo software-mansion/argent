@@ -445,8 +445,8 @@ describe("formatDescribeTree", () => {
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses
   // an iterative DFS specifically to avoid a recursive stack overflow there.
-  // The depth stays under the rendering budget (500 lines) so this case tests
-  // stack safety and nothing else.
+  // At this depth the indentation alone passes the rendering budget, so the
+  // case reads the two ends the cut keeps rather than a line count.
   it("handles deeply nested trees without recursing the JS stack", () => {
     let inner: DescribeNode = leaf({
       role: "Button",
@@ -467,8 +467,9 @@ describe("formatDescribeTree", () => {
       children: [inner],
     };
     const out = formatDescribeTree(root, { source: "uiautomator" });
+    // The walk reached the bottom: the deepest node is the last line of it.
     expect(out).toContain('"deep"');
-    expect(out.split("\n").length).toBeGreaterThan(300);
+    expect(out).toContain("FrameLayout");
   });
 
   // The trim rule must only strip "value === label" — value strings that
@@ -576,6 +577,29 @@ describe("formatDescribeTree — rendering budget", () => {
     expect(out).toContain('StaticText "row 1199"');
     expect(out).toContain('StaticText "row 1100"');
     expect(out).not.toContain('StaticText "row 1099"');
+  });
+
+  it("stops a page that grows in text rather than in nodes", () => {
+    // The budget exists to bound the context a rendering is charged, and a line
+    // carries no bound of its own. A page of long paragraphs stayed far inside
+    // the line budget while costing more than twice a capped grid.
+    const paragraphs: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: Array.from({ length: 300 }, (_, i) => ({
+        role: "StaticText",
+        label: `p${i} ${"lorem ipsum dolor sit amet ".repeat(15)}`,
+        frame: { x: 0, y: i / 300, width: 1, height: 1 / 300 },
+        children: [],
+      })),
+    };
+    const out = formatDescribeTree(paragraphs, { source: "android-devtools" });
+    expect(out.split("\n").length).toBeLessThan(500);
+    expect(out.length).toBeLessThan(50_000);
+    expect(out).toContain("more elements are NOT shown");
+    // Both ends still survive the character budget.
+    expect(out).toContain('"p0 ');
+    expect(out).toContain('"p299 ');
   });
 
   it("caps the flat renderers too", () => {
