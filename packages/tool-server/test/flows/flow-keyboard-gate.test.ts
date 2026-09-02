@@ -202,4 +202,52 @@ steps:
     expect(run.steps.map((s) => s.status)).toEqual(["pass"]);
     expect(run.steps[0].warning).toBe(note);
   });
+
+  it("takes the note of the keyboard steps only, and says which step each is from", async () => {
+    // `await-ui-element` returns a `note` of its own about a wait it decided
+    // itself, and it is in run-sequence's allowed tools — read as a read-back
+    // note it would report a typing problem that never happened. The two
+    // keyboard notes are labelled because each one's advice is about its own
+    // field, and the first here is the secret note that says NOT to read one back.
+    const secret =
+      "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` this field.";
+    const second = "The typed text was not verified against the screen: the read was truncated.";
+    const flowFile = await writeFlow(
+      "two-notes",
+      `executionPrerequisite: ""
+steps:
+  - tool: run-sequence
+    args:
+      udid: 00000000-0000-0000-0000-0000000000ab
+      steps:
+        - tool: keyboard
+          args:
+            text: hunter2
+`
+    );
+    const registry = makeRegistry(async () => ({
+      completed: 3,
+      total: 3,
+      steps: [
+        { tool: "keyboard", result: { typed: "hunter2", keys: 7, note: secret } },
+        { tool: "await-ui-element", result: { success: true, note: "waited 0 ms" } },
+        { tool: "keyboard", result: { typed: "next", keys: 4, note: second } },
+      ],
+    }));
+
+    const run = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        {
+          name: "two-notes",
+          project_root: PROJECT_ROOT,
+          flow_file: flowFile,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        }
+      )
+    );
+
+    expect(run.steps[0].warning).toBe(`step 1: ${secret} step 3: ${second}`);
+    expect(run.steps[0].warning).not.toContain("waited 0 ms");
+  });
 });

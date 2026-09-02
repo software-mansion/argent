@@ -6,8 +6,6 @@ import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { sleepOrAbort } from "../../../utils/timing";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 async function runChromium(
   api: ChromiumCdpApi,
   params: KeyboardParams,
@@ -81,7 +79,9 @@ async function runChromium(
       code: named.code,
       windowsVirtualKeyCode: named.windowsVirtualKeyCode,
     });
-    await sleep(delay);
+    // Abortable like the per-character hold above; the key-up below still goes
+    // out, so a cancel shortens the press rather than leaving the key down.
+    await sleepOrAbort(delay, signal);
     await api.dispatchKeyEvent({
       type: "keyUp",
       key: named.key,

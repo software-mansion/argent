@@ -340,6 +340,29 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(Date.now() - started).toBeLessThan(1_500);
     });
 
+    it("does not wait out the named-key hold either", async () => {
+      // The `key:` branch has its own hold, and the iOS twin's is inside
+      // `pressKeyCode`, which serves both branches - so only this one could be
+      // left behind.
+      const { api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await makeChromiumImpl(registryWith(aborting)).handler(
+        {},
+        { udid: CHROMIUM.id, key: "enter", delayMs: 3_000 },
+        CHROMIUM,
+        { signal: controller.signal }
+      );
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
+
     it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {
       const { events, api } = cdpRecorder();
 

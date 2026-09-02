@@ -201,8 +201,8 @@ export interface StepReport {
    * it is dispatched regardless, and the warning is the only thing separating it
    * from one that waited — and by any step whose `keyboard` result carries a
    * note: the read-back could not conclude, or it repaired the field to get
-   * there. A directive step has no `result` to carry that in, and a raw `tool:`
-   * step's `result` is not rendered anywhere.
+   * there. A directive step has no `result` to carry that in, and the CLI does
+   * not render a raw `tool:` step's `result` either.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -2682,10 +2682,9 @@ async function execLeafStep(
  * The read-back note a passing raw `tool:` step is handing back, in either
  * spelling the recorder writes: the `keyboard` call itself, or a `run-sequence`
  * holding one. A `type:` step gets this through `runType`; this spelling keeps
- * the whole result, but nothing renders a step's `result` — the CLI prints the
- * step line and its warning — so a repair that ran, or a read-back that could
- * not conclude, would otherwise be an unqualified green in the spelling the
- * recorder produces.
+ * the whole result, but the CLI renders only the step line and the warning under
+ * it — so a repair that ran, or a read-back that could not conclude, would
+ * otherwise be an unqualified green there, in the spelling the recorder writes.
  */
 function rawStepKeyboardNote(toolId: string, result: unknown): string | undefined {
   if (toolId === "keyboard") return keyboardResultNote(result);
@@ -2693,13 +2692,21 @@ function rawStepKeyboardNote(toolId: string, result: unknown): string | undefine
   const steps = (result as { steps?: unknown }).steps;
   if (!Array.isArray(steps)) return undefined;
   const notes = steps
-    .filter(
-      (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null
-    )
-    .filter((entry) => entry.tool === "keyboard")
-    .map((entry) => keyboardResultNote(entry.result))
-    .filter((note): note is string => note !== undefined);
-  return notes.length > 0 ? notes.join(" ") : undefined;
+    .map((entry, index) => {
+      // Only `keyboard`'s note means what a reader of this takes it to mean:
+      // `await-ui-element` returns one too, about a wait it decided itself.
+      if (typeof entry !== "object" || entry === null) return undefined;
+      const step = entry as Record<string, unknown>;
+      if (step.tool !== "keyboard") return undefined;
+      const note = keyboardResultNote(step.result);
+      return note === undefined ? undefined : { index, note };
+    })
+    .filter((found): found is { index: number; note: string } => found !== undefined);
+  if (notes.length === 0) return undefined;
+  if (notes.length === 1) return notes[0]!.note;
+  // Each note's advice is about its own field, and a secret's says NOT to read
+  // that one back, so two run together would govern the wrong field.
+  return notes.map(({ index, note }) => `step ${index + 1}: ${note}`).join(" ");
 }
 
 function errMsg(err: unknown): string {
