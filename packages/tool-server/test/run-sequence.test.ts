@@ -88,6 +88,38 @@ describe("run-sequence — the device keyboard queue", () => {
     expect(result.completed).toBe(1);
   });
 
+  it("waits for the queue when the only queued step is a `paste`", async () => {
+    // `paste` is on the queue for the same reason `keyboard` is: it fills the
+    // clipboard and then sends Cmd+V, at the same focused field. Every other
+    // case here reaches the queue through a `keyboard` step, so dropping
+    // `paste` from DEVICE_QUEUE_TOOLS left them all green.
+    const { registry, calls } = makeMockRegistry();
+    let release = () => {};
+    const blocking = serializedPerDevice(
+      IOS,
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    await new Promise((r) => setTimeout(r, 2));
+
+    const sequence = createRunSequenceTool(registry).execute!(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+          { tool: "paste", args: { text: "OTP-1234" } },
+        ],
+      }
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toEqual([]);
+
+    release();
+    await blocking;
+    expect((await sequence).completed).toBe(2);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap", "paste"]);
+  });
+
   it("leaves the queue alone when no step uses the keyboard", async () => {
     // A gesture-only batch must not wait behind another session's clear, nor
     // make one wait behind it: the hazard is the focused field, and a batch that
