@@ -100,23 +100,25 @@ function publishDescriptor(options: { capabilities: string[]; pid?: number }): v
 
 function makeApi(): NativeDevtoolsApi {
   return {
-    activateNetworkInspection: () => {},
-    appConnectionState: async () => "stale_process",
-    clearNetworkLog: () => {},
-    detectFrontmostBundleId: async () => null,
+    isEnvSetup: () => true,
+    socketPath: "/tmp/mock.sock",
     ensureEnvReady: async () => {},
+    reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
+    getInitFailure: () => null,
+    isConnected: () => false,
+    isAppRunning: async () => false,
+    listConnectedBundleIds: () => [],
+    appConnectionState: async () => "stale_process",
+    activateNetworkInspection: () => {},
+    getNetworkLog: () => [],
+    clearNetworkLog: () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
-    getInitFailure: () => null,
-    getNetworkLog: () => [],
-    isAppRunning: async () => false,
-    isConnected: () => false,
-    isEnvSetup: () => true,
-    listConnectedBundleIds: () => [],
+    detectFrontmostBundleId: async () => null,
     queryViewHierarchy: async () => ({}),
-    reverifyEnv: async () => {},
-    socketPath: "/tmp/mock.sock",
   };
 }
 

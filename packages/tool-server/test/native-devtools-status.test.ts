@@ -62,6 +62,8 @@ function makeNativeApi(options: {
       socketPath: "/tmp/mock.sock",
       ensureEnvReady,
       reverifyEnv,
+      armsEnv: true,
+      withdrawEnv: async () => {},
       getInitFailure: () => options.initFailure ?? null,
       isConnected: () => options.connected ?? false,
       isAppRunning,
