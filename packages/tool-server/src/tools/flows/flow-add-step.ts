@@ -429,19 +429,39 @@ const PROBE_BUDGET_MS = PROBE_ASSERT_GRACE_MS + 2 * PROBE_MAX_TREE_READ_MS;
 /**
  * Length cap on a DETERMINATE reason before it is quoted back. That reason
  * quotes the matched element's text, and the flow tree hoists text from every
- * descendant, so one failed `text` check can carry a whole card.
+ * descendant, so one failed `text` check can carry a whole card. The card is
+ * what this bounds; everything the author needs to judge the step is kept.
  *
  * An indeterminate reason is quoted whole: it is an environment error, it
  * carries no screen content, and its tail is the recovery instruction.
  */
-const MAX_PROBE_REASON_CHARS = 200;
+const MAX_PROBE_REASON_CHARS = 1250;
 
 /**
- * How much of the cap goes to the END. `waitForCondition` closes a determinate
- * reason with the note that its final poll went dark. That note qualifies the
- * verdict, so elide the middle rather than the tail.
+ * How much of the cap goes to the END, where every part that DIAGNOSES the miss
+ * sits: `waitForCondition` closes a determinate reason with the note that its
+ * final poll went dark, `assertReason` closes with the codepoint note, and the
+ * compatibility note is appended after both. So elide the middle rather than
+ * the tail.
+ *
+ * Sized to hold the largest of those whole. The codepoint note is the widest at
+ * 1,065 characters — two 48-code-point dumps of astral characters plus the
+ * rendering-affecting lead — and at the old 60 the cut landed ON it: the lead
+ * stopped at "differ only in i", and the tail was a headless fragment of one
+ * dump, sliced through a `U+0` prefix so `U+0076` printed as `076`. On the one
+ * surface that asks the author whether a recorded wait converts, the only
+ * sentence that answers the question was the part that was dropped.
  */
-const PROBE_REASON_TAIL_CHARS = 60;
+const PROBE_REASON_TAIL_CHARS = 1100;
+
+/**
+ * @internal Seam so the cap tests read the real bounds instead of copies. A
+ * hardcoded copy silently stops reaching the cap when the cap moves.
+ */
+export const flowAddStepInternals = {
+  MAX_PROBE_REASON_CHARS,
+  PROBE_REASON_TAIL_CHARS,
+};
 
 function elisionMarker(dropped: number): string {
   return `… (${dropped} more chars) …`;
