@@ -92,6 +92,11 @@ jobs:
         env:
           BOOT_JSON: '{"udid":"${{ env.UDID }}"}'
           DEVICE_ID: ${{ env.UDID }}
+          # The only job here on a simulator-server backend, so the only one
+          # that can hold the binary to the resize contract the snapshot
+          # retry-scale rests on. Not the Chromium jobs: a scale below 1 there
+          # goes through the optional `sharp` dependency instead.
+          CHECK_RETRY_SCALE: "1"
 
       - if: always()
         uses: actions/upload-artifact@v7
@@ -100,6 +105,7 @@ jobs:
           path: |
             ${{ runner.temp }}/smoke-shot.png
             ${{ runner.temp }}/smoke-shot.json
+            ${{ runner.temp }}/retry-scale-*.json
             ~/.argent/tool-server.log
           if-no-files-found: warn
           retention-days: 7

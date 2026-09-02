@@ -9,7 +9,9 @@ set -euo pipefail
 #   3. gesture-tap round-trips
 # The same three assertions wayland-e2e.yml inlines for the Android emulator,
 # parameterised: screenshot and gesture-tap take the device as `udid` and answer
-# in the same shapes on every platform, so the body is uniform.
+# in the same shapes on every platform, so the body is uniform. With
+# CHECK_RETRY_SCALE set it also holds the simulator-server binary to the resize
+# contract REFUSED_CAPTURE_RETRY_SCALE rests on (see below).
 #
 # Inputs (env):
 #   BOOT_JSON          JSON body for POST /boot-device
@@ -20,6 +22,9 @@ set -euo pipefail
 #   SLEEP_BEFORE_SHOT  settle time before the first capture
 #   BOOT_CURL_TIMEOUT  curl -m for boot-device; must exceed the boot budget
 #   ARTIFACT_DIR       screenshot and raw response land here
+#   CHECK_RETRY_SCALE  non-empty runs the retry-scale fidelity check. Only for
+#                      simulator-server backends: on Chromium a scale below 1
+#                      needs the optional `sharp` dependency.
 
 : "${BOOT_JSON:?BOOT_JSON is required}"
 : "${DEVICE_ID:?DEVICE_ID is required}"
@@ -91,6 +96,67 @@ test "$SZ" -gt "$MIN_SHOT_BYTES" || {
   echo "::error::screenshot too small (${SZ}B) — likely a blank/all-zero framebuffer"
   exit 1
 }
+
+# A capture the device refuses unscaled is re-requested at
+# REFUSED_CAPTURE_RETRY_SCALE — one part in a million below 1
+# (packages/tool-server/src/utils/simulator-client.ts). That recovers the frame
+# rather than a reduced one only because simulator-server rounds
+# `dimension × scale` back to the dimension, so the retry keys the same
+# baseline file every other host writes. The binary is fetched from a rolling
+# tag and is not in-tree, so no unit suite can hold it to that; this does.
+if [ -n "${CHECK_RETRY_SCALE:-}" ]; then
+  echo "::group::retry-scale fidelity"
+  REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  # Read the scale off the constant rather than restating it: a check pinned to
+  # its own literal would keep passing for a value the code no longer sends.
+  RETRY_SCALE=$(python3 - "$REPO_ROOT/packages/tool-server/src/utils/simulator-client.ts" <<'READ_SCALE'
+import re, sys
+m = re.search(r"REFUSED_CAPTURE_RETRY_SCALE\s*=\s*([^;]+);", open(sys.argv[1]).read())
+if not m:
+    sys.exit("REFUSED_CAPTURE_RETRY_SCALE is gone from %s" % sys.argv[1])
+scale = eval(m.group(1), {"__builtins__": {}})
+if not 0 < scale < 1:
+    sys.exit("REFUSED_CAPTURE_RETRY_SCALE is %r, which is not a scale below 1" % scale)
+print(repr(scale))
+READ_SCALE
+  )
+  # $1 = scale, $2 = label. Echoes the tool-server-local png path, or "" — the
+  # caller reports, so a failed capture must not trip `set -e` in here.
+  capture_at() {
+    local out="$ARTIFACT_DIR/retry-scale-$2.json"
+    curl -sS -m 60 -X POST "${BASE_URL}/screenshot" \
+      -H 'Content-Type: application/json' \
+      -d "{\"udid\":\"${DEVICE_ID}\",\"scale\":$1,\"includeImageInContext\":false}" \
+      >"$out" || true
+    python3 -c "import json,sys
+try:
+    d = json.load(open('$out'))
+except Exception:
+    print(''); sys.exit(0)
+print(d.get('data', {}).get('image', {}).get('hostPath', '') if isinstance(d, dict) else '')"
+  }
+  png_dims() {
+    python3 -c "import struct,sys
+head = open(sys.argv[1], 'rb').read(24)
+if head[:8] != b'\x89PNG\r\n\x1a\n':
+    sys.exit('%s is not a PNG' % sys.argv[1])
+print('%dx%d' % struct.unpack('>II', head[16:24]))" "$1"
+  }
+  FULL_PATH=$(capture_at 1.0 unscaled)
+  RETRY_PATH=$(capture_at "$RETRY_SCALE" retry)
+  if [ -z "$FULL_PATH" ] || [ -z "$RETRY_PATH" ]; then
+    echo "::error::retry-scale check could not capture (unscaled=$(cat "$ARTIFACT_DIR/retry-scale-unscaled.json"), retry=$(cat "$ARTIFACT_DIR/retry-scale-retry.json"))"
+    exit 1
+  fi
+  FULL_DIMS=$(png_dims "$FULL_PATH")
+  RETRY_DIMS=$(png_dims "$RETRY_PATH")
+  echo "unscaled=${FULL_DIMS}  scale ${RETRY_SCALE}=${RETRY_DIMS}"
+  echo "::endgroup::"
+  test "$FULL_DIMS" = "$RETRY_DIMS" || {
+    echo "::error::simulator-server returned ${RETRY_DIMS} at scale ${RETRY_SCALE} for a ${FULL_DIMS} screen — REFUSED_CAPTURE_RETRY_SCALE would now silently reduce every recovered capture, re-keying committed snapshot baselines"
+    exit 1
+  }
+fi
 
 echo "::group::gesture-tap"
 # Symmetric with the screenshot retry: a successful screenshot already proves the
