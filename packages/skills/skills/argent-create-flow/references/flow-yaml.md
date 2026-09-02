@@ -8,6 +8,7 @@ Read this reference when polishing, composing, or manually reviewing a flow.
     - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
     - [Relational scopes](#relational-scopes)
   - [Directives](#directives)
+    - [`swipe`](#swipe)
   - [Verification conditions](#verification-conditions)
   - [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
     - [`idle` readiness](#idle-readiness)
@@ -244,7 +245,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
-Run only scripts that you trust. If a script fails, check its changes before you retry.
+If a script fails, check its changes before you retry.
 
 ## Snapshots and standalone runs
 
