@@ -495,10 +495,22 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           // is gone" reads that as "nothing happened" and types over a field
           // that is now shorter.
           throw new FailureError(
-            `the clear burst did not finish on ${udid}, and the focused field may be PARTIALLY ` +
-              `emptied — ${keysSent} of the ${CLEAR_KEY_PAIRS * 2} delete keys had been written ` +
-              "one at a time when the Apple TV HID daemon stopped accepting them. Read the field " +
-              "back before clearing or typing again. Underlying failure: " +
+            // A refused CONNECTION delivers nothing: `sendLine` writes only from
+            // the socket's `connect` handler, so a socket that errors instead
+            // rejects the very first `sendJson` with `keysSent` still 0 — and
+            // "may be PARTIALLY emptied — 0 of the 200" sends the caller to
+            // re-read a field nothing touched. The Android and Vega bursts both
+            // special-case the same state.
+            (keysSent === 0
+              ? `the clear burst never reached ${udid}: the Apple TV HID daemon refused the very ` +
+                `first of the ${CLEAR_KEY_PAIRS * 2} delete keys, so NO delete key was sent and ` +
+                "the focused field is unchanged. This is a daemon problem, not a field problem — " +
+                "nothing needs to be read back; retry the clear once the simulator answers again. "
+              : `the clear burst did not finish on ${udid}, and the focused field may be ` +
+                `PARTIALLY emptied — ${keysSent} of the ${CLEAR_KEY_PAIRS * 2} delete keys had ` +
+                "been written one at a time when the Apple TV HID daemon stopped accepting them. " +
+                "Read the field back before clearing or typing again. ") +
+              "Underlying failure: " +
               (err instanceof Error ? err.message.split("\n")[0] : String(err)),
             {
               error_code: FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED,

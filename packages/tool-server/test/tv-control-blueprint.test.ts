@@ -508,4 +508,27 @@ describe("tvControlBlueprint — clear()", () => {
     expect(err?.message).toMatch(/may be PARTIALLY\s+emptied/);
     expect(err?.message).toMatch(new RegExp(`${hidLines().length} of the 200 delete keys`));
   });
+
+  it("says the field is UNCHANGED when the daemon refused the connection", async () => {
+    // `sendLine` writes only from the socket's `connect` handler, so a refused
+    // connection delivers nothing and the first `sendJson` rejects with
+    // `keysSent` still 0. "May be PARTIALLY emptied — 0 of the 200 delete keys"
+    // sent the caller to re-read a field nothing had touched; the Android and
+    // Vega bursts both special-case the same state.
+    const instance = await buildService();
+    h.sent.length = 0;
+    const hid = [...h.liveSockets].find((p) => p.includes("-hid-"))!;
+    h.liveSockets.delete(hid);
+
+    const err = await instance.api.clear().then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
+    expect(err?.message).toContain("NO delete key was sent");
+    expect(err?.message).toContain("the focused field is unchanged");
+    expect(err?.message).not.toMatch(/PARTIALLY/);
+    expect(hidLines()).toEqual([]);
+  });
 });
