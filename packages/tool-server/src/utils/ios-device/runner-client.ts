@@ -5,7 +5,8 @@ import {
   type FailureKind,
   type FailureSignal,
 } from "@argent/registry";
-import { sleep, type SendRunnerCommand } from "./runner-route";
+import { sleep } from "../timing";
+import type { SendRunnerCommand } from "./runner-route";
 import {
   appendHintToMessage,
   IosDeviceTransportError,

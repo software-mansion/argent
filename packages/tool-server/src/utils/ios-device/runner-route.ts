@@ -3,9 +3,6 @@ import { postRunnerCommand } from "./runner-http";
 import { createDeadline, openUsbmuxRunnerSocket, type Deadline } from "./usbmux";
 import { isIosDeviceTransportError } from "./usbmux-protocol";
 
-/** Re-exported for runner-client's readiness poll. */
-export { sleep };
-
 /**
  * Send a command to the runner over usbmux.
  * Mutating commands go out at most once. Read-only commands retry on retryable errors.
