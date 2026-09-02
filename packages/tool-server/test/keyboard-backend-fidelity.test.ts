@@ -316,18 +316,33 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // landing in whatever is sent to that device next. Measured on a booted
       // simulator against a 250-character field: a client gone at 150ms left the
       // full 100 deletions running, and now leaves 34.
+      // Aborted at a CHOSEN key rather than after a wall-clock wait: a timer
+      // lands wherever the host's load puts it, so nothing could assert an
+      // absolute count and `result.keys === events.length / 2` compared two
+      // values production had just produced — an identity that holds at every
+      // exit of the loop, so it could not tell an abort that fired far too
+      // early from one that fired far too late.
       const { events, api } = hidRecorder();
       const controller = new AbortController();
-      const pending = clearSimulatorServer(registryWith(api), IOS_SIM, controller.signal).then(
+      const aborting = {
+        ...api,
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          if (events.length === 6) controller.abort();
+        },
+      };
+      const result = await clearSimulatorServer(
+        registryWith(aborting),
+        IOS_SIM,
+        controller.signal
+      ).then(
         () => undefined,
         (e: unknown) => e as Error
       );
-      await new Promise((r) => setTimeout(r, 25));
-      controller.abort();
-      const result = await pending;
 
-      expect(events.length).toBeGreaterThan(0);
-      expect(events.length).toBeLessThan(400);
+      // Three key presses: six Down/Up events, and the burst stopped at the
+      // cadence gap that follows them.
+      expect(events).toHaveLength(6);
       // A half-emptied field is a FAILURE, not a short success. Returning it
       // filed the dangerous state as a completed step — `run-sequence` counts a
       // returned step in `completed` — while the two adb backends already threw
@@ -335,7 +350,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(getFailureSignal(result)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_UNCONFIRMED);
       expect(getFailureSignal(result)?.failure_stage).toBe("keyboard_clear_simulator_abandoned");
       expect(result?.message).toMatch(/cancelled partway/);
-      expect(result?.message).toContain(`${events.length / 2} of the 200 delete keys`);
+      expect(result?.message).toContain("3 of the 200 delete keys");
     });
 
     it("a burst the transport stops accepting is NOT reported as a clear", async () => {
@@ -933,7 +948,12 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // be ABSENT there rather than false — the claim is not made at all.
       const ios = await clearSimulatorServer(registryWith(hidRecorder().api), IOS_SIM);
       expect(ios).toEqual({ typed: "", keys: CLEAR_KEY_PAIRS * 2, cleared: true });
-      expect(ios.clearVerified).toBeUndefined();
+      // `Object.hasOwn`, not `toBeUndefined`: no key backend sets the property
+      // at all, so the old assertion passed with the whole feature deleted — and
+      // it would pass for an explicit `clearVerified: undefined` too, which is a
+      // different claim. The Chromium side gets the mirror assertion.
+      expect(Object.hasOwn(ios, "clearVerified")).toBe(false);
+      expect(Object.hasOwn(chromium, "clearVerified")).toBe(true);
     });
 
     it("clears through TWO renderer evaluations and no key events at all", async () => {
