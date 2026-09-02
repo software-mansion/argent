@@ -114,6 +114,40 @@ describe("the queue's drop guard", () => {
   });
 });
 
+describe("each in-flight sequence's holds are its own", () => {
+  it("does not let one sequence jump another sequence's hold", async () => {
+    // Two sequences are in flight at once, each holding a DIFFERENT device.
+    // With the holds on a module-level variable instead of AsyncLocalStorage —
+    // the design the source comment rejects — the later sequence's hold is
+    // still what the variable names when the earlier one resumes from an await,
+    // so the earlier sequence's reach for the other device reads as re-entrant
+    // and jumps a hold that is somebody else's.
+    const order: string[] = [];
+    let releaseB = () => {};
+    const heldA = holdDeviceQueue(IOS_UDID, async () => {
+      order.push("a:hold");
+      await sleep(10); // the other sequence takes its hold inside this window
+      await serializedPerDevice(OTHER_UDID, async () => {
+        order.push("a:uses-b");
+      });
+    });
+    await sleep(1);
+    const heldB = holdDeviceQueue(OTHER_UDID, async () => {
+      order.push("b:hold");
+      await new Promise<void>((resolve) => (releaseB = resolve));
+      order.push("b:release");
+    });
+    await sleep(40);
+    // Sequence A holds IOS_UDID only, so its call at OTHER_UDID must wait out
+    // sequence B's hold rather than running inside it.
+    expect(order).toEqual(["a:hold", "b:hold"]);
+
+    releaseB();
+    await Promise.all([heldA, heldB]);
+    expect(order).toEqual(["a:hold", "b:hold", "b:release", "a:uses-b"]);
+  });
+});
+
 describe("one key per device, not per spelling of its id", () => {
   it("serializes two spellings of one Chromium target", async () => {
     // `parseChromiumCdpPort` reads both of these as port 9333, so they are one
