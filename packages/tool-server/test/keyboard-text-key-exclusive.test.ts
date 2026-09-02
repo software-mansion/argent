@@ -742,8 +742,15 @@ describe("keyboard — how the constraint reaches a client", () => {
         (e: unknown) => {
           const message = (e as Error).message;
           expect(message).toMatch(/placeholder/);
-          expect(message).toMatch(/{ clear: true } call carries none either/);
+          expect(message).toMatch(/releases the device's keyboard queue/);
           expect(message).not.toMatch(/after the key lands/);
+          // The hazard it used to name was not one the prescribed split has:
+          // the order is `{ clear }` then `{ text }`, so the clear runs BEFORE
+          // the secret exists and its screenshot cannot capture one. The figure
+          // was wrong too — the burst clears 100 characters per side, not 200,
+          // on four of the five key backends.
+          expect(message).not.toMatch(/200 presses/);
+          expect(message).not.toMatch(/held a longer secret/);
         }
       );
   });

@@ -252,10 +252,10 @@ One call does one action: pass text, key OR clear, never two of them. \`text\` a
                 (params.key !== undefined
                   ? 'a separate { key: "enter" } call carries no placeholder — its screenshot is ' +
                     "taken after the key lands and can capture the still-visible secret."
-                  : "a separate { clear: true } call carries none either, so its screenshot is " +
-                    "taken — and every key-injecting backend bounds the burst at 200 presses, so " +
-                    "a field that held a longer secret is captured with the remainder still in " +
-                    "it.")
+                  : "a separate { clear: true } call releases the device's keyboard queue the " +
+                    "moment it returns, so another session's `keyboard` or `paste` can reach the " +
+                    "field before the secret is typed — one `run-sequence` holds that queue " +
+                    "across the clear and the type together.")
               : ""),
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
