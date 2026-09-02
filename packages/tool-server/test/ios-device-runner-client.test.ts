@@ -444,16 +444,51 @@ describe("createRunnerClient", () => {
       expect(signal?.error_kind).toBe("network");
     });
 
-    it("rethrows the transport error when the status probe itself fails", async () => {
+    it("rethrows the transport error when the status probe fails the same way", async () => {
       const original = transportError();
       const { send, sent } = createFakeSend([original, transportError()]);
       const client = createRunnerClient({ udid: UDID, port: PORT, send });
 
       const error = await client.run({ command: "tap" }).catch((caught: unknown) => caught);
 
+      // A second mid-exchange failure says nothing the first did not.
       expect(error).toBe(original);
       expect(sent).toHaveLength(2);
     });
+
+    it.each([
+      [
+        "device-unattached",
+        { hint: "Connect the device by cable." },
+        "usbmux connect failed. Hint: Connect the device by cable.",
+      ],
+      ["runner-not-listening", {}, "usbmux connect failed"],
+    ] as const)(
+      "surfaces the probe's pre-send verdict %s over the bare transport error",
+      async (kind, options, message) => {
+        const original = transportError();
+        const probe = new IosDeviceTransportError(kind, "usbmux connect failed", {
+          retryable: false,
+          ...options,
+        });
+        const { send, sent } = createFakeSend([original, probe]);
+        const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+        const error = await client.run({ command: "tap" }).catch((caught: unknown) => caught);
+
+        // The cable came out, or the runner stopped listening, between the tap
+        // and the probe. That verdict carries the hint the agent needs now; a
+        // bare "read ECONNRESET" would leave it guessing until the next call.
+        expect(error).toBe(probe);
+        expect((error as Error).message).toBe(message);
+        expect((error as Error).cause).toBe(original);
+        expect(sent).toHaveLength(2);
+        // The probe never went through run(), so it is stamped here.
+        const signal = getFailureSignal(error);
+        expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+        expect(signal?.failure_stage).toBe("ios_device_runner_transport");
+      }
+    );
 
     it("rethrows the transport error when completed but no response was retained", async () => {
       const original = transportError();

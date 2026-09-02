@@ -163,6 +163,11 @@ function hostHint(
   }
 }
 
+/** Kinds raised before any connection opened: the runner was never reached. */
+function isPreSendKind(kind: IosDeviceTransportErrorKind): boolean {
+  return kind === "device-unattached" || kind === "runner-not-listening";
+}
+
 /**
  * Failure signal for a transport error. The pre-send kinds never reached a
  * runner, so they read as not ready; the rest failed against a reachable one.
@@ -246,7 +251,7 @@ export function createRunnerClient(options: {
       }
 
       // Pre-send kinds never opened a connection. The command cannot have run.
-      if (error.kind === "device-unattached" || error.kind === "runner-not-listening") {
+      if (isPreSendKind(error.kind)) {
         throw error;
       }
 
@@ -276,8 +281,16 @@ export function createRunnerClient(options: {
       const data = unwrapEnvelope(response, options.udid);
 
       status = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
-    } catch {
-      // Status probe failed. Rethrow the original transport error.
+    } catch (probeError) {
+      // A pre-send verdict from the probe is the newer story: the cable came
+      // out, or the runner stopped listening, after the command went out. Its
+      // hint is what the agent needs now, not a bare ECONNRESET that only the
+      // next call would explain. Any other probe failure adds nothing.
+      if (isIosDeviceTransportError(probeError) && isPreSendKind(probeError.kind)) {
+        (probeError as { cause?: unknown }).cause = transportError;
+        throw withFailureSignal(probeError, transportFailureSignal(probeError.kind));
+      }
+
       throw transportError;
     }
 
