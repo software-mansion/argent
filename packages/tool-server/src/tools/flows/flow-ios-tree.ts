@@ -302,9 +302,10 @@ async function unreadableHierarchyReason(
       `full view hierarchy native devtools serve.`
     );
   }
-  // The diagnosis already names the corrective action — for `unregistered` a
-  // tool-server restart, where telling a flow author to relaunch would loop.
-  // The trailing sentence says why a tree read needed one at all.
+  // The diagnosis already names the corrective action, whatever it is — and for
+  // `unregistered` it is never a relaunch, which is what telling a flow author
+  // to restart would loop on. The trailing sentence says why a tree read needed
+  // one at all.
   //
   // This surface records deliberately despite settling swallowing some throws:
   // the common path renders the reason as the step's failure, a swallowed

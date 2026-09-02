@@ -447,9 +447,11 @@ export function buildInitFailedResult(
 }
 
 /**
- * The measured terminal state, reported by every surface that has a `status`
- * channel. Carries no `state`: the remedies for the state it was measured in
- * are exactly what this block exists to withhold.
+ * The measured terminal state, reported by the surfaces that measure it and
+ * have a `status` channel: the six feature tools through the 3-arg precheck,
+ * and `native-devtools-status`, which measures it for itself. Carries no
+ * `state`: the remedies for the state it was measured in are exactly what this
+ * block exists to withhold.
  */
 export interface NativeDevtoolsInjectionFailedResult {
   status: "injection_failed";
@@ -464,32 +466,44 @@ export type NativeDevtoolsPrecheckBlock =
   | { status: "connect_pending"; message: string };
 
 /**
- * Every tool whose handler answers a blocked precheck with one of these status
- * objects instead of doing its work. The six feature tools run the 3-arg
- * overload and can return any of the five; the rest run the 2-arg one, which
- * blocks on `init_failed` alone. `native-devtools-status` also reports
- * `injection_failed`, which it measures for itself after the precheck lets it
- * through — so membership here is what a tool CAN answer with, not which
- * overload produced it.
+ * Which statuses mean a given tool's handler answered a blocked precheck
+ * INSTEAD of doing its work — keyed per tool, because the same status is not the
+ * same event on every one. The six feature tools run the 3-arg overload, where
+ * all five come back before the tool's work begins. `launch-app` and
+ * `restart-app` run the 2-arg overload, which blocks on `init_failed` alone.
+ * `native-devtools-status` runs it too, and `injection_failed` is its own
+ * measured answer, produced after the precheck let it through — reporting the
+ * state IS its work, so that status is not a block for it.
  */
-const NATIVE_DEVTOOLS_PRECHECK_TOOLS = new Set([
-  "native-describe-screen",
-  "native-find-views",
-  "native-full-hierarchy",
-  "native-network-logs",
-  "native-view-at-point",
-  "native-user-interactable-view-at-point",
-  "native-devtools-status",
-  "launch-app",
-  "restart-app",
-]);
-
-const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["status"]>([
-  "init_failed",
-  "injection_failed",
-  "restart_required",
-  "service_stale",
-  "connect_pending",
+const NATIVE_DEVTOOLS_BLOCKING_STATUSES = new Map<
+  string,
+  ReadonlySet<NativeDevtoolsPrecheckBlock["status"]>
+>([
+  ...(
+    [
+      "native-describe-screen",
+      "native-find-views",
+      "native-full-hierarchy",
+      "native-network-logs",
+      "native-view-at-point",
+      "native-user-interactable-view-at-point",
+    ] as const
+  ).map(
+    (id) =>
+      [
+        id,
+        new Set<NativeDevtoolsPrecheckBlock["status"]>([
+          "init_failed",
+          "injection_failed",
+          "restart_required",
+          "service_stale",
+          "connect_pending",
+        ]),
+      ] as const
+  ),
+  ...(["native-devtools-status", "launch-app", "restart-app"] as const).map(
+    (id) => [id, new Set<NativeDevtoolsPrecheckBlock["status"]>(["init_failed"])] as const
+  ),
 ]);
 
 /**
@@ -500,18 +514,20 @@ const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["stat
  *
  * Keyed on the tool id as well as the shape: the five status strings are
  * unremarkable words, and an unrelated tool that happens to answer
- * `{status: "..."}` must not fail a step it passed.
+ * `{status: "..."}` must not fail a step it passed. The step's failure reason
+ * says the tool "did not run", so a status a tool produces AS its work must not
+ * be listed for it.
  */
 export function isNativeDevtoolsBlockResult(
   toolId: string,
   result: unknown
 ): result is NativeDevtoolsPrecheckBlock {
-  if (!NATIVE_DEVTOOLS_PRECHECK_TOOLS.has(toolId)) return false;
+  const blocking = NATIVE_DEVTOOLS_BLOCKING_STATUSES.get(toolId);
+  if (blocking === undefined) return false;
   if (typeof result !== "object" || result === null) return false;
   const status = (result as { status?: unknown }).status;
   return (
-    typeof status === "string" &&
-    NATIVE_DEVTOOLS_BLOCK_STATUSES.has(status as NativeDevtoolsPrecheckBlock["status"])
+    typeof status === "string" && blocking.has(status as NativeDevtoolsPrecheckBlock["status"])
   );
 }
 
@@ -1200,6 +1216,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       noteRelaunchAdvice: (bundleId) => {
         // Snapshot the pid the hand-out was addressed at. A later `unregistered`
         // reading is only evidence of a relaunch if the pid has since changed.
+        //
+        // Only the first hand-out is kept. The entry is retired on a handshake
+        // and on dispose, so a surviving one already means "told to relaunch,
+        // has not connected since"; re-stamping it at each later reading would
+        // move the anchor onto the replacement process and erase the very pid
+        // change that proves the relaunch happened. A polling surface — the flow
+        // tree reads a few times a second — would otherwise withhold the verdict
+        // for as long as it kept reading.
+        if (relaunchAdvised.has(bundleId)) return;
         relaunchAdvised.set(bundleId, lastSeenPid.get(bundleId) ?? null);
       },
       wasAdvisedToRelaunch: (bundleId) => {

@@ -1424,7 +1424,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
       .find((l) => l.startsWith('Returns { status: "injection_failed"'));
     expect(line, "description has no injection_failed line").toBeTypeOf("string");
     expect(line).toBe(
-      'Returns { status: "injection_failed", message } instead once this app has been told to restart, has done so, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. This is a TERMINAL state: do NOT restart the app again and do NOT restart the tool-server, read the message for the likely cause and use `describe` or `screenshot` instead.'
+      'Returns { status: "injection_failed", message } instead once this app has been told to restart, has done so, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. Do NOT restart the app again and do NOT restart the tool-server: no restart on either side changes this. Follow the message — it names the likely cause and the one passive re-check that can still clear this verdict — then read the screen with `describe` or `screenshot`.'
     );
   });
 
@@ -1484,7 +1484,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "injection_failed",
-      "If status is injection_failed: the app was told to restart, did, and the fresh process still never connected — the dylib reaches the process but nothing ever dials, so this is TERMINAL. Do NOT restart the app again and do NOT restart the tool-server; read the message for the likely cause and use the standard `describe` tool or `screenshot` instead.",
+      "If status is injection_failed: the app was told to restart, did, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. Do NOT restart the app again and do NOT restart the tool-server: no restart on either side changes this. Follow the message — it names the likely cause and the one passive re-check that can still clear this verdict — then read the screen with the standard `describe` tool or `screenshot`.",
     ],
   ])("routes %s identically on all six native-* tools", (status, clause) => {
     for (const tool of tools) {

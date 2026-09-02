@@ -107,6 +107,11 @@ import {
 } from "../src/blueprints/native-devtools";
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
+import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { queryFullHierarchyTree } from "../src/tools/flows/flow-ios-tree";
 import { createDescribeTool } from "../src/tools/describe";
 import { describeIos } from "../src/tools/describe/platforms/ios";
@@ -457,6 +462,79 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
       expect(advice.message).toContain(
         `wait about ${Math.round((NATIVE_DEVTOOLS_CONNECT_BUDGET_MS * 2) / 1000)} seconds`
       );
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("keeps the first hand-out when a polling reader re-reads the replacement", async () => {
+    // `ps -o etime` is whole-second, so a process replaced inside the age slop
+    // reads `stale_process` on some polls and `unregistered` on others. The flow
+    // tree records on every read; re-stamping the hand-out at the replacement's
+    // pid would move the anchor onto the process the verdict is about and
+    // withhold it for as long as the poll kept running.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(1_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(1_500);
+      world.execAt = Date.now();
+      world.pid += 1;
+
+      let terminal = false;
+      for (let i = 0; i < 200 && !terminal; i++) {
+        advance(250);
+        const state = await api.appConnectionState(BUNDLE);
+        if (state === "connected") throw new Error("the modelled app never connects");
+        terminal = adviseOnUninjectedApp(api, BUNDLE, state, INJECTION_FAILED_RECOVERY).terminal;
+      }
+      expect(terminal, "a polling reader must still reach the verdict").toBe(true);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("sends the agent to the message rather than past it", async () => {
+    // The terminal message is not diagnostic-only: it prescribes a wait and one
+    // passive re-probe, which is the only thing that separates this verdict
+    // from the cold start it cannot tell apart. A description that frames the
+    // state as final is exactly what an agent skips that step on, so the two
+    // surfaces are asserted against each other rather than each on its own.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(10_000);
+      await api.appConnectionState(BUNDLE);
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await api.appConnectionState(BUNDLE);
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY);
+
+      expect(advice.terminal).toBe(true);
+      expect(advice.message).toContain("probe native-devtools-status once more");
+
+      for (const tool of [
+        nativeDescribeScreenTool,
+        nativeFindViewsTool,
+        nativeFullHierarchyTool,
+        nativeNetworkLogsTool,
+        nativeViewAtPointTool,
+        nativeUserInteractableViewAtPointTool,
+        nativeDevtoolsStatusTool,
+      ]) {
+        const start = tool.description!.indexOf("injection_failed");
+        expect(start, `${tool.id} does not route injection_failed`).toBeGreaterThanOrEqual(0);
+        const clause = tool.description!.slice(start).split("\n")[0];
+        expect(clause, `${tool.id} must hand the agent to the message`).toContain(
+          "Follow the message"
+        );
+      }
     } finally {
       await instance.dispose();
     }
