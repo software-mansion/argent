@@ -56,7 +56,16 @@ const QUEUE_WAIT_REPORT_MS = 5_000;
  * rather than to a wrong verdict.
  */
 const V8_HEAP_FATAL_RE = /FATAL ERROR:[^\n]*(?:heap limit|heap out of memory|Allocation failed)/i;
-const HEAP_FATAL_WINDOW_CHARS = 256;
+
+/**
+ * A watchdog announcing that it never armed: `flow-script-runner.mjs`'s
+ * `reportWatchdogProblem`, and the lifeline thread's own module-scope catch.
+ * Those are the only first-party writers on the child's stderr, and without
+ * this a run that lost both watchdogs is byte-identical to a healthy one.
+ */
+const WATCHDOG_PROBLEM_RE = /\[argent\] script (?:watchdog|lifeline)\b[^\n]*unavailable:/;
+
+const STDERR_WINDOW_CHARS = 256;
 
 const RUNNER_FILE = "flow-script-runner.mjs";
 
@@ -464,7 +473,7 @@ export class FlowScriptExecutor {
     }
 
     const timeoutMs = clampTimeout(request.timeoutMs, bounds.maxTimeoutMs, notes);
-    const heapWatch = new HeapFatalWatch();
+    const stderrWatch = new StderrSignalWatch();
 
     // The real path, not just the absolute one: Node resolves an entry module
     // through `realpath` and the runner re-imports that URL, so a different
@@ -574,9 +583,10 @@ export class FlowScriptExecutor {
     // pipe left paused fills its buffer and blocks the child from ever reaching
     // its own time limit. `resume()` discards stdout as it arrives; stderr goes
     // through the one reader that survives, which holds nothing beyond the
-    // window it matches against and reports none of it.
+    // window it matches against and forwards no text of its own — a match sets
+    // a flag, and argent writes whatever sentence that flag earns.
     child.stdout?.resume();
-    child.stderr?.on("data", (chunk: Buffer) => heapWatch.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderrWatch.push(chunk));
 
     child.on("message", (raw) => {
       if (terminal) return;
@@ -646,11 +656,22 @@ export class FlowScriptExecutor {
         interrupted,
         timeoutMs,
         deadlinePassed,
-        heapFatalSeen: heapWatch.seen,
+        heapFatalSeen: stderrWatch.heapFatalSeen,
         heapLimitMb: bounds.heapLimitMb,
       }),
       request.secrets ?? []
     );
+
+    // A watchdog that never armed says so on stderr and nowhere else, so this
+    // flag is the whole of what outlives the drain. Nothing went wrong inside
+    // the script, so it rides `notes` beside the clamped-timeout and
+    // wrong-directory notes rather than moving the verdict.
+    if (stderrWatch.watchdogProblemSeen) {
+      notes.push(
+        `A watchdog for this step did not arm, so a process the script started can outlive a ` +
+          `tool server that dies afterwards.`
+      );
+    }
 
     return {
       ...verdict,
@@ -1254,28 +1275,40 @@ function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-class HeapFatalWatch {
+/**
+ * The two things stderr still owes, each kept as a flag and never as text.
+ *
+ * A script can print either banner itself, so what a match earns is a verdict
+ * or a note that ARGENT wrote — never a byte the script chose. That is the
+ * bargain the heap verdict already made, and the watchdog note joins it on the
+ * same terms rather than reopening the channel this executor stopped keeping.
+ */
+class StderrSignalWatch {
   private readonly decoder = new StringDecoder("utf8");
-  private found = false;
+  private heapFatal = false;
+  private watchdogProblem = false;
   private tail = "";
 
   push(chunk: Buffer): void {
     this.scan(this.decoder.write(chunk));
   }
 
-  get seen(): boolean {
-    return this.found;
+  get heapFatalSeen(): boolean {
+    return this.heapFatal;
+  }
+
+  get watchdogProblemSeen(): boolean {
+    return this.watchdogProblem;
   }
 
   private scan(text: string): void {
-    if (this.found || !text) return;
+    if (!text || (this.heapFatal && this.watchdogProblem)) return;
     const window = this.tail + text;
-    if (V8_HEAP_FATAL_RE.test(window)) {
-      this.found = true;
-      this.tail = "";
-      return;
-    }
-    this.tail = window.slice(-HEAP_FATAL_WINDOW_CHARS);
+    if (!this.heapFatal) this.heapFatal = V8_HEAP_FATAL_RE.test(window);
+    if (!this.watchdogProblem) this.watchdogProblem = WATCHDOG_PROBLEM_RE.test(window);
+    // The window is what lets a banner split across two chunks match, so it is
+    // dropped only once NEITHER pattern is still looking for one.
+    this.tail = this.heapFatal && this.watchdogProblem ? "" : window.slice(-STDERR_WINDOW_CHARS);
   }
 }
 

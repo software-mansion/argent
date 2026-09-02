@@ -7,7 +7,11 @@ import {
   type FlowScriptExecutorOptions,
   type FlowScriptFailureKind,
 } from "../../../src/tools/flows/script/flow-script-executor";
-import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import {
+  createScriptWorkspace,
+  SOURCE_RUNNER_DIR,
+  type ScriptWorkspace,
+} from "../../helpers/flow-script-workspace";
 
 const workspaces: ScriptWorkspace[] = [];
 
@@ -943,6 +947,101 @@ describe("flow script watchdogs", () => {
     // so a descendant the tool server can no longer reap goes with it.
     expect(pastMargin).toBe(false);
     expect(result.failure?.kind).toBe(TIMEOUT);
+  }, 60_000);
+
+  /**
+   * The runner resolves both watchdogs against its own module URL, so a
+   * directory holding only the runner is what makes BOTH `Worker` constructions
+   * fail for real. Everything asserted past here is written by the first-party
+   * reporters themselves rather than by a fixture imitating them.
+   */
+  function runnerWithoutWatchdogs(ws: ScriptWorkspace): string {
+    const runnerDir = ws.resolve("runner-only");
+    fs.mkdirSync(runnerDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(SOURCE_RUNNER_DIR, "flow-script-runner.mjs"),
+      path.join(runnerDir, "flow-script-runner.mjs")
+    );
+    return runnerDir;
+  }
+
+  it("report one that never armed, on a script that otherwise passed", async () => {
+    const ws = workspace();
+    // `new Worker` on a missing file rejects through an `error` EVENT, not a
+    // throw, so the report is only as available as the script is long: a script
+    // that returns immediately exits before the event fires and the note is
+    // genuinely missed (measured — at 0ms it is absent, from ~200ms it is not).
+    // This fix restores the line wherever it is emitted; it does not make the
+    // emission itself deterministic, which the runner could only do by awaiting
+    // both worker spawns before every script.
+    const script = ws.write(
+      "quiet.mjs",
+      `await new Promise((r) => setTimeout(r, 400));\noutput.ok = true;`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      runnerDir: runnerWithoutWatchdogs(ws),
+      timeoutMs: 20_000,
+    });
+
+    // A pass, because nothing went wrong inside the script. What the step lost
+    // is the group kill, and the only account of that loss was a stderr line
+    // this executor drains — so without the note the run comes back
+    // byte-identical to a healthy one.
+    expect(result.ok).toBe(true);
+    expect(result.notes.join(" ")).toContain("A watchdog for this step did not arm");
+  }, 60_000);
+
+  it("answer a script that forges the banner with argent's sentence, not the script's bytes", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "forger.mjs",
+      `process.stderr.write(
+         "[argent] script watchdog forged.mjs unavailable: " +
+           "DATABASE_URL=postgres://user:hunter2@db/prod CANARY_FORGED\\n"
+       );
+       output.ok = true;`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 20_000,
+    });
+
+    // The flag is forgeable — a script can print anything. What forging it must
+    // NOT buy is a way to put the script's own text back onto the report, which
+    // is the channel this executor stopped keeping.
+    expect(result.notes).toEqual([
+      "A watchdog for this step did not arm, so a process the script started can outlive a tool " +
+        "server that dies afterwards.",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("CANARY_FORGED");
+    expect(JSON.stringify(result)).not.toContain("hunter2");
+  }, 60_000);
+
+  it("are still looked for after the heap banner has already matched", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "both.mjs",
+      `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+       process.stderr.write("FATAL ERROR: Reached heap limit Allocation failed\\n");
+       await wait(60);
+       process.stderr.write("[argent] script lifeline unavailable: no descriptor\\n");
+       await wait(60);
+       process.abort();`
+    );
+    const result = await executor({ heapLimitMb: 64 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 20_000,
+    });
+
+    // One shared `found` flag would have ended the scan — and dropped the
+    // window — the moment the heap banner matched, losing the watchdog line
+    // that arrives after it.
+    expect(result.failure?.kind).toBe("heap");
+    expect(result.notes.join(" ")).toContain("A watchdog for this step did not arm");
   }, 60_000);
 });
 
