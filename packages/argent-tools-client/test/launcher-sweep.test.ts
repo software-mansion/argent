@@ -254,16 +254,20 @@ describe("sweepDeadStateFiles", () => {
     const marker = join(TEST_HOME, "wrapped-install/dist/tool-server.cjs");
     expect(existsSync(marker)).toBe(false);
     // `node <marker> start` fails instantly (no such module) with its output
-    // discarded, leaving the shell parked in `sleep` with the argv intact.
+    // discarded; `ready` follows it so the shell is in its final shape by the
+    // time the sweep looks. The trailing `:` is load bearing: dash execs the
+    // LAST command of a `-c` script in place, and the process ps reports would
+    // be `sleep 30`, the wrapper's argv gone.
     const child = spawn(
       "/bin/sh",
-      ["-c", `echo ready; node ${marker} start >/dev/null 2>&1; sleep 30`],
+      ["-c", `node ${marker} start >/dev/null 2>&1; echo ready; sleep 30; :`],
       { stdio: ["ignore", "pipe", "ignore"] }
     );
     await new Promise<void>((resolve, reject) => {
       child.stdout!.once("data", () => resolve());
       child.once("exit", () => reject(new Error("shell wrapper exited before becoming ready")));
     });
+    expect(launcher.readProcessCommandLine(child.pid!)).toContain(`${marker} start`);
     const file = writeRecord(marker, child.pid!);
     try {
       await launcher.sweepDeadStateFiles();
