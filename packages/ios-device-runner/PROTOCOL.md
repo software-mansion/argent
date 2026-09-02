@@ -59,7 +59,7 @@ set, so clean replies stay byte-identical on the wire.
 | `statusCommandId`     | `status`            | Journal lookup key.                                                     |
 | `appBundleId`         | app-scoped commands | Target app. Required, never inferred.                                   |
 | `x`, `y`              | `tap`, `longPress`  | Absolute points in the app's space.                                     |
-| `numberOfTaps`        | `tap`               | 1 (default) or 2 (the native double-tap); higher counts are refused.    |
+| `numberOfTaps`        | `tap`               | 1 (default), 2 (native double-tap), or more (separate taps, see below). |
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
 | `holdMs`              | `drag`              | Rest at the start point before moving (default 50 ms).                  |
@@ -82,12 +82,12 @@ launch, and launching is launch-app's job, never a command side effect):
   keyboard included). Same rect describe normalizes against, so 0-1 tap
   coordinates invert that mapping.
 - `tap`, `longPress`, `drag` → `{message}`: coordinate gestures via
-  XCUICoordinate (public API; orientation-safe). `tap` accepts
-  `numberOfTaps` 1 (default) or 2, the native `doubleTap()`; anything
-  higher fails with `UNSUPPORTED_OPERATION`. XCUICoordinate has no N-tap
-  API, and a loop of single taps is not one gesture on hardware: each tap
-  is its own synthesized event behind XCTest's idle wait and an XPC round
-  trip, hundreds of milliseconds apart, outside the OS multi-tap window.
+  XCUICoordinate (public API; orientation-safe). `tap` runs `numberOfTaps`
+  1 (default) as a tap and 2 as the native `doubleTap()`. Higher counts loop
+  single taps on the device, and that loop is not one gesture: XCUICoordinate
+  has no N-tap API, each tap is its own synthesized event behind XCTest's
+  idle wait and an XPC round trip, hundreds of milliseconds apart, so the
+  taps land separately and do not trigger a multi-tap recognizer.
   `drag` presses for `holdMs` at the start, moves at the velocity
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since

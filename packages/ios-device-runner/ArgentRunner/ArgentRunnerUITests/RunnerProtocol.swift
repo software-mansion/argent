@@ -100,9 +100,9 @@ struct CommandRequest: Codable {
     /// `tap`/`longPress`: absolute point (in points) in the app's coordinate space.
     let x: Double?
     let y: Double?
-    /// `tap`: number of taps in the gesture. Defaults to 1; 2 is the native
-    /// double-tap. Higher counts are refused with UNSUPPORTED_OPERATION: there
-    /// is no native N-tap API, and looped single taps are not one gesture.
+    /// `tap`: number of taps. Defaults to 1; 2 is the native double-tap.
+    /// Higher counts loop single taps on the device: there is no native N-tap
+    /// API, so they land as separate taps, not one multi-tap gesture.
     let numberOfTaps: Int?
     /// `drag`: absolute start and end points.
     let fromX: Double?

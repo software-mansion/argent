@@ -38,7 +38,7 @@ Everything else fails with `not supported on ios device`. Do this instead:
 
 ## Gesture recipes
 
-- **Double-tap**: `gesture-tap` with `clickCount: 2` runs the native XCUITest double-tap as one gesture. Never send two separate taps.
+- **Double-tap**: `gesture-tap` with `clickCount: 2` runs the native XCUITest double-tap as one gesture. Never send two separate taps. Counts above 2 are accepted but land as separate taps on hardware (no N-tap API), so they do not trigger a triple-tap recognizer.
 - **Scrolling**: `gesture-swipe`; `momentum: false` gives a momentum-free, deterministic scroll distance (`settle` is a retired alias and is rejected).
 - **Edge gestures** (for example the back-swipe): the start point must sit exactly at the edge, `fromX: 0`. A start a few thousandths in reports success without triggering the OS gesture.
 - **`gesture-custom` supports two shapes**, no second finger. A `Down` followed by an `Up`: same point = press-hold (set `delayMs` on the `Up`); different points = drag, where the `Up`'s `delayMs` is how long the finger rests at the `Down` point before it moves. To pick up a draggable item (list reordering) add one `Move` at the `Down` point in between: its `delayMs` is the long-press hold (500 ms or more) and the `Up`'s `delayMs` the movement time, for example `[{Down 0.5,0.6}, {Move 0.5,0.6, delayMs 800}, {Up 0.5,0.3, delayMs 500}]`. Other `Move` waypoints are rejected. Use `gesture-swipe` for scrolls.
