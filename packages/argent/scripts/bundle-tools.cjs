@@ -256,7 +256,7 @@ const ASSETS = [
   // The physical-iOS runner's Xcode project, SOURCES not binaries: the runner
   // must be signed with each user's own Apple team on each user's own Mac
   // (a development profile whitelists device UDIDs, so no prebuilt can exist),
-  // and runner-build.ts resolves this exact dest relative to the bundled
+  // and runner-artifact.ts resolves this exact dest relative to the bundled
   // tool-server. Cleaned first so a re-bundle never merges a stale tree.
   {
     kind: "dir",

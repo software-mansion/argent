@@ -3,7 +3,7 @@
  * settled; different keys never queue behind each other. No timers, no entry
  * queue, just a promise chain per key. The caller owns the map (one per lock
  * domain), so what each domain locks, and why, stays documented at the map's
- * declaration; see runnerBuildLocks (runner-build.ts) and flowFileLocks
+ * declaration; see runnerBuildLocks (runner-artifact.ts) and flowFileLocks
  * (flow-utils.ts).
  */
 export async function withKeyedLock<T>(

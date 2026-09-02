@@ -1,7 +1,7 @@
 /**
  * Shared SIGTERM-to-SIGKILL escalation primitives for detached child process
  * groups. Two stacks terminate detached children this way: the physical-iOS
- * runner (utils/ios-device/runner-build.ts) and runner-booted Chromium/Electron
+ * runner (utils/ios-device/runner-launch.ts and runner-sweep.ts) and runner-booted Chromium/Electron
  * apps (tools/devices/boot-electron.ts). Both spawn detached, so pgid=pid names
  * the child's own group, and descendants that survive a leader-only signal stay
  * reachable: they reparent to init but keep their pgid.
@@ -44,8 +44,8 @@ export function pidIsAlive(pid: number): boolean {
  * kill(pid). Returns whether either delivery succeeded, so a caller can skip
  * waiting on a pid nothing reached; both failures are swallowed (the process
  * exited before the signal, which is the desired outcome). `kill` is a
- * parameter, not process.kill, because runner-build routes every signal
- * through an injectable test seam.
+ * parameter, not process.kill, because the runner sweep (runner-sweep.ts)
+ * routes its signals through an injectable test seam.
  */
 export function signalGroupThenPid(
   kill: (pid: number, signal: NodeJS.Signals) => void,
