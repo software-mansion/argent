@@ -109,13 +109,14 @@ describe("ensureRunnerArtifact", () => {
   /**
    * Run `fn` with HOME moved under a per-test dir (so the build dir stays
    * inside the fixture tree), PATH narrowed to `binDir` (empty by default, so
-   * nothing reaches the real Xcode), and the project override pointed at the
-   * fake, the env-swap fixture pattern launchRunner's tests established.
+   * nothing reaches the real Xcode), and the project override pointed at
+   * `project` (the shared empty fake by default), the env-swap fixture
+   * pattern launchRunner's tests established.
    */
   async function withEnsureEnv<T>(
     name: string,
     fn: () => Promise<T>,
-    binDir: string = emptyBin
+    opts: { binDir?: string; project?: string } = {}
   ): Promise<T> {
     const saved = {
       HOME: process.env.HOME,
@@ -123,8 +124,8 @@ describe("ensureRunnerArtifact", () => {
       PROJECT: process.env.ARGENT_IOS_RUNNER_PROJECT,
     };
     process.env.HOME = path.join(tmpRoot, `ensure-home-${name}`);
-    process.env.PATH = binDir;
-    process.env.ARGENT_IOS_RUNNER_PROJECT = fakeProject;
+    process.env.PATH = opts.binDir ?? emptyBin;
+    process.env.ARGENT_IOS_RUNNER_PROJECT = opts.project ?? fakeProject;
     try {
       return await fn();
     } finally {
@@ -288,6 +289,41 @@ describe("ensureRunnerArtifact", () => {
     });
   });
 
+  it("keys the cache on every project file and on none of the local Xcode noise", async () => {
+    // A private project tree: the files planted here must not leak into the
+    // other cases' keys through the shared fake.
+    const root = path.join(tmpRoot, "fingerprint-proj");
+    const project = path.join(root, "ArgentRunner.xcodeproj");
+    const contents = path.join(root, "ArgentRunner", "Assets.xcassets", "Contents.json");
+    await fsp.mkdir(path.dirname(contents), { recursive: true });
+    await fsp.writeFile(contents, '{"info":{"version":1}}');
+
+    await withEnsureEnv(
+      "fingerprint",
+      async () => {
+        const counter = { builds: 0 };
+        const build = fakeBuild(counter);
+        await ensureRunnerArtifact(CONFIG, { build });
+
+        // Per-user Xcode state, build output and Finder metadata never enter
+        // the key, whether they sit at the root or deeper in the tree.
+        for (const dir of ["xcuserdata", "DerivedData", ".build", "ArgentRunner/.swiftpm"]) {
+          await fsp.mkdir(path.join(root, dir), { recursive: true });
+          await fsp.writeFile(path.join(root, dir, "state"), dir);
+        }
+        await fsp.writeFile(path.join(root, ".DS_Store"), "finder");
+        expect((await ensureRunnerArtifact(CONFIG, { build })).fromCache).toBe(true);
+
+        // An asset catalog is not a .swift/.plist/... source, yet it ships in
+        // the runner, so editing it must rebuild.
+        await fsp.writeFile(contents, '{"info":{"version":2}}');
+        expect((await ensureRunnerArtifact(CONFIG, { build })).fromCache).toBe(false);
+        expect(counter.builds).toBe(2);
+      },
+      { project }
+    );
+  });
+
   it("rebuilds when the stamp is missing even though an xctestrun exists (interrupted build)", async () => {
     await withEnsureEnv("no-stamp", async () => {
       const counter = { builds: 0 };
@@ -321,7 +357,9 @@ describe("ensureRunnerArtifact", () => {
       { mode: 0o755 }
     );
 
-    const artifact = await withEnsureEnv("stamp", () => ensureRunnerArtifact(CONFIG), stubBin);
+    const artifact = await withEnsureEnv("stamp", () => ensureRunnerArtifact(CONFIG), {
+      binDir: stubBin,
+    });
 
     const stamp = await fsp.readFile(
       path.join(artifact.derivedDataPath, ".argent-cache-key"),

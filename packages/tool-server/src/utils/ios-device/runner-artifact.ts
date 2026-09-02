@@ -50,18 +50,10 @@ export function resolveRunnerProjectPath(): string {
   );
 }
 
-const SOURCE_EXTENSIONS = new Set([
-  ".swift",
-  ".m",
-  ".h",
-  ".pbxproj",
-  ".plist",
-  ".entitlements",
-  ".xctestplan",
-  ".xcscheme",
-]);
+/** Local Xcode and SwiftPM state plus Finder metadata. Never part of the fingerprint. */
+const FINGERPRINT_NOISE = new Set(["xcuserdata", "DerivedData", ".build", ".swiftpm", ".DS_Store"]);
 
-/** Hash runner sources for the cache key. */
+/** Hash every regular file under the project root for the cache key. */
 async function fingerprintRunnerSources(projectPath: string): Promise<string> {
   const root = path.dirname(projectPath);
   const hash = createHash("sha256");
@@ -73,16 +65,15 @@ async function fingerprintRunnerSources(projectPath: string): Promise<string> {
     );
 
     for (const entry of entries) {
+      if (FINGERPRINT_NOISE.has(entry.name)) {
+        continue;
+      }
+
       const full = path.join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        // Local Xcode noise. Not part of the source fingerprint.
-        if (["xcuserdata", "DerivedData"].includes(entry.name)) {
-          continue;
-        }
-
         await walk(full);
-      } else if (SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
+      } else if (entry.isFile()) {
         const content = await fsp.readFile(full);
 
         // Skip mtime. Pack and npm install restamp files and would bust the cache.
