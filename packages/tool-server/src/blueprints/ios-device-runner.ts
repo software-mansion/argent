@@ -11,7 +11,6 @@ import {
 import { pickFreePort } from "../utils/free-port";
 import { ensureDeviceReady } from "../utils/ios-device/devicectl";
 import {
-  assertXctestrunParses,
   ensureRunnerArtifact,
   isProfileExpiredFailure,
   isProfileMissingDeviceFailure,
@@ -19,7 +18,6 @@ import {
   killStaleRunnersForDevice,
   launchRunner,
   resolveRunnerSigningConfig,
-  XctestrunFormatError,
   type LaunchedRunner,
   type RunnerArtifact,
   type RunnerSigningConfig,
@@ -165,8 +163,6 @@ async function startRunner(
   udid: string,
   artifact: RunnerArtifact
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
-  await assertXctestrunParses(artifact.xctestrunPath);
-
   const port = await pickFreePort();
 
   const launched = await launchRunner({
@@ -237,8 +233,8 @@ async function startRunner(
 }
 
 /**
- * Build the runner artifact and start it. Retries once per known recoverable
- * failure: a poisoned cache, and a profile that is missing this device or has expired.
+ * Build the runner artifact and start it. Retries once when the profile is
+ * missing this device or has expired.
  */
 async function buildAndStartRunner(
   udid: string,
@@ -258,13 +254,6 @@ async function buildAndStartRunner(
   try {
     return await startRunner(udid, artifact);
   } catch (error) {
-    if (error instanceof XctestrunFormatError && artifact.fromCache) {
-      // A cached xctestrun that does not parse is a poisoned cache. Wipe it and rebuild once.
-      // A fresh artifact with the same error is a real build failure. Do not loop.
-      await fs.rm(artifact.derivedDataPath, { recursive: true, force: true });
-      return await startRunner(udid, await ensureRunnerArtifact(signing, { force: true }));
-    }
-
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
     // The profile lacks this device or has expired. Rebuild against the device:

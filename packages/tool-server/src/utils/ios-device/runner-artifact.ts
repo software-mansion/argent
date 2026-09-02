@@ -392,29 +392,3 @@ async function buildRunnerArtifact(
     fromCache: false,
   };
 }
-
-/**
- * Thrown when an `.xctestrun` does not parse as a plist.
- */
-export class XctestrunFormatError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "XctestrunFormatError";
-  }
-}
-
-/**
- * Lint a cached .xctestrun as a plist.
- */
-export async function assertXctestrunParses(xctestrunPath: string): Promise<void> {
-  try {
-    await execFileAsync("plutil", ["-lint", xctestrunPath], { timeout: 20_000 });
-  } catch (error) {
-    throw new XctestrunFormatError(
-      `xctestrun at ${xctestrunPath} could not be parsed as a plist: ` +
-        `${(error as Error).message}. Delete ~/.argent/ios-device-runner and retry to ` +
-        `force a rebuild.`,
-      { cause: error }
-    );
-  }
-}

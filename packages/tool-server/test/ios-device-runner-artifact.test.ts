@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
-  assertXctestrunParses,
   computeRunnerCacheKey,
   ensureRunnerArtifact,
   isProfileExpiredFailure,
@@ -14,12 +11,9 @@ import {
   resolveRunnerProjectPath,
   runnerBuildStaticArgs,
   xcodebuildFailureSummary,
-  XctestrunFormatError,
   type RunnerArtifact,
 } from "../src/utils/ios-device/runner-artifact";
 import type { RunnerSigningConfig } from "../src/utils/ios-device/runner-signing";
-
-const execFileAsync = promisify(execFile);
 
 let tmpRoot: string;
 beforeAll(async () => {
@@ -27,52 +21,6 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await fsp.rm(tmpRoot, { recursive: true, force: true });
-});
-
-/**
- * Write a plist-XML .xctestrun from a JSON object via the same plutil the
- * production code shells out to. plutil ships only with macOS, so every case
- * built on this helper is gated on darwin.
- */
-async function writeXctestrun(name: string, contents: unknown): Promise<string> {
-  const jsonPath = path.join(tmpRoot, `${name}.json`);
-  const xctestrunPath = path.join(tmpRoot, `${name}.xctestrun`);
-  await fsp.writeFile(jsonPath, JSON.stringify(contents));
-  await execFileAsync("plutil", ["-convert", "xml1", jsonPath, "-o", xctestrunPath]);
-  return xctestrunPath;
-}
-
-// The probe shells out to plutil, so it and its fixtures are macOS-only. The
-// unit-test job runs on Linux, where a missing plutil would fail the valid
-// case and pass the torn case for the wrong reason.
-describe.skipIf(process.platform !== "darwin")("assertXctestrunParses", () => {
-  it("accepts a well-formed xctestrun", async () => {
-    const src = await writeXctestrun("valid", {
-      __xctestrun_metadata__: { FormatVersion: 2 },
-      TestConfigurations: [],
-    });
-
-    await expect(assertXctestrunParses(src)).resolves.toBeUndefined();
-  });
-
-  it("wraps an unparseable (truncated) xctestrun in the typed format error", async () => {
-    const truncatedPath = path.join(tmpRoot, "truncated.xctestrun");
-    // The head of a real plist, torn mid-write: plutil cannot parse it. Raw,
-    // this would surface as an execFileAsync error the blueprint's self-heal
-    // could not key on.
-    await fsp.writeFile(
-      truncatedPath,
-      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n<key>TestConfig'
-    );
-
-    const error = await assertXctestrunParses(truncatedPath).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(XctestrunFormatError);
-    expect((error as Error).name).toBe("XctestrunFormatError");
-    expect((error as Error).message).toContain("could not be parsed as a plist");
-    expect((error as Error).message).toContain(truncatedPath);
-    expect((error as Error).cause).toBeDefined();
-  });
 });
 
 const PROJECT = "/opt/argent/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj";
