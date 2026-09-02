@@ -1,21 +1,13 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
 ---
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
+All interaction tools below accept a `udid` parameter and auto-dispatch on its shape, so you use the same tool names on every platform. A known prefix wins first — `chromium-cdp-` → Chromium (CDP) app, `remote:` → remote iOS simulator — otherwise a bare UUID → local iOS simulator and anything else → Android adb serial.
 
-**Chromium (CDP) app** = any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app (boot it with `boot-device` + `electronAppPath`), or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`. The latter is auto-discovered by `list-devices` on port `9222` plus anything in `ARGENT_CHROMIUM_PORTS`. The same describe/tap/swipe/keyboard/screenshot surface drives all of them.
-
-**Multi-tab / windows (Chromium only):** a Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to `list` them (stable ids `t1`, `t2`, …, optional labels), open a `new` one, `select` which is active, or `close` one. Every other tool (`describe`, `gesture-tap`, `screenshot`, `debugger-evaluate`, `open-url`, …) acts on the **active** tab, so `chromium-tabs action=select` before driving a different tab. Note: a cross-process navigation (some redirects) can swap a tab's underlying CDP target — re-run `chromium-tabs action=list` to pick it up under a fresh id.
-
-**Cookies & storage (Chromium only):** `chromium-cookies` reads/writes cookies via the Network domain (so HttpOnly cookies are visible): `action=get` (optionally scoped by `url`), `set` (`name`, `value`, + `url`/`domain`, optional `secure`/`httpOnly`/`sameSite`/`expires`), `delete` (`name`), `clear` (all). `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`. Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
-
-> **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
-
-For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
+**Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
 
 ## 1. Before You Start
 
@@ -96,7 +88,7 @@ Point follow-up native diagnostics after you already have a candidate point:
 - `native-user-interactable-view-at-point`: deepest native view that would receive touch at a known raw iOS point; requires `bundleId`
 - `native-view-at-point`: deepest visible native view at a known raw iOS point; requires `bundleId`
 
-### If `describe` Fails
+### If `describe` Tool Fails
 
 Read the exact error and choose the action that matches it:
 
@@ -184,21 +176,7 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 { "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
 ```
 
-The placeholder is resolved on the machine running the tool-server, from the first of these that defines the name:
-
-| #   | Source                                        | Which keys it exposes                                                |
-| --- | --------------------------------------------- | -------------------------------------------------------------------- |
-| 1   | `ARGENT_SECRET_<NAME>` environment variable   | prefixed vars only — the CI-native path                              |
-| 2   | `<project>/.argent/secrets.env`               | every key (`APP_PASSWORD=…`) — gitignore this file                   |
-| 3   | `<project>/.env.local`, then `<project>/.env` | only `ARGENT_SECRET_`-prefixed keys, so app config stays unreachable |
-| 4   | `~/.argent/secrets.env`                       | every key — per-user, works in any project                           |
-
-Rules:
-
-- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths — read that list before asking the user anything.
-- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen. To submit, put the text step and the Enter step in **one `run-sequence`**. The skip covers a whole batch that contains the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field.
-- Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
-- The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
+Where the value is read from, and the rules for using a placeholder — including not screenshotting the field afterwards — are in `references/secrets.md`. Read it before typing any credential.
 
 ### paste — Paste text into the focused field
 
@@ -222,20 +200,18 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 ### await-ui-element — Block until a UI element reaches a state
 
-Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to block server-side until an element reaches an expected state (or `timeoutMs`, default 5000ms, elapses). It polls the same accessibility/DOM tree as `describe`. (For a plain pause, use your own harness sleep — this tool deliberately has no bare-timer mode.)
+**Never poll `screenshot`/`describe` in a loop to wait for something.** Use `await-ui-element`: it blocks server-side on the same tree `describe` reads. It has no bare-timer mode by design — for a plain pause, use your own harness sleep.
 
 ```json
 { "udid": "<UDID>", "condition": "visible", "selector": { "text": "Continue" } }
 ```
 
-- `condition`: `exists`, `visible`, `hidden`, or `text`.
-- `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
-- `text` condition also needs `expectedText` (substring the matched element must contain).
-- `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
-- Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
+The tool's own description carries the conditions, selector matching, defaults and return shape. What it does not tell you:
 
-Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
+- A `hidden` check that succeeds **immediately** may be a false pass — its `note` then says the selector never matched anything at all. Treat that as a failed check and fix the selector; do not read it as "the element went away".
+- The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
+- To disambiguate a loose selector, pin the `role` to a text role like `StaticText` — that skips a same-named button.
+- On a `text` timeout the `note` quotes the text of the element the check actually read, so you can see which match it landed on.
 
 ### await-screen-idle — Block until the screen stops changing
 
@@ -295,18 +271,14 @@ For visual regression checks, before/after screenshot comparisons, and detailed 
 
 ## 8. Action Sequencing with `run-sequence`
 
-Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
-scrolling multiple times, typing and submitting automatically, known sequence of multiple taps, rotating device back and forth.
+Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete.
 
-Do **not** use `run-sequence` when any step depends on observing the result of a previous step
+Do **not** use `run-sequence` when any step depends on observing the result of a previous step.
 
 ### Use cases
 
-Use the sequencing when:
-
-- Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
-- "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- "scroll to bottom", "scroll to top", "scroll until X" -> sequence 3-5 scrolls
+- form interactions, "clear and retype field" -> triple-tap to select all, then type the new value
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 
@@ -391,6 +363,10 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
+
+### Chromium
+
+See `references/chromium.md` — tabs, cookies/storage, `gesture-scroll` / `gesture-drag`, and the `paste` restriction.
 
 ### iOS
 
