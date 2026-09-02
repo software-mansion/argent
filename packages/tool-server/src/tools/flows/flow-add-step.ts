@@ -154,6 +154,10 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
  * Chromium, that no read-only tool reports it. `describe` and the native
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
+ *
+ * On iOS the near miss is also SHALLOWER: `native-full-hierarchy` defaults to
+ * `maxDepth: 8` where the runner's read asks for 100, so absent from it does
+ * not mean absent from the runner's tree until the depth is raised.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
@@ -384,19 +388,17 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
   return UNMET_WAIT_WARNING;
 }
 
-// The indeterminate reason is quoted verbatim, and on iOS it can end "provide
-// bundleId explicitly" — advice written for the native tools. Correct it rather
-// than honour it.
+// The indeterminate reason is quoted verbatim, and it carries whatever recovery
+// fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
+// dropped the shared native-target error's "provide bundleId explicitly" line
+// that a flow selector step cannot act on. So name no remedy here — a second one
+// would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
   return (
-    ". That reason may tell you to pass `bundleId` — it is quoted from the shared native-target " +
-    "error, and it does not apply here: the probe predicts an `await:`/`assert:` directive, and " +
-    "no directive takes a bundleId, so neither this probe nor the runner accepts one (the " +
-    "`bundleId` on this step reached the live wait only). What the runner's iOS tree needs is an " +
-    "app with argent's instrumentation loaded — relaunch it with `launch-app` or a flow `launch:` " +
-    "step. An app that cannot load it at all, such as a `com.apple.*` system app, can never be " +
-    "probed or converted: keep the check as a raw `tool:` step"
+    ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
+    "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
+    "one (the `bundleId` on this step reached the live wait only)"
   );
 }
 
@@ -606,6 +608,27 @@ async function probeAgainstRunnerTree(
 }
 
 /**
+ * `deriveSelector`'s last resort: the tapped node has no identifier and no
+ * visible text, so the step replays on role alone. It holds only while that
+ * element keeps winning `selectorToFrame`'s ranking. The re-resolve guard below
+ * proves that for the recording screen, never for the screen replay meets, so
+ * the warning says so instead of leaving it silent.
+ *
+ * The raised iOS depth cap makes this more common. An unlabeled icon that the
+ * device used to truncate away, which left `nodeAtPoint` to pick its `testID`
+ * container, is now present and is the smaller frame under the tap.
+ */
+function roleOnlySelectorWarning(selector: Selector): string | undefined {
+  if (selector.role === undefined || selector.identifier !== undefined) return undefined;
+  if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  return (
+    `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
+    `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
+    `against a labelled element if that is not reliably this one`
+  );
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -663,7 +686,11 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    return { selector, warning: fallbackSourceWarning(source, device.platform) };
+    const warnings = [
+      roleOnlySelectorWarning(selector),
+      fallbackSourceWarning(source, device.platform),
+    ].filter((w) => w !== undefined);
+    return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,

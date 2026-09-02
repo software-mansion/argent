@@ -505,6 +505,14 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * aborted, and for an iOS app the native tools refuse to target (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed.
  * Otherwise the reason to report.
+ *
+ * The iOS wait is per bundle, and it does more than confirm readiness. A
+ * successful launch pins later tree reads to this bundle
+ * ({@link FlowTreeTarget}), so the read no longer has to agree with
+ * auto-targeting about which app is frontmost — but the pin only names the app,
+ * it does not prove the app can serve a hierarchy. This wait is what proves
+ * that, so a launch that skips it hands the next selector step a pin to a
+ * process whose tree source is not up yet.
  */
 async function treeSourceGate(
   registry: Registry,

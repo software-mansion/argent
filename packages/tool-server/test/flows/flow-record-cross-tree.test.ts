@@ -5,6 +5,11 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import {
+  __resetDeviceSetCacheForTesting,
+  rememberDeviceSet,
+} from "../../src/utils/ios-device-sets";
 
 // `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
 // directive polish converts the step into reads `fetchFlowTree`'s. Neither tree
@@ -38,7 +43,10 @@ import { createAwaitUiElementTool, evaluateMatches } from "../../src/tools/await
 import { assertSupported } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
 import { findAll, type Selector } from "../../src/utils/ui-tree-match";
-import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
+import {
+  adaptFullHierarchyToDescribeResult,
+  queryFullHierarchyTree,
+} from "../../src/tools/flows/flow-ios-tree";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
@@ -280,6 +288,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __resetRecordingsForTesting();
+  // The udid to device-set memo is module state; a seeded entry would outlive
+  // the case that seeded it.
+  __resetDeviceSetCacheForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -1197,14 +1208,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("no directive takes a bundleId");
   });
 
-  // The quoted reason ends "provide bundleId explicitly", but no directive takes one.
-  it("iOS: says the bundleId its quoted reason recommends cannot reach the probe", async () => {
+  /**
+   * The iOS caveat rides on a reason the RUNNER's own tree source writes, so
+   * build that reason with the real function. A hand-copied one is what let the
+   * caveat go on describing a message production had stopped emitting.
+   */
+  async function realIosTargetingFailure(): Promise<Error> {
+    // Seed the device set so `terminateCommand` answers from the memo instead of
+    // probing simctl.
+    rememberDeviceSet(IOS, null);
+    const api = {
+      listConnectedBundleIds: () => [] as string[],
+      getAppState: vi.fn(),
+    } as unknown as NativeDevtoolsApi;
+    const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
+    return (await queryFullHierarchyTree(registry, resolveDevice(IOS)).catch(
+      (err: unknown) => err
+    )) as Error;
+  }
+
+  // That reason carries its own remedy, so the caveat must not answer it with a
+  // second one.
+  it("iOS: adds no remedy of its own to the reason the runner's source wrote", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error(
-        "No native-devtools-connected apps are available for auto-targeting. " +
-          "Launch or restart the app first, provide bundleId explicitly, or use screenshot " +
-          "to inspect visible Home/system UI."
-      );
+      throw failure;
     };
     await startRecording("iosblind");
 
@@ -1214,16 +1242,27 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     });
     const warning = warningOf(result, "iosblind");
 
-    // The quoted reason still arrives whole — its tail is the recovery.
-    expect(warning).toContain("provide bundleId explicitly");
+    // The reason arrives whole, its own recovery included.
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
+    // launch-app does not terminate, so it cannot instrument a process that is
+    // already running — the opposite move to the one just quoted.
+    expect(warning).not.toContain("relaunch it with `launch-app`");
+    // And no advice attributed to the reason that it does not carry.
+    expect(warning).not.toContain("provide bundleId explicitly");
+    expect(warning).not.toContain("quoted from the shared native-target");
+    // The reason is not always the iOS tree source's: a blind-but-not-throwing
+    // read is described by the poll loop instead, and names no recovery at all.
+    // So the caveat asserts nothing about where the reason came from.
+    expect(warning).not.toContain("tree source writes it");
+    // What the reason cannot see — this step — is still said.
     expect(warning).toContain("no directive takes a bundleId");
-    expect(warning).toContain("`launch-app`");
-    expect(warning).toContain("keep the check as a raw `tool:` step");
   });
 
   it("iOS: the caveat holds when the step DID carry a bundleId", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error("no connected app; provide bundleId explicitly");
+      throw failure;
     };
     await startRecording("iosblindbundle");
 
