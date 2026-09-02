@@ -95,7 +95,12 @@ function run(
    * <body contenteditable>), which is the one refusal decided by identity.
    * `execCommand` may also be replaced with a thrower.
    */
-  documentExtras: Record<string, unknown> = {}
+  documentExtras: Record<string, unknown> = {},
+  /**
+   * The page's own `window`, for the one case that makes the stash assignment
+   * throw. Left out, `run` installs a fresh mutable object.
+   */
+  windowForStash?: Record<string, unknown>
 ): {
   outcome: Outcome;
   commands: string[];
@@ -125,7 +130,10 @@ function run(
   // read-back is built to consume existed in no test at all.
   const hadWindow = Object.hasOwn(g, "window");
   const savedWindow = g.window;
-  const win: Record<string, unknown> = {};
+  // `windowForStash` is how a case reaches the stash's own try/catch: `run`
+  // otherwise installs a fresh mutable object, so a page-supplied one never
+  // reached the script at all.
+  const win: Record<string, unknown> = windowForStash ?? {};
   g.window = win;
   // The element the script is about to act on, found by the same shadow descent
   // it does — so a per-element answer follows focus into a shadow root.
@@ -814,18 +822,30 @@ describe("CLEAR_FOCUSED_EDITABLE_SCRIPT — the record it leaves for the read-ba
     expect(run(el("INPUT", { type: "text", readOnly: true })).parked).toBeUndefined();
   });
 
-  it("survives a page that sealed `window`", () => {
+  it("survives a page whose `window` refuses the stash", () => {
     // The stash is best-effort: a page can make the assignment throw, and the
     // clear still has to succeed — the read-back then simply has no identity.
-    const sealed = Object.freeze({});
-    const g = globalThis as Record<string, unknown>;
-    const saved = g.window;
-    g.window = sealed;
-    try {
-      expect(run(textInput()).outcome).toEqual({ cleared: true, focus: "input type=text" });
-    } finally {
-      g.window = saved;
-    }
+    //
+    // A THROWING SETTER, not `Object.freeze`. Two reasons the frozen object
+    // proved nothing: `run` installed a fresh mutable `window` over it, so the
+    // seal never reached the script at all; and the script is sloppy-mode
+    // (indirect eval, as `Runtime.evaluate` is), where assigning onto a frozen
+    // object fails SILENTLY rather than throwing. The hardened-global / Proxy
+    // shape is the one that reaches the try/catch.
+    const hostile: Record<string, unknown> = {};
+    Object.defineProperty(hostile, "__argentClearTarget", {
+      set() {
+        throw new TypeError("sealed");
+      },
+      get() {
+        return undefined;
+      },
+    });
+    const { outcome, parked } = run(textInput(), {}, {}, hostile);
+    expect(outcome).toEqual({ cleared: true, focus: "input type=text" });
+    // And the record really was not left: the read-back has no identity to read,
+    // which is the state the conditional `clearVerified` exists for.
+    expect(parked).toBeUndefined();
   });
 });
 
