@@ -71,6 +71,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
     isConnected: () => false,
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
+    holdsEndpoint: () => true,
     noteRelaunchAdvice: (bundleId: string) => {
       relaunchAdvised.add(bundleId);
     },
@@ -178,6 +179,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
       isConnected: () => false,
       isAppRunning: async () => false,
       listConnectedBundleIds: () => [],
+      holdsEndpoint: () => true,
       noteRelaunchAdvice: (bundleId: string) => {
         relaunchAdvised.add(bundleId);
       },

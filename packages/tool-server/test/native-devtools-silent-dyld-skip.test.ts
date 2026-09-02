@@ -445,12 +445,58 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
 
       expect(advice.terminal).toBe(true);
       expect(advice.message).toContain("No app on this simulator is connected");
-      // The destructive remedy is gated on the re-probe, not handed out first.
-      expect(advice.message).toContain("If the re-probe still reads unregistered");
+      // The destructive remedy is gated on the re-probe, not handed out first —
+      // and on an outcome these surfaces can emit: once terminal they return no
+      // `state`, so "reads unregistered again" would be a test of nothing.
+      expect(advice.message).toContain("If the re-probe repeats this diagnosis");
+      expect(advice.message).not.toContain("re-probe still reads unregistered");
       expect(advice.message).toContain("boot-device with force=true");
       expect(advice.message).toContain("cold start");
+      // The wait is derived from the budget it exists to outlast, not spelled
+      // out beside it.
+      expect(advice.message).toContain(
+        `wait about ${Math.round((NATIVE_DEVTOOLS_CONNECT_BUDGET_MS * 2) / 1000)} seconds`
+      );
     } finally {
       await instance.dispose();
+    }
+  });
+
+  it("withholds the verdict when another tool-server has taken the socket", async () => {
+    // The per-UDID socket path carries no server identity and the last binder
+    // owns it, so a second tool-server on this simulator takes every future
+    // dial. The reading is then about the socket, not the app: a healthy app can
+    // be connected to the other listener, and restarting THIS tool-server — the
+    // step the terminal diagnosis forecloses — is what takes the path back.
+    const first = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let second: Instance | undefined;
+    try {
+      const api = first.api as NativeDevtoolsApi;
+      advance(10_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      expect(api.holdsEndpoint()).toBe(true);
+
+      // The rival binds the same path, which unlinks ours and creates a new one.
+      second = await nativeDevtoolsBlueprint.factory({}, device, { device });
+      expect(api.holdsEndpoint()).toBe(false);
+
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY);
+      expect(advice.terminal).toBe(false);
+      expect(advice.message).toContain("no longer owns this simulator's devtools socket");
+      expect(advice.message).toContain("argent server stop && argent server start --detach");
+      // The claim the withheld diagnosis would have made is exactly what is
+      // false here, so it must not appear on this path.
+      expect(advice.message).not.toContain("A tool-server restart does not help");
+    } finally {
+      await second?.dispose();
+      await first.dispose();
     }
   });
 

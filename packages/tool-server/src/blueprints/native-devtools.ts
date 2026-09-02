@@ -287,6 +287,13 @@ export function buildAppStateMessage(
  * still warming up (#778 was such a cold start). The prescribed disambiguator
  * is one passive re-probe after a wait — it prescribes no restart, so it cannot
  * reopen the cycle this verdict exists to close.
+ *
+ * That re-probe is spelled as a test on what the surfaces actually emit. Once
+ * the verdict turns terminal the record clears only on a handshake, so the only
+ * two outcomes are a connected app (the verdict is gone, `status` with it) and
+ * this same block again — never `unregistered`, which carries a `state` these
+ * surfaces stop returning. A repeat is therefore also the second-landing test
+ * `unregistered`'s own message has to spell out by hand.
  */
 function buildInjectionFailedDiagnosis(
   bundleId: string,
@@ -296,13 +303,32 @@ function buildInjectionFailedDiagnosis(
   const localisation =
     connectedPeers.length > 0
       ? `Other apps on this simulator are connected (${connectedPeers.join(", ")}), so the launchd environment, the dylib and this service's listener all work — the fault is specific to this app's binary: check that it is a simulator build for this platform and that it does not enforce library validation. `
-      : `No app on this simulator is connected to this tool-server, so a dylib dyld never loads and a listener nothing can reach still read the same. If the re-probe still reads unregistered, re-boot the simulator (boot-device with force=true) and confirm argent's native binaries are installed. A tool-server restart does not help here either: it leaves this app older than the new listener, which reads as the restart-app prompt again, and a second, freshly bound listener would see nothing too. `;
+      : `No app on this simulator is connected to this tool-server, so a dylib dyld never loads and a listener nothing can reach still read the same. If the re-probe repeats this diagnosis, re-boot the simulator (boot-device with force=true) and confirm argent's native binaries are installed. A tool-server restart does not help here either: this service still owns this simulator's devtools socket, so a fresh listener on it would see exactly what this one sees. `;
 
   return (
     `${bundleId} was told to relaunch, and the process now running is a different one, so the relaunch happened — and it still never connected. ` +
     `It carries argent's bootstrap dylib pointed at this simulator's devtools endpoint and it started after this service's listener bound, so the launchd environment reached it. That proves the dylib was handed to the process, not that dyld loaded it: dyld skips an inserted library silently when its slice does not match the simulator's platform, when it is unsigned, or when one of its dependencies is missing. Relaunching it again reproduces exactly this reading. ` +
-    `One reading can mimic this with nothing wrong: a cold start that takes longer than ${Math.round(connectBudgetMs / 1000)} seconds to make its first connection. Before treating this as final, wait about thirty seconds and probe native-devtools-status once more — an app that has connected by then clears this verdict. ` +
+    `One reading can mimic this with nothing wrong: a cold start that takes longer than ${Math.round(connectBudgetMs / 1000)} seconds to make its first connection. Before treating this as final, wait about ${Math.round((connectBudgetMs * 2) / 1000)} seconds — a second budget's worth on top of the one already spent — and probe native-devtools-status once more. An app that has connected by then reports connected and this verdict is gone; if it repeats this diagnosis instead, the wait was not the answer. ` +
     localisation
+  );
+}
+
+/**
+ * What `unregistered` means when this service no longer owns the socket the app
+ * was told to dial. Both of the terminal verdict's premises fail here: the app
+ * may be connected, to a listener this service cannot see, and a tool-server
+ * restart is then the fix rather than the futile step the diagnosis calls it.
+ */
+function buildEndpointLostMessage(bundleId: string, socketPath: string): string {
+  return (
+    `${bundleId} is running with argent's native devtools injected, but this tool-server no longer ` +
+    `owns this simulator's devtools socket: another argent tool-server has rebound ${socketPath}, ` +
+    `and the last to bind owns it. A connection the app made to that listener is invisible here, so ` +
+    `this reading is not evidence about the app. Restart this tool-server ` +
+    `(\`argent server stop && argent server start --detach\`) to take the socket back, then call ` +
+    `restart-app once so the app re-dials it. If a second tool-server is running against this ` +
+    `simulator on purpose, read the app there instead — stopping one of them is what keeps the ` +
+    `socket stable.`
   );
 }
 
@@ -373,6 +399,14 @@ export function adviseOnUninjectedApp(
   if (state === "stale_process") {
     if (options.recordAdvice ?? true) api.noteRelaunchAdvice(bundleId);
   } else if (state === "unregistered" && api.wasAdvisedToRelaunch(bundleId)) {
+    // The diagnosis reasons from "nothing dialed the listener this service
+    // holds". If it no longer holds one, that premise is about the socket, not
+    // the app — and the tool-server restart the diagnosis forecloses is what
+    // takes it back. Non-terminal, so the caller reports it as `service_stale`,
+    // whose remedy is exactly that restart.
+    if (!api.holdsEndpoint()) {
+      return { terminal: false, message: buildEndpointLostMessage(bundleId, api.socketPath) };
+    }
     return {
       terminal: true,
       message:
@@ -627,6 +661,15 @@ export interface NativeDevtoolsApi {
   isAppRunning(bundleId: string): Promise<boolean>;
   listConnectedBundleIds(): string[];
   /**
+   * Whether the endpoint this service bound is still the one an app dialing this
+   * simulator reaches. The per-UDID socket path carries no server identity and
+   * the last binder owns it, so a second tool-server on the same simulator
+   * silently takes every future dial — leaving this service unable to see a
+   * connection that exists. False makes the unconnected readings statements
+   * about the socket rather than about the app.
+   */
+  holdsEndpoint(): boolean;
+  /**
    * Why this app has no live devtools connection, and so what would fix it —
    * see {@link NativeDevtoolsAppState}. When not connected it first re-applies
    * the launchd env, covering the simulator reboot that silently cleared
@@ -691,6 +734,15 @@ function getNativeDevtoolsSocketPath(udid: string): string {
  * On EADDRINUSE/EEXIST the stale entry is cleared and the bind retried once — a
  * self-heal for the unlink→listen race with a concurrent same-UDID server.
  */
+/** The inode behind a path, or null if it cannot be read. */
+function socketInode(socketPath: string): number | null {
+  try {
+    return fs.statSync(socketPath).ino;
+  } catch {
+    return null;
+  }
+}
+
 export function bindNativeDevtoolsUnixSocket(
   server: net.Server,
   socketPath: string
@@ -1068,6 +1120,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // relaunching however well-injected it looks. Stamped after the bind, so no
     // dial can land before it.
     const listeningSince = Date.now();
+    // Identity for the unix socket we just bound. Another tool-server binding
+    // the same per-UDID path unlinks it and creates a new one, so an inode that
+    // has moved (or gone) is proof the path no longer routes to us. A TCP
+    // endpoint is per-instance and cannot be taken over this way.
+    const boundSocketIno = transport === "unix" ? socketInode(socketPath) : null;
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
     // registry's `_teardown` skips dispose when `node.instance` is never set.
@@ -1084,6 +1141,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       isConnected: (bundleId) => connections.has(bundleId),
       isAppRunning,
       listConnectedBundleIds: () => [...connections.keys()],
+      // Unknowable inode at bind time reads as "ours": the check exists to
+      // withdraw a verdict, and guessing that it has been taken would withdraw
+      // one on every read.
+      holdsEndpoint: () =>
+        boundSocketIno === null ? true : socketInode(socketPath) === boundSocketIno,
 
       async appConnectionState(bundleId) {
         if (connections.has(bundleId)) return "connected";

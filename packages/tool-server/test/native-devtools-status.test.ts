@@ -67,6 +67,7 @@ function makeNativeApi(options: {
       isConnected: () => options.connected ?? false,
       isAppRunning,
       listConnectedBundleIds: () => [],
+      holdsEndpoint: () => true,
       noteRelaunchAdvice: (bundleId: string) => {
         relaunchAdvised.add(bundleId);
       },

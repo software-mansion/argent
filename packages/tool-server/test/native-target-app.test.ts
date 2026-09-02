@@ -31,6 +31,7 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     isConnected: (bundleId) => byBundleId.has(bundleId),
     isAppRunning: async (bundleId) => byBundleId.has(bundleId),
     listConnectedBundleIds: () => [...byBundleId.keys()],
+    holdsEndpoint: () => true,
     noteRelaunchAdvice: (bundleId: string) => {
       relaunchAdvised.add(bundleId);
     },
