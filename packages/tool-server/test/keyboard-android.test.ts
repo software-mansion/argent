@@ -1034,6 +1034,35 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(signal?.failure_command).toBe("adb");
   });
 
+  it("names its own telemetry stage, which nothing else in the repo uses", async () => {
+    // `keyboard_clear_android_burst` occurs once — at its production site — and
+    // `failure_stage` is an unconstrained string, so it could be reassigned to
+    // a Chromium or iOS value with the suite green. Its iOS and Chromium
+    // siblings are pinned; this one was not.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(new Error("adb: protocol fault (couldn't read status): eof"));
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_clear_android_burst");
+  });
+
+  it("names its own stage for a runtime kind it could not read", async () => {
+    // The other unpinned Android stage, and the same gap.
+    // Both reads: the branch re-probes once before it refuses.
+    getAndroidRuntimeKind.mockResolvedValueOnce(undefined as never);
+    getAndroidRuntimeKind.mockResolvedValueOnce(undefined as never);
+    adbShell.mockClear();
+    const err = await impl
+      .handler({}, { udid: SERIAL, key: "enter" } as KeyboardParams, phone)
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+    expect(getFailureSignal(err)?.failure_stage).toBe("keyboard_android_runtime_kind");
+  });
+
   it("presses the key it was asked for, not a hardcoded Enter", async () => {
     // Every other named-key assertion on this backend uses `key:"enter"`, so a
     // path that ignored `params.key` and always pressed Enter would pass them
