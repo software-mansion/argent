@@ -193,7 +193,10 @@ export type FlowStepResult = {
   reason?: string;
   /**
    * The step passed, but the WAY it passed weakens it as proof; rendered as a
-   * "⚠" suffix (see StepReport.warning in the tool-server's flow-run).
+   * "⚠" suffix (see StepReport.warning in the tool-server's flow-run). Two
+   * sources today: `await: { idle: true }`, which never fails a run, and a
+   * `hidden` check that held without its selector ever matching in a run that
+   * never established it.
    */
   warning?: string;
   tool?: string;

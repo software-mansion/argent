@@ -185,6 +185,36 @@ describe("flow recording with a remote client (probe miss)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("does not emit a client-write directive when an unmet wait records nothing", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": {
+        result: { success: false, elapsed: 5000, note: "no element matched" },
+      },
+    });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
+      remoteCtx()
+    );
+
+    const result = await addStep.execute(
+      {},
+      {
+        name: "remote-flow",
+        project_root: CLIENT_ROOT,
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Continue"}}',
+      }
+    );
+
+    expect(result.message).toContain("NOT recorded");
+    expect(result.savedTo).toBe(CLIENT_FLOW_PATH);
+    expect(result.savedTo).not.toHaveProperty(CLIENT_FILE_MARKER);
+    expect(result.stepCount).toBe(0);
+  });
+
   it("finish-recording summarizes the in-memory flow and clears the session", async () => {
     await flowStartRecordingTool.execute(
       {},

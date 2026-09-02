@@ -38,9 +38,12 @@ import {
 import {
   AWAIT_UI_ELEMENT_TOOL_ID,
   isUnmetUiWaitResult,
+  vacuousHiddenSelectors,
   unmetUiWaitCause,
   type UnmetUiWaitCause,
 } from "../await-ui-element";
+import { AWAIT_SCREEN_IDLE_TOOL_ID } from "../await-screen-idle";
+import { selectorEstablishedInSteps, selectorIdentityTerms } from "./flow-selector-evidence";
 import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { NATIVE_READY_POLL_MS, NATIVE_READY_TIMEOUT_MS } from "./flow-run";
@@ -484,50 +487,43 @@ const SPELLING_CLAUSE =
   "identifier first, text only as a fallback — which is a different check this probe never made.";
 
 /**
- * `await-ui-element` reports an unmet condition by returning
- * `{ success: false }` rather than throwing, so the recorder writes the step
- * anyway. At replay the same step FAILS and stops the run, so the message must
- * not read as fine.
+ * What to tell an author whose recorded wait came back `{ success: false }`.
+ *
+ * The step is refused either way: at replay an unmet wait FAILS the step and
+ * stops the run there, so recording one bakes a gate that cannot pass. But only
+ * `unmet` is a verdict ON the condition. An `unreadable` tree source or a
+ * cancellation observed nothing, so the condition may be perfectly satisfiable
+ * and the step perfectly good — telling that author to lengthen `timeoutMs` or
+ * change the selector sends them to rewrite something that may be fine. That is
+ * the same unknown-vs-known-bad distinction {@link probeAgainstRunnerTree}
+ * draws for an unreadable RUNNER tree, and it is drawn here for the same reason.
+ *
+ * The cross-tree probe is skipped on every one of these paths. That probe asks
+ * whether a check that PASSED would survive conversion to an `await:`/`assert:`
+ * directive; none of these passed, so its answer would be about a premise that
+ * never held.
  */
-const UNMET_WAIT_WARNING =
-  "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
-  "returning success:false instead of failing, so the step was written to the flow anyway. At " +
-  "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
-  "condition can actually hold, and delete the failed step after `flow-finish-recording` rather " +
-  "than mid-recording: against a remote client the in-memory copy is authoritative and the next " +
-  "append writes the step straight back, and in host mode the recorder re-reads the file before " +
-  "each append, so an edit that renumbers the steps costs the finish the verdicts it would " +
-  "otherwise carry. The cross-tree re-probe was " +
-  "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
-  "and this one did not pass";
-
-/**
- * The same `success: false`, reached without a trustworthy read of the tree —
- * see {@link unmetUiWaitCause}. It must not reuse the unmet text, which asserts
- * that the wait never held: nothing judged the condition here, so the step may
- * be perfectly good.
- */
-const UNREADABLE_WAIT_WARNING =
-  "recorded, but this wait reached its deadline without a trustworthy read of the UI tree, so " +
-  "the condition was never judged — `await-ui-element` returns success:false for that too, and " +
-  "the step was written to the flow anyway. Either no read in the window could be trusted, or " +
-  "the reads went dark before the end and what they saw no longer describes it. Whether the " +
-  "condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source error " +
-  "where a fetch threw, and describes what was seen where the tree was merely empty or " +
-  "degraded. Get that source back and re-record the step to find out. Do not delete the step on " +
-  "this warning alone. The cross-tree re-probe was skipped: it asks whether a check that PASSED " +
-  "would survive conversion to `await:`/`assert:`, and this one never got an answer";
-
-const CANCELLED_WAIT_WARNING =
-  "recorded, but this wait was cancelled before its deadline, so the condition was never settled " +
-  "— `await-ui-element` reports a cancelled wait as success:false, and the step was written to " +
-  "the flow anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
-  "The cross-tree re-probe was skipped for the same reason";
-
-function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
-  if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
-  if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
-  return UNMET_WAIT_WARNING;
+function unmetWaitRefusal(cause: UnmetUiWaitCause, detail: string): string {
+  if (cause === "cancelled") {
+    return (
+      `await-ui-element was cancelled before its deadline, so the condition was never settled — ` +
+      `step NOT recorded${detail}. Whether it holds is UNKNOWN, not known-bad: re-run this ` +
+      `flow-add-step call to find out.`
+    );
+  }
+  if (cause === "unreadable") {
+    return (
+      `await-ui-element reached its deadline without a trustworthy read of the UI tree, so the ` +
+      `condition was never judged — step NOT recorded${detail}. Whether it holds is UNKNOWN, not ` +
+      `known-bad: \`toolResult.note\` names the tree-source error where a fetch threw. Restore ` +
+      `that source and re-run this flow-add-step call; do not change the selector or raise ` +
+      `timeoutMs on this alone.`
+    );
+  }
+  return (
+    `await-ui-element condition not met — step NOT recorded${detail}. Fix the wait (a longer ` +
+    `timeoutMs or a different selector) and re-run this flow-add-step call.`
+  );
 }
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
@@ -1259,6 +1255,21 @@ function rawCoordinateWarning(
 }
 
 /**
+ * True when the flow being recorded has ALREADY established this selector
+ * positively — acted on it, or proved it present — in an earlier step.
+ *
+ * This is what makes a later `hidden` check falsifiable. The wait tool itself
+ * can only see its own poll window, so an element removed by the immediately
+ * preceding action reads as "never matched" even though the flow proves it
+ * existed two steps ago. Without this lookup the recorder would reject the
+ * correct authoring order (prove visible -> act -> prove gone) and push authors
+ * into adding absence checks by hand in YAML, which the skill forbids.
+ */
+function selectorEstablishedInFlow(session: RecordingSession, selector: unknown): boolean {
+  return selectorEstablishedInSteps(session.flow.steps, selector);
+}
+
+/**
  * Whether this step must be refused rather than recorded, and why.
  *
  * `flow-execute` and `run-sequence` report a failed, cancelled or never-run
@@ -1608,9 +1619,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
     description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
-A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
+A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its refusal says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. A live wait that came back \`{ success: false }\` is REFUSED instead of recorded — that tool reports a failed wait by returning rather than throwing, so nothing else stops it becoming a step that fails every replay. The refusal names the cause, because only one of them judges the condition: a genuine miss needs the wait fixed, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN — do not rewrite the selector on those.
 Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls record NOTHING and answer with guidance instead: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device, both omit \`recorded\`, and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
-A NORMAL return can also mean "not recorded": \`recorded\` is the discriminator - it is absent, and \`message\` says "step NOT recorded", whenever the call ran but its outcome must not become a step. That covers a nested \`flow-execute\` that failed, was cancelled, or returned a prerequisite notice instead of running, and a nested \`run-sequence\` that stopped on a failed nested step or was cancelled part-way. Read \`message\` before assuming the step landed. Whether anything ran is what \`message\` says, not something to infer from which case it was: it warns that the device may have moved whenever a nested step was reached, and stays silent when the refusal provably reached none (a prerequisite notice, a sequence rejected before its first step could be dispatched, a cancel that landed before it). On the warning, CHECK the device against the state your recorded prefix leaves it in before adding the next step - do not relaunch the app to "reset", which lands on the start screen instead and makes the rest of the recording unreproducible.
+A NORMAL return can also mean "not recorded": \`recorded\` is the discriminator - it is absent, and \`message\` says "step NOT recorded", whenever the call ran but its outcome must not become a step. That covers a nested \`flow-execute\` that failed, was cancelled, or returned a prerequisite notice instead of running, and a nested \`run-sequence\` that stopped on a failed nested step or was cancelled part-way. It covers three checks too, each refused because recording it would bake a gate that cannot do its job: an \`await-ui-element\` whose condition never held (it FAILS the step at replay), an \`await-screen-idle\` (a live diagnostic, green on every replay whatever the screen does), and a \`hidden\` check that held without its selector ever matching in a flow that never established that selector (nothing can falsify it). Read \`message\` before assuming the step landed. Whether anything ran is what \`message\` says, not something to infer from which case it was: it warns that the device may have moved whenever a nested step was reached, and stays silent when the refusal provably reached none (a prerequisite notice, a sequence rejected before its first step could be dispatched, a cancel that landed before it). On the warning, CHECK the device against the state your recorded prefix leaves it in before adding the next step - do not relaunch the app to "reset", which lands on the start screen instead and makes the rest of the recording unreproducible.
 If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
@@ -1707,26 +1718,109 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
       }
       invalidateReadinessMissAfterAppStart(session, params.command, args, toolResult);
 
-      // A wait that HELD is asked the runner's tree as well, so the author
-      // learns now — rather than after polish — whether the conversion is safe.
-      // One that came back success:false is reported by CAUSE instead: only a
-      // genuine miss fails the step at replay (see {@link UNMET_WAIT_WARNING});
-      // an unreadable tree or a cancellation observed nothing (see
-      // {@link UNREADABLE_WAIT_WARNING}).
+      // An `await-ui-element` whose condition never held reports
+      // { success: false } instead of throwing — the same shape flow-run and
+      // run-sequence special-case to stop a sequence. Without this gate the
+      // wait would record as a passing step and bake a gate that fails every
+      // replay. Hand the full result back, record nothing.
       //
-      // The two are filed under different kinds because only the probe's answer
-      // is about converting the step, and the finish counts them separately.
-      let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
+      // WHY it came back false picks the wording — see {@link unmetWaitRefusal}.
+      // A signal that is already down counts as cancelled whatever the result
+      // says, since the tool can return before the abort reaches its poll loop.
+      if (isUnmetUiWaitResult(params.command, toolResult)) {
+        const { stepCount, note } = await activeFlowState(session, true);
+        const waitNote = (toolResult as { note?: unknown }).note;
+        const detail = typeof waitNote === "string" ? `: ${waitNote}` : "";
+        const cause = ctx?.signal?.aborted === true ? "cancelled" : unmetUiWaitCause(toolResult);
+        return {
+          message: `${unmetWaitRefusal(cause, detail)}${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // `await-screen-idle` reports "did not settle" as a SOFT `settled: false`
+      // rather than a failure, so persisting it bakes a step that is green on
+      // every replay whatever the screen does — the same unfalsifiable class
+      // the `hidden` gate below exists to block. The skills already say never
+      // to persist it; without this gate the recorder did it silently.
+      if (params.command === AWAIT_SCREEN_IDLE_TOOL_ID) {
+        const { stepCount, note } = await activeFlowState(session, true);
+        const settled = (toolResult as { settled?: unknown }).settled;
+        return {
+          message:
+            "`await-screen-idle` is a live diagnostic, not a gate — step NOT recorded. It " +
+            "reports a screen that never settled as `settled: false` instead of failing, so a " +
+            "recorded one passes on every replay no matter what the screen does" +
+            (settled === false ? " — and it just reported `settled: false`" : "") +
+            ". Record readiness as the element you actually need next (`await-ui-element`), or " +
+            "add `await: { idle: true }` during polish, which FAILS when the screen never " +
+            `settles.${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // A `hidden` wait that passed without the selector EVER matching is not
+      // proof of dismissal — it is a check that cannot fail. Recorded, it
+      // becomes a permanently-green gate: a typo'd selector, a renamed id, or
+      // the wrong screen all satisfy it.
+      //
+      // "Ever matched" is scoped to the wait's own poll window, which is too
+      // narrow on its own: the action that removes an element runs BEFORE the
+      // check, so the normal authoring order (prove visible -> act -> prove
+      // gone) always reaches here with everMatched false. The flow itself is
+      // the wider evidence — if an earlier recorded step established this
+      // selector, the check is falsifiable and is recorded.
+      //
+      // Read from `vacuousHiddenSelectors` rather than the wait's own args, so
+      // a wait NESTED in a `run-sequence` is judged too. Refusing only the
+      // direct call left the gate one wrapper away from being bypassed.
+      const vacuousHidden = vacuousHiddenSelectors(params.command, toolResult, args).filter(
+        // A selector this evidence model cannot name (role-only, a regex text
+        // locator) is not something it may condemn either — the runner passes
+        // it clean for the same reason, so refusing to record it would only
+        // disagree with the runner. Mirror `hiddenCheckIsFalsifiable`.
+        (selector) =>
+          selectorIdentityTerms(selector).length > 0 &&
+          !selectorEstablishedInFlow(session, selector)
+      );
+      if (vacuousHidden.length > 0) {
+        const { stepCount, note } = await activeFlowState(session, true);
+        const wrapped = params.command !== AWAIT_UI_ELEMENT_TOOL_ID;
+        return {
+          message:
+            `the \`hidden\` condition was met without the selector ever matching, and no earlier ` +
+            `step in this flow established it — step NOT recorded.${
+              wrapped
+                ? ` (Inside the \`${params.command}\` you passed; wrapping the wait does not make it provable, so the whole step is refused.)`
+                : ""
+            } This check cannot fail, so ` +
+            "it would prove nothing on replay. Record a `visible` check for the same selector " +
+            "while the element IS on screen first, then act, then record this one; the flow " +
+            "then proves the element went away. If the element is never present at all, the " +
+            `selector is wrong — find the real one with ${treeReaderFor(args.udid)}.${
+              // A wrapped wait means the whole sequence ran first, so earlier
+              // nested steps may already have changed device state — the same
+              // hazard the run-sequence failure/cancel refusals warn about.
+              wrapped ? ` ${partialMutationWarning("run-sequence")}` : ""
+            }${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // The wait held against the accessibility tree — a wait that did not hold
+      // was refused above, so there is no unmet case left to answer for here.
+      // Ask the tree the runner resolves DIRECTIVES against too, so the author
+      // learns now — rather than after polish — whether the conversion is safe.
+      let waitWarning: { warning: string } | undefined;
       if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
-        if (isUnmetUiWaitResult(params.command, toolResult)) {
-          waitWarning = {
-            warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
-            kind: "wait",
-          };
-        } else {
-          const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-          if (probed) waitWarning = { warning: probed, kind: "conversion" };
-        }
+        const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
+        if (probed) waitWarning = { warning: probed };
       }
 
       const refusal = nestedRecordRefusal(

@@ -2921,6 +2921,394 @@ describe("flow-add-step", () => {
     const flow = parseFlow(content);
     expect(flow.steps).toEqual([]);
   });
+
+  it("warns when delayMs prevents gesture-tap selector capture", async () => {
+    const registry = createMockRegistry({
+      "gesture-tap": { result: { tapped: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "delayed-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "delayed-tap",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: '{"udid":"ABC","x":0.5,"y":0.3}',
+        delayMs: 500,
+      }
+    );
+
+    expect(result.message).toContain("raw coordinate tool step");
+    expect(result.message).toContain("remove delayMs");
+    expect(parseFlow(await onDisk("delayed-tap")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "gesture-tap",
+        args: { x: 0.5, y: 0.3 },
+        delayMs: 500,
+      },
+    ]);
+  });
+
+  it("warns when delayMs prevents restart-app from becoming the leading launch", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "delayed-launch", project_root: tmpDir });
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "delayed-launch",
+        project_root: tmpDir,
+        command: "restart-app",
+        args: '{"udid":"ABC","bundleId":"com.acme.app"}',
+        delayMs: 500,
+      }
+    );
+
+    expect(result.message).toContain("prevents the launch rewrite");
+    expect(result.message).toContain("post-launch await-ui-element");
+    expect(parseFlow(await onDisk("delayed-launch")).steps[0]).toMatchObject({
+      kind: "tool",
+      name: "restart-app",
+      delayMs: 500,
+    });
+  });
+
+  it("warns when gesture-custom records an opaque coordinate gesture", async () => {
+    const registry = createMockRegistry({
+      "gesture-custom": { result: { completed: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "custom-gesture", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "custom-gesture",
+        project_root: tmpDir,
+        command: "gesture-custom",
+        args: '{"udid":"ABC","events":[{"type":"Down","x":0.5,"y":0.3},{"type":"Up","x":0.5,"y":0.3}]}',
+      }
+    );
+
+    expect(result.message).toContain("raw coordinates");
+    expect(result.message).toContain("record that tap individually");
+  });
+
+  it("warns when run-sequence hides coordinate taps in one opaque step", async () => {
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: { completed: 1, total: 1, steps: [{ tool: "gesture-tap", result: {} }] },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-tap",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: '{"udid":"ABC","steps":[{"tool":"gesture-tap","args":{"x":0.5,"y":0.3}}]}',
+      }
+    );
+
+    expect(result.message).toContain("opaque raw step");
+    expect(result.message).toContain("record taps individually");
+  });
+
+  it("does not record an await-ui-element whose condition was not met", async () => {
+    // An unmet wait reports { success: false } WITHOUT throwing — recorded
+    // as-is it would bake a gate that fails every replay, so the gate must
+    // surface the result and record nothing.
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unmet-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "unmet-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(result.message).toContain("NOT recorded");
+    expect(result.toolResult).toEqual({ success: false, elapsed: 5000, note: "not seen" });
+    const flow = parseFlow(await onDisk("unmet-await"));
+    expect(flow.steps).toEqual([]);
+    const content = await readFlowFile("unmet-await");
+    expect(parseFlow(content).steps).toEqual([]);
+  });
+
+  it("reports a cancelled await without suggesting a longer timeout", async () => {
+    const controller = new AbortController();
+    const registry = {
+      invokeTool: vi.fn(async () => {
+        controller.abort();
+        return {
+          success: false,
+          elapsed: 20,
+          note: "wait was cancelled before the condition was met",
+        };
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "cancelled-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "cancelled-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      },
+      { signal: controller.signal } as never
+    );
+
+    expect(result.message).toContain("was cancelled");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).not.toContain("longer timeout");
+    expect(parseFlow(await onDisk("cancelled-await")).steps).toEqual([]);
+  });
+
+  it("returns a valid in-memory snapshot if the host flow file disappears", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "deleted-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.rm(path.join(tmpDir, ".argent", "flows", "deleted-await.yaml"));
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "deleted-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(result.message).toContain("last valid in-memory snapshot");
+    // The file is gone, so the step count comes from the in-memory copy.
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("reflects and validates a host-side edit in a no-op response", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "edited-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "edited-await.yaml"),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [{ kind: "echo", message: "manual edit" }],
+      })
+    );
+
+    await tool.execute(
+      {},
+      {
+        name: "edited-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(parseFlow(await onDisk("edited-await")).steps).toEqual([
+      { kind: "echo", message: "manual edit" },
+    ]);
+  });
+
+  // The unmet-wait gate keys on `await-ui-element` specifically, not on "some
+  // field of the result was falsy" — otherwise every tool that reports a soft
+  // negative would stop being recordable. `await-screen-idle` used to be this
+  // test's example; it now has a refusal of its own (it is a live diagnostic
+  // whose `settled: false` cannot fail a replay), so the invariant is pinned
+  // here with a tool that has no special handling at all.
+  it("does not apply the unmet-wait gate to another falsy soft result", async () => {
+    const registry = createMockRegistry({
+      "screenshot-diff": { result: { matched: false, diffRatio: 0.12 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "diff-soft-result", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "diff-soft-result",
+        project_root: tmpDir,
+        command: "screenshot-diff",
+        args: "{}",
+      }
+    );
+
+    expect(result.message).toContain("Step added");
+    expect(parseFlow(await onDisk("diff-soft-result")).steps).toEqual([
+      { kind: "tool", name: "screenshot-diff", args: {} },
+    ]);
+  });
+
+  it("records an await-ui-element whose condition was met", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: true, elapsed: 250 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "met-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await tool.execute(
+      {},
+      {
+        name: "met-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    const flow = parseFlow(await onDisk("met-await"));
+    expect(flow.steps).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "visible", selector: { text: "Home" } },
+      },
+    ]);
+  });
+
+  // A `hidden` wait wrapped in a run-sequence is refused when it proves nothing
+  // (below), but by then the whole sequence has already run — so a mutating
+  // earlier step has changed the device. The refusal must say so, like the
+  // sibling run-sequence failure/cancel refusals do, or a naive retry
+  // re-applies the mutation.
+  it("warns of partial mutation when refusing a run-sequence-wrapped vacuous hidden", async () => {
+    const vacuous = {
+      success: true,
+      note: "condition met immediately — the selector never matched any element, so it may have already been hidden before the wait, or the selector is wrong",
+    };
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: {
+          completed: 2,
+          total: 2,
+          steps: [
+            { tool: "gesture-tap", result: { tapped: true } },
+            { tool: "await-ui-element", result: vacuous },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "seq-vac", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "seq-vac",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+            {
+              tool: "await-ui-element",
+              args: { condition: "hidden", selector: { text: "Sheet" } },
+            },
+          ],
+        }),
+      }
+    );
+
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).toContain("may already have changed the device");
+    expect(parseFlow(await onDisk("seq-vac")).steps).toEqual([]);
+  });
+
+  // A role-only (or regex-text) selector names no identity the evidence model
+  // can track, so it cannot be condemned — the runner passes such a hidden
+  // clean, and the recorder must agree rather than refuse a check it has no
+  // basis to call unfalsifiable.
+  it("records a vacuous hidden whose selector the evidence model cannot name", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": {
+        result: {
+          success: true,
+          note: "condition met immediately — the selector never matched any element, so it may have already been hidden before the wait, or the selector is wrong",
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "role-hidden", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "role-hidden",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"hidden","selector":{"role":"button"}}',
+      }
+    );
+
+    expect(result.message).not.toContain("step NOT recorded");
+    expect(parseFlow(await onDisk("role-hidden")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "hidden", selector: { role: "button" } },
+      },
+    ]);
+  });
 });
 
 // ── flow-finish-recording ────────────────────────────────────────────
@@ -4242,115 +4630,5 @@ describe("summarizeStep rendering", () => {
     expect(summarizeStep(toolStepWithDelay('"2000"'), 4)).toBe(
       "4. tool: screenshot {} (after 2000ms)"
     );
-  });
-
-  it("warns when delayMs prevents gesture-tap selector capture", async () => {
-    const registry = createMockRegistry({
-      "gesture-tap": { result: { tapped: true } },
-    });
-    const tool = createFlowAddStepTool(registry);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "delayed-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
-    );
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "delayed-tap",
-        project_root: tmpDir,
-        command: "gesture-tap",
-        args: '{"udid":"ABC","x":0.5,"y":0.3}',
-        delayMs: 500,
-      }
-    );
-
-    expect(result.message).toContain("raw coordinate tool step");
-    expect(result.message).toContain("remove delayMs");
-    expect(parseFlow(await onDisk("delayed-tap")).steps).toEqual([
-      {
-        kind: "tool",
-        name: "gesture-tap",
-        args: { x: 0.5, y: 0.3 },
-        delayMs: 500,
-      },
-    ]);
-  });
-
-  it("warns when delayMs prevents restart-app from becoming the leading launch", async () => {
-    const registry = createMockRegistry({
-      "restart-app": { result: { restarted: true } },
-    });
-    const tool = createFlowAddStepTool(registry);
-    await flowStartRecordingTool.execute({}, { name: "delayed-launch", project_root: tmpDir });
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "delayed-launch",
-        project_root: tmpDir,
-        command: "restart-app",
-        args: '{"udid":"ABC","bundleId":"com.acme.app"}',
-        delayMs: 500,
-      }
-    );
-
-    expect(result.message).toContain("prevents the launch rewrite");
-    expect(result.message).toContain("post-launch await-ui-element");
-    expect(parseFlow(await onDisk("delayed-launch")).steps[0]).toMatchObject({
-      kind: "tool",
-      name: "restart-app",
-      delayMs: 500,
-    });
-  });
-
-  it("warns when gesture-custom records an opaque coordinate gesture", async () => {
-    const registry = createMockRegistry({
-      "gesture-custom": { result: { completed: true } },
-    });
-    const tool = createFlowAddStepTool(registry);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "custom-gesture", project_root: tmpDir, executionPrerequisite: PREREQ }
-    );
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "custom-gesture",
-        project_root: tmpDir,
-        command: "gesture-custom",
-        args: '{"udid":"ABC","events":[{"type":"Down","x":0.5,"y":0.3},{"type":"Up","x":0.5,"y":0.3}]}',
-      }
-    );
-
-    expect(result.message).toContain("raw coordinates");
-    expect(result.message).toContain("record that tap individually");
-  });
-
-  it("warns when run-sequence hides coordinate taps in one opaque step", async () => {
-    const registry = createMockRegistry({
-      "run-sequence": {
-        result: { completed: 1, total: 1, steps: [{ tool: "gesture-tap", result: {} }] },
-      },
-    });
-    const tool = createFlowAddStepTool(registry);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "sequence-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
-    );
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "sequence-tap",
-        project_root: tmpDir,
-        command: "run-sequence",
-        args: '{"udid":"ABC","steps":[{"tool":"gesture-tap","args":{"x":0.5,"y":0.3}}]}',
-      }
-    );
-
-    expect(result.message).toContain("opaque raw step");
-    expect(result.message).toContain("record taps individually");
   });
 });
