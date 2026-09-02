@@ -33,7 +33,10 @@ const FORBIDDEN: [RegExp, string][] = [
     "booting an app that is still up",
   ],
   [
-    /(?:does mean|means|proves|confirms) (?:that )?the app (?:exited|is gone)/i,
+    new RegExp(
+      String.raw`(?<!${NEGATED})(?:does mean|means|proves|confirms) (?:that )?the app (?:exited|is gone)`,
+      "i"
+    ),
     "reading an exit off a missing list-devices entry",
   ],
   [

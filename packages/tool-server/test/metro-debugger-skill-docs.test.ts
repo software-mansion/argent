@@ -322,7 +322,13 @@ describe("the prose derives what the code decides", () => {
     const skill = readFileSync(DEBUGGER_SKILL, "utf8");
     for (const reason of DEBUGGER_NOT_CONNECTED_REASONS) {
       expect(skill, `${reason} is missing from SKILL.md's reason list`).toContain(`\`${reason}\``);
-      expect(table, `${reason} is missing from failure-scenarios.md`).toContain(reason);
+      // A row, not a mention: the reason has to reach the column that carries a
+      // recovery. Prose elsewhere in the file satisfies a whole-file search while
+      // leaving the reader with nothing to do.
+      const rows = table
+        .split("\n")
+        .filter((line) => line.startsWith("|") && line.includes(reason));
+      expect(rows, `${reason} has no row in failure-scenarios.md`).toHaveLength(1);
       expect(
         debuggerStatusTool.description,
         `${reason} is missing from debugger-status's description`

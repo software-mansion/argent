@@ -77,6 +77,8 @@ describe("expectNoForbiddenAdvice", () => {
       "Never relaunch there.",
       "You cannot relaunch it with restart-app on Chromium.",
       "A missing entry does not mean the app exited.",
+      "A missing entry never proves the app exited.",
+      "An absent entry never confirms the app is gone.",
       "Do not keep using the old id.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);

@@ -12,6 +12,7 @@ import { pinsOnce } from "../helpers/pins";
 import { discoverPrimaryPage, ensureCdpReachable } from "../../src/chromium-server/cdp-session";
 import { getCandidateChromiumPorts } from "../../src/utils/chromium-discovery";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
+import { WebSocketServer } from "ws";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -126,20 +127,40 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     }
   });
 
-  it("retires the paused branch its own detail offers", () => {
+  /**
+   * The real request-timeout message, from a real timeout. A copy would make the
+   * premise below a statement about the copy: cdp-client could reword the text
+   * this guidance has to reconcile with and nothing here would go red.
+   */
+  async function realCdpTimeoutDetail(): Promise<string> {
+    const wss = new WebSocketServer({ port: 0 });
+    try {
+      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+      const { port } = wss.address() as { port: number };
+      const client = new CDPClient(`ws://127.0.0.1:${port}`);
+      await client.connect();
+      try {
+        // The server accepts the socket and never answers, so the per-request
+        // timer is the only way out.
+        await client.send("Runtime.enable", {}, 20);
+      } catch (err) {
+        return (err as Error).message;
+      } finally {
+        await client.disconnect();
+      }
+      throw new Error("expected the send to time out");
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  }
+
+  it("retires the paused branch its own detail offers", async () => {
     // The detail is the shared cdp-client timeout message, which offers a resume
     // because debugger-evaluate — awaitPromise: true — really can hang on a
     // breakpoint. The connect pipeline cannot pause, so the two ship contradicting
     // instructions in one payload unless the guidance retires the branch, not just
-    // the phrase. Driven with the REAL message as the detail: a fixture message
-    // ("x") makes every assertion below vacuous.
-    const detail =
-      "CDP request Runtime.enable (id=3) timed out — the runtime accepted the connection but " +
-      "did not answer; it may be frozen, or paused at a breakpoint. Do not retry in a loop. " +
-      "Nothing here tells the two apart — no tool reports pausedness, and once the session is " +
-      'established debugger-status reports "connected" either way — so have the user check the ' +
-      "app before choosing. If it is paused, ask them to resume it — quitting throws the debug " +
-      "session away.";
+    // the phrase.
+    const detail = await realCdpTimeoutDetail();
     for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
       const result = buildNotConnected(
         "runtime_unresponsive",
