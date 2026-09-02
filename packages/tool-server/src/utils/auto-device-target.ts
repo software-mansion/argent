@@ -35,6 +35,10 @@ export class AutoDeviceTargetError extends Error {
  * Chromium app both up, `chromium-tabs` still resolves, because the iPhone is
  * not a candidate for it.
  *
+ * The pool is only what `list-devices` could see. A discovery branch that fails
+ * degrades to an empty list and reports nothing, so a wedged adb makes a genuinely
+ * ambiguous pool look singular and this resolves rather than refusing (#1019).
+ *
  * It narrows by platform and kind only. A UDID does not say whether it belongs
  * to an iPhone or an Apple TV, and `capability` has no key to ask with, so a
  * lone booted Apple TV simulator IS a candidate for `gesture-tap`, and a lone
