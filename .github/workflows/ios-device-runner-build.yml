@@ -1,0 +1,49 @@
+name: iOS device runner build
+
+# Compiles the XCUITest runner argent signs and installs on a physical iPhone
+# (packages/ios-device-runner). The package workflows only assert that the
+# runner sources are packed into the tarball; this is the one place the Swift
+# goes through a compiler, so a change that breaks the project fails here
+# rather than on a user's Mac the first time a phone is connected.
+#
+# build-for-testing against the generic iOS destination with signing disabled
+# needs no team, profile or attached device. The project uses the objectVersion
+# 77 format (Xcode 16 or newer); like the other macOS jobs this relies on the
+# Xcode macos-latest ships rather than selecting one, and the version step
+# records which one built it.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/ios-device-runner/**"
+      - ".github/workflows/ios-device-runner-build.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/ios-device-runner/**"
+      - ".github/workflows/ios-device-runner-build.yml"
+
+concurrency:
+  group: ios-device-runner-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-runner:
+    name: Compile the XCUITest runner
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show the selected Xcode
+        run: xcodebuild -version
+
+      - name: Build for testing (generic iOS, unsigned)
+        run: xcodebuild build-for-testing -project packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj -scheme ArgentRunner -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= -derivedDataPath "$RUNNER_TEMP/argent-runner-dd" -quiet
