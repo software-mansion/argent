@@ -110,22 +110,48 @@ type CertificateLister = (commonName: string) => Promise<string>;
 let certificateLister: CertificateLister = listCertificatePem;
 let memoizedTeams: Promise<DetectedSigningTeam[]> | null = null;
 
+async function runDetection(): Promise<DetectedSigningTeam[]> {
+  const pems = await Promise.all(SIGNING_CERT_COMMON_NAMES.map((name) => certificateLister(name)));
+  return parseSigningTeams(pems.join("\n"));
+}
+
+/** Drop `detection` from the memo unless a newer detection has already replaced it. */
+function forgetDetection(detection: Promise<DetectedSigningTeam[]>): void {
+  if (memoizedTeams === detection) {
+    memoizedTeams = null;
+  }
+}
+
 /**
- * Detect signing teams, memoized for the process lifetime: certificates change
- * through an Xcode sign-in, not mid-session, and the shellout should not tax
- * every signing resolution.
+ * Detect signing teams. A populated result is memoized for the process
+ * lifetime: certificates change through an Xcode sign-in, not mid-session,
+ * and the shellout should not tax every signing resolution. An empty result
+ * and a rejected detection are dropped from the memo instead, so the next
+ * signing resolution reads the keychain again: the no-certificate error tells
+ * the user to retry once the certificate exists, and that retry must not need
+ * a tool-server restart. Concurrent callers still share one in-flight
+ * detection.
  */
 export function detectSigningTeams(): Promise<DetectedSigningTeam[]> {
-  if (!memoizedTeams) {
-    memoizedTeams = (async () => {
-      const pems = await Promise.all(
-        SIGNING_CERT_COMMON_NAMES.map((name) => certificateLister(name))
-      );
-      return parseSigningTeams(pems.join("\n"));
-    })();
+  if (memoizedTeams) {
+    return memoizedTeams;
   }
 
-  return memoizedTeams;
+  const detection: Promise<DetectedSigningTeam[]> = runDetection().then(
+    (teams) => {
+      if (teams.length === 0) {
+        forgetDetection(detection);
+      }
+      return teams;
+    },
+    (error: unknown) => {
+      forgetDetection(detection);
+      throw error;
+    }
+  );
+
+  memoizedTeams = detection;
+  return detection;
 }
 
 function formatTeam(team: DetectedSigningTeam): string {

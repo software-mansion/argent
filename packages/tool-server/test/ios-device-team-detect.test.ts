@@ -93,7 +93,7 @@ describe("detectSigningTeams", () => {
     expect(teams.map((t) => t.teamId)).toEqual(["FGHIJ67890", "ABCDE12345"]);
   });
 
-  it("memoizes for the process lifetime until the test seam resets it", async () => {
+  it("memoizes a populated result for the process lifetime until the test seam resets it", async () => {
     const lister = vi.fn(async () => TEAM_A_PEM);
     __setCertificateListerForTests(lister);
 
@@ -106,6 +106,45 @@ describe("detectSigningTeams", () => {
 
     __setCertificateListerForTests(lister);
     await detectSigningTeams();
+    expect(lister).toHaveBeenCalledTimes(4);
+  });
+
+  it("re-detects after an empty result instead of caching it for the process lifetime", async () => {
+    // The lister reads `pem` on every call, so the keychain gains a
+    // certificate between the two detections without a seam reset (which
+    // would clear the memo and hide the bug).
+    let pem = "";
+    const lister = vi.fn(async () => pem);
+    __setCertificateListerForTests(lister);
+
+    expect(await detectSigningTeams()).toEqual([]);
+    expect(lister).toHaveBeenCalledTimes(2);
+
+    pem = TEAM_A_PEM;
+    const teams = await detectSigningTeams();
+
+    expect(teams.map((t) => t.teamId)).toEqual(["ABCDE12345"]);
+    expect(lister).toHaveBeenCalledTimes(4);
+    // Once populated, the memo holds again.
+    expect(await detectSigningTeams()).toBe(teams);
+    expect(lister).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not memoize a rejected detection", async () => {
+    let pem: string | null = null;
+    const lister = vi.fn(async () => {
+      if (pem === null) throw new Error("keychain unavailable");
+      return pem;
+    });
+    __setCertificateListerForTests(lister);
+
+    await expect(detectSigningTeams()).rejects.toThrow("keychain unavailable");
+    expect(lister).toHaveBeenCalledTimes(2);
+
+    pem = TEAM_A_PEM;
+    const teams = await detectSigningTeams();
+
+    expect(teams.map((t) => t.teamId)).toEqual(["ABCDE12345"]);
     expect(lister).toHaveBeenCalledTimes(4);
   });
 });
