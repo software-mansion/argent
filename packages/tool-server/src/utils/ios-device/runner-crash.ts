@@ -12,7 +12,10 @@ const XCRESULTTOOL_TIMEOUT_MS = 15_000;
 const XCRESULTTOOL_MAX_JSON_BYTES = 32 * 1024 * 1024;
 
 /**
- * Pull the crash line out of `xcresulttool get test-results summary` JSON.
+ * The labeled failure line from `xcresulttool get test-results summary`
+ * JSON: the crash when XCTest recorded one, otherwise the last recorded
+ * failure. A runner that exited through XCTest teardown records no crash,
+ * and its last failure must not be presented as one.
  */
 export function extractCrashFailureText(summary: unknown): string | null {
   const failures = (summary as { testFailures?: unknown })?.testFailures;
@@ -24,19 +27,22 @@ export function extractCrashFailureText(summary: unknown): string | null {
   const texts = failures
     .map((f) => (f as { failureText?: unknown })?.failureText)
     .filter((t): t is string => typeof t === "string" && t.length > 0);
-  const crash = texts.find((t) => /crash/i.test(t)) ?? texts[0];
+  const crash = texts.find((t) => /crash/i.test(t));
+  const text = crash ?? texts[texts.length - 1];
 
-  if (!crash) {
+  if (!text) {
     return null;
   }
 
   // One line, bounded. Failure texts can embed multi-paragraph diagnostics.
-  return crash.split("\n")[0]!.slice(0, 400);
+  const line = text.split("\n")[0]!.slice(0, 400);
+
+  return `${crash ? "recorded crash" : "last recorded failure"}: ${line}`;
 }
 
 /**
- * Crash reason from this session's result bundle, or null if none can be read.
- * Never throws.
+ * The labeled crash or last-failure line from this session's result bundle,
+ * or null if none can be read. Never throws.
  */
 export async function readRunnerCrashSummary(resultBundlePath: string): Promise<string | null> {
   try {

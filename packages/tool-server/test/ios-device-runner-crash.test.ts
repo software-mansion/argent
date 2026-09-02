@@ -9,27 +9,37 @@ const CRASH_TEXT =
   "cannot be converted to Int because the result would be greater than Int.max";
 
 describe("extractCrashFailureText", () => {
-  it("prefers a failure that names a crash", () => {
+  it("labels a failure that names a crash as the recorded crash, wherever it sits", () => {
     const summary = {
       testFailures: [
-        { failureText: "runner session ended without a shutdown command" },
         { failureText: CRASH_TEXT },
+        { failureText: "runner session ended without a shutdown command" },
       ],
     };
-    expect(extractCrashFailureText(summary)).toBe(CRASH_TEXT);
+    expect(extractCrashFailureText(summary)).toBe(`recorded crash: ${CRASH_TEXT}`);
   });
 
-  it("falls back to the first failure text when none names a crash", () => {
-    const summary = { testFailures: [{ failureText: "some failure" }] };
-    expect(extractCrashFailureText(summary)).toBe("some failure");
+  it("labels the last failure as such, not as a crash, when none names one", () => {
+    // A runner that exited through XCTest teardown records this shape.
+    // Calling its shutdown failure a crash sends the agent after a crash
+    // that never happened.
+    const summary = {
+      testFailures: [
+        { failureText: "some earlier assertion" },
+        { failureText: "runner session ended without a shutdown command (timedOut)" },
+      ],
+    };
+    expect(extractCrashFailureText(summary)).toBe(
+      "last recorded failure: runner session ended without a shutdown command (timedOut)"
+    );
   });
 
-  it("keeps only the first line, bounded", () => {
+  it("keeps only the first line of the text, bounded, after the label", () => {
     const summary = {
       testFailures: [{ failureText: `${"x".repeat(500)}\nsecond line` }],
     };
     const text = extractCrashFailureText(summary);
-    expect(text).toHaveLength(400);
+    expect(text).toBe(`last recorded failure: ${"x".repeat(400)}`);
     expect(text).not.toContain("second line");
   });
 

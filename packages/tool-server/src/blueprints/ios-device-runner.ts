@@ -99,7 +99,7 @@ async function explainRunnerDeath(options: {
 
   const bundleId = typeof command.appBundleId === "string" ? command.appBundleId : null;
   const deaths = bundleId ? recordAppCrash(udid, bundleId) : 0;
-  const crash = await readRunnerCrashSummary(options.resultBundlePath);
+  const failure = await readRunnerCrashSummary(options.resultBundlePath);
 
   const recovery =
     deaths >= 2 && bundleId
@@ -113,7 +113,7 @@ async function explainRunnerDeath(options: {
     withFailureSignal(
       new Error(
         `iOS device runner exited (code ${exitCode}) while executing '${String(command.command)}'` +
-          (crash ? `; recorded crash: ${crash}.` : ".") +
+          (failure ? `; ${failure}.` : ".") +
           recovery +
           ` Log: ${options.logPath}`,
         { cause: error }

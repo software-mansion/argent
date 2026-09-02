@@ -116,8 +116,8 @@ describe("ios-device-runner blueprint: mid-command runner death", () => {
     );
     clientRun.mockRejectedValue(transportError);
     const crash =
-      "Crash: ArgentRunnerUITests-Runner at Swift runtime failure: Double value " +
-      "cannot be converted to Int because the result would be greater than Int.max";
+      "recorded crash: Crash: ArgentRunnerUITests-Runner at Swift runtime failure: Double " +
+      "value cannot be converted to Int because the result would be greater than Int.max";
     vi.mocked(readRunnerCrashSummary).mockResolvedValueOnce(crash);
     child.emit("exit", 1);
 
@@ -127,12 +127,39 @@ describe("ios-device-runner blueprint: mid-command runner death", () => {
 
     expect(clientRun).toHaveBeenCalledTimes(1);
     expect(thrown.message).toBe(
-      `iOS device runner exited (code 1) while executing 'snapshot'; recorded crash: ${crash}.` +
+      `iOS device runner exited (code 1) while executing 'snapshot'; ${crash}.` +
         ` The runner respawns on the next call; re-observe the screen and retry. Log: ${LOG_PATH}`
     );
     expect(thrown.cause).toBe(transportError);
     expect(recoverable(thrown)).toBe(true);
     expect(readRunnerCrashSummary).toHaveBeenCalledWith(RESULT_BUNDLE_PATH);
+  });
+
+  it("prints the post-mortem's own label, so a teardown exit is not reported as a crash", async () => {
+    const { api, child, clientRun } = await createInstance();
+    clientRun.mockRejectedValue(
+      new IosDeviceTransportError("http", "Runner HTTP request failed: socket hang up", {
+        retryable: false,
+      })
+    );
+    // The result bundle of a runner that left through XCTest teardown holds
+    // no crash; the summary says which label applies and the blueprint
+    // must not add its own.
+    vi.mocked(readRunnerCrashSummary).mockResolvedValueOnce(
+      "last recorded failure: runner session ended without a shutdown command (timedOut)"
+    );
+    child.emit("exit", 0);
+
+    const thrown = (await rejectionOf(
+      api.run({ command: "tap", appBundleId: "com.example.teardown" })
+    )) as Error;
+
+    expect(thrown.message).toBe(
+      "iOS device runner exited (code 0) while executing 'tap'; last recorded failure: " +
+        "runner session ended without a shutdown command (timedOut)." +
+        ` The runner respawns on the next call; re-observe the screen and retry. Log: ${LOG_PATH}`
+    );
+    expect(thrown.message).not.toContain("recorded crash");
   });
 
   it("treats a 'timeout' shape the same way and escalates to restart-app on the second death", async () => {
