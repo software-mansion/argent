@@ -265,9 +265,11 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 //
 // A PARTIAL tree is the same danger with a full-looking tree: the source stopped
 // at a walker budget, so an element it does not list may simply be past the cut.
-// This is the one place that draws a negative conclusion from a describe read,
-// so the flag has to be read before the emptiness test — a truncated capture is
-// rarely empty.
+// The flag has to be read before the emptiness test — a truncated capture is
+// rarely empty. Two guards draw a negative conclusion from a describe read:
+// this one, and `waitForCondition` in `flow-actions`, which backs the flow
+// `await` and `assert { hidden }` directives. A rule changed here has to be
+// changed there too.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   if (data.truncated) return true;
   if (data.tree.children.length > 0) return false;
