@@ -295,6 +295,22 @@ describe("injectVegaClear — the delete burst", () => {
     expect(err.message).toMatch(/printed nothing but its own press lines/);
   });
 
+  it("names the absence when the daemon banner was adb's ONLY output", async () => {
+    // Same shape as the Android sibling: the banner is stripped, nothing
+    // follows the `failed:`, and the caller was handed a dangling
+    // "Underlying failure: adb … failed:" naming no failure at all.
+    adbShell.mockRejectedValueOnce(
+      new Error(
+        "adb -s vega-0 shell inputd-cli series button_press KEY_DELETE holdDuration 1 , " +
+          "button_press KEY_DELETE holdDuration 1 failed: " +
+          "* daemon not running; starting now at tcp:5037\n* daemon started successfully"
+      )
+    );
+    const err = await captureError(injectVegaClear());
+    expect(err.message).not.toMatch(/failed:\s*$/);
+    expect(err.message).toMatch(/adb printed only its daemon banner before it stopped/);
+  });
+
   it("fails when the count never came back at all", async () => {
     // A device whose shell dropped the marker line is not a cleared field
     // either, and the old code would have called it a success.

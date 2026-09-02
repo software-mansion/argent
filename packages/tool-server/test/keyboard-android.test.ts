@@ -947,6 +947,29 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(err?.message).toMatch(/input keyevent <the delete burst>/);
   });
 
+  it("names the absence when the banner was adb's ONLY output", async () => {
+    // The 90s budget's SIGKILL against a cold adb — the first Android call of a
+    // tool-server's life. The banner is stripped, nothing follows the `failed:`,
+    // and the caller was handed a dangling "Underlying failure: adb … failed:"
+    // naming no failure at all. (The killed/signal suffix is gone too, because
+    // stderr was non-empty.)
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(
+      new Error(
+        "adb -s emulator-5554 shell input keyevent 67 112 67 112 failed: " +
+          "* daemon not running; starting now at tcp:5037\n" +
+          "* daemon started successfully"
+      )
+    );
+    const err = await impl.handler({}, { udid: SERIAL, clear: true } as KeyboardParams, phone).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).not.toMatch(/failed:\s*$/);
+    expect(err?.message).toMatch(/adb printed only its daemon banner before it stopped/);
+    expect(err?.message).not.toMatch(/daemon not running/);
+  });
+
   it("keeps the subprocess telemetry every other adb re-statement keeps", async () => {
     // `failure_exit_code` and `failure_signal` must survive the re-statement,
     // including the SIGKILL from the 90s cap that this budget exists to bound.

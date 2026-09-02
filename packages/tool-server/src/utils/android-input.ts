@@ -298,9 +298,14 @@ function firstLine(err: unknown): string {
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
   const head = lines[0] ?? "";
-  // With the banner gone, the head can end at its own `failed:` with adb's
-  // error on the next line.
-  const line = /failed:$/.test(head) && lines[1] !== undefined ? `${head} ${lines[1]}` : head;
+  // With the banner gone, the head can end at its own `failed:` and have
+  // NOTHING after it — the banner was adb's only output. That is the 90s
+  // budget's SIGKILL against a cold adb, i.e. the first Android call of a
+  // tool-server's life, and it left the caller a dangling "failed:" naming no
+  // failure at all.
+  const detail =
+    lines[1] ?? "adb printed only its daemon banner before it stopped, and no error of its own";
+  const line = /failed:$/.test(head) ? `${head} ${detail}` : head;
   return line.replace(/input keyevent[\d ]*\d/g, "input keyevent <the delete burst>");
 }
 
