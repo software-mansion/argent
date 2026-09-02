@@ -19,7 +19,6 @@ import {
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
-  rebuildRunnerArtifactForDevice,
   XctestrunFormatError,
 } from "../../src/utils/ios-device/runner-build";
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
@@ -44,11 +43,6 @@ vi.mock("../../src/utils/ios-device/runner-build", async (importOriginal) => {
     killStaleRunnersForDevice: vi.fn(async () => {}),
     launchRunner: vi.fn(),
     assertXctestrunParses: vi.fn(async () => {}),
-    rebuildRunnerArtifactForDevice: vi.fn(async () => ({
-      xctestrunPath: "/tmp/argent-test/rebuilt.xctestrun",
-      derivedDataPath: "/tmp/argent-test/rebuilt-derived",
-      fromCache: false,
-    })),
     resolveRunnerSigningConfig: vi.fn(async () => SIGNING_CONFIG),
   };
 });
@@ -239,7 +233,10 @@ describe("ios-device-runner blueprint: mid-command runner death", () => {
 
     await rejectionOf(api.run({ command: "snapshot", appBundleId: "com.example.rebuilt" }));
     expect(launchRunner).toHaveBeenCalledTimes(2);
-    expect(rebuildRunnerArtifactForDevice).toHaveBeenCalledWith(DEVICE_UDID, SIGNING_CONFIG);
+    expect(ensureRunnerArtifact).toHaveBeenLastCalledWith(SIGNING_CONFIG, {
+      destinationUdid: DEVICE_UDID,
+      force: true,
+    });
     expect(readRunnerCrashSummary).toHaveBeenCalledWith(RESULT_BUNDLE_PATH);
   });
 });
@@ -278,7 +275,10 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
     // The predicate reads the build error's MESSAGE (there is no launch log
     // yet), and the concrete-destination rebuild registers the phone.
     expect(isProfileMissingDeviceFailure).toHaveBeenCalledWith(buildError.message);
-    expect(rebuildRunnerArtifactForDevice).toHaveBeenCalledWith(DEVICE_UDID, SIGNING_CONFIG);
+    expect(ensureRunnerArtifact).toHaveBeenLastCalledWith(SIGNING_CONFIG, {
+      destinationUdid: DEVICE_UDID,
+      force: true,
+    });
     expect(launchRunner).toHaveBeenCalledTimes(1);
   });
 
@@ -287,7 +287,7 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
     vi.mocked(ensureRunnerArtifact).mockRejectedValueOnce(new Error("No Accounts"));
 
     await expect(callFactory()).rejects.toThrow("No Accounts");
-    expect(rebuildRunnerArtifactForDevice).not.toHaveBeenCalled();
+    expect(ensureRunnerArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("re-signs and retries once when the launch log reports an expired profile", async () => {
@@ -296,7 +296,10 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
     vi.mocked(isProfileExpiredFailure).mockReturnValueOnce(true);
 
     await callFactory();
-    expect(rebuildRunnerArtifactForDevice).toHaveBeenCalledWith(DEVICE_UDID, SIGNING_CONFIG);
+    expect(ensureRunnerArtifact).toHaveBeenLastCalledWith(SIGNING_CONFIG, {
+      destinationUdid: DEVICE_UDID,
+      force: true,
+    });
     expect(launchRunner).toHaveBeenCalledTimes(2);
   });
 
@@ -306,7 +309,10 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
     vi.mocked(isProfileMissingDeviceFailure).mockReturnValueOnce(true);
 
     await callFactory();
-    expect(rebuildRunnerArtifactForDevice).toHaveBeenCalledWith(DEVICE_UDID, SIGNING_CONFIG);
+    expect(ensureRunnerArtifact).toHaveBeenLastCalledWith(SIGNING_CONFIG, {
+      destinationUdid: DEVICE_UDID,
+      force: true,
+    });
     expect(launchRunner).toHaveBeenCalledTimes(2);
   });
 
@@ -371,7 +377,6 @@ describe("ios-device-runner blueprint: poisoned cache self-heal", () => {
     expect(ensureRunnerArtifact).toHaveBeenCalledTimes(2);
     expect(ensureRunnerArtifact).toHaveBeenNthCalledWith(2, SIGNING_CONFIG, { force: true });
     expect(launchRunner).toHaveBeenCalledTimes(1);
-    expect(rebuildRunnerArtifactForDevice).not.toHaveBeenCalled();
   });
 
   it("propagates a second format error after the heal as a genuine failure, never looping", async () => {

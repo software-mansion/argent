@@ -18,7 +18,6 @@ import {
   killRunnerProcess,
   killStaleRunnersForDevice,
   launchRunner,
-  rebuildRunnerArtifactForDevice,
   resolveRunnerSigningConfig,
   XctestrunFormatError,
   type LaunchedRunner,
@@ -253,7 +252,7 @@ async function buildAndStartRunner(
     // A new team cannot mint a profile from the generic build. Rebuild against this device to register it.
     const message = error instanceof Error ? error.message : String(error);
     if (!isProfileMissingDeviceFailure(message)) throw error;
-    artifact = await rebuildRunnerArtifactForDevice(udid, signing);
+    artifact = await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true });
   }
 
   try {
@@ -270,7 +269,10 @@ async function buildAndStartRunner(
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
     // The profile lacks this device or has expired. Rebuild against the device:
     // automatic signing registers it and mints a fresh profile. Retry once.
-    return await startRunner(udid, await rebuildRunnerArtifactForDevice(udid, signing));
+    return await startRunner(
+      udid,
+      await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true })
+    );
   }
 }
 
