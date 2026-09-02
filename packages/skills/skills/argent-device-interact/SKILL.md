@@ -29,10 +29,10 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
-3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
+3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`. Pass `momentum: false` when the swipe should decelerate before ending for a precise movement.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For app navigation, use the element tree returned after each action** (`--- Elements after action (describe) ---`); call `describe` only when no fresh tree is available for the current screen. It works on any screen without app restart. Do not navigate from screenshot pixels on regular in-app screens unless the tree failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -130,6 +130,8 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 ```
 
 Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
+
+`"momentum"` defaults to `true` (a natural flinging swipe). Pass `"momentum": false` for a momentum-free swipe: the finger decelerates into the end point, resulting in little to no fling. It needs `durationMs` of at least 150 and is rejected below it.
 
 ### gesture-pinch — Two-finger pinch
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolContext } from "@argent/registry";
 
 /**
@@ -42,4 +43,31 @@ export async function invokeSubTool<T = unknown>(
   } finally {
     release();
   }
+}
+
+/**
+ * Dispatchers rewrite the args they forward, and the registry can only
+ * describe what it was handed.
+ *
+ * Re-parsing rather than pre-flighting the dispatch: the invoke is what emits
+ * `toolInvoked`/`toolFailed`, so validating up front would make an invalid step
+ * invisible to telemetry and the event log.
+ */
+export function describeNestedParamError(
+  registry: Registry,
+  err: unknown,
+  toolId: string,
+  dispatchedArgs: unknown,
+  authoredArgs: unknown
+): string | undefined {
+  if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return undefined;
+  const zodSchema = registry.getTool(toolId)?.zodSchema;
+  if (!zodSchema) return undefined;
+  // `?? {}` mirrors what the registry parsed, so the issues are the same ones.
+  const parsed = zodSchema.safeParse(dispatchedArgs ?? {});
+  // Not defensive: `InvalidToolInputError` defaults to `TOOL_INPUT_INVALID`, so
+  // a tool that rejects its own arguments inside `execute` passes the gate above
+  // with args that parsed fine. Its own message is already right.
+  if (parsed.success) return undefined;
+  return `Invalid params for tool "${toolId}": ${describeParamIssues(parsed.error, authoredArgs)}`;
 }

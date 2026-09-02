@@ -143,12 +143,15 @@ describe("hidden timeout diagnostics", () => {
     // exercises at the unit level and flow-hidden-no-windows-e2e.test.ts
     // end-to-end). What this case locks in is the caller's contract with that
     // upstream throw: when every fetch rejects, the assert fails with the
-    // outage — the /not injectable/ check pins the fetch error's text landing
-    // in the step reason — instead of treating an unreadable screen as a
-    // no-match that satisfies `hidden`.
+    // outage — the /no window attached/ check pins the fetch error's text
+    // landing in the step reason — instead of treating an unreadable screen as
+    // a no-match that satisfies `hidden`. The scripted bundle id is a system
+    // app because this flow has no `launch:` step, so its reads are unpinned -
+    // the one path on which auto-resolve can still hand a connected
+    // `com.apple.*` process to the read.
     currentFetch = () => {
       throw new Error(
-        "getFullHierarchy returned no windows for com.apple.Preferences — the app is not injectable"
+        "getFullHierarchy returned no windows for com.apple.Preferences - it has no window attached to read"
       );
     };
 
@@ -162,7 +165,7 @@ describe("hidden timeout diagnostics", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/not injectable/);
+    expect(result.steps[0].reason).toMatch(/no window attached to read/);
     // Must NOT read as a confirmed-hidden pass.
     expect(result.steps[0].reason).not.toMatch(/still visible/);
   });

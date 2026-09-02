@@ -66,7 +66,7 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-export interface ScreenshotDiffResult {
+interface ScreenshotDiffResult {
   summary: string;
   /**
    * Artifact handles, not host paths: the client materializes them locally so the

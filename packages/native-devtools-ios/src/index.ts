@@ -161,7 +161,14 @@ export function simulatorServerBinaryPath(): string {
   return p;
 }
 
-export function simulatorServerBinaryDir(): string {
+// Working directory for the simulator-server spawn: the binary resolves the
+// screen-sharing agent at `resources/android/` relative to cwd. One shared
+// copy lives at the bin root; fall back to the per-platform dir for pre-dedup
+// layouts (e.g. an ARGENT_SIMULATOR_SERVER_DIR override on an old install).
+export function simulatorServerRunDir(): string {
+  if (fs.existsSync(path.join(BIN_DIR, "resources", "android"))) {
+    return BIN_DIR;
+  }
   return platformBinDir();
 }
 

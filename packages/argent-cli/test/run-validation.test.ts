@@ -73,6 +73,23 @@ describe("findMissingRequired", () => {
     expect(findMissingRequired({}, schema)).toEqual(["constructor"]);
   });
 
+  it("never asks for a retired key", () => {
+    // `formatSchemaUsage` filters retired keys out of the usage block and the parser refuses every
+    // spelling of one, so this reader must agree with them. A retirement declared without
+    // `.optional()` lands in `required` and would be reported as `missing required flag --settle`
+    // for a flag the help does not show and no input can supply.
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    expect(findMissingRequired({}, schema)).toEqual(["udid"]);
+    expect(findMissingRequired({ udid: "X" }, schema)).toEqual([]);
+  });
+
   it("reports nothing when the schema requires nothing", () => {
     expect(findMissingRequired({}, { type: "object", properties: {} })).toEqual([]);
     expect(findMissingRequired({}, undefined)).toEqual([]);
@@ -212,6 +229,22 @@ describe("describeServerValidationFailure", () => {
     ]);
   });
 
+  it("does not call a retired key a missing required flag", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    const message = "Invalid input: expected never, received undefined";
+    const err = new Error(JSON.stringify([{ code: "invalid_type", path: ["settle"], message }]));
+    const report = describeServerValidationFailure(err, { udid: "X" }, schema);
+    expect(report?.missing).toEqual([]);
+    expect(report?.invalid).toEqual([{ path: ["settle"], message }]);
+  });
+
   it("treats an explicitly supplied null as rejected, not missing", () => {
     const err = new Error(
       JSON.stringify([
@@ -233,6 +266,40 @@ describe("describeServerValidationFailure", () => {
   it("keeps the raw issue list for programmatic callers", () => {
     const issues = [missingIssue("udid")];
     expect(forGestureTap(new Error(JSON.stringify(issues)))?.rawIssues).toEqual(issues);
+  });
+
+  describe("reads the issue list the live server sends beside its prose", () => {
+    const withIssues = (issues: unknown[], message = "`x`: Too big. You sent: `udid`, `x`, `y`.") =>
+      Object.assign(new Error(message), { issues });
+
+    it("maps a rejected value back to its field", () => {
+      const report = forGestureTap(
+        withIssues([{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }]),
+        { udid: "X", x: 99, y: 0.5 }
+      );
+      expect(report?.invalid).toEqual([{ path: ["x"], message: "Too big: expected <=1" }]);
+      expect(formatValidationError(report!, gestureTapSchema)).toBe("--x Too big: expected <=1");
+    });
+
+    it("recognises missing required fields", () => {
+      const report = forGestureTap(withIssues([missingIssue("udid"), missingIssue("x")]));
+      expect(report?.missing).toEqual(["udid", "x"]);
+    });
+
+    it("prefers the structured field over a message that is not JSON at all", () => {
+      const report = forGestureTap(
+        withIssues([missingIssue("udid")], "Pass a non-zero deltaX and/or deltaY.")
+      );
+      expect(report).not.toBeNull();
+      expect(report?.missing).toEqual(["udid"]);
+    });
+
+    it.each([
+      ["an empty list", []],
+      ["a list of non-issues", [{ a: 1 }]],
+    ])("still refuses %s, whichever channel carried it", (_label, issues) => {
+      expect(forGestureTap(withIssues(issues, "Simulator not booted"))).toBeNull();
+    });
   });
 
   describe("leaves anything that is not this tool's input validation alone", () => {

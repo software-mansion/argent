@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import { zodObjectToJsonSchema, type Registry } from "@argent/registry";
 import {
   IDLE_DEFAULT_STABLE_FOR_MS,
   IDLE_DEFAULT_TIMEOUT_MS,
@@ -10,8 +10,10 @@ import {
   IDLE_SETTLE_SPAN_MS,
   idleMinimumTimeoutMs,
   parseFlow,
+  STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 
 /**
  * Keep the core skill's scope routing concise while guarding the linked
@@ -22,6 +24,10 @@ const FLOW_YAML = path.resolve(
   __dirname,
   "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
 );
+const LIVE_AUTHORING = path.resolve(
+  __dirname,
+  "../../../skills/skills/argent-create-flow/references/live-authoring.md"
+);
 /**
  * The three surfaces that quote the number of `idle` warnings instead of
  * listing them. They cite the reference rather than restating it, so a warning
@@ -29,7 +35,7 @@ const FLOW_YAML = path.resolve(
  * how "five different warnings" survived a sixth being added.
  */
 const WARNING_COUNT_CITATIONS = [
-  path.resolve(__dirname, "../../../skills/skills/argent-create-flow/references/live-authoring.md"),
+  LIVE_AUTHORING,
   path.resolve(
     __dirname,
     "../../../skills/skills/argent-create-flow/references/reliability-and-recovery.md"
@@ -152,6 +158,48 @@ describe("create-flow idle docs", () => {
       expect(() => parseFlow(step(smallest - 1)), `${stableFor}`).toThrow(
         new RegExp(`at least ${smallest}ms`)
       );
+    }
+  });
+});
+
+describe("create-flow directive-answer docs", () => {
+  const answered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) !== undefined);
+  const withoutRecordingTool = answered.filter((key) =>
+    directiveCommandHint(key)!.includes("records one")
+  );
+  const withRecordingTool = answered.filter((key) => !withoutRecordingTool.includes(key));
+
+  function sentenceWith(paragraph: string, marker: string): string {
+    const hit = paragraph.split(". ").find((s) => s.includes(marker));
+    expect(hit, `no sentence mentions "${marker}"`).toBeDefined();
+    return hit!;
+  }
+
+  function commandParamDescription(): string {
+    const schema = zodObjectToJsonSchema(createFlowAddStepTool({} as Registry).zodSchema!) as {
+      properties: Record<string, { description?: string }>;
+    };
+    const described = schema.properties.command?.description;
+    expect(described, "`command` no longer describes itself").toBeDefined();
+    return described!;
+  }
+
+  it("names every directive it answers, so a new one cannot go unmentioned", () => {
+    expect(answered.length).toBeGreaterThan(0);
+    const clause = sentenceWith(commandParamDescription(), "is answered with guidance");
+    for (const key of answered) expect(clause, key).toContain(`"${key}"`);
+  });
+
+  it("names each directive that has no recording tool, on both surfaces", () => {
+    expect(withoutRecordingTool.length).toBeGreaterThan(0);
+    const { description } = createFlowAddStepTool({} as Registry);
+    expect(description, "flow-add-step no longer declares a description").toBeDefined();
+    for (const key of withoutRecordingTool) {
+      expect(sentenceWith(description!, "have no recording tool"), key).toContain(`\`${key}\``);
+      expect(commandParamDescription(), key).toContain(`"${key}"`);
+    }
+    for (const key of withRecordingTool) {
+      expect(sentenceWith(description!, "have no recording tool"), key).not.toContain(`\`${key}\``);
     }
   });
 });
