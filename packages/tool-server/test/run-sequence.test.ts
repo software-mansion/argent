@@ -70,6 +70,12 @@ describe("run-sequence — the device keyboard queue", () => {
     await blocking;
     expect((await sequence).completed).toBe(2);
     expect(calls.map((c) => c.tool)).toEqual(["gesture-tap", "keyboard"]);
+    // The switch itself, not just the step. `clear` is the only boolean any
+    // allowed tool takes, and every other pass-through case here carries only
+    // numbers and strings — so a runner that dropped boolean args while
+    // injecting the udid sent `keyboard` a no-op and stayed green across the
+    // whole suite.
+    expect(calls[1]!.args).toEqual({ clear: true, udid: IOS });
   });
 
   it("does not deadlock on the queue it is itself holding", async () => {
