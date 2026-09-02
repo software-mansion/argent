@@ -424,11 +424,11 @@ function multiTouchArgs(paths: HarmonyFingerPath[], durationMs: number): string 
 const UINPUT_ARGUMENT_ECHO = /^(startX:|fingerCount:|keepTimeMs:|smoothTimeMs:)/;
 
 /**
- * The refusal out of whatever `uinput` printed, which on some builds is nothing
- * at all — see {@link runUinputDirect}.
+ * The refusal out of whatever `uinput` printed — which on some builds is
+ * nothing at all, see {@link runUinputDirect}.
  *
- * Where there is output: it echoes the arguments it parsed *before* validating
- * them, and follows an unrecognised option with its ~90-line usage block, so
+ * Where there is output, it echoes the arguments it parsed *before* validating
+ * them and follows an unrecognised option with its ~90-line usage block, so
  * neither the first line nor the last is the diagnostic. Drop the echo, stop at
  * the usage block, and keep the two lines that can remain — a range refusal
  * puts the bound on the line after the message.
