@@ -85,12 +85,17 @@ export const FAILURE_CODES = {
   SIMULATOR_COMMAND_ACK_TIMEOUT: "SIMULATOR_COMMAND_ACK_TIMEOUT",
   SIMULATOR_COMMAND_TRANSPORT_FAILED: "SIMULATOR_COMMAND_TRANSPORT_FAILED",
 
-  // Physical iOS devices: the XCUITest-runner blueprint lifecycle and the
-  // `xcrun devicectl` subprocess wrapper (simulators use the SIMULATOR_* set).
+  // Physical iOS devices: the XCUITest-runner blueprint lifecycle, the runner
+  // command client, and the `xcrun devicectl` subprocess wrapper (simulators
+  // use the SIMULATOR_* set).
   IOS_DEVICE_RUNNER_FACTORY_OPTIONS_MISSING: "IOS_DEVICE_RUNNER_FACTORY_OPTIONS_MISSING",
   IOS_DEVICE_RUNNER_NOT_READY: "IOS_DEVICE_RUNNER_NOT_READY",
   IOS_DEVICE_RUNNER_TERMINATED: "IOS_DEVICE_RUNNER_TERMINATED",
   IOS_DEVICE_RUNNER_EXITED: "IOS_DEVICE_RUNNER_EXITED",
+  // The runner answered a command with an ok:false envelope.
+  IOS_DEVICE_RUNNER_COMMAND_FAILED: "IOS_DEVICE_RUNNER_COMMAND_FAILED",
+  // The usbmux or HTTP exchange with a reachable runner failed.
+  IOS_DEVICE_RUNNER_TRANSPORT_FAILED: "IOS_DEVICE_RUNNER_TRANSPORT_FAILED",
   IOS_DEVICECTL_COMMAND_FAILED: "IOS_DEVICECTL_COMMAND_FAILED",
 
   AX_QUERY_TIMEOUT: "AX_QUERY_TIMEOUT",

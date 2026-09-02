@@ -4,7 +4,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { FAILURE_CODES, subprocessFailureMetadata, withFailureSignal } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  subprocessFailureMetadata,
+  withFailureSignal,
+  type FailureKind,
+  type FailureSignal,
+} from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
 
 /**
@@ -35,7 +41,7 @@ interface IosPhysicalDevice {
   tunnelState: string | null;
 }
 
-class IosDeviceControlError extends Error {
+export class IosDeviceControlError extends Error {
   /** Callers may branch on this. The message already includes the same text. */
   readonly hint: string | null;
 
@@ -378,6 +384,17 @@ async function deviceInfoDetails(
 const READY_MEMO_TTL_MS = 5_000;
 const readyMemo = new Map<string, number>();
 
+/** Signal for a readiness verdict devicectl answered without itself failing. */
+function readyFailureSignal(error_kind: FailureKind): FailureSignal {
+  return {
+    error_code: FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED,
+    failure_stage: "ios_device_ready",
+    failure_area: "tool_server",
+    error_kind,
+    failure_command: "devicectl",
+  };
+}
+
 /**
  * Ensure the device is on USB and its CoreDevice tunnel is ready.
  */
@@ -394,15 +411,21 @@ export async function ensureDeviceReady(udid: string): Promise<void> {
 
   // Older toolchains omit transportType. Only an explicit non-wired value rejects.
   if (info.transportType != null && info.transportType !== "wired") {
-    throw new IosDeviceControlError(`Device transport is ${info.transportType}, not wired`, {
-      hint: "Connect the device by USB cable and unlock it, then retry.",
-    });
+    throw withFailureSignal(
+      new IosDeviceControlError(`Device transport is ${info.transportType}, not wired`, {
+        hint: "Connect the device by USB cable and unlock it, then retry.",
+      }),
+      readyFailureSignal("not_found")
+    );
   }
 
   if (info.tunnelState === "connecting") {
-    throw new IosDeviceControlError("Device tunnel is still connecting", {
-      hint: "Keep the device unlocked and connected; retry in a few seconds.",
-    });
+    throw withFailureSignal(
+      new IosDeviceControlError("Device tunnel is still connecting", {
+        hint: "Keep the device unlocked and connected; retry in a few seconds.",
+      }),
+      readyFailureSignal("network")
+    );
   }
 
   readyMemo.set(udid, Date.now());

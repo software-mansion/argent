@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, withFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, subprocessFailureMetadata, withFailureSignal } from "@argent/registry";
 import { withKeyedLock } from "../keyed-lock";
 import { resolveSigningHint, type RunnerSigningConfig } from "./runner-signing";
 
@@ -362,18 +362,36 @@ async function buildRunnerArtifact(
     const output = [e.stdout ?? "", e.stderr ?? "", e.message ?? ""].join("\n");
     const hint = resolveSigningHint(output);
 
-    throw new Error(
-      `Building the iOS device runner failed.${hint ? ` ${hint}` : ""}\n\n` +
-        `xcodebuild reported:\n${xcodebuildFailureSummary(output)}`,
-      { cause: error }
+    throw withFailureSignal(
+      new Error(
+        `Building the iOS device runner failed.${hint ? ` ${hint}` : ""}\n\n` +
+          `xcodebuild reported:\n${xcodebuildFailureSummary(output)}`,
+        { cause: error }
+      ),
+      {
+        error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
+        failure_stage: "ios_device_runner_build",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(error, "xcodebuild"),
+      }
     );
   }
 
   const built = findBaseXctestrun(derivedDataPath);
 
   if (!built) {
-    throw new Error(
-      `xcodebuild reported success but no iphoneos .xctestrun was found under ${derivedDataPath}/Build/Products.`
+    throw withFailureSignal(
+      new Error(
+        `xcodebuild reported success but no iphoneos .xctestrun was found under ${derivedDataPath}/Build/Products.`
+      ),
+      {
+        error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
+        failure_stage: "ios_device_runner_build",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "xcodebuild",
+      }
     );
   }
 

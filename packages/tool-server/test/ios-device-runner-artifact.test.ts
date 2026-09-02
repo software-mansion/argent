@@ -367,6 +367,68 @@ describe("ensureRunnerArtifact", () => {
     );
     expect(stamp).toMatch(/^[0-9a-f]{16}$/);
   });
+
+  /** A PATH dir holding one xcodebuild stub; `-version` always answers so the fingerprint stays deterministic. */
+  async function stubXcodebuild(name: string, buildLines: string[]): Promise<string> {
+    const binDir = path.join(tmpRoot, `ensure-${name}-bin`);
+    await fsp.mkdir(binDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(binDir, "xcodebuild"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "-version" ]; then echo "Xcode 99.0"; exit 0; fi',
+        ...buildLines,
+        "",
+      ].join("\n"),
+      { mode: 0o755 }
+    );
+    return binDir;
+  }
+
+  it("stamps a failed xcodebuild as the not-ready build stage with the exit code", async () => {
+    const binDir = await stubXcodebuild("build-fails", [
+      'echo "/proj.xcodeproj: error: No Accounts: Add a new account in Accounts settings." >&2',
+      "exit 65",
+    ]);
+
+    const caught = await withEnsureEnv(
+      "build-fails",
+      () => ensureRunnerArtifact(CONFIG).catch((error: unknown) => error),
+      { binDir }
+    );
+
+    expect((caught as Error).message).toContain("Building the iOS device runner failed.");
+    expect((caught as Error).message).toContain(
+      "xcodebuild reported:\n/proj.xcodeproj: error: No Accounts"
+    );
+    // Every sibling stage of the runner's cold start is stamped; a build
+    // failure must not be the one that lands in the unclassified bucket.
+    const signal = getFailureSignal(caught);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+    expect(signal?.failure_stage).toBe("ios_device_runner_build");
+    expect(signal?.error_kind).toBe("subprocess");
+    expect(signal?.failure_command).toBe("xcodebuild");
+    expect(signal?.failure_exit_code).toBe(65);
+  });
+
+  it("stamps a build that succeeds without producing an xctestrun the same way", async () => {
+    const binDir = await stubXcodebuild("no-xctestrun", ["exit 0"]);
+
+    const caught = await withEnsureEnv(
+      "no-xctestrun",
+      () => ensureRunnerArtifact(CONFIG).catch((error: unknown) => error),
+      { binDir }
+    );
+
+    expect((caught as Error).message).toContain(
+      "xcodebuild reported success but no iphoneos .xctestrun was found"
+    );
+    const signal = getFailureSignal(caught);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+    expect(signal?.failure_stage).toBe("ios_device_runner_build");
+    expect(signal?.error_kind).toBe("not_found");
+    expect(signal?.failure_command).toBe("xcodebuild");
+  });
 });
 
 describe("resolveRunnerProjectPath", () => {

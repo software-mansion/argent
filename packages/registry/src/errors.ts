@@ -36,6 +36,7 @@ export const FAILURE_COMMANDS = [
   "npx",
   "unknown",
   "devicectl",
+  "xcodebuild",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];

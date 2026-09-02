@@ -23,8 +23,10 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDep: vi.fn(async () => {}),
 }));
 
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { buttonTool, BUTTONS_BY_PLATFORM } from "../src/tools/button";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 import { DependencyMissingError, ensureDep } from "../src/utils/check-deps";
 import { sendCommand } from "../src/utils/simulator-client";
@@ -172,6 +174,39 @@ describe("button tool: physical iOS", () => {
       ).rejects.toBeInstanceOf(UnsupportedOperationError);
       expect(run).not.toHaveBeenCalled();
     }
+  });
+
+  it("maps the runner's UNSUPPORTED_OPERATION to the capability rejection, message kept", async () => {
+    // Only the device knows whether it has an Action button: a non-Pro iPhone
+    // answers UNSUPPORTED_OPERATION from the runner. That is the same verdict
+    // as the platform gates above, so it must be a 400-class capability error,
+    // not a raw runner failure surfacing as a 500.
+    const { run, services: runnerServices } = runnerRig();
+    run.mockRejectedValueOnce(
+      new RunnerCommandError("this device has no action button", {
+        code: "UNSUPPORTED_OPERATION",
+      })
+    );
+
+    const error = await buttonTool
+      .execute(runnerServices, { udid: deviceUdid, button: "actionButton" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(UnsupportedOperationError);
+    expect((error as Error).message).toContain("this device has no action button");
+    expect(getFailureSignal(error)?.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+  });
+
+  it("passes every other runner failure through untouched", async () => {
+    const { run, services: runnerServices } = runnerRig();
+    const original = new RunnerCommandError("runner busy", { code: "RUNNER_BUSY" });
+    run.mockRejectedValueOnce(original);
+
+    await expect(
+      buttonTool.execute(runnerServices, { udid: deviceUdid, button: "home" })
+    ).rejects.toBe(original);
   });
 
   it("declares the runner service only for a button it can actually press", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { ensureDeviceReady } from "../src/utils/ios-device/devicectl";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { ensureDeviceReady, IosDeviceControlError } from "../src/utils/ios-device/devicectl";
 
 const fake = vi.hoisted(() => ({ connectionProperties: {} as Record<string, string> }));
 
@@ -36,11 +37,37 @@ describe("ensureDeviceReady gates on the cable, not just the tunnel", () => {
       (caught: unknown) => caught
     );
 
-    expect((error as Error).name).toBe("IosDeviceControlError");
+    expect(error).toBeInstanceOf(IosDeviceControlError);
     expect((error as Error).message).toBe(
       "Device transport is localNetwork, not wired. " +
         "Hint: Connect the device by USB cable and unlock it, then retry."
     );
+    // The verdict bypasses runDevicectl's stamp (devicectl itself succeeded),
+    // so it carries its own: the registry must not file a pulled cable as
+    // unclassified.
+    const signal = getFailureSignal(error);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
+    expect(signal?.failure_stage).toBe("ios_device_ready");
+    expect(signal?.error_kind).toBe("not_found");
+    expect(signal?.failure_command).toBe("devicectl");
+  });
+
+  it("rejects a wired device whose CoreDevice tunnel is still connecting", async () => {
+    fake.connectionProperties = { transportType: "wired", tunnelState: "connecting" };
+
+    const error = await ensureDeviceReady("00008110-000000000000004E").catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toBeInstanceOf(IosDeviceControlError);
+    expect((error as Error).message).toBe(
+      "Device tunnel is still connecting. " +
+        "Hint: Keep the device unlocked and connected; retry in a few seconds."
+    );
+    const signal = getFailureSignal(error);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
+    expect(signal?.failure_stage).toBe("ios_device_ready");
+    expect(signal?.error_kind).toBe("network");
   });
 
   it("accepts a wired device with a settled tunnel", async () => {

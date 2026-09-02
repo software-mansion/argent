@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { FAILURE_CODES, withFailureSignal, type FailureSignal } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  withFailureSignal,
+  type FailureKind,
+  type FailureSignal,
+} from "@argent/registry";
 import { sleep, type SendRunnerCommand } from "./runner-route";
 import {
   appendHintToMessage,
@@ -19,7 +24,29 @@ const RUNNER_READY_POLL_INTERVAL_MS = 250;
 const RUNNER_READY_PROBE_TIMEOUT_MS = 2_000;
 
 const RUNNER_BUSY_ERROR_CODE = "RUNNER_BUSY";
+const COMMAND_TIMED_OUT_ERROR_CODE = "COMMAND_TIMED_OUT";
 const INVALID_RUNNER_RESPONSE_CODE = "INVALID_RUNNER_RESPONSE";
+
+/** Runner codes for a request refused on its shape or target before any work ran. */
+const RUNNER_VALIDATION_ERROR_CODES: ReadonlySet<string> = new Set([
+  "TEXT_INPUT_NOT_FOCUSED",
+  "APP_BUNDLE_ID_REQUIRED",
+  "INVALID_REQUEST",
+  "UNSUPPORTED_OPERATION",
+]);
+
+/** Failure kind for a runner wire code. Codes outside the known shapes stay unknown. */
+function runnerCommandFailureKind(code: string | undefined): FailureKind {
+  if (code === COMMAND_TIMED_OUT_ERROR_CODE) {
+    return "timeout";
+  }
+
+  if (code !== undefined && RUNNER_VALIDATION_ERROR_CODES.has(code)) {
+    return "validation";
+  }
+
+  return "unknown";
+}
 
 export interface RunnerCommand {
   command: string;
@@ -99,36 +126,41 @@ export class RunnerCommandError extends Error {
 
     // Classify the failure here. The runner wire code stays on `code`.
     withFailureSignal(this, {
-      error_code: FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED,
+      error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_COMMAND_FAILED,
       failure_stage: "ios_device_runner_command",
       failure_area: "tool_server",
-      error_kind: "unknown",
+      error_kind: runnerCommandFailureKind(options.code),
     });
   }
 }
 
 /**
- * Failure signal for a transport error.
+ * Failure signal for a transport error. The pre-send kinds never reached a
+ * runner, so they read as not ready; the rest failed against a reachable one.
  */
 function transportFailureSignal(kind: IosDeviceTransportErrorKind): FailureSignal {
   // Stamp here. usbmux-protocol cannot import `@argent/registry`.
-  const base = {
+  const notReady = {
     error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
     failure_stage: "ios_device_runner_transport",
     failure_area: "tool_server",
   } as const;
+  const failed = {
+    ...notReady,
+    error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_TRANSPORT_FAILED,
+  } as const;
 
   switch (kind) {
     case "device-unattached":
-      return { ...base, error_kind: "not_found" };
+      return { ...notReady, error_kind: "not_found" };
     case "runner-not-listening":
-      return { ...base, error_kind: "network", network_failure: "connection_refused" };
+      return { ...notReady, error_kind: "network", network_failure: "connection_refused" };
     case "timeout":
-      return { ...base, error_kind: "timeout" };
+      return { ...failed, error_kind: "timeout" };
     case "protocol":
-      return { ...base, error_kind: "network", network_failure: "invalid_response" };
+      return { ...failed, error_kind: "network", network_failure: "invalid_response" };
     case "http":
-      return { ...base, error_kind: "network", network_failure: "other" };
+      return { ...failed, error_kind: "network", network_failure: "other" };
   }
 }
 
@@ -266,13 +298,19 @@ export async function waitForRunnerReady(
     const remainingMs = expiresAt - Date.now();
 
     if (remainingMs <= 0) {
+      // Not a transport verdict: the runner never produced a first envelope.
       throw withFailureSignal(
         new IosDeviceTransportError(
           "timeout",
           `Runner did not become ready within ${options.timeoutMs}ms`,
           { retryable: false, cause: lastError }
         ),
-        transportFailureSignal("timeout")
+        {
+          error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
+          failure_stage: "ios_device_runner_ready_poll",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
       );
     }
 

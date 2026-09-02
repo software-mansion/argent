@@ -3,6 +3,7 @@ import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { pressButton, type RunnerButton } from "../../utils/ios-device/runner-commands";
+import { RunnerCommandError } from "../../utils/ios-device/runner-client";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
@@ -54,6 +55,9 @@ const PHYSICAL_IOS_BUTTONS: ReadonlySet<string> = new Set<RunnerButton>([
   "volumeDown",
   "actionButton",
 ]);
+
+/** Wire code the runner answers for a button this particular hardware lacks. */
+const RUNNER_UNSUPPORTED_OPERATION_CODE = "UNSUPPORTED_OPERATION";
 
 /** Narrows an accepted button to the runner's `button` wire names. */
 function isPhysicalIosButton(button: Params["button"]): button is RunnerButton {
@@ -108,7 +112,20 @@ Fails if the device backend is not reachable: the simulator-server for iOS simul
             "exposes no API for the power/lock button or the app switcher"
         );
       }
-      await pressButton(services.iosDeviceRunner as IosDeviceRunnerApi, params.button);
+      try {
+        await pressButton(services.iosDeviceRunner as IosDeviceRunnerApi, params.button);
+      } catch (error) {
+        // Only the device knows its hardware: actionButton on a non-Pro iPhone
+        // comes back as UNSUPPORTED_OPERATION. That is the same capability
+        // verdict as the platform checks above, not a runner fault.
+        if (
+          error instanceof RunnerCommandError &&
+          error.code === RUNNER_UNSUPPORTED_OPERATION_CODE
+        ) {
+          throw new UnsupportedOperationError("button", device, error.message);
+        }
+        throw error;
+      }
       return { pressed: params.button };
     }
     if (device.platform === "android") {

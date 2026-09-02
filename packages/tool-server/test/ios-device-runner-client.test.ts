@@ -146,11 +146,36 @@ describe("createRunnerClient", () => {
     const error = await client.run({ command: "tap" }).catch((caught: unknown) => caught);
 
     // Telemetry classification (T44): a runner-reported failure must not fall
-    // into the registry's unclassified bucket. The wire code stays on `.code`.
+    // into the registry's unclassified bucket, and it is the runner's verdict,
+    // not devicectl's, so it carries the runner-command code. The wire code
+    // stays on `.code`.
     const signal = getFailureSignal(error);
-    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_COMMAND_FAILED);
     expect(signal?.failure_stage).toBe("ios_device_runner_command");
+    expect(signal?.error_kind).toBe("unknown");
     expect((error as RunnerCommandError).code).toBe("ELEMENT_NOT_FOUND");
+  });
+
+  it.each([
+    ["COMMAND_TIMED_OUT", "timeout"],
+    ["TEXT_INPUT_NOT_FOCUSED", "validation"],
+    ["APP_BUNDLE_ID_REQUIRED", "validation"],
+    ["INVALID_REQUEST", "validation"],
+    ["UNSUPPORTED_OPERATION", "validation"],
+    ["APP_NOT_AVAILABLE", "unknown"],
+    ["RUNNER_WEDGED", "unknown"],
+  ] as const)("classifies the runner code %s as error_kind %s", async (code, kind) => {
+    const { send } = createFakeSend([{ ok: false, error: { code, message: "refused" } }]);
+    const client = createRunnerClient({ udid: UDID, port: PORT, send });
+
+    const error = await client.run({ command: "tap" }).catch((caught: unknown) => caught);
+
+    // A request the runner refused on its shape or target reads as validation
+    // and a watchdog overrun as timeout; every other wire code stays unknown
+    // rather than guessing.
+    const signal = getFailureSignal(error);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_COMMAND_FAILED);
+    expect(signal?.error_kind).toBe(kind);
   });
 
   describe("reactivated pass-through", () => {
@@ -348,10 +373,13 @@ describe("createRunnerClient", () => {
 
       expect(error).toBe(original);
       // The rethrown object is stamped IN PLACE (T44); identity above proves
-      // the stamp cannot have replaced the error callers compare against.
+      // the stamp cannot have replaced the error callers compare against. The
+      // exchange failed against a runner that was reachable, so this is a
+      // transport failure, not a runner that never became ready.
       const signal = getFailureSignal(error);
-      expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
+      expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_TRANSPORT_FAILED);
       expect(signal?.failure_stage).toBe("ios_device_runner_transport");
+      expect(signal?.error_kind).toBe("network");
     });
 
     it("rethrows the transport error when the status probe itself fails", async () => {
@@ -408,7 +436,8 @@ describe("createRunnerClient", () => {
         // a status probe would ride the same dead route.
         expect(error).toBe(original);
         expect(sent).toHaveLength(1);
-        // Pre-send kinds are user-reachable too, so they carry the stamp.
+        // Pre-send kinds are user-reachable too, so they carry the stamp; no
+        // runner was reached at all, so they keep the not-ready code.
         const signal = getFailureSignal(error);
         expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
         expect(signal?.failure_stage).toBe("ios_device_runner_transport");
@@ -427,6 +456,11 @@ describe("createRunnerClient", () => {
       expect(error).toBe(original);
       expect(sent).toHaveLength(2);
       expect(sent[1]?.body.command).toBe("status");
+      // A mid-session timeout on a ready runner is a transport failure with
+      // the timeout kind, not a runner that never became ready.
+      const signal = getFailureSignal(error);
+      expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_TRANSPORT_FAILED);
+      expect(signal?.error_kind).toBe("timeout");
     });
 
     it("surfaces the retained ok:false envelope as the command's real outcome", async () => {
@@ -537,11 +571,12 @@ describe("waitForRunnerReady", () => {
     expect(error).toBeInstanceOf(IosDeviceTransportError);
     expect((error as IosDeviceTransportError).kind).toBe("timeout");
     expect(send.mock.calls.length).toBeGreaterThan(1);
-    // The ready-timeout is user-reachable when the child is still alive, so
-    // it carries the transport stamp with the timeout kind (T44).
+    // The ready-timeout is user-reachable when the child is still alive. It
+    // is the one timeout that genuinely means not ready: no first envelope
+    // ever came, so it must not read as a mid-session transport failure (T44).
     const signal = getFailureSignal(error);
     expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
-    expect(signal?.failure_stage).toBe("ios_device_runner_transport");
+    expect(signal?.failure_stage).toBe("ios_device_runner_ready_poll");
     expect(signal?.error_kind).toBe("timeout");
   });
 });
