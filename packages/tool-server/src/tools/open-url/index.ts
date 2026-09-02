@@ -8,6 +8,7 @@ import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 const zodSchema = z.object({
   udid: z
@@ -42,6 +43,21 @@ const capability: ToolCapability = {
   chromium: { app: true },
 };
 
+const dispatch = dispatchByPlatform<
+  OpenUrlServices,
+  OpenUrlServices,
+  Params,
+  OpenUrlResult,
+  OpenUrlChromiumServices
+>({
+  toolId: "open-url",
+  capability,
+  ios: iosImpl,
+  android: androidImpl,
+  iosRemote: iosRemoteImpl,
+  chromium: chromiumImpl,
+});
+
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
   interaction: {
@@ -64,18 +80,12 @@ Returns { opened, url, note? }. note carries the deep-linking caveat when a web 
     }
     return {};
   },
-  execute: dispatchByPlatform<
-    OpenUrlServices,
-    OpenUrlServices,
-    Params,
-    OpenUrlResult,
-    OpenUrlChromiumServices
-  >({
-    toolId: "open-url",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-    iosRemote: iosRemoteImpl,
-    chromium: chromiumImpl,
-  }),
+  execute: async (services, params, options) => {
+    // A focus move landing inside another session's `run-sequence` keyboard
+    // hold redirects that sequence's own clear — the hold serializes
+    // `keyboard` and `paste` and nothing else. This waits only while a hold is
+    // actually active on this device (utils/device-serial.ts).
+    await awaitDeviceHold(params.udid);
+    return dispatch(services, params, options);
+  },
 };

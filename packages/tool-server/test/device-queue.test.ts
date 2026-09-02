@@ -14,7 +14,8 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDeps: vi.fn(async () => {}),
 }));
 
-import { serializedPerDevice } from "../src/utils/device-serial";
+import { awaitDeviceHold, holdDeviceQueue, serializedPerDevice } from "../src/utils/device-serial";
+import { gestureTapTool } from "../src/tools/gesture-tap";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { createPasteTool } from "../src/tools/paste";
 
@@ -37,6 +38,88 @@ const TYPED = "abcdefghij";
  * `keyboard-text-key-exclusive.test.ts` green, and a single GLOBAL queue would
  * satisfy them too, because every serialization assertion there uses one udid.
  */
+/**
+ * The queue serializes `keyboard` and `paste` and nothing else, so a bare
+ * `gesture-tap` from another session lands INSIDE a `run-sequence`'s hold —
+ * between the sequence's own focus tap and its clear — and the clear then
+ * empties whatever the tap moved focus to. Measured on Chrome 152 against
+ * `[gesture-tap delayMs 4000, keyboard { clear: true }]` with a second session's
+ * tap 1.5s in: the sequence reported `completed: 2 of 2`, `cleared: true`,
+ * `clearVerified: true`, the OTHER session's textarea was emptied, and the field
+ * the sequence tapped kept its value.
+ */
+describe("focus movers and an open hold", () => {
+  it("waits out a hold on the same device", async () => {
+    const order: string[] = [];
+    let release = () => {};
+    const held = holdDeviceQueue(IOS_UDID, async () => {
+      order.push("hold:in");
+      await new Promise<void>((resolve) => (release = resolve));
+      order.push("hold:out");
+    });
+    await sleep(2);
+    const mover = awaitDeviceHold(IOS_UDID).then(() => order.push("tap"));
+    await sleep(20);
+    expect(order).toEqual(["hold:in"]);
+
+    release();
+    await Promise.all([held, mover]);
+    expect(order).toEqual(["hold:in", "hold:out", "tap"]);
+  });
+
+  it("does not wait when nothing holds the device, nor for another device's hold", async () => {
+    // The map is empty whenever no sequence is mid-hold, which is nearly always
+    // — putting the focus movers on the QUEUE instead would make every tap wait
+    // behind every `keyboard` call, up to 90s for an Android clear.
+    let release = () => {};
+    const held = holdDeviceQueue(OTHER_UDID, () => new Promise<void>((r) => (release = r)));
+    await sleep(2);
+    let ran = false;
+    await awaitDeviceHold(IOS_UDID).then(() => (ran = true));
+    expect(ran).toBe(true);
+
+    release();
+    await held;
+  });
+
+  it("lets the holder's OWN steps through, exactly as a nested keyboard step is", async () => {
+    // A `run-sequence` invokes its gesture steps inside its own hold; if those
+    // waited on it the sequence would deadlock on itself.
+    let inside = false;
+    await holdDeviceQueue(IOS_UDID, async () => {
+      await awaitDeviceHold(IOS_UDID);
+      inside = true;
+    });
+    expect(inside).toBe(true);
+  });
+
+  it("holds a real `gesture-tap` back until the hold releases", async () => {
+    // The wiring, not just the helper: every tool that can move keyboard focus
+    // takes this wait. The stub transport makes the tap itself fail, which is
+    // beside the point — what is asserted is WHEN it got to try.
+    const order: string[] = [];
+    let release = () => {};
+    const held = holdDeviceQueue(IOS_UDID, async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      order.push("hold:out");
+    });
+    await sleep(2);
+
+    const settled = () => order.push("tap");
+    const tap = gestureTapTool.execute!({ simulatorServer: {} } as never, {
+      udid: IOS_UDID,
+      x: 0.5,
+      y: 0.5,
+    }).then(settled, settled);
+    await sleep(20);
+    expect(order).toEqual([]);
+
+    release();
+    await Promise.all([held, tap]);
+    expect(order).toEqual(["hold:out", "tap"]);
+  });
+});
+
 describe("the per-device queue", () => {
   it("runs two tasks for one device one after the other", async () => {
     const order: string[] = [];

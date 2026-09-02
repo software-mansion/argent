@@ -127,5 +127,62 @@ export function holdDeviceQueue<T>(deviceId: string, body: () => Promise<T>): Pr
   if (held?.has(deviceId) === true) return body();
   const nested = new Set(held ?? []);
   nested.add(deviceId);
-  return serializedPerDevice(deviceId, () => heldByCaller.run(nested, body));
+  return serializedPerDevice(deviceId, () => {
+    const running = heldByCaller.run(nested, body);
+    activeHolds.set(deviceId, running);
+    const drop = () => {
+      if (activeHolds.get(deviceId) === running) activeHolds.delete(deviceId);
+    };
+    void running.then(drop, drop);
+    return running;
+  });
+}
+
+/**
+ * The hold currently in flight at each device, for the tools that can MOVE
+ * keyboard focus.
+ *
+ * The queue serializes `keyboard` and `paste` and nothing else, so another
+ * session's bare `gesture-tap` landed INSIDE a hold — between the sequence's own
+ * focus tap and its clear — and the clear emptied the tapped-over field.
+ * Measured on Chrome 152 against `[gesture-tap delayMs 4000, keyboard
+ * { clear: true }]` with a second session's tap 1.5s in: the sequence returned
+ * `completed: 2 of 2`, `cleared: true`, `clearVerified: true`, the OTHER
+ * session's textarea was emptied, and the field the sequence tapped kept its
+ * value.
+ *
+ * Kept separate from `deviceQueues` on purpose. Putting the focus movers on the
+ * queue itself would make every `gesture-tap` wait behind every `keyboard` call
+ * — up to 90s for an Android clear — for a hazard that only exists while a hold
+ * is open. This map is empty the rest of the time, and `awaitDeviceHold` then
+ * costs one lookup.
+ */
+const activeHolds = new Map<string, Promise<unknown>>();
+
+/**
+ * Wait out another session's hold on this device, if there is one.
+ *
+ * Called by the tools that move keyboard focus (the gestures, `button`,
+ * `tv-remote`, `launch-app`, `restart-app`, `open-url`). A call made INSIDE the
+ * hold — a `run-sequence`'s own steps — returns at once, exactly as a nested
+ * `keyboard` step does.
+ *
+ * Bounded by the same budget the queue uses, and it PROCEEDS at the bound rather
+ * than failing: a tap is not a write into a field, and a tap that never lands is
+ * worse than one that lands late.
+ */
+export function awaitDeviceHold(deviceId: string): Promise<void> {
+  if (heldByCaller.getStore()?.has(deviceId) === true) return Promise.resolve();
+  const hold = activeHolds.get(deviceId);
+  if (hold === undefined) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, DEVICE_QUEUE_MAX_WAIT_MS);
+    // Never keep the process alive for a hold that outlives its own request.
+    timer.unref?.();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    hold.then(done, done);
+  });
 }

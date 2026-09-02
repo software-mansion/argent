@@ -8,6 +8,7 @@ import { makeIosImpl } from "./platforms/ios";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
+import { awaitDeviceHold } from "../../utils/device-serial";
 
 // Head must be a letter or `_` so a bundleId like `--user` can't masquerade as
 // a flag inside `am force-stop …`.
@@ -48,6 +49,24 @@ const capability: ToolCapability = {
 // `services()`. A tvOS sim classifies as platform "ios", and native-devtools
 // covers it too (ensureEnv injects the TVOSSIMULATOR dylib slice).
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
+  const dispatch = dispatchByPlatform<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    Params,
+    RestartAppResult,
+    // No chromium branch.
+    Record<string, unknown>,
+    RestartAppVegaServices,
+    RestartAppIosServices
+  >({
+    toolId: "restart-app",
+    capability,
+    ios: makeIosImpl(registry),
+    iosRemote: iosRemoteImpl,
+    android: androidImpl,
+    vega: vegaImpl,
+  });
+
   return {
     id: "restart-app",
     interaction: {
@@ -71,22 +90,13 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
       return {};
     },
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      Params,
-      RestartAppResult,
-      // No chromium branch.
-      Record<string, unknown>,
-      RestartAppVegaServices,
-      RestartAppIosServices
-    >({
-      toolId: "restart-app",
-      capability,
-      ios: makeIosImpl(registry),
-      iosRemote: iosRemoteImpl,
-      android: androidImpl,
-      vega: vegaImpl,
-    }),
+    execute: async (services, params, options) => {
+      // A focus move landing inside another session's `run-sequence` keyboard
+      // hold redirects that sequence's own clear — the hold serializes
+      // `keyboard` and `paste` and nothing else. This waits only while a hold is
+      // actually active on this device (utils/device-serial.ts).
+      await awaitDeviceHold(params.udid);
+      return dispatch(services, params, options);
+    },
   };
 }
