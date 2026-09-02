@@ -1271,8 +1271,9 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // last measurement, so none of them may report "not checked".
     //
     // `misdirected` is where they divide: the repair's backspaces and retype went
-    // wherever focus was, so every cause that leaves focus unaccounted for has to
-    // say so, and the two that found the field again must not.
+    // wherever focus was, so every cause that leaves that open has to say so -
+    // including the reads that failed before they could look. The one that must
+    // NOT is the one that found the field and matched it.
     const baseline = { xml: hierarchy({ text: "XY" }) };
     const partial = { xml: hierarchy({ text: "XYabcdefgh" }) };
     const blocked: Array<{
@@ -1280,10 +1281,15 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       reads: Array<{ xml: string; truncated?: boolean }>;
       misdirected?: RegExp;
     }> = [
-      { label: "read throws", reads: [baseline, partial] },
+      {
+        label: "read throws",
+        reads: [baseline, partial],
+        misdirected: /never reached that field/,
+      },
       {
         label: "truncated",
         reads: [baseline, partial, { xml: hierarchy({ focused: false }), truncated: true }],
+        misdirected: /never reached that field/,
       },
       {
         label: "masks now",
@@ -1316,7 +1322,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       {
         label: "no windows",
         reads: [baseline, partial, { xml: EMPTY_CAPTURE }],
-        misdirected: /held no window at all/,
+        misdirected: /never reached that field/,
       },
     ];
     for (const { label, reads, misdirected } of blocked) {
@@ -1325,7 +1331,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       expect(res.verified, label).toBe(false);
       expect(res.note, label).toMatch(/modified beyond the original typing/);
       if (misdirected) expect(res.note, label).toMatch(misdirected);
-      else expect(res.note, label).not.toMatch(/key events reached|held no window at all/);
+      else expect(res.note, label).not.toMatch(/key events reached|key events went/);
     }
   });
 

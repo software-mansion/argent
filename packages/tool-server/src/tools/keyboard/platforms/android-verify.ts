@@ -833,12 +833,13 @@ function blockedNote(reason: string, deleted: number | null): string {
  * change that happened before the repair sent the backspaces and the retype
  * somewhere else. That is the worst state this module can leave behind, and
  * `retypedClause` beside these asserts the field WAS modified, which holds only
- * where the repair reached it — so every reason that leaves focus unaccounted
- * for says so. The two that do not are the two that found the field again: a
- * capture truncated before it reached the field, and a field that masks its
- * input now.
+ * where the repair reached it. Exactly one blocked reason establishes that — the
+ * field masking its input NOW, which found and matched it first — so every other
+ * one has to say where those key events may have gone instead, including the
+ * ones that failed before they could look.
  */
 function misdirected(reason: string): string {
+  if (reason === MASKED_AFTER_REASON) return "";
   if (reason === FOCUS_MOVED_REASON) {
     return (
       " If focus moved before the repair rather than during the read, those key events reached " +
@@ -863,13 +864,13 @@ function misdirected(reason: string): string {
       "rather than the one the text was typed into."
     );
   }
-  if (reason === EMPTY_CAPTURE_AFTER_REASON) {
-    return (
-      " The read that would have shown where those key events went held no window at all, so it " +
-      "does not place them in that field either."
-    );
-  }
-  return "";
+  // The reads that never saw the field: one that failed, one that came back
+  // empty, one truncated before it got there. None of them says focus moved —
+  // and none of them says it did not.
+  return (
+    " The read that would have shown where those key events went never reached that field, so it " +
+    "does not place them in it either."
+  );
 }
 
 /**
