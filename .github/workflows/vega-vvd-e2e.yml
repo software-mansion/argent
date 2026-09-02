@@ -34,6 +34,13 @@ on:
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/tools/devices/list-devices.ts"
       - "packages/tool-server/src/utils/vega-*.ts"
+      # `utils/vega-*.ts` alone does not cover the clear: `injectVegaClear`
+      # shells out through `adbShell`, and tells a half-emptied field from an
+      # untouched one with `adbDeliveredCommand` — both live here.
+      - "packages/tool-server/src/utils/adb.ts"
+      # Every Vega `keyboard` call is serialized on the per-device queue here,
+      # so a change to it changes what this job actually exercises.
+      - "packages/tool-server/src/utils/device-serial.ts"
       - "packages/tool-server/src/utils/device-info.ts"
       - "scripts/ci/vega-vvd-test.sh"
       - ".github/workflows/vega-vvd-e2e.yml"
