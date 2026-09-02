@@ -1504,10 +1504,8 @@ async function runType(
   await waitForFocus(env, step.into, frame);
   // waitForFocus returns void on abort as well as on focus/timeout — re-check
   // before every keyboard dispatch, so a cancelled run can never type into
-  // whatever the app has focused after the caller gave up. The tool re-checks the
-  // signal before it dispatches to any backend and would reject, which the catch
-  // below turns into the same skip; checking here keeps a cancelled run off the
-  // device entirely.
+  // whatever the app has focused after the caller gave up. The tool checks the
+  // signal too and rejects, which the catch below turns into the same skip.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
   let typed: unknown;
   try {
@@ -1520,15 +1518,10 @@ async function runType(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     throw err;
   }
-  // On Android phones/tablets the keyboard tool reads the field back and reports
-  // `verified: false` when the text demonstrably did not land (see
-  // keyboard/platforms/android-verify.ts). The step fails on that, because
-  // `input text` exits 0 having dropped characters: whether the tool returned
-  // says nothing about what reached the field, so only the read-back can gate a
-  // step that types. An ABSENT `verified` is not evidence of failure — the field
-  // was not read (another platform, no helper, a password field) or was read to a
-  // reading that concludes nothing — so only an explicit `false` fails, carrying
-  // the tool's own note as the reason.
+  // `input text` exits 0 having dropped characters, so whether the tool returned
+  // says nothing about what reached the field: only the read-back can gate a step
+  // that types. See `isUnlandedKeyboardTextResult` for why an absent `verified`
+  // is not evidence of failure.
   if (isUnlandedKeyboardTextResult("keyboard", typed)) {
     // Verdict first, as the raw `tool:` and `run-sequence` gates write it: the
     // note can open with the secret warning, which would bury the finding in the
@@ -1553,11 +1546,9 @@ async function runType(
       throw err;
     }
   }
-  // A note on a passing result is the read-back reporting that it could not
-  // conclude, or that it repaired the field to get there. A directive step carries
-  // no `result`, so without this an unverified type step and a verified one are
-  // indistinguishable in the report (`flow-run.ts` does the same for the raw
-  // `tool:` spellings, whose `result` the CLI does not render).
+  // A directive step carries no `result`, so the note travels as the warning —
+  // otherwise an unverified type step and a verified one are indistinguishable in
+  // the report. `flow-run.ts` does the same for the raw `tool:` spellings.
   const note = keyboardResultNote(typed);
   return note ? { ok: true, warning: note } : { ok: true };
 }

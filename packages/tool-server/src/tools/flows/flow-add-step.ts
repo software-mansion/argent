@@ -851,8 +851,7 @@ const RUN_TARGET_COMMAND = "flow-execute";
 /**
  * The Android read-back verdict in either spelling the recorder can be handed:
  * the `keyboard` call itself, or a `run-sequence` holding one, which converts the
- * verdict into a step error of its own and returns normally. Both record green
- * and both fail at replay.
+ * verdict into a step error of its own and returns normally.
  */
 function unlandedKeyboardStep(command: string, result: unknown): boolean {
   if (isUnlandedKeyboardTextResult(command, result)) return true;

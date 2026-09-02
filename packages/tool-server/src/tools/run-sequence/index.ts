@@ -232,7 +232,7 @@ entry for the step it was in — and returns partial results.`,
           // Same shape gap: a `keyboard` text step reports an Android read-back
           // failure in its result instead of throwing, so continuing would run
           // the next step (typically the submit) against the wrong field
-          // contents. Only an explicit `verified: false` stops the sequence.
+          // contents.
           if (isUnlandedKeyboardTextResult(step.tool, result)) {
             results.push({
               tool: step.tool,
@@ -242,12 +242,12 @@ entry for the step it was in — and returns partial results.`,
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
-          // A tool that watches the signal rejects when the caller gives up mid-call
-          // — the gesture tools do, and so does the Android keyboard read-back,
-          // which holds the call for tens of seconds while it repairs. Recording
-          // that as a step error would report a cancelled run as a failed one:
-          // `flow-nested-outcome.ts` reads an error entry as a step failure and a
-          // sequence that merely stopped short as the aborted skip.
+          // A tool that watches the signal rejects when the caller gives up
+          // mid-call — the keyboard read-back can hold one for tens of seconds
+          // while it repairs. Recording that as a step error would report a
+          // cancelled run as a failed one: `flow-nested-outcome.ts` reads an
+          // error entry as a step failure, and a sequence that merely stopped
+          // short as the aborted skip.
           if (signal?.aborted) break;
           const reframed = describeNestedParamError(
             registry,

@@ -247,10 +247,9 @@ export interface RecordedStepWarning {
    *   FAILURE at replay, and the other causes leave the step unjudged.
    * - `typed` — a recorded call whose Android read-back came back
    *   `verified: false`: a `keyboard` step, or a `run-sequence` stopped by one of
-   *   its own keyboard steps. The same shape as `wait` for a different tool: the
-   *   recorder wrote the step because the tool returned, and the runner fails it
-   *   at replay. Counted apart so the finish does not report a typing problem as
-   *   a wait that did not pass.
+   *   its own keyboard steps. `wait`'s shape gap for a different tool — the
+   *   recorder wrote the step because the tool returned, and the runner FAILS it
+   *   at replay.
    */
   kind: "conversion" | "wait" | "typed";
   /**

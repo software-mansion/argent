@@ -2580,10 +2580,9 @@ async function execLeafStep(
         // composition that failed everything counted as a passing step (#606).
         const nested = nestedOrchestratorOutcome(step.name, result);
         if (nested) {
-          // A sequence stopped by a LATER step still ran the typing before it, and
-          // that note is an advisory about a field this run has already changed.
-          // The reason belongs to what failed, so the note travels as the warning
-          // — otherwise it reaches the CLI nowhere, which renders no `result`.
+          // A sequence stopped by a LATER step still ran the typing before it.
+          // The reason belongs to what failed, so the note travels as the
+          // warning — the CLI renders no `result`.
           const nestedNote = rawStepKeyboardNote(step.name, result);
           return {
             ...base,
@@ -2631,8 +2630,7 @@ async function execLeafStep(
         // Same hazard as the ones above: `keyboard` reports a typed-text
         // read-back failure in its result instead of throwing, so a raw
         // `tool: keyboard` step whose text demonstrably did not land would read
-        // green and let the run submit a field holding the wrong value. Only an
-        // explicit `verified: false` fails — absent means not checked.
+        // green and let the run submit a field holding the wrong value.
         if (isUnlandedKeyboardTextResult(step.name, result)) {
           return {
             ...base,
@@ -2687,10 +2685,9 @@ async function execLeafStep(
 /**
  * The read-back note a passing raw `tool:` step is handing back, in either
  * spelling the recorder writes: the `keyboard` call itself, or a `run-sequence`
- * holding one. A `type:` step gets this through `runType`; this spelling keeps
- * the whole result, but the CLI renders only the step line and the warning under
- * it — so a repair that ran, or a read-back that could not conclude, would
- * otherwise be an unqualified green there, in the spelling the recorder writes.
+ * holding one. The CLI renders only the step line and the warning under it, so
+ * without this a repair that ran — or a read-back that could not conclude —
+ * shows there as an unqualified green. (`runType` does the same for `type:`.)
  */
 function rawStepKeyboardNote(toolId: string, result: unknown): string | undefined {
   if (toolId === "keyboard") return keyboardResultNote(result);

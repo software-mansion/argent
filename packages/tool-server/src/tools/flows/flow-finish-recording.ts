@@ -125,9 +125,6 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
       `${counts.wait} ${counts.wait === 1 ? "step" : "steps"} recorded a wait that did not pass`
     );
   }
-  // Counted apart from `wait` for the same reason `wait` is counted apart from
-  // `conversion`: this one is not a wait, and calling it one sends the author to
-  // the wrong step.
   if (counts.typed > 0) {
     clauses.push(
       `${counts.typed} ${counts.typed === 1 ? "step" : "steps"} recorded text that did not ` +

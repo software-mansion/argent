@@ -59,17 +59,12 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-// True when a `keyboard` result says the typed text demonstrably did not land
-// on an Android phone/tablet read-back (`verified: false`, see
-// platforms/android-verify.ts). The tool reports this verdict instead of
-// throwing, so run-sequence, flow-run's raw `tool: keyboard` steps, the flow
-// `type` directive and the recorder's warning all use it to fail/stop or flag a
-// step that would otherwise count as passed — the same shape gap
-// `isUnmetUiWaitResult` closes for `await-ui-element`. An ABSENT `verified` is
-// deliberately not matched: it means "not checked", never "checked and failed",
-// and failing on it would green-light nothing while breaking every platform
-// that has no read-back. `unknown` because the result crosses the registry
-// boundary untyped.
+// True when an Android phone/tablet read-back proved the typed text did not
+// land (`verified: false`, see platforms/android-verify.ts), returned rather
+// than thrown — the same shape gap `isUnmetUiWaitResult` closes for
+// `await-ui-element`. An ABSENT `verified` means "not checked", never "checked
+// and failed", so it is deliberately not matched. `unknown` because the result
+// crosses the registry boundary untyped.
 export function isUnlandedKeyboardTextResult(
   toolId: string,
   result: unknown
@@ -79,9 +74,7 @@ export function isUnlandedKeyboardTextResult(
   return (result as { verified?: unknown }).verified === false;
 }
 
-// The read-back's advisory `note`, from a result that crossed the registry
-// boundary untyped. Its companion above: that one decides a step's verdict, this
-// one carries what the call has to say about a step that passed anyway.
+// The read-back's advisory `note`; `unknown` for the same reason as above.
 export function keyboardResultNote(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null) return undefined;
   const note = (result as { note?: unknown }).note;
@@ -153,11 +146,10 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      // The read-back's verdict belongs here too. This line is where a user
-      // watches the run, and reporting "Entered text" over a `verified: false`
-      // reproduces in the log exactly the silent success the read-back exists to
-      // catch. An absent `verified` stays quiet: it means not checked, and the
-      // `note` carries the reason.
+      // Not `!result.verified`: an absent `verified` means not checked, and
+      // reporting a plain "Entered text" over a `false` reproduces, on the line
+      // a user watches the run by, the silent success the read-back exists to
+      // catch.
       completedMsg: ({ params, result }) =>
         params.text === undefined
           ? "Pressed a key"
@@ -252,10 +244,8 @@ One call does one action: pass text OR key, never both. To type and then press a
           }
         );
       }
-      // `longRunning` drops the MCP adapter's 30 s bound, so the signal is all
-      // that can stop a call the caller has given up on. Checked here as well as
-      // in the backends, because this is the last point where nothing has been
-      // sent to the device — and on a TV target it is the only one, since the
+      // Checked here as well as in the backends: the last point where nothing
+      // has been sent to the device — and on a TV target the only one, since the
       // per-word loop lives behind the control blueprint's own API.
       options?.signal?.throwIfAborted();
       // Resolve inside `execute`: after every logging boundary (agent
@@ -274,19 +264,12 @@ One call does one action: pass text OR key, never both. To type and then press a
           // The note's own closing advice is unsafe for a secret; correct it
           // rather than emit it. See SECRET_READ_BACK_WARNING.
           ...(result.note === undefined ? {} : { note: SECRET_READ_BACK_WARNING + result.note }),
-          // The note is NOT scrubbed, deliberately. The Android backend reads the
-          // field back off the screen, so on this path it has held the plaintext,
-          // and every note it writes is value-free by construction — counts and
-          // structural facts, never the text — which `keyboard-secrets.test.ts`
-          // pins directly. Running the substitution over that prose would buy
-          // nothing and cost correctness: it replaces bare occurrences of the
-          // value anywhere, so a two-character secret rewrites ordinary words
-          // ("uiautomator" → "uiautomat{{secret:W}}") and a numeric one swallows
-          // the character count the note exists to report, on notes a perfectly
-          // successful call returns. It could not save a leak either — it matches
-          // whole values only, and a dropped-character read-back holds a PARTIAL
-          // secret, which no substitution catches. Errors are different and are
-          // still scrubbed below: they quote the `input text` argv verbatim.
+          // The note is deliberately NOT scrubbed: it is value-free by
+          // construction (`keyboard-secrets.test.ts` pins that), and the
+          // substitution is destructive on curated prose — see `redactSecrets`.
+          // It could not save a leak either: it matches whole values only, and a
+          // dropped-character read-back holds a PARTIAL secret. Errors, which
+          // quote the `input text` argv verbatim, are still scrubbed below.
         };
       } catch (err) {
         // A backend error can quote its input (e.g. the Android `input text`
