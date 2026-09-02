@@ -12,11 +12,21 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Choosing the device
 
-The interaction tools name their target with a `udid`: an iOS simulator UDID, an Android serial, a Vega serial, or a `chromium-cdp-<port>` id. The argument is optional. When it is left out, Argent acts on the one booted device that supports the tool, so the common case of a single simulator needs no device id at all - not in the agent's tool calls, and not on the `argent run` command line.
+The interaction tools name their target with a `udid`. The value is an iOS simulator UDID, an Android serial, a Vega serial, or a `chromium-cdp-<port>` id.
 
-Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it supports, and only booted devices that pass that declaration are candidates: a Chromium tool still resolves with a phone booted alongside the browser, because the phone was never a candidate for it. That declaration covers platform and device kind, not form factor - an Apple TV simulator is an Apple simulator like any other - so name the device yourself when a TV and a phone are booted together. When no candidate is booted, or when more than one is, the call fails and the error lists the devices, so the next call can name one.
+The argument is optional. Argent acts on the one booted device that supports the tool when the caller leaves the argument out. A session with a single simulator needs no device id at all. This holds for the agent's tool calls and for the `argent run` command line.
 
-Three groups keep an explicit target. `boot-device` treats a missing `udid` as "boot by `avdName`, `vvdImage` or `electronAppPath`" instead. The debugger and profiler tools spell it `device_id` and address the session an earlier `debugger-connect` or `*-profiler-start` pinned, so they stay bound to the device that call named. And a flow step, or a `run-sequence` step, is always replayed against the device the flow resolved, never against whatever happens to be booted.
+Argent picks a device only when the choice is unambiguous. Each tool declares which platforms it supports. Only booted devices that pass that declaration are candidates. A Chromium tool still resolves when a phone is booted next to the browser, because the phone is not a candidate for it.
+
+The declaration covers platform and device kind, but not form factor. An Apple TV simulator is an Apple simulator like any other. Name the device yourself when a TV and a phone are booted together.
+
+The call fails when no candidate is booted, and when more than one is. The error lists every device when no candidate matched. The error lists the candidates when several matched. Name one of them in the next call.
+
+Three groups keep an explicit target:
+
+- `boot-device` reads a missing `udid` as "boot by `avdName`, `vvdImage` or `electronAppPath`".
+- The debugger and profiler tools spell the argument `device_id`. Each one addresses the session that an earlier `debugger-connect` or `*-profiler-start` pinned. They stay bound to the device that call named.
+- A flow step and a `run-sequence` step carry no device of their own. Every step runs on the target its parent resolved. A flow pins that target when the flow runs. A sequence takes it from its own `udid`, which resolves like any other tool's.
 
 ## Devices and apps
 

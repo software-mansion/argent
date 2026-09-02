@@ -56,9 +56,10 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 
 <device_selection_rule>
 Device tools take `udid` as an optional argument: omit it and the server acts on the one booted
-device that supports the tool, and refuses with the full device list when none or several do. So
-call `list-devices` only when you need to CHOOSE - to boot something, or when the user named a
-platform or device and you have to find it. Prefer running devices.
+device that supports the tool. It refuses when none or several do, listing every device in the
+first case and only the candidates in the second. So call `list-devices` only when you need to
+CHOOSE - to boot something, or when the user named a platform or device and you have to find it.
+Prefer running devices.
 
 Decision order:
 
