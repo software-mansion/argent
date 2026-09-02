@@ -11,12 +11,12 @@ import type * as net from "node:net";
  * its RPC waited out the timeout. A `\n` byte can never occur inside a
  * multi-byte UTF-8 sequence, so splitting on it alone is exact.
  *
- * Every frame that fails to parse is reported through `onDropped` rather than
- * vanishing: a silent drop is what turned a framing defect into a
+ * Every frame that does not yield a record is reported through `onDropped`
+ * rather than vanishing: a silent drop is what turned a framing defect into a
  * fifteen-second mystery.
  */
 interface NdjsonReaderHandlers {
-  onMessage: (msg: unknown) => void;
+  onMessage: (msg: object) => void;
   onDropped: (info: { bytes: number; preview: string }) => void;
 }
 
@@ -31,7 +31,7 @@ function preview(raw: string): string {
 /** The conventional `onDropped`: one stderr line tagged with the owning service. */
 export function reportDroppedFrameToStderr(tag: string): NdjsonReaderHandlers["onDropped"] {
   return ({ bytes, preview }) => {
-    process.stderr.write(`[${tag}] dropped unparseable frame (${bytes} bytes): ${preview}\n`);
+    process.stderr.write(`[${tag}] dropped unusable frame (${bytes} bytes): ${preview}\n`);
   };
 }
 
@@ -45,6 +45,15 @@ export function attachNdjsonReader(socket: net.Socket, handlers: NdjsonReaderHan
     try {
       msg = JSON.parse(raw);
     } catch {
+      handlers.onDropped({ bytes: Buffer.byteLength(raw, "utf8"), preview: preview(raw) });
+      return;
+    }
+    // `JSON.parse` also accepts `null`, `7` and `"s"`. Every consumer reads a
+    // frame as a record and dereferences it, and a TypeError raised in a socket
+    // handler reaches the process's uncaughtException hook, which stops the
+    // tool-server for every agent sharing it. Refused here so that no consumer
+    // can be written without the check.
+    if (msg === null || typeof msg !== "object") {
       handlers.onDropped({ bytes: Buffer.byteLength(raw, "utf8"), preview: preview(raw) });
       return;
     }

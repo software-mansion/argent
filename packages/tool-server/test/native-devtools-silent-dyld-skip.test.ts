@@ -22,6 +22,7 @@
  * guidance reaches a state whose advice is not one of the two.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 import * as net from "node:net";
 import type { DeviceInfo } from "@argent/registry";
 
@@ -568,6 +569,8 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
       const advice = adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY);
       expect(advice.terminal).toBe(false);
       expect(advice.message).toContain("no longer owns this simulator's devtools socket");
+      expect(advice.message).toContain(`${BUNDLE} is running with argent's native devtools`);
+      expect(advice.message).toContain(`${SOCKET} is not the endpoint this service bound`);
       expect(advice.message).toContain("argent server stop && argent server start --detach");
       // The claim the withheld diagnosis would have made is exactly what is
       // false here, so it must not appear on this path.
@@ -575,6 +578,76 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
     } finally {
       await second?.dispose();
       await first.dispose();
+    }
+  });
+
+  it("withholds the verdict when the socket it bound is gone entirely", async () => {
+    // The other way this service stops owning the path: `net.Server.close()`
+    // unlinks by name, so any instance that shuts down takes whatever socket is
+    // at the path with it — including a rival's. The listener here survives with
+    // an unlinked inode nothing can dial, which is a statement about the socket
+    // and not about the app, exactly as a rebind would be.
+    const superseded = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    const live = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = live.api as NativeDevtoolsApi;
+      advance(10_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+
+      await superseded.dispose();
+      expect(fs.existsSync(SOCKET)).toBe(false);
+      expect(api.holdsEndpoint()).toBe(false);
+
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY);
+      expect(advice.terminal).toBe(false);
+      expect(advice.message).toContain(`${SOCKET} is not the endpoint this service bound`);
+      // No rival is on the path at all here, so the message must not assert one.
+      expect(advice.message).not.toContain("has rebound");
+    } finally {
+      await live.dispose();
+    }
+  });
+
+  it("bounds the refusal it logs however large the id a peer sends", async () => {
+    // The size of the value is the peer's choice: the length cap above the log
+    // line reads `.length`, which only a string has.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    const lines: string[] = [];
+    vi.mocked(process.stderr.write).mockImplementation((chunk: unknown) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    let socket: net.Socket | undefined;
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      socket = await new Promise<net.Socket>((resolve, reject) => {
+        const s = net.connect(api.socketPath);
+        s.once("connect", () => resolve(s));
+        s.once("error", reject);
+      });
+      socket.write(
+        JSON.stringify({
+          type: "Control",
+          payload: { bundleId: { pad: "b".repeat(100_000) } },
+        }) + "\n"
+      );
+      for (let i = 0; i < 100 && lines.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("refused a handshake whose bundle id is not a plain identifier");
+      expect(lines[0]!.length).toBeLessThan(200);
+      expect(api.listConnectedBundleIds()).toEqual([]);
+    } finally {
+      socket?.destroy();
+      await instance.dispose();
     }
   });
 
@@ -610,6 +683,14 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
       // The tool-server remedy is the half of the cycle that discards the record
       // proving the relaunch was already tried, so it must not be prescribed.
       expect(terminal.hint).not.toContain("argent server stop");
+      // This surface passes its own recovery half: leading with `screenshot`,
+      // since it is reached only once describe's own path returned empty, and
+      // carrying the measured dead-end warning rather than the bundle-id one.
+      expect(terminal.hint).toContain("Take a `screenshot` to see the screen");
+      expect(terminal.hint).not.toContain("Use the standard `describe` tool");
+      expect(terminal.hint).toContain(
+        "they read the same connection state and return the same injection_failed status"
+      );
     } finally {
       await instance.dispose();
     }
@@ -671,6 +752,15 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
         "was told to relaunch, and the process now running is a different one"
       );
       expect("message" in result && result.message).not.toContain("argent server stop");
+      // Reached before `describe` has been tried, so this surface offers it —
+      // with the measured dead-end warning, not the bundle-id one.
+      expect("message" in result && result.message).toContain("Use the standard `describe` tool");
+      expect("message" in result && result.message).toContain(
+        "they read the same connection state and return the same injection_failed status"
+      );
+      expect("message" in result && result.message).not.toContain(
+        "they run the same injection precheck"
+      );
     } finally {
       await instance.dispose();
     }

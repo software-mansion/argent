@@ -66,6 +66,30 @@ describe("attachNdjsonReader", () => {
     expect(dropped[0]!.preview).toBe("garbage·here");
   });
 
+  it.each([
+    ["null", "null"],
+    ["a number", "7"],
+    ["a string", '"restart the app"'],
+  ])("refuses %s frame, which parses but is not a record", async (_label, raw) => {
+    // Every consumer casts the frame to a record and dereferences it. A
+    // TypeError raised inside a socket handler is an uncaughtException, which
+    // the tool-server turns into `process.exit(1)` for every agent on it.
+    const { stream, messages, dropped } = harness();
+    stream.write(`${raw}\n{"id":9}\n`);
+    await settle();
+    expect(messages).toEqual([{ id: 9 }]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.preview).toBe(raw);
+  });
+
+  it("delivers an array frame, which a consumer reads as a record with no fields", async () => {
+    const { stream, messages, dropped } = harness();
+    stream.write("[1,2]\n");
+    await settle();
+    expect(messages).toEqual([[1, 2]]);
+    expect(dropped).toEqual([]);
+  });
+
   it("delivers a trailing frame without newline when the stream ends", async () => {
     const { stream, messages } = harness();
     stream.write('{"id":7}');

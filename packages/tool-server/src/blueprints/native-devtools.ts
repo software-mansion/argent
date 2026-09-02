@@ -237,8 +237,8 @@ export function buildAppStateMessage(
         `Restarting the app cannot change that — it already launched under exactly the terms a ` +
         `restart would recreate. Restart the tool-server ` +
         `(\`argent server stop && argent server start --detach\`) and retry. If you have already ` +
-        `restarted the tool-server for this app and it reads this way again, stop: the process is ` +
-        `loading argent's dylib but never dialing, which no further restart on either side fixes. ` +
+        `restarted the tool-server for this app and it reads this way again, stop: the process carries ` +
+        `argent's dylib but never dials, which no further restart on either side fixes. ` +
         `Treat native devtools as unavailable — read the screen with describe or screenshot and ` +
         `drive it by coordinate.`
       );
@@ -289,11 +289,14 @@ export function buildAppStateMessage(
  * reopen the cycle this verdict exists to close.
  *
  * That re-probe is spelled as a test on what the surfaces actually emit. Once
- * the verdict turns terminal the record clears only on a handshake, so the only
- * two outcomes are a connected app (the verdict is gone, `status` with it) and
- * this same block again — never `unregistered`, which carries a `state` these
- * surfaces stop returning. A repeat is therefore also the second-landing test
- * `unregistered`'s own message has to spell out by hand.
+ * the verdict turns terminal the record clears only on a handshake, so a still
+ * running, still silent app reads either connected (the verdict is gone,
+ * `status` with it) or this same block again — never `unregistered`, which
+ * carries a `state` these surfaces stop returning. A repeat is therefore also
+ * the second-landing test `unregistered`'s own message has to spell out by
+ * hand. A quit app or an unreadable `ps` answer neither, and both fall back to
+ * the measured state's own remedy; the record outlives them, so the next
+ * readable process restores the verdict.
  */
 function buildInjectionFailedDiagnosis(
   bundleId: string,
@@ -308,7 +311,7 @@ function buildInjectionFailedDiagnosis(
   return (
     `${bundleId} was told to relaunch, and the process now running is a different one, so the relaunch happened — and it still never connected. ` +
     `It carries argent's bootstrap dylib pointed at this simulator's devtools endpoint and it started after this service's listener bound, so the launchd environment reached it. That proves the dylib was handed to the process, not that dyld loaded it: dyld skips an inserted library silently when its slice does not match the simulator's platform, when it is unsigned, or when one of its dependencies is missing. Relaunching it again reproduces exactly this reading. ` +
-    `One reading can mimic this with nothing wrong: a cold start that takes longer than ${Math.round(connectBudgetMs / 1000)} seconds to make its first connection. Before treating this as final, wait about ${Math.round((connectBudgetMs * 2) / 1000)} seconds — a second budget's worth on top of the one already spent — and probe native-devtools-status once more. An app that has connected by then reports connected and this verdict is gone; if it repeats this diagnosis instead, the wait was not the answer. ` +
+    `One reading can mimic this with nothing wrong: a cold start that takes longer than ${Math.round(connectBudgetMs / 1000)} seconds to make its first connection. Before treating this as final, wait about ${Math.round((connectBudgetMs * 2) / 1000)} seconds — twice the budget this verdict already allowed, so a cold start half this speed still clears it — and probe native-devtools-status once more. An app that has connected by then reports connected and this verdict is gone; if it repeats this diagnosis instead, the wait was not the answer. ` +
     localisation
   );
 }
@@ -322,8 +325,9 @@ function buildInjectionFailedDiagnosis(
 function buildEndpointLostMessage(bundleId: string, socketPath: string): string {
   return (
     `${bundleId} is running with argent's native devtools injected, but this tool-server no longer ` +
-    `owns this simulator's devtools socket: another argent tool-server has rebound ${socketPath}, ` +
-    `and the last to bind owns it. A connection the app made to that listener is invisible here, so ` +
+    `owns this simulator's devtools socket: ${socketPath} is not the endpoint this service bound. ` +
+    `That path carries no owner and the last binder takes it, so a second argent tool-server on this ` +
+    `simulator is the usual cause. A connection the app made to that listener is invisible here, so ` +
     `this reading is not evidence about the app. Restart this tool-server ` +
     `(\`argent server stop && argent server start --detach\`) to take the socket back, then call ` +
     `restart-app once so the app re-dials it. If a second tool-server is running against this ` +
@@ -402,8 +406,9 @@ export function adviseOnUninjectedApp(
     // The diagnosis reasons from "nothing dialed the listener this service
     // holds". If it no longer holds one, that premise is about the socket, not
     // the app — and the tool-server restart the diagnosis forecloses is what
-    // takes it back. Non-terminal, so the caller reports it as `service_stale`,
-    // whose remedy is exactly that restart.
+    // takes it back. Non-terminal, so each surface keeps its own non-terminal
+    // spelling (`service_stale` from the precheck), whose remedy is that
+    // restart.
     if (!api.holdsEndpoint()) {
       return { terminal: false, message: buildEndpointLostMessage(bundleId, api.socketPath) };
     }
@@ -681,8 +686,9 @@ export interface NativeDevtoolsApi {
    * simulator reaches. The per-UDID socket path carries no server identity and
    * the last binder owns it, so a second tool-server on the same simulator
    * silently takes every future dial — leaving this service unable to see a
-   * connection that exists. False makes the unconnected readings statements
-   * about the socket rather than about the app.
+   * connection that exists. Consulted for the one reading that would otherwise
+   * turn terminal: false withdraws that verdict, because it would be a
+   * statement about the socket rather than about the app.
    */
   holdsEndpoint(): boolean;
   /**
@@ -735,6 +741,15 @@ function getNativeDevtoolsSocketPath(udid: string): string {
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
 }
 
+/** The inode behind a path, or null if it cannot be read. */
+function socketInode(socketPath: string): number | null {
+  try {
+    return fs.statSync(socketPath).ino;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Bind the per-UDID unix socket with the same guarded, self-healing treatment
  * the TCP branch gets. Exported for testing.
@@ -750,15 +765,6 @@ function getNativeDevtoolsSocketPath(udid: string): string {
  * On EADDRINUSE/EEXIST the stale entry is cleared and the bind retried once — a
  * self-heal for the unlink→listen race with a concurrent same-UDID server.
  */
-/** The inode behind a path, or null if it cannot be read. */
-function socketInode(socketPath: string): number | null {
-  try {
-    return fs.statSync(socketPath).ino;
-  } catch {
-    return null;
-  }
-}
-
 export function bindNativeDevtoolsUnixSocket(
   server: net.Server,
   socketPath: string
@@ -996,9 +1002,6 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
           if (refused) return;
-          // JSON.parse("null") succeeds, and a TypeError anywhere below would
-          // surface as an uncaughtException and crash the whole tool-server.
-          if (parsed === null || typeof parsed !== "object") return;
           const msg = parsed as { type: string; payload: any };
 
           // Handshake: must be the first message.
@@ -1018,11 +1021,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               !HANDSHAKE_BUNDLE_ID_PATTERN.test(requested)
             ) {
               // Audible, because the diagnosis three functions away reads a
-              // missing registration as a dylib dyld never loaded.
+              // missing registration as a dylib dyld never loaded. Bounded after
+              // stringifying, not before: the id is whatever the peer sent, and
+              // only the string branch has a length the guard above caps.
               process.stderr.write(
-                `[native-devtools] refused a handshake whose bundle id is not a plain identifier: ${JSON.stringify(
-                  typeof requested === "string" ? requested.slice(0, 64) : requested
-                )}\n`
+                `[native-devtools] refused a handshake whose bundle id is not a plain identifier: ${(
+                  JSON.stringify(requested) ?? "undefined"
+                ).slice(0, 80)}\n`
               );
               refused = true;
               socket.destroy();

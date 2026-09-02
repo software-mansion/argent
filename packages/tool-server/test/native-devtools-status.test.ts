@@ -1338,7 +1338,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     "discards the one in progress and returns you to this same state.";
   const UNREGISTERED_ESCAPE =
     "If you have already restarted the tool-server for this app and it reads this way again, " +
-    "stop: the process is loading argent's dylib but never dialing, which no further restart on " +
+    "stop: the process carries argent's dylib but never dials, which no further restart on " +
     "either side fixes. Treat native devtools as unavailable — read the screen with describe or " +
     "screenshot and drive it by coordinate.";
   const INDETERMINATE_ESCALATION =
@@ -1463,7 +1463,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "unregistered",
-      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
+      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process carries argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
     ],
     [
       "indeterminate",
