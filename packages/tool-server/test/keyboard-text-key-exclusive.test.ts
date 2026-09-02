@@ -703,8 +703,18 @@ describe("keyboard — how the constraint reaches a client", () => {
       await stage({ key: "enter", clear: true }),
       await stage({ text: "hi", key: "enter", clear: true }),
     ];
-    expect(new Set(stages).size).toBe(4);
-    expect(stages[0]).toBe("keyboard_text_and_key_combined");
+    // Pinned by VALUE, in the order the shapes are driven above. Distinctness
+    // alone left each name free and, worse, each shape-to-stage MAPPING free:
+    // swap the two two-field branches of the ternary and the bucket a client's
+    // telemetry lands in changes with nothing going red. Three of these four
+    // occur exactly once in the repo — at their production site — and
+    // `failure_stage` is an unconstrained string.
+    expect(stages).toEqual([
+      "keyboard_text_and_key_combined",
+      "keyboard_text_and_clear_combined",
+      "keyboard_key_and_clear_combined",
+      "keyboard_text_key_and_clear_combined",
+    ]);
   });
 
   it("does not send a caller after a key it never asked for", () => {
