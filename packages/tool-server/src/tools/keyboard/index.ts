@@ -54,7 +54,7 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
+      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence), and on physical iOS devices (XCTest types whole strings and has no per-key HID surface)."
     ),
 });
 

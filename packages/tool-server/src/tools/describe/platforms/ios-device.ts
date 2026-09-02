@@ -30,10 +30,22 @@ export async function describeIosDevice(
   const data = adaptRunnerSnapshot(nodes);
 
   if (quality?.state && quality.state !== "healthy") {
-    data.hint =
+    const summary =
       `Snapshot quality: ${quality.state} (backend ${quality.backend ?? "?"}, ` +
-      `reason ${quality.reasonCode ?? quality.reason ?? "?"}). The tree may be incomplete; ` +
-      "retry after the UI settles, or fall back to the screenshot.";
+      `reason ${quality.reasonCode ?? quality.reason ?? "?"}). `;
+
+    // The runner reports node_cap when the flattened tree hit its node budget.
+    // Retrying without changing the screen returns the same capped tree, so
+    // the way out is fewer nodes, not another read.
+    data.hint =
+      quality.reasonCode === "node_cap"
+        ? summary +
+          "The tree was truncated at the runner's node budget, so retrying returns the same capped tree. " +
+          "Dismiss the keyboard if it is up (its keys alone add about 100 Key nodes), or wait for the " +
+          "target with await-ui-element and a selector, which succeeds once it lands inside the budget. " +
+          "The screenshot shows what the tree dropped."
+        : summary +
+          "The tree may be incomplete; retry after the UI settles, or fall back to the screenshot.";
   } else if (data.tree.children.length === 0) {
     // Blind-read guards key off this hint. Every childless tree must carry one.
     data.hint =

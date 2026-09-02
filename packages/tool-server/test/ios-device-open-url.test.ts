@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 describe("ios-device open-url", () => {
-  it("delivers an https URL to Safari by default and keeps the deep-link note", async () => {
+  it("delivers an https URL to Safari by default and notes that Universal Links are not resolved", async () => {
     const res = await iosDeviceImpl.handler(
       {},
       { udid: UDID, url: "https://bsky.app/profile/x" },
@@ -38,7 +38,13 @@ describe("ios-device open-url", () => {
     });
     expect(res.opened).toBe(true);
     expect(res.url).toBe("https://bsky.app/profile/x");
-    expect(res.note).toBeTypeOf("string");
+    // The note describes the devicectl payload path, not simctl openurl routing:
+    // Safari received the URL, Universal Links were not consulted, and bundleId
+    // is the way to hand the URL to the app.
+    expect(res.note).toContain("Safari");
+    expect(res.note).toContain("Universal Links are not resolved");
+    expect(res.note).toContain("bundleId");
+    expect(res.note).not.toMatch(/simulator|opens the native app/i);
     // The launch fronts Safari, so it becomes the app under automation.
     expect(requireCurrentIosDeviceApp(UDID)).toBe(SAFARI);
   });

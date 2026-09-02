@@ -6,10 +6,19 @@ import {
   setCurrentIosDeviceApp,
 } from "../../../utils/ios-device/app-session";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
-import { httpDeepLinkNote } from "../deep-link-note";
 
 /** The default receiver for web URLs. */
 const SAFARI_BUNDLE_ID = "com.apple.mobilesafari";
+
+/**
+ * A web URL without bundleId reaches Safari as a devicectl launch payload.
+ * That path never consults Universal Links, so the shared deep-link note
+ * (written for simctl openurl routing) would describe the wrong behavior.
+ */
+const SAFARI_PAYLOAD_NOTE =
+  "This web URL was delivered to Safari as a launch payload. Universal Links are not resolved on " +
+  "this path, so the app verified for the link's domain does not open even when it is installed. " +
+  "Pass bundleId naming that app to hand it the URL directly.";
 
 /**
  * Resolve which app receives the URL. devicectl passes a URL to one named app
@@ -53,9 +62,9 @@ export const iosDeviceImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrl
 
     setCurrentIosDeviceApp(params.udid, bundleId);
 
-    // A web URL delivered to Safari keeps the deep-link ambiguity the note
-    // describes. A URL delivered to an explicitly named app does not.
-    const note = bundleId === SAFARI_BUNDLE_ID ? httpDeepLinkNote(params.url) : undefined;
+    // Only the Safari default needs the note. A URL delivered to an explicitly
+    // named app reaches that app directly.
+    const note = bundleId === SAFARI_BUNDLE_ID ? SAFARI_PAYLOAD_NOTE : undefined;
 
     return {
       opened: true,

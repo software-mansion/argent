@@ -21,7 +21,7 @@ type IosDevice = IosSimulator & { platform: "ios" };
 
 /**
  * A physical iPhone from CoreDevice (`xcrun devicectl`). Physical-device
- * support is iPhone-only for now; discovery skips iPads and notes the skip.
+ * support is iPhone-only for now; discovery skips iPads silently.
  */
 type IosPhysicalDevice = {
   platform: "ios";

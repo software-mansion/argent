@@ -32,7 +32,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones, where the capture always follows the device's real orientation."
     ),
   scale: z
     .number()
@@ -54,7 +54,7 @@ const zodSchema = z.object({
     .enum(["lanczos3", "box", "bilinear", "nearest"])
     .optional()
     .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum."
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones, where the runner capture is downscaled with sips."
     ),
 });
 

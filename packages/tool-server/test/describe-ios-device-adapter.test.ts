@@ -44,13 +44,19 @@ function appRoot(): RunnerSnapshotNode {
   return node({ index: 0, depth: 0, type: "Application" });
 }
 
-async function renderSnapshot(nodes: RunnerSnapshotNode[]): Promise<string> {
+type SnapshotQuality = { state: string; backend?: string; reason?: string; reasonCode?: string };
+
+async function describeSnapshot(nodes: RunnerSnapshotNode[], quality: SnapshotQuality | null) {
   const api: IosDeviceRunnerApi = {
     udid: DEVICE_UDID,
-    run: async () => ({ nodes, quality: null }),
+    run: async () => ({ nodes, quality }),
   };
   const registry = { resolveService: async () => api } as unknown as Registry;
-  const data = await describeIosDevice(registry, IOS_DEVICE);
+  return describeIosDevice(registry, IOS_DEVICE);
+}
+
+async function renderSnapshot(nodes: RunnerSnapshotNode[]): Promise<string> {
+  const data = await describeSnapshot(nodes, null);
   return formatDescribeTree(data.tree, { source: data.source });
 }
 
@@ -147,5 +153,62 @@ describe("describeIosDevice adapter: runner type mapping", () => {
     expect(segmented).toContain("SegmentedControl");
     expect(metric).toContain("AXButton");
     expect(lines.find((l) => l.includes('"Imperial"'))).toContain("AXButton");
+  });
+});
+
+describe("describeIosDevice adapter: degraded snapshot hints", () => {
+  setCurrentIosDeviceApp(DEVICE_UDID, APP);
+
+  const button = () =>
+    node({
+      index: 1,
+      depth: 1,
+      parentIndex: 0,
+      type: "Button",
+      label: "Continue",
+      rect: { x: 16, y: 700, width: 358, height: 48 },
+    });
+
+  it("explains the node cap and suggests fewer nodes instead of a retry", async () => {
+    const data = await describeSnapshot([appRoot(), button()], {
+      state: "degraded",
+      backend: "xctest",
+      reason: "node budget reached; deeper content was dropped",
+      reasonCode: "node_cap",
+    });
+
+    expect(data.hint).toMatch(/^Snapshot quality: degraded \(backend xctest, reason node_cap\)\./);
+    // A capped tree is deterministic: the same screen yields the same
+    // truncation, so the hint must not send the agent into a retry loop.
+    expect(data.hint).toContain("node budget");
+    expect(data.hint).toContain("same capped tree");
+    expect(data.hint).toContain("keyboard");
+    expect(data.hint).toContain("await-ui-element");
+    expect(data.hint).not.toContain("retry after the UI settles");
+    // The tree itself is still adapted; only the hint changes.
+    expect(data.tree.children).toHaveLength(1);
+  });
+
+  it("keeps the retry wording for every other degraded reason", async () => {
+    const data = await describeSnapshot([appRoot(), button()], {
+      state: "degraded",
+      backend: "ax-fallback",
+      reasonCode: "SNAPSHOT_TIMEOUT",
+    });
+
+    expect(data.hint).toMatch(
+      /^Snapshot quality: degraded \(backend ax-fallback, reason SNAPSHOT_TIMEOUT\)\./
+    );
+    expect(data.hint).toContain("retry after the UI settles");
+    expect(data.hint).not.toContain("node budget");
+  });
+
+  it("emits no quality hint for a healthy snapshot", async () => {
+    const data = await describeSnapshot([appRoot(), button()], {
+      state: "healthy",
+      backend: "xctest",
+    });
+
+    expect(data.hint).toBeUndefined();
   });
 });
