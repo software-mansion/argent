@@ -135,6 +135,16 @@ describe("attachRegistryLogger — happy-path events", () => {
     expect(logSpy.mock.calls[0]![0]).toContain("serviceStateChange svc:x: IDLE → STARTING");
   });
 
+  it("logs toolRegistered", () => {
+    const registry = new Registry();
+    attachRegistryLogger(registry);
+
+    registry.events.emit("toolRegistered", "my-tool");
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy.mock.calls[0]![0]).toContain("toolRegistered my-tool");
+  });
+
   it("logs toolInvoked", () => {
     const registry = new Registry();
     attachRegistryLogger(registry);
@@ -168,6 +178,16 @@ describe("attachRegistryLogger — happy-path events", () => {
     expect(logSpy.mock.calls[0]![0]).toContain(
       "toolCompleted my-tool (11111111-1111-4111-8111-111111111111, 123.46ms)"
     );
+  });
+
+  it("logs serviceRegistered", () => {
+    const registry = new Registry();
+    attachRegistryLogger(registry);
+
+    registry.events.emit("serviceRegistered", "svc:1");
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy.mock.calls[0]![0]).toContain("serviceRegistered svc:1");
   });
 });
 
