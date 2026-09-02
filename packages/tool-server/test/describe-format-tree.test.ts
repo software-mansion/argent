@@ -563,9 +563,19 @@ describe("formatDescribeTree — rendering budget", () => {
     const out = formatDescribeTree(rows(1200), { source: "android-devtools" });
     const body = out.split("\n").filter((l) => l.includes("StaticText"));
     expect(body).toHaveLength(500);
-    expect(out).toContain('StaticText "row 499"');
-    expect(out).not.toContain('StaticText "row 500"');
+    expect(out).toContain('StaticText "row 399"');
+    expect(out).not.toContain('StaticText "row 400"');
     expect(out).toContain("700 more elements are NOT shown");
+  });
+
+  it("keeps the end of the walk, where a WebView screen puts the host's controls", () => {
+    // A web page fills the FRONT of the walk and the app's own chrome sits
+    // behind it, so a head-only cut left the agent on a page with no toolbar,
+    // no tab switcher and no way off the screen.
+    const out = formatDescribeTree(rows(1200), { source: "android-devtools" });
+    expect(out).toContain('StaticText "row 1199"');
+    expect(out).toContain('StaticText "row 1100"');
+    expect(out).not.toContain('StaticText "row 1099"');
   });
 
   it("caps the flat renderers too", () => {

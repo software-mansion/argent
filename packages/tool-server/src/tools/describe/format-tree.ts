@@ -151,18 +151,31 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
 // 40-row table renders 392 lines, and the shape grows with the page.
 const MAX_BODY_LINES = 500;
 
+// How much of the budget is held back for the END of the walk. Keeping only the
+// head is what a web page can exploit: its DOM fills the front of the walk and
+// the host app's own controls sit behind it, so a capped Android WebView screen
+// arrived with no browser toolbar and no app action bar — measured on an
+// emulator, an in-app WebView over a 3,000-cell grid dropped every element the
+// agent needed to leave the page. The lines that go are now a slice out of the
+// middle instead.
+const TAIL_BODY_LINES = 100;
+
 // Cut the rendering at the budget and say what is missing, rather than hand
-// back a tree that reads complete. The lines that go are the tail of the walk —
-// the bottom of the screen in flat mode, the last subtrees in nested mode.
+// back a tree that reads complete.
 function capBody(body: string[]): string[] {
   if (body.length <= MAX_BODY_LINES) return body;
+  const head = MAX_BODY_LINES - TAIL_BODY_LINES;
   const dropped = body.length - MAX_BODY_LINES;
   return [
-    ...body.slice(0, MAX_BODY_LINES),
+    ...body.slice(0, head),
     "",
-    `... ${dropped} more elements are NOT shown: the rendering stops at ${MAX_BODY_LINES} lines. ` +
-      "Scope the inspection to a smaller region (scroll to or collapse the relevant view) and " +
-      "describe again.",
+    `... ${dropped} more elements are NOT shown. The rendering stops at ${MAX_BODY_LINES} lines: ` +
+      `it keeps the first ${head} and the last ${TAIL_BODY_LINES} of the walk and drops what is ` +
+      "between them. Scroll the missing part into view and describe again. An element in the gap " +
+      "is still addressable: await-ui-element and the flow selector directives match against the " +
+      "whole tree, not this rendering.",
+    "",
+    ...body.slice(body.length - TAIL_BODY_LINES),
   ];
 }
 
