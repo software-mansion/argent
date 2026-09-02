@@ -106,11 +106,12 @@ chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
-A directory run prints each flow's failing steps and its outcome, then a final
-flow summary; --recursive walks subdirectories too (dot-directories and
-node_modules are skipped). A flow the server rejects up front — an invalid file,
-or a device it cannot resolve — fails alone and the batch continues; any other
-failure stops the batch and counts the remaining flows skipped.
+A directory run prints each flow's failing steps and warnings, then its outcome,
+then a final flow summary; --recursive walks subdirectories too (dot-directories
+and node_modules are skipped). A flow that fails its steps keeps the batch
+running, as does one the server rejects up front — an invalid file, or a device
+it cannot resolve. Any other failure stops the batch and counts the remaining
+flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -1054,7 +1055,8 @@ interface BatchFlowResult {
 
 /**
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
- * steps and its outcome (no live step lines), then a flow-level summary; a flow
+ * steps and warnings, then its outcome (no live step lines), then a flow-level
+ * summary; a flow
  * failing its steps — or one the tool-server rejects up front (a bad YAML, an
  * unparseable step, a device it cannot resolve) — lets the batch continue,
  * while anything else (a transport throw, a failure of any other kind, a result
