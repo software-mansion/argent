@@ -25,6 +25,7 @@ A QA flow is complete only when:
        args: { clear: true }
      - tool: keyboard
        args: { text: "new@example.com" }
+     - assert: { text: { in: { id: email }, equals: "new@example.com" } } # not on iOS: see below
      - tool: keyboard
        args: { key: enter }
      ```
@@ -33,7 +34,13 @@ A QA flow is complete only when:
      `submit: false`, and a `tool: keyboard` step does not, so a replacement without it fills the
      field and never submits. Drop that step where the original `type:` carried `submit: false`.
 
-     Write them as YAML, not as the compact `tool: keyboard { clear: true }` form: a `tool:` step carries its arguments on an `args:` line of its own, and `parseFlow` rejects the compact one outright ("Nested mappings are not allowed in compact mappings"). The wait is load-bearing: raw `tool:` steps take no settle, and on every target except Chromium a clear that lands before focus empties the previously focused element and still reports success. On a Vega flow, drop the `tap:`/`type:` steps for `tool: tv-remote` — the runner rejects the touch directives there — and keep the `clear` step, which works. On Apple TV and Android TV drive the whole thing with the tools directly rather than as a flow.
+     Write them as YAML, not as the compact `tool: keyboard { clear: true }` form: a `tool:` step carries its arguments on an `args:` line of its own, and `parseFlow` rejects the compact one outright ("Nested mappings are not allowed in compact mappings"). The wait is load-bearing: raw `tool:` steps take no settle, and on every target except Chromium a clear that lands before focus empties the previously focused element and still reports success.
+
+     The `assert:` is load-bearing for a different reason. A `tool:` step has no verdict of its own — it passes on any result the tool returns — so on their own the clear and the type cannot fail this flow. One clear is also BOUNDED on every target except Chromium: 100 characters ahead of the caret and 100 behind it on iOS, Android, Apple TV and Android TV, and 200 behind it with none ahead on Vega. A longer field keeps the remainder, the type splices the new value onto it, and both steps still report `pass`. Measured on a booted iOS simulator with a 150-character field and exactly the two `tool: keyboard` steps: `ok=True passed=2 ['pass','pass']`, and the field ended as `abcdefghij…abcdefghijNEWVALUE`. Add one more `clear` step for every further 100 characters the field can hold, and let the assertion catch the case where that is still not enough.
+
+     Assert the FINISHED value, never an empty field: `parseFlow` rejects an empty `equals`, and `equals` is a full match a spliced value never satisfies. Put the assertion before the Enter step, which navigates away.
+
+     **Where you can assert the field itself, and where you cannot.** The runner's own tree is not `describe`. On Chromium and Android a leaf carries a `value`, so the step above works as written — except on a password field, whose value the Chromium tree deletes. On **iOS the leaf carries `label`, `identifier` and `focused` and no `value` at all**, so no `assert:` can read a field's contents there: the step above fails whatever the field holds. On iOS assert the app's own visible consequence of the finished value instead — the row it filters to, the button it enables, the error it clears — which item 3 asks for anyway. On a Vega flow, drop the `tap:`/`type:` steps for `tool: tv-remote` — the runner rejects the touch directives there — and keep the `clear` step, which works. On Apple TV and Android TV drive the whole thing with the tools directly rather than as a flow.
 
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
