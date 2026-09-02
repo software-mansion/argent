@@ -2580,6 +2580,11 @@ async function execLeafStep(
         // composition that failed everything counted as a passing step (#606).
         const nested = nestedOrchestratorOutcome(step.name, result);
         if (nested) {
+          // A sequence stopped by a LATER step still ran the typing before it, and
+          // that note is an advisory about a field this run has already changed.
+          // The reason belongs to what failed, so the note travels as the warning
+          // — otherwise it reaches the CLI nowhere, which renders no `result`.
+          const nestedNote = rawStepKeyboardNote(step.name, result);
           return {
             ...base,
             status: nested.status,
@@ -2588,6 +2593,7 @@ async function execLeafStep(
             result,
             outputHint,
             args,
+            ...(nestedNote ? { warning: nestedNote } : {}),
           };
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {

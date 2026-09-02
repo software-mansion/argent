@@ -204,6 +204,53 @@ steps:
     expect(run.steps[0].warning).toBe(note);
   });
 
+  it("keeps the typing note when the sequence stopped on a later step", async () => {
+    // The sequence failed for a reason of its own, and the reason line is that
+    // one. The typing still happened, and its note is about a field the run has
+    // already changed - dropping it leaves the CLI, which renders no `result`,
+    // with no trace of the repair or the secret warning.
+    const note =
+      "The typed text is in the field, but not from the first attempt: 8 characters were " +
+      "deleted and the text was retyped in smaller chunks.";
+    const flowFile = await writeFlow(
+      "stopped-later",
+      `executionPrerequisite: ""
+steps:
+  - tool: run-sequence
+    args:
+      udid: 00000000-0000-0000-0000-0000000000ab
+      steps:
+        - tool: keyboard
+          args:
+            text: hunter2
+`
+    );
+    const registry = makeRegistry(async () => ({
+      completed: 1,
+      total: 2,
+      steps: [
+        { tool: "keyboard", result: { typed: "hunter2", keys: 7, note } },
+        { tool: "await-ui-element", error: "condition not met after 5000ms" },
+      ],
+    }));
+
+    const run = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        {
+          name: "stopped-later",
+          project_root: PROJECT_ROOT,
+          flow_file: flowFile,
+          device: "00000000-0000-0000-0000-0000000000ab",
+        }
+      )
+    );
+
+    expect(run.steps.map((s) => s.status)).toEqual(["fail"]);
+    expect(run.steps[0].reason).toContain("condition not met");
+    expect(run.steps[0].warning).toBe(note);
+  });
+
   it("takes the note of the keyboard steps only, and says which step each is from", async () => {
     // `await-ui-element` returns a `note` of its own about a wait it decided
     // itself, and it is in run-sequence's allowed tools — read as a read-back
