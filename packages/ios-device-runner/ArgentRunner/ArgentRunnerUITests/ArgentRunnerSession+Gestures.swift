@@ -16,8 +16,12 @@ extension ArgentRunnerSession {
         )
     }
 
-    /// Taps at the wire coordinates, executing `numberOfTaps` taps as one
-    /// on-device gesture.
+    /// Taps at the wire coordinates: one tap, or the native double-tap when
+    /// `numberOfTaps` is 2. Higher counts are refused. XCUICoordinate has no
+    /// N-tap API, and a loop of single taps is not one gesture on hardware:
+    /// each tap is its own synthesized event behind XCTest's idle wait and an
+    /// XPC round trip, hundreds of milliseconds apart, outside the OS
+    /// multi-tap window.
     func performTap(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope
     {
@@ -30,19 +34,21 @@ extension ArgentRunnerSession {
             return .failure(.invalidRequest, "tap requires numberOfTaps >= 1")
         }
 
+        guard taps <= 2 else {
+            return .failure(
+                .unsupportedOperation,
+                "tap supports numberOfTaps 1 or 2, not \(taps)",
+                hint:
+                    "2 = the native double-tap; higher counts are not one gesture on hardware."
+            )
+        }
+
         let coordinate = point(app, x, y)
-        switch taps {
-        case 1:
-            coordinate.tap()
-        case 2:
+
+        if taps == 2 {
             coordinate.doubleTap()
-        default:
-            // XCUICoordinate has no N-tap API. Sequential taps in an on-device loop
-            // have no wire round-trips between them, so inter-tap latency stays
-            // inside the OS multi-tap window.
-            for _ in 0..<taps {
-                coordinate.tap()
-            }
+        } else {
+            coordinate.tap()
         }
 
         return .success(MessagePayload(message: "tapped"))

@@ -16,6 +16,7 @@ vi.mock("../../src/utils/simulator-client", () => ({
 }));
 
 import { gestureTapTool } from "../../src/tools/gesture-tap";
+import { InvalidToolInputError } from "../../src/utils/capability";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 
 const touchServices = { simulatorServer: {} } as never;
@@ -75,6 +76,28 @@ describe("gesture-tap", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("physical iOS: refuses clickCount above 2 before any runner round trip", async () => {
+    // XCUICoordinate has a tap and the native double-tap only. A loop of
+    // single taps on the device is not one gesture (each is its own
+    // synthesized event, hundreds of ms apart), so the count is refused with
+    // guidance instead of landing as separate taps.
+    const { run, services } = runnerRig();
+    const error = await gestureTapTool
+      .execute(services, { udid: DEVICE_UDID, x: 0.5, y: 0.5, clickCount: 3 })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(InvalidToolInputError);
+    expect((error as Error).message).toContain("2 = the native double-tap");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("physical iOS: declares the runner service only for a count it will send", () => {
+    const tap = { udid: DEVICE_UDID, x: 0.5, y: 0.5 };
+    expect(gestureTapTool.services({ ...tap, clickCount: 2 })).toHaveProperty("iosDeviceRunner");
+    // A refused request must not stand a runner up first: a cold start is an
+    // xcodebuild of up to 15 minutes plus a ready-wait.
+    expect(gestureTapTool.services({ ...tap, clickCount: 3 })).toEqual({});
   });
 
   it("physical iOS: a single tap keeps its pre-numberOfTaps wire shape", async () => {

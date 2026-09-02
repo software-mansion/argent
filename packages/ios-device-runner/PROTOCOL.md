@@ -55,7 +55,7 @@ set, so clean replies stay byte-identical on the wire.
 | `statusCommandId`     | `status`            | Journal lookup key.                                                     |
 | `appBundleId`         | app-scoped commands | Target app. Required, never inferred.                                   |
 | `x`, `y`              | `tap`, `longPress`  | Absolute points in the app's space.                                     |
-| `numberOfTaps`        | `tap`               | Taps in the one gesture (default 1; 2 = native double-tap).             |
+| `numberOfTaps`        | `tap`               | 1 (default) or 2 (the native double-tap); higher counts are refused.    |
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
 | `holdMs`              | `drag`              | Rest at the start point before moving (default 50 ms).                  |
@@ -78,14 +78,16 @@ launch, and launching is launch-app's job, never a command side effect):
   keyboard included). Same rect describe normalizes against, so 0-1 tap
   coordinates invert that mapping.
 - `tap`, `longPress`, `drag` → `{message}`: coordinate gestures via
-  XCUICoordinate (public API; orientation-safe). `tap` executes
-  `numberOfTaps` taps as one on-device gesture: 2 maps to the native
-  `doubleTap()`, >2 to a tight tap loop (no native N-tap API; inter-tap
-  latency stays on-device, inside the OS multi-tap window). `drag` presses
-  for `holdMs` at the start, moves at the velocity `durationMs` implies, and
-  rests `settle`-long before lifting; a long-press pickup of a draggable item
-  needs a `holdMs` of about 500 ms or more, since a short press never lifts
-  it however slowly the finger then moves.
+  XCUICoordinate (public API; orientation-safe). `tap` accepts
+  `numberOfTaps` 1 (default) or 2, the native `doubleTap()`; anything
+  higher fails with `UNSUPPORTED_OPERATION`. XCUICoordinate has no N-tap
+  API, and a loop of single taps is not one gesture on hardware: each tap
+  is its own synthesized event behind XCTest's idle wait and an XPC round
+  trip, hundreds of milliseconds apart, outside the OS multi-tap window.
+  `drag` presses for `holdMs` at the start, moves at the velocity
+  `durationMs` implies, and rests `settle`-long before lifting; a long-press
+  pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
+  a short press never lifts it however slowly the finger then moves.
 - `type` → `{message}`: types into the current first responder. The runner
   probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
   nothing has it. The probe is what makes that code real on hardware: there,

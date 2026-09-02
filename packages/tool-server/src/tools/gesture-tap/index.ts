@@ -3,6 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { InvalidToolInputError } from "../../utils/capability";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, tapAt, toPoints } from "../../utils/ios-device/runner-commands";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
@@ -26,8 +27,8 @@ const zodSchema = z.object({
     .describe(
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
-        "CDP clickCount so dblclick actually fires; on physical iOS the whole multi-tap is one " +
-        "on-device runner gesture (2 = the native double-tap). Default 1."
+        "CDP clickCount so dblclick actually fires; on physical iOS only 1 or 2 is accepted (2 = " +
+        "the native double-tap; higher counts are not one gesture on hardware). Default 1."
     ),
 });
 
@@ -72,6 +73,21 @@ const capability: ToolCapability = {
 const TAP_HOLD_MS = 50;
 const MULTI_TAP_GAP_MS = 100;
 
+/**
+ * The runner's tap ceiling. XCUICoordinate has a single tap and the native
+ * double-tap; it has no N-tap API, and looping single taps on the device is
+ * not one gesture: each tap is its own synthesized event, hundreds of
+ * milliseconds apart, outside the OS multi-tap window.
+ */
+const IOS_DEVICE_MAX_CLICK_COUNT = 2;
+
+function iosDeviceClickCountError(clickCount: number): InvalidToolInputError {
+  return new InvalidToolInputError(
+    `gesture-tap on a physical iOS device accepts clickCount 1 or 2, not ${clickCount}: ` +
+      "2 = the native double-tap; higher counts are not one gesture on hardware."
+  );
+}
+
 async function tapChromium(
   api: ChromiumCdpApi,
   x: number,
@@ -103,7 +119,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this tap (the foreground screen changed as a side effect). Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.
+Returns { tapped: true, timestampMs }. On a physical iOS device the result also carries reactivated: true when the target app was backgrounded and the runner had to re-front it for this tap (the foreground screen changed as a side effect); clickCount above 2 is rejected there before anything reaches the device, since higher counts are not one gesture on hardware. Fails if the device backend is not reachable: the simulator-server for iOS simulators, the XCUITest runner for a physical iOS device, the emulator backend for Android, or Chromium CDP.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
@@ -115,6 +131,12 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       return { chromium: chromiumCdpRef(device) };
     }
     if (isIosPhysicalDevice(device)) {
+      // A count execute refuses must not stand a runner up first: a cold start
+      // is an xcodebuild of up to 15 minutes plus a ready-wait, paid for a
+      // request that never reaches the device.
+      if ((params.clickCount ?? 1) > IOS_DEVICE_MAX_CLICK_COUNT) {
+        return {};
+      }
       return { iosDeviceRunner: iosDeviceRunnerRef(device) };
     }
     return { simulatorServer: simulatorServerRef(device) };
@@ -131,11 +153,14 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       return { tapped: true, timestampMs };
     }
     if (isIosPhysicalDevice(device)) {
+      if (clickCount > IOS_DEVICE_MAX_CLICK_COUNT) {
+        throw iosDeviceClickCountError(clickCount);
+      }
       const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
       const bundleId = requireCurrentIosDeviceApp(device.id);
       const viewport = await getViewport(runner, bundleId);
       const point = toPoints(viewport, params.x, params.y);
-      // The whole multi-tap is one runner command. Per-tap round-trips would miss the OS double-tap window.
+      // A double-tap is one runner command. A per-tap round-trip would miss the OS double-tap window.
       const tap = await tapAt(runner, bundleId, point, clickCount);
       // Either leg can be the one that re-fronted a backgrounded target: the
       // viewport read fronts it first, so the tap then finds it foreground.
