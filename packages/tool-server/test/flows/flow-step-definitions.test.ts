@@ -472,6 +472,15 @@ describe("flow step definitions", () => {
     expect(stepTarget({ kind: "type", into: { identifier: "bio" }, text: atCap })).toBe(
       `into id=bio ← "${atCap}"`
     );
+    // The cap counts CODE POINTS: an astral char is two UTF-16 units, so
+    // counting units calls these 201 and 203 long and quotes half a pair.
+    const astralAtCap = `${"x".repeat(199)}\u{1F600}`;
+    expect(stepTarget({ kind: "type", into: { identifier: "bio" }, text: astralAtCap })).toBe(
+      `into id=bio ← "${astralAtCap}"`
+    );
+    expect(
+      stepTarget({ kind: "type", into: { identifier: "bio" }, text: `${astralAtCap}\u{1F389}` })
+    ).toBe(`into id=bio ← "${astralAtCap}"…(+1 chars)`);
   });
 
   it("describes a when guard for report reasons with the failure-prose selector spelling", () => {

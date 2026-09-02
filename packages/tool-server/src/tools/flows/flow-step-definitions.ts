@@ -217,11 +217,14 @@ function delayLabel(step: Extract<FlowStep, { kind: "tool" }>): string {
 const MAX_TARGET_TEXT_CHARS = 200;
 
 function typedTextLabel(text: string): string {
-  if (text.length <= MAX_TARGET_TEXT_CHARS) return JSON.stringify(text);
+  // Cut in CODE POINTS: `text.length` counts UTF-16 units, so a cut at the cap
+  // can halve a surrogate pair.
+  const chars = Array.from(text);
+  if (chars.length <= MAX_TARGET_TEXT_CHARS) return JSON.stringify(text);
   // Elide before quoting, not after: a cut through the rendered form can halve
   // an escape sequence.
-  const elided = text.length - MAX_TARGET_TEXT_CHARS;
-  return `${JSON.stringify(text.slice(0, MAX_TARGET_TEXT_CHARS))}…(+${elided} chars)`;
+  const elided = chars.length - MAX_TARGET_TEXT_CHARS;
+  return `${JSON.stringify(chars.slice(0, MAX_TARGET_TEXT_CHARS).join(""))}…(+${elided} chars)`;
 }
 
 // ── Step definitions ──
