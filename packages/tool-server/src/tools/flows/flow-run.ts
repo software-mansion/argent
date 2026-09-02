@@ -44,7 +44,6 @@ import {
   LAUNCH_PLATFORMS,
   SELECTOR_RELATIONS,
 } from "./flow-utils";
-import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
@@ -240,8 +239,6 @@ export interface StepReport {
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
-  scriptLog?: string;
-  scriptLogTruncated?: boolean;
   /**
    * Nesting depth for display: omitted at top level, +1 inside each nesting
    * step's expanded steps. The report is a flat list with no block-end marker,
@@ -944,7 +941,6 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   attachedAppPath?: string;
   projectRoot: string;
-  scriptLogBudget: FlowScriptLogBudget;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1250,7 +1246,7 @@ is resolved against the flow file that names the step, exactly as a \`run\` targ
 climbs out of .argent/flows/ to reach the project's own scripts/ directory. The step needs no device, so
 a script-only flow runs with nothing booted — but a \`run\` or a \`when\` step beside it still resolves
 one, \`when\` even when the only thing it guards is another script, so a platform-gated seed needs a
-device of that platform. Its stdout and stderr come back on the step report. Co-located runs only.).
+device of that platform. Co-located runs only.).
 A selector-less gesture — a coordinate \`tap\`/\`long-press\`/\`swipe\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
 no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
 settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
@@ -1427,7 +1423,6 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         chromiumLaunched: false,
         snapshotApps: new Map(),
         projectRoot: params.project_root,
-        scriptLogBudget: createScriptLogBudget(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -2408,7 +2403,7 @@ async function execRunStep(
   );
 }
 
-type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
+type ScriptStepOutcome = Pick<StepReport, "status" | "reason">;
 
 /**
  * A `script` step is the one step whose `reason` is written by something other
@@ -2448,7 +2443,6 @@ async function runScriptStep(
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
-    logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });
   return outcome.reason === undefined

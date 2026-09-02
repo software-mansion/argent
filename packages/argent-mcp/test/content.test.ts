@@ -356,16 +356,17 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
   });
 
-  it("renders a script step's captured output as its own block", async () => {
+  it("renders a script step as a status line, with its reason and nothing else", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
       steps: [
+        { index: 0, kind: "script", status: "pass", target: "scripts/seed.mjs" },
         {
-          index: 0,
+          index: 1,
           kind: "script",
-          status: "pass",
-          target: "scripts/seed.mjs",
-          scriptLog: "creating order\norder 4711 created\n",
+          status: "fail",
+          target: "scripts/pay.mjs",
+          reason: "Error: seed API returned 500",
         },
       ],
     };
@@ -374,64 +375,32 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] ✓ script scripts/seed.mjs" });
     expect(blocks[2]).toEqual({
       type: "text",
-      text: "script output:\ncreating order\norder 4711 created",
+      text: "[2] ✗ script scripts/pay.mjs — Error: seed API returned 500",
     });
   });
 
-  it("indents a nested script step's output block with its step line", async () => {
+  it("puts nothing a script wrote into the content, even when the report carries it", async () => {
     const blocks = await flowRunToMcpContent({
-      flow: "f",
-      steps: [
-        { index: 0, kind: "run", status: "pass", target: "seed.yaml" },
-        {
-          index: 1,
-          kind: "script",
-          status: "pass",
-          target: "scripts/seed.mjs",
-          depth: 1,
-          scriptLog: "creating order\n",
-          scriptLogTruncated: true,
-        },
-      ],
-    });
-
-    expect(blocks[2]).toEqual({ type: "text", text: "[2] ✓   script scripts/seed.mjs" });
-    expect(blocks[3]).toEqual({
-      type: "text",
-      text: "  script output:\ncreating order\n… output truncated",
-    });
-  });
-
-  it("says when a script's log was truncated, and ignores a non-string one off the wire", async () => {
-    const truncated = await flowRunToMcpContent({
-      flow: "f",
-      steps: [
-        { index: 0, kind: "script", status: "fail", scriptLog: "…", scriptLogTruncated: true },
-      ],
-    });
-    expect(JSON.stringify(truncated)).toContain("output truncated");
-
-    const nothingLeft = await flowRunToMcpContent({
-      flow: "f",
-      steps: [{ index: 0, kind: "script", status: "pass", scriptLogTruncated: true }],
-    });
-    expect(nothingLeft[2]).toEqual({
-      type: "text",
-      text: "script output:\n… output truncated",
-    });
-
-    const hostile = await flowRunToMcpContent({
       flow: "f",
       steps: [
         {
           index: 0,
           kind: "script",
-          status: "pass",
-          scriptLog: { evil: true } as unknown as string,
-        },
+          status: "fail",
+          target: "scripts/seed.mjs",
+          reason: "Error: seed API returned 500",
+          scriptLog: "DATABASE_URL=postgres://user:hunter2@db/prod\n",
+          scriptLogTruncated: true,
+        } as FlowExecuteResult["steps"][number],
       ],
     });
-    expect(hostile.filter((b) => b.type === "text")).toHaveLength(3); // header, step, footer
+
+    const text = JSON.stringify(blocks);
+    expect(text).toContain("Error: seed API returned 500");
+    expect(text).not.toContain("hunter2");
+    expect(text).not.toContain("script output");
+    expect(text).not.toContain("truncated");
+    expect(blocks.filter((b) => b.type === "text")).toHaveLength(3); // header, step, footer
   });
 
   it("renders run steps by their as-written path, with a stem fallback for legacy servers", async () => {

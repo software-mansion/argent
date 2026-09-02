@@ -26,8 +26,6 @@ let root: string;
 function outcome(over: Partial<FlowScriptResult>): FlowScriptResult {
   return {
     ok: false,
-    log: "",
-    logTruncated: false,
     durationMs: 1,
     queuedMs: 0,
     notes: [],

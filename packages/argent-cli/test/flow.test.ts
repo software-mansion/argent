@@ -370,7 +370,7 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
   });
 
-  it("prints a script step's log live, under the step line the event produced", async () => {
+  it("prints a live script step as a status line, never what the script wrote", async () => {
     const steps: StepFixture[] = [
       { index: 0, kind: "echo", status: "pass", message: "seeding" },
       {
@@ -378,7 +378,7 @@ describe("argent flow run", () => {
         kind: "script",
         status: "pass",
         target: "scripts/seed.mjs",
-        scriptLog: "creating order\norder 4711 created\n",
+        scriptLog: "creating order\nDATABASE_URL=postgres://user:hunter2@db/prod\n",
         scriptLogTruncated: true,
       },
     ];
@@ -393,9 +393,9 @@ describe("argent flow run", () => {
 
     const out = logs.join("\n");
     expect(out).toContain("✓  1 script scripts/seed.mjs");
-    expect(out).toContain("       │ creating order");
-    expect(out).toContain("       │ order 4711 created");
-    expect(out).toContain("       │ … output truncated");
+    expect(out).not.toContain("creating order");
+    expect(out).not.toContain("hunter2");
+    expect(out).not.toContain("truncated");
     expect(out.match(/script scripts\/seed\.mjs/g)).toHaveLength(1);
     expect(out).toContain("PASS (started on SIM-1) — 1 passed");
   });
@@ -1663,7 +1663,7 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
   });
 
-  it("prints a passing script's output, the only record a green batch run leaves", async () => {
+  it("leaves a passing script step out of a green batch run entirely", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
         steps: [
@@ -1683,9 +1683,8 @@ describe("argent flow run <dir>", () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
     const out = logs.join("\n");
-    expect(out).toContain("✓  1 script scripts/seed.mjs");
-    expect(out).toContain("│ seeded order 4711");
-    // The widened gate still admits only the script step, not its neighbour.
+    expect(out).not.toContain("script scripts/seed.mjs");
+    expect(out).not.toContain("seeded order 4711");
     expect(out).not.toMatch(/✓ {2}2 tap/);
   });
 

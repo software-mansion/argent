@@ -258,14 +258,12 @@ describe("flow script executor — the protocol channel is the runner's alone", 
     const script = ws.write(
       "pings.mjs",
       `if (process.send) process.send("ready");
-       console.log("did the real work");
        output.ok = true;`
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
     expect(result.output).toEqual({ ok: true });
-    expect(result.log).toContain("did the real work");
   });
 
   it("ignores a verdict the script sends for itself", async () => {
@@ -300,7 +298,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
       "writes-fd3.mjs",
       `import fs from "node:fs";
        try { fs.writeSync(3, ${JSON.stringify(written)}); } catch {}
-       console.log("did the real work");
        output.real = true;`
     );
     const uncaught: unknown[] = [];
@@ -312,7 +309,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
       expect(uncaught).toEqual([]);
       expect(result.failure).toBeUndefined();
       expect(result.output).toEqual({ real: true });
-      expect(result.log).toContain("did the real work");
     } finally {
       process.off("uncaughtException", onUncaught);
     }
@@ -333,7 +329,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
       "awaits-send.mjs",
       `async function main() {
          await new Promise((resolve) => process.send({ hello: 1 }, resolve));
-         console.log("past the send");
          output.done = true;
        }
        main();
@@ -343,7 +338,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
 
     expect(result.failure).toBeUndefined();
     expect(result.output).toEqual({ started: true, done: true });
-    expect(result.log).toContain("past the send");
   });
 
   it("delivers the disconnect event to the script that asked for it", async () => {
@@ -355,7 +349,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
            process.on("disconnect", resolve);
            process.disconnect();
          });
-         console.log("past the disconnect");
          output.done = true;
        }
        main();
@@ -365,7 +358,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
 
     expect(result.failure).toBeUndefined();
     expect(result.output).toEqual({ started: true, done: true });
-    expect(result.log).toContain("past the disconnect");
   });
 });
 
@@ -380,15 +372,11 @@ describe("flow script executor — the runner's reporting path survives the scri
   for (const [what, prelude] of shapes) {
     it(`still reports a script that ${what}`, async () => {
       const ws = workspace();
-      const script = ws.write(
-        "disturbs.mjs",
-        `${prelude}\nconsole.log("did the work");\noutput.ok = true;`
-      );
+      const script = ws.write("disturbs.mjs", `${prelude}\noutput.ok = true;`);
       const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
       expect(result.failure).toBeUndefined();
       expect(result.output).toEqual({ ok: true });
-      expect(result.log).toContain("did the work");
     });
   }
 
@@ -403,16 +391,14 @@ describe("flow script executor — the runner's reporting path survives the scri
       "reclaims.mjs",
       `process.removeAllListeners();
        process.on("uncaughtException", (err) => {
-         console.log("script handled", err.message);
-         output.recovered = true;
+         output.handled = err.message;
        });
        setTimeout(() => { throw new Error("late boom"); }, 10);`
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ recovered: true });
-    expect(result.log).toContain("script handled late boom");
+    expect(result.output).toEqual({ handled: "late boom" });
   });
 });
 
@@ -453,7 +439,7 @@ describe("flow script executor — the published layout", () => {
     ]);
 
     const ws = workspace();
-    const script = ws.write("seed.mjs", `console.log("bundled"); output.ok = true;`);
+    const script = ws.write("seed.mjs", `output.ok = true;`);
     const shared = executor();
     await shared.execute({ scriptPath: script, projectRoot: ws.dir, runnerDir: dist });
 
@@ -466,7 +452,7 @@ describe("flow script executor — the published layout", () => {
     const roundTripMs = Date.now() - started;
 
     expect(result.ok).toBe(true);
-    expect(result.log).toContain("bundled");
+    expect(result.output).toEqual({ ok: true });
     // Headroom for a loaded CI box rather than a real expectation.
     expect(roundTripMs, `process start cost: ${roundTripMs}ms`).toBeLessThan(3_000);
   }, 30_000);

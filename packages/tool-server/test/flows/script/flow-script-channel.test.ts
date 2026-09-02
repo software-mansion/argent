@@ -6,6 +6,7 @@
  * put on the send itself. Everything else about the child stays real.
  */
 import type { ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FlowScriptExecutor,
@@ -40,15 +41,22 @@ afterEach(() => {
   while (workspaces.length) workspaces.pop()!.cleanup();
 });
 
-async function run(): Promise<FlowScriptResult> {
+async function run(): Promise<{ result: FlowScriptResult; ranMark: string }> {
   const ws = createScriptWorkspace("chan");
   workspaces.push(ws);
-  const script = ws.write("script.mjs", `console.log("ran"); output.ok = true;`);
-  return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+  const ranMark = ws.resolve("ran.txt");
+  const script = ws.write(
+    "script.mjs",
+    `import fs from "node:fs";
+     fs.writeFileSync(${JSON.stringify(ranMark)}, "ran");
+     output.ok = true;`
+  );
+  const result = await new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
     scriptPath: script,
     projectRoot: ws.dir,
     timeoutMs: 20_000,
   });
+  return { result, ranMark };
 }
 
 describe("flow script executor — a request that never reaches the runner", () => {
@@ -59,7 +67,7 @@ describe("flow script executor — a request that never reaches the runner", () 
     "names %s, and stops the child rather than waiting it out",
     async (_label, mode, expected) => {
       fault.mode = mode;
-      const result = await run();
+      const { result, ranMark } = await run();
 
       expect(result.failure?.kind).toBe("protocol");
       expect(result.failure?.message).toContain(expected);
@@ -68,7 +76,7 @@ describe("flow script executor — a request that never reaches the runner", () 
       // stop these paths ask for ends the step before its 20s time limit.
       expect(result.durationMs).toBeLessThan(10_000);
       // And the script itself never ran: the runner imports it only on a request.
-      expect(result.log).not.toContain("ran");
+      expect(fs.existsSync(ranMark)).toBe(false);
     },
     30_000
   );

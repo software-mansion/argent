@@ -21,11 +21,7 @@ import {
 } from "@argent/configuration-core";
 import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
-import {
-  scrubSecretChunk,
-  scrubSecretValues,
-  SECRET_PLACEHOLDER_MARKER,
-} from "../../../utils/secrets";
+import { scrubSecretValues } from "../../../utils/secrets";
 import { sleep } from "../../../utils/timing";
 import {
   isTerminalResponse,
@@ -38,8 +34,6 @@ import {
 } from "./flow-script-protocol";
 
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
-export const SCRIPT_STEP_LOG_LIMIT_BYTES = 64 * 1024;
-const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
 const SETTLE_TIMEOUT_MS = 500;
 const STOP_GRACE_MS = 1_500;
 /**
@@ -56,14 +50,22 @@ const GROUP_POLL_MS = 50;
 const FORCE_GRACE_MS = 500;
 const QUEUE_DEPTH_LIMIT = 32;
 const QUEUE_WAIT_REPORT_MS = 5_000;
-const MAX_BUFFERED_LINE_CHARS = 8 * 1024;
 /**
  * V8's heap-exhaustion banner. Coarse on purpose: the wording is not a
  * stability contract, and an unrecognized abort degrades to the signal report
  * rather than to a wrong verdict.
  */
 const V8_HEAP_FATAL_RE = /FATAL ERROR:[^\n]*(?:heap limit|heap out of memory|Allocation failed)/i;
-const HEAP_FATAL_WINDOW_CHARS = 256;
+
+/**
+ * A watchdog announcing that it never armed: `flow-script-runner.mjs`'s
+ * `reportWatchdogProblem`, and the lifeline thread's own module-scope catch.
+ * Those are the only first-party writers on the child's stderr, and without
+ * this a run that lost both watchdogs is byte-identical to a healthy one.
+ */
+const WATCHDOG_PROBLEM_RE = /\[argent\] script (?:watchdog|lifeline)\b[^\n]*unavailable:/;
+
+const STDERR_WINDOW_CHARS = 256;
 
 const RUNNER_FILE = "flow-script-runner.mjs";
 
@@ -199,14 +201,6 @@ export interface FlowScriptSecret {
   value: string;
 }
 
-export interface FlowScriptLogBudget {
-  remainingBytes: number;
-}
-
-export function createScriptLogBudget(): FlowScriptLogBudget {
-  return { remainingBytes: SCRIPT_RUN_LOG_LIMIT_BYTES };
-}
-
 export interface FlowScriptRequest {
   scriptPath: string;
   output?: Record<string, unknown>;
@@ -215,7 +209,6 @@ export interface FlowScriptRequest {
   projectRoot?: string;
   flowDir?: string;
   secrets?: readonly FlowScriptSecret[];
-  logBudget?: FlowScriptLogBudget;
   signal?: AbortSignal;
   runnerDir?: string;
 }
@@ -253,8 +246,6 @@ export interface FlowScriptResult {
   ok: boolean;
   output?: Record<string, unknown>;
   failure?: FlowScriptFailure;
-  log: string;
-  logTruncated: boolean;
   durationMs: number;
   queuedMs: number;
   notes: string[];
@@ -482,11 +473,7 @@ export class FlowScriptExecutor {
     }
 
     const timeoutMs = clampTimeout(request.timeoutMs, bounds.maxTimeoutMs, notes);
-    const capture = new ScriptLogCapture(
-      () => request.secrets ?? [],
-      SCRIPT_STEP_LOG_LIMIT_BYTES,
-      request.logBudget
-    );
+    const stderrWatch = new StderrSignalWatch();
 
     // The real path, not just the absolute one: Node resolves an entry module
     // through `realpath` and the runner re-imports that URL, so a different
@@ -592,8 +579,14 @@ export class FlowScriptExecutor {
       });
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => capture.push("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer) => capture.push("stderr", chunk));
+    // Drained, never kept: what a script prints is nobody's to read here, but a
+    // pipe left paused fills its buffer and blocks the child from ever reaching
+    // its own time limit. `resume()` discards stdout as it arrives; stderr goes
+    // through the one reader that survives, which holds nothing beyond the
+    // window it matches against and forwards no text of its own — a match sets
+    // a flag, and argent writes whatever sentence that flag earns.
+    child.stdout?.resume();
+    child.stderr?.on("data", (chunk: Buffer) => stderrWatch.push(chunk));
 
     child.on("message", (raw) => {
       if (terminal) return;
@@ -640,19 +633,19 @@ export class FlowScriptExecutor {
     clearTimeout(timer);
     request.signal?.removeEventListener("abort", onAbort);
 
-    // The protocol runs on IPC and the logs on the standard streams, with no
-    // shared order between them: a terminal message routinely arrives *before*
-    // the log text of the same script. The bound covers a descendant that
-    // inherited the streams and is holding them open.
+    // The protocol runs on IPC and stderr on its own pipe, with no shared order
+    // between them: a terminal message routinely arrives *before* the last text
+    // the same script wrote. V8's heap banner is in that text, and the watch
+    // can only match what reached it, so waiting for the close is what puts
+    // those chunks in before the destroys below. The bound covers a descendant
+    // that inherited the streams and is holding them open.
     await Promise.race([closed, sleep(SETTLE_TIMEOUT_MS)]);
     await stop();
-    capture.end();
     child.stdout?.destroy();
     child.stderr?.destroy();
     lifeline?.destroy?.();
     if (child.connected) child.disconnect();
 
-    const log = capture.text;
     const verdict = redactSecrets(
       classifyOutcome({
         exit,
@@ -663,16 +656,25 @@ export class FlowScriptExecutor {
         interrupted,
         timeoutMs,
         deadlinePassed,
-        heapFatalSeen: capture.heapFatalSeen,
+        heapFatalSeen: stderrWatch.heapFatalSeen,
         heapLimitMb: bounds.heapLimitMb,
       }),
       request.secrets ?? []
     );
 
+    // A watchdog that never armed says so on stderr and nowhere else, so this
+    // flag is the whole of what outlives the drain. Nothing went wrong inside
+    // the script, so it rides `notes` beside the clamped-timeout and
+    // wrong-directory notes rather than moving the verdict.
+    if (stderrWatch.watchdogProblemSeen) {
+      notes.push(
+        `A watchdog for this step did not arm, so a process the script started can outlive a ` +
+          `tool server that dies afterwards.`
+      );
+    }
+
     return {
       ...verdict,
-      log,
-      logTruncated: capture.truncated,
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
@@ -754,8 +756,8 @@ function classifyOutcome(
 
   return failed(
     "exit",
-    `The script stopped its own process with exit code ${exit.code ?? 0} instead of returning; ` +
-      `no output was captured.`
+    `The script stopped its own process with exit code ${exit.code ?? 0} instead of returning, ` +
+      `so it left no output document behind: throw the reason instead of exiting on it.`
   );
 }
 
@@ -1273,183 +1275,41 @@ function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-interface StreamState {
-  decoder: StringDecoder;
-  holdback: string;
-  holdbackAt?: number;
-  collapser?: V8FrameCollapser;
-  watchForHeapFatal?: boolean;
-}
-
 /**
- * stdout and stderr, captured into one buffer in arrival order.
+ * The two things stderr still owes, each kept as a flag and never as text.
  *
- * Console text deliberately does *not* also travel over IPC: any subprocess the
- * script starts writes to the same two descriptors, and an IPC message is
- * serialized whole — one large `console.log` could not be limited while
- * draining, as pipe data can. Arrival order is faithful to written order except
- * for a burst written to *both* streams inside one turn, and nothing else here
- * may add reordering on top of that.
- *
- * Redaction runs on the live stream, ahead of both limits: a value can straddle
- * two pipe chunks and a per-chunk replacement sees neither half, and one
- * straddling the truncation cut would leave a prefix that a whole-value
- * replacement never matches.
+ * A script can print either banner itself, so what a match earns is a verdict
+ * or a note that ARGENT wrote — never a byte the script chose. That is the
+ * bargain the heap verdict already made, and the watchdog note joins it on the
+ * same terms rather than reopening the channel this executor stopped keeping.
  */
-class ScriptLogCapture {
-  private readonly parts: string[] = [];
-  private readonly streams = new Map<string, StreamState>();
-  private stepRemaining: number;
-  private truncatedFlag = false;
-  private cut = false;
-  private heapFatalFlag = false;
-  private heapFatalTail = "";
+class StderrSignalWatch {
+  private readonly decoder = new StringDecoder("utf8");
+  private heapFatal = false;
+  private watchdogProblem = false;
+  private tail = "";
 
-  constructor(
-    private readonly secrets: () => readonly FlowScriptSecret[],
-    stepLimitBytes: number,
-    private readonly runBudget?: FlowScriptLogBudget
-  ) {
-    this.stepRemaining = stepLimitBytes;
-  }
-
-  /**
-   * Never pauses the stream: a paused one fills the pipe buffer and blocks the
-   * child from ever reaching its own time limit, so past the log limit the data
-   * is still drained and discarded.
-   */
-  push(stream: "stdout" | "stderr", chunk: Buffer): void {
-    const state = this.stateFor(stream);
-    this.consume(state, state.decoder.write(chunk), false);
-  }
-
-  end(): void {
-    for (const state of this.streams.values()) {
-      this.consume(state, state.decoder.end(), true);
-      if (state.collapser) {
-        this.append(state.collapser.end());
-        if (state.collapser.collapsed) this.truncatedFlag = true;
-      }
-    }
-    this.streams.clear();
-  }
-
-  get text(): string {
-    return scrubSecretValues(this.parts.join(""), this.secrets());
-  }
-
-  get truncated(): boolean {
-    return this.truncatedFlag;
+  push(chunk: Buffer): void {
+    this.scan(this.decoder.write(chunk));
   }
 
   get heapFatalSeen(): boolean {
-    return this.heapFatalFlag;
+    return this.heapFatal;
   }
 
-  private watchForHeapFatal(text: string): void {
-    if (this.heapFatalFlag) return;
-    const window = this.heapFatalTail + text;
-    if (V8_HEAP_FATAL_RE.test(window)) {
-      this.heapFatalFlag = true;
-      this.heapFatalTail = "";
-      return;
-    }
-    this.heapFatalTail = window.slice(-HEAP_FATAL_WINDOW_CHARS);
+  get watchdogProblemSeen(): boolean {
+    return this.watchdogProblem;
   }
 
-  private stateFor(stream: "stdout" | "stderr"): StreamState {
-    let state = this.streams.get(stream);
-    if (!state) {
-      state = {
-        decoder: new StringDecoder("utf8"),
-        holdback: "",
-        ...(stream === "stderr"
-          ? { collapser: new V8FrameCollapser(), watchForHeapFatal: true }
-          : {}),
-      };
-      this.streams.set(stream, state);
-    }
-    return state;
+  private scan(text: string): void {
+    if (!text || (this.heapFatal && this.watchdogProblem)) return;
+    const window = this.tail + text;
+    if (!this.heapFatal) this.heapFatal = V8_HEAP_FATAL_RE.test(window);
+    if (!this.watchdogProblem) this.watchdogProblem = WATCHDOG_PROBLEM_RE.test(window);
+    // The window is what lets a banner split across two chunks match, so it is
+    // dropped only once NEITHER pattern is still looking for one.
+    this.tail = this.heapFatal && this.watchdogProblem ? "" : window.slice(-STDERR_WINDOW_CHARS);
   }
-
-  private consume(state: StreamState, text: string, final: boolean): void {
-    if (!text && !final) return;
-    if (state.watchForHeapFatal) this.watchForHeapFatal(text);
-    const secrets = this.secrets();
-    const held = state.holdback;
-    const pending = held + text;
-    const { emit, held: keep } = scrubSecretChunk(pending, secrets, final);
-    const split = pending.length - keep;
-    state.holdback = pending.slice(split);
-    this.release(state, held.slice(0, split), emit);
-    if (state.collapser?.collapsed) this.truncatedFlag = true;
-    if (!state.holdback) state.holdbackAt = undefined;
-    else if (split >= held.length) state.holdbackAt = this.parts.push("") - 1;
-  }
-
-  private release(state: StreamState, released: string, emit: string): void {
-    const at = state.holdbackAt;
-    if (at === undefined || !emit) {
-      this.append(state.collapser ? state.collapser.write(emit) : emit);
-      return;
-    }
-    const head = scrubSecretValues(released, this.secrets());
-    const headText = emit.startsWith(head) ? head : "";
-    this.append(state.collapser ? state.collapser.write(headText) : headText, at);
-    const tailText = emit.slice(headText.length);
-    this.append(state.collapser ? state.collapser.write(tailText) : tailText);
-  }
-
-  private append(text: string, at?: number): void {
-    if (!text) return;
-    const runRemaining = this.runBudget
-      ? Math.max(0, this.runBudget.remainingBytes)
-      : Number.POSITIVE_INFINITY;
-    const allowed = Math.min(this.stepRemaining, runRemaining);
-    // Once a cut has happened the log ends there: what follows would read as
-    // the text that came next, and the bytes the cut gave back — a partial
-    // character, a partial marker — are room enough to admit some of it.
-    if (this.cut || allowed <= 0) {
-      this.truncatedFlag = true;
-      return;
-    }
-    const buffer = Buffer.from(text, "utf8");
-    let taken = buffer.length <= allowed ? buffer.length : utf8SafeCut(buffer, allowed);
-    if (taken < buffer.length) {
-      this.truncatedFlag = true;
-      this.cut = true;
-      // The cut lands wherever the budget runs out, which may be inside a
-      // marker the scrub wrote. No value escapes either way, but a downstream
-      // reader parsing markers would read a placeholder naming no secret, so
-      // the fragment is given back rather than committed.
-      taken = withoutPartialMarker(buffer, taken);
-    }
-    if (taken > 0) {
-      const kept = taken === buffer.length ? text : buffer.subarray(0, taken).toString("utf8");
-      if (at === undefined) this.parts.push(kept);
-      else this.parts[at] += kept;
-      this.stepRemaining -= taken;
-      if (this.runBudget) this.runBudget.remainingBytes -= taken;
-    }
-  }
-}
-
-/**
- * How much of `buffer` is left once a trailing fragment of a
- * `{{secret:NAME}}` marker is dropped: an opening the cut never closed, or the
- * beginning of one. Marker text is ASCII, so byte offsets are character
- * offsets here.
- */
-function withoutPartialMarker(buffer: Buffer, taken: number): number {
-  const text = buffer.subarray(0, taken).toString("utf8");
-  const open = text.lastIndexOf(SECRET_PLACEHOLDER_MARKER);
-  if (open >= 0 && !text.includes("}}", open + SECRET_PLACEHOLDER_MARKER.length)) {
-    return Buffer.byteLength(text.slice(0, open), "utf8");
-  }
-  for (let n = Math.min(SECRET_PLACEHOLDER_MARKER.length - 1, text.length); n > 0; n--) {
-    if (text.endsWith(SECRET_PLACEHOLDER_MARKER.slice(0, n))) return taken - n;
-  }
-  return taken;
 }
 
 function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {
@@ -1472,77 +1332,6 @@ export function utf8SafeCut(buffer: Buffer, max: number): number {
   return cut;
 }
 
-const V8_FRAME_RE = /^\s*\d+:\s+0x[0-9a-f]+/i;
-/**
- * What a V8 frame dump follows; until one of these prints, nothing is
- * collapsed. Coarse on purpose: a false arm costs a marker line in place of
- * frame-shaped output, while a missed dump costs sixty lines of log budget.
- */
-const ARM_FRAME_COLLAPSE_RE = /FATAL ERROR|Fatal error in|Fatal JavaScript|# Fatal/i;
-const COLLAPSE_THRESHOLD = 3;
-
-class V8FrameCollapser {
-  private partial = "";
-  private held: string[] = [];
-  private heldCount = 0;
-  private armed = false;
-  private armWindow = "";
-  private collapsedAny = false;
-
-  get collapsed(): boolean {
-    return this.collapsedAny;
-  }
-
-  write(text: string): string {
-    if (!text) return "";
-    if (!this.armed) {
-      const armed = ARM_FRAME_COLLAPSE_RE.test(this.armWindow + text);
-      this.armWindow = armed ? "" : (this.armWindow + text).slice(-HEAP_FATAL_WINDOW_CHARS);
-      if (!armed) return text;
-      this.armed = true;
-    }
-    this.partial += text;
-    let out = "";
-    const lines = this.partial.split("\n");
-    this.partial = lines.pop() ?? "";
-    for (const line of lines) out += this.classify(`${line}\n`);
-    if (this.partial.length > MAX_BUFFERED_LINE_CHARS) {
-      out += this.flush() + this.partial;
-      this.partial = "";
-    }
-    return out;
-  }
-
-  end(): string {
-    if (!this.armed) return "";
-    let out = "";
-    if (this.partial) {
-      out += this.classify(this.partial);
-      this.partial = "";
-    }
-    return out + this.flush();
-  }
-
-  private classify(line: string): string {
-    if (V8_FRAME_RE.test(line)) {
-      this.heldCount += 1;
-      if (this.held.length < COLLAPSE_THRESHOLD - 1) this.held.push(line);
-      return "";
-    }
-    return this.flush() + line;
-  }
-
-  private flush(): string {
-    if (this.heldCount === 0) return "";
-    const collapsing = this.heldCount >= COLLAPSE_THRESHOLD;
-    if (collapsing) this.collapsedAny = true;
-    const out = collapsing ? `[${this.heldCount} V8 stack frames omitted]\n` : this.held.join("");
-    this.held = [];
-    this.heldCount = 0;
-    return out;
-  }
-}
-
 /**
  * The result for a failure raised before anything was forked. Every caller is
  * on that side of the fork — a queue the step never left, a cancellation that
@@ -1557,8 +1346,6 @@ function emptyResult(
   return {
     ok: false,
     failure: { ...failure, beforeFork: true },
-    log: "",
-    logTruncated: false,
     durationMs: extras.durationMs ?? 0,
     queuedMs: extras.queuedMs ?? 0,
     notes: extras.notes ?? [],

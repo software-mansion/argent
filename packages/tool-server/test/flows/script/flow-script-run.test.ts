@@ -24,7 +24,7 @@ function executor(): FlowScriptExecutor {
 }
 
 describe("flow script executor — a passing run", () => {
-  it("returns the script's output and its captured logs", async () => {
+  it("returns the script's output, and nothing the script printed", async () => {
     const ws = workspace();
     const script = ws.write(
       "seed.mjs",
@@ -37,11 +37,27 @@ describe("flow script executor — a passing run", () => {
     expect(result.failure).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.output).toEqual({ order: { id: "ord_1", total: 42 } });
-    expect(result.log).toContain("seeding order");
-    expect(result.log).toContain("a warning");
-    expect(result.logTruncated).toBe(false);
     expect(result.durationMs).toBeGreaterThan(0);
+    expect(JSON.stringify(result)).not.toContain("seeding order");
+    expect(JSON.stringify(result)).not.toContain("a warning");
   });
+
+  it("drains stdout, so a flood cannot hold the child at its own exit", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "flood.mjs",
+      `process.stdout.write("z".repeat(4 * 1024 * 1024));
+       output.ok = true;`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 5_000,
+    });
+
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ ok: true });
+  }, 30_000);
 
   it("carries the flow's existing output into the script", async () => {
     const ws = workspace();
@@ -61,18 +77,16 @@ describe("flow script executor — work the module evaluation outlives", () => {
     const script = ws.write(
       "seed.mjs",
       `async function main() {
-         console.log("seeding");
          await new Promise((r) => setTimeout(r, 100));
          output.order = { id: "ord_1" };
-         console.log("seeded");
+         output.seeded = true;
        }
        main();`
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ order: { id: "ord_1" } });
-    expect(result.log).toContain("seeded");
+    expect(result.output).toEqual({ order: { id: "ord_1" }, seeded: true });
   });
 
   it("waits for callback-style I/O the script never awaited", async () => {
@@ -117,10 +131,11 @@ describe("flow script executor — work the module evaluation outlives", () => {
       "retry.mjs",
       `let attempts = 0;
        let uploaded = false;
+       output.attempts = [];
        process.on("beforeExit", () => {
          if (uploaded || attempts >= 3) return;
          attempts += 1;
-         console.log("attempt", attempts);
+         output.attempts.push(attempts);
          setTimeout(() => {
            if (attempts === 3) {
              uploaded = true;
@@ -132,8 +147,7 @@ describe("flow script executor — work the module evaluation outlives", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ uploaded: true });
-    expect(result.log).toBe("attempt 1\nattempt 2\nattempt 3\n");
+    expect(result.output).toEqual({ attempts: [1, 2, 3], uploaded: true });
   });
 
   it("drains a queue a beforeExit handler works through over several rounds", async () => {
@@ -348,8 +362,7 @@ describe("flow script executor — module loading", () => {
     const script = ws.write(
       "recovers.mjs",
       `process.on("uncaughtException", (err) => {
-         console.log("recovered from " + err.message);
-         output.recovered = true;
+         output.recoveredFrom = err.message;
        });
        setTimeout(() => { throw new Error("boom in timer"); }, 20);
        output.ok = true;`
@@ -357,8 +370,7 @@ describe("flow script executor — module loading", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ ok: true, recovered: true });
-    expect(result.log).toContain("recovered from boom in timer");
+    expect(result.output).toEqual({ ok: true, recoveredFrom: "boom in timer" });
   });
 
   it("calls a SyntaxError from running code a runtime failure, not a load one", async () => {
@@ -504,13 +516,20 @@ describe("flow script executor — module loading", () => {
     }
   });
 
-  it("does not put a stream crash into the log of a passing step", async () => {
+  it("passes a script that ends its own stdout mid-run", async () => {
     const ws = workspace();
-    const script = ws.write("ends-stdout.mjs", `console.log("done"); process.stdout.end();`);
+    const script = ws.write(
+      "ends-stdout.mjs",
+      `console.log("done");
+       process.stdout.end();
+       await new Promise((r) => setTimeout(r, 50));
+       output.ok = true;`
+    );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
+    expect(result.failure).toBeUndefined();
     expect(result.ok).toBe(true);
-    expect(result.log).not.toContain("ERR_STREAM_WRITE_AFTER_END");
+    expect(result.output).toEqual({ ok: true });
   });
 
   it("loads a script whose path holds a space and a #", async () => {
