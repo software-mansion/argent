@@ -500,6 +500,13 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // back to a literal and then chokes on dtrace-provider's own dynamic native
 // binding require. External restores bunyan's intent: the published package
 // never declares it, so the require misses and bunyan nulls it out.
+//
+// `sharp` is the optional Chromium screenshot post-processor: the tool-server
+// `require("sharp")`s it inside a try/catch and skips scale / rotation when it
+// is absent. It is never declared here, so in CI esbuild leaves the require
+// alone — but a developer with sharp in node_modules (e.g. installed to test
+// that path) would have the bundle inline its native addon and fail. External
+// keeps the runtime require resolving against whatever the user installed.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -512,6 +519,7 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    "sharp",
   ],
 });
 

@@ -50,6 +50,20 @@ export interface MediaReady {
   url: string;
   /** Absolute path on the tool-server host. */
   path: string;
+  /**
+   * Geometry the caller asked for that this capture could not apply — see
+   * `dropReason` for why. The image is still returned; the tool turns this
+   * into a note so the omission is visible to the caller rather than only on
+   * stderr.
+   */
+  droppedFeatures?: ("rotation" | "scale")[];
+  /**
+   * Why `droppedFeatures` were dropped. `sharp-missing`: no transform ran at
+   * all and installing `sharp` fixes it. `png-header-unreadable`: `sharp` IS
+   * installed and a requested rotation still ran, but the resize could not be
+   * sized from the capture's PNG header, so only the scale was lost.
+   */
+  dropReason?: "sharp-missing" | "png-header-unreadable";
 }
 
 export interface ViewportSize {
