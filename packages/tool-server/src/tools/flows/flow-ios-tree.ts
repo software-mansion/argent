@@ -544,7 +544,6 @@ function errMsg(err: unknown): string {
  */
 function projectIosDeviceNode(node: DescribeNode): FlatNode<DescribeNode> {
   const onScreen = node.frame.width > 0 && node.frame.height > 0;
-  // No scroll-clip inputs: frames are already clamped to the app rect.
   return {
     skip: false,
     children: node.children,
@@ -552,6 +551,13 @@ function projectIosDeviceNode(node: DescribeNode): FlatNode<DescribeNode> {
     ownText: onScreen ? nodeText(node) : "",
     leaf: { ...node, children: [] },
     shield: Boolean(node.identifier),
+    // Scroll-clip inputs (see `flattenHoisting`), in the adapter's normalized
+    // space. The runner drops only what lies outside the Application frame: a
+    // row scrolled out of a nested ScrollView whose own frame is still on
+    // screen arrives with its raw frame, so the scroller's frame must clip its
+    // subtree exactly as the simulator and Android projections do.
+    rect: { x: node.frame.x, y: node.frame.y, w: node.frame.width, h: node.frame.height },
+    scrolls: node.scrollable === true,
   };
 }
 

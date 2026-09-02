@@ -5,7 +5,13 @@ import type { DescribeNode } from "../../src/tools/describe/contract";
 import type { RunnerSnapshotNode } from "../../src/utils/ios-device/runner-commands";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 import { queryIosDeviceFlowTree } from "../../src/tools/flows/flow-ios-tree";
-import { assertText, evaluateCondition, findAll, nodeText } from "../../src/utils/ui-tree-match";
+import {
+  assertText,
+  evaluateCondition,
+  findAll,
+  nodeText,
+  selectorToFrame,
+} from "../../src/utils/ui-tree-match";
 
 // The flow contract on hardware (the Vega/Chromium tests pin the same contract
 // for their adapters): the runner's accessibility snapshot must reach flows as
@@ -104,8 +110,82 @@ function registryFor(api: IosDeviceRunnerApi): Registry {
   return { resolveService: async () => api } as unknown as Registry;
 }
 
-async function flowTree(): Promise<DescribeNode> {
-  const run = vi.fn(async () => ({ nodes: snapshot(), quality: null }));
+/**
+ * A mid-screen ScrollView the way the runner reports it: the scroller's own
+ * frame is on screen, one row sits inside its viewport and one has been
+ * scrolled out of it while still inside the Application frame, so the runner
+ * emits the scrolled-out row with its raw, on-screen frame.
+ */
+function scrolledSnapshot(): RunnerSnapshotNode[] {
+  return [
+    node({ index: 0, depth: 0, type: "Application" }),
+    node({
+      index: 1,
+      depth: 1,
+      parentIndex: 0,
+      type: "ScrollView",
+      identifier: "feed",
+      rect: { x: 0, y: 100, width: 390, height: 400 },
+    }),
+    node({
+      index: 2,
+      depth: 2,
+      parentIndex: 1,
+      type: "StaticText",
+      label: "Feed header",
+      rect: { x: 16, y: 110, width: 200, height: 24 },
+    }),
+    node({
+      index: 3,
+      depth: 2,
+      parentIndex: 1,
+      identifier: "row-2",
+      rect: { x: 0, y: 150, width: 390, height: 100 },
+    }),
+    node({
+      index: 4,
+      depth: 3,
+      parentIndex: 3,
+      type: "StaticText",
+      label: "Row 2",
+      rect: { x: 16, y: 170, width: 120, height: 24 },
+    }),
+    node({
+      index: 5,
+      depth: 2,
+      parentIndex: 1,
+      identifier: "row-7",
+      rect: { x: 0, y: 600, width: 390, height: 100 },
+    }),
+    node({
+      index: 6,
+      depth: 3,
+      parentIndex: 5,
+      type: "StaticText",
+      label: "Row 7",
+      rect: { x: 16, y: 620, width: 120, height: 24 },
+    }),
+    node({
+      index: 7,
+      depth: 2,
+      parentIndex: 1,
+      type: "StaticText",
+      label: "Load more",
+      rect: { x: 16, y: 720, width: 200, height: 24 },
+    }),
+    node({
+      index: 8,
+      depth: 1,
+      parentIndex: 0,
+      type: "Button",
+      label: "Continue",
+      rect: { x: 16, y: 760, width: 358, height: 52 },
+    }),
+  ];
+}
+
+async function flowTree(nodes: RunnerSnapshotNode[] = snapshot()): Promise<DescribeNode> {
+  const run = vi.fn(async () => ({ nodes, quality: null }));
   const { tree } = await queryIosDeviceFlowTree(
     registryFor({ udid: DEVICE_UDID, run }),
     IOS_DEVICE
@@ -159,5 +239,36 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     const text = findAll(tree, { text: "Enabled" });
     expect(text).toHaveLength(1);
     expect(text[0]!.role).toBe("AXStaticText");
+  });
+
+  // Scroll-clip prune, the same contract the simulator and Android projections
+  // honor: the runner only drops what lies outside the Application frame, so a
+  // row scrolled out of a mid-screen ScrollView still arrives with an on-screen
+  // frame. Keeping it would falsely fail `assert { hidden }`, falsely pass
+  // `visible`, hoist its text onto the scroller and resolve a tap below the
+  // scroller's fold.
+  it("drops a row scrolled out of a mid-screen ScrollView viewport", async () => {
+    const tree = await flowTree(scrolledSnapshot());
+
+    // The in-viewport row resolves; the scrolled-out one is gone entirely,
+    // node, testID and text.
+    expect(findAll(tree, { identifier: "row-2" })).toHaveLength(1);
+    expect(findAll(tree, { text: "Row 2" })).toHaveLength(1);
+    const clipped = findAll(tree, { identifier: "row-7" });
+    expect(clipped).toHaveLength(0);
+    expect(JSON.stringify(tree)).not.toContain("Row 7");
+    expect(evaluateCondition("hidden", undefined, clipped)).toBe(true);
+    expect(evaluateCondition("visible", undefined, clipped)).toBe(false);
+    // No tap point resolves below the scroller's fold, by id or by text.
+    expect(selectorToFrame(tree, { identifier: "row-7" })).toBeUndefined();
+    expect(selectorToFrame(tree, { text: "Row 7" })).toBeUndefined();
+    // The scroller hoists only the text its viewport shows: the in-view header
+    // and not the scrolled-out, unshielded "Load more".
+    const feed = findAll(tree, { identifier: "feed" });
+    expect(feed).toHaveLength(1);
+    expect(assertText(feed[0]!)).toBe("Feed header");
+    expect(JSON.stringify(tree)).not.toContain("Load more");
+    // Siblings outside the scroller are never clipped by it.
+    expect(findAll(tree, { text: "Continue" })).toHaveLength(1);
   });
 });
