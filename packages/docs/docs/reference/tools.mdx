@@ -56,6 +56,36 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+### Clearing a text field
+
+`keyboard` takes `text`, `key` or `clear`, never two of them in one call. `clear: true` empties the element that holds keyboard focus. Focus the element first, and give that focus at least 500 ms to settle: `run-sequence` waits only 100 ms between steps.
+
+A clear returns `{ typed: "", keys: <number>, cleared: true }`. Argent adds `clearVerified: true` only where it read the field back and found it empty. Read `clearVerified`, not `keys`, to tell the two meanings of `cleared` apart.
+
+| Target                             | How Argent clears                                          | Limit per call                            | `keys` | `clearVerified`                          |
+| ---------------------------------- | ---------------------------------------------------------- | ----------------------------------------- | ------ | ---------------------------------------- |
+| iOS, Android, Apple TV, Android TV | 100 backspaces interleaved with 100 forward deletes        | 100 characters on each side of the cursor | 200    | never                                    |
+| Vega                               | 200 backspaces, because the platform has no forward delete | 200 characters before the cursor          | 200    | never                                    |
+| Chromium                           | Selects the focused editable and deletes the selection     | none                                      | 0      | when the read-back found the field empty |
+
+Send `clear` again for each further 100 characters the field holds. Argent reports what it sent, so read the field to get proof.
+
+Chromium is the only target that checks focus, and it fails the clear when no editable element holds focus. The other five send the keys wherever focus is, and they report success.
+
+A remote Apple TV (an `ios-remote` tvOS id) refuses `clear` and `key`. The tvOS daemons drive a simulator in the Argent host's own CoreSimulator set, and they do not reach a device behind sim-remote. Use a local Apple TV simulator instead.
+
+A failed clear carries one of five codes:
+
+| Code                                | Argent raises it when                                                                                                                                                                                                                                 | What to do next                                                                                  |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `KEYBOARD_CLEAR_NO_EDITABLE_FOCUS`  | Chromium finds no editable element in focus                                                                                                                                                                                                           | Tap the field, then send the clear again                                                         |
+| `KEYBOARD_CLEAR_UNSUPPORTED_FIELD`  | The focused element cannot be emptied this way: a date or time input, a `readonly`, `disabled` or non-text control, an opaque custom element, an `<iframe>`, a page-wide editing host, a broken script, a restoring editor, or a mask that rewrote it | Read the message. It names which one it was, and the repair for that one                         |
+| `KEYBOARD_CLEAR_UNSUPPORTED_TARGET` | The target refuses the clear outright — a remote Apple TV                                                                                                                                                                                             | Run against a local Apple TV simulator, or use the app's own on-screen keyboard                  |
+| `KEYBOARD_CLEAR_UNCONFIRMED`        | Argent cannot say what the field now holds                                                                                                                                                                                                            | Read the message. It says whether Argent sent anything, and whether the field needs reading back |
+| `KEYBOARD_TARGET_KIND_UNKNOWN`      | Argent cannot tell a phone from a TV, and the two take the burst over different transports. Argent sends nothing                                                                                                                                      | Check that `list-devices` reports the device, then send the call again                           |
+
+`keyboard` and `paste` are serialized per device, because both write to whatever holds keyboard focus. A `run-sequence` that carries a step of either holds that device's keyboard from its first step through its last such step, so a focus tap and the clear that follows it cannot be separated by another agent session.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |
