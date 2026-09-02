@@ -282,7 +282,7 @@ The outcome line of a flow that produced a report is the summary of the run. The
 | `did not finish (no run report)` | The tool-server answered without a run report              |
 | `not run (batch stopped)`        | An earlier flow stopped the batch. Directory runs only     |
 
-`--json` and `--json-stream` print no outcome lines. JSON is the only output on stdout. In the aggregate of a directory run, each entry holds the path, the status and the report of one flow. A failed entry holds the message in `error`. When the tool-server sends a failure signal, the entry also holds `error_code` and `error_kind`. `--json-stream` puts the same two fields on its `error` record.
+`--json` and `--json-stream` print no outcome lines. JSON is the only output on stdout. In the aggregate of a directory run, each entry holds the path and the status of one flow. An entry holds the report when the flow produced one. A failed entry holds the message in `error`. When the tool-server sends a failure signal, the entry also holds `error_code` and `error_kind`. `--json-stream` puts the same two fields on its `error` record.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
