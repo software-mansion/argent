@@ -11,9 +11,13 @@ let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
 let STATE_DIR: string;
 let LEGACY_STATE_FILE: string;
+const ambientHome: Record<string, string | undefined> = {};
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-sweep-test-"));
+  // Captured for afterAll, which puts them back before deleting TEST_HOME —
+  // anything left pointing at it resolves to a directory that is gone.
+  for (const name of ["HOME", "USERPROFILE"]) ambientHome[name] = process.env[name];
   // os.homedir() — which STATE_DIR and the link file are built from — reads
   // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
   // is inert there and these tests operate on the real ~/.argent.
@@ -27,6 +31,10 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  for (const [name, value] of Object.entries(ambientHome)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
