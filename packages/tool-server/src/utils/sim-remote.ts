@@ -109,9 +109,8 @@ export async function simctlShutdown(udid: string): Promise<void> {
 }
 
 export async function simctlBootstatus(udid: string, opts?: { boot?: boolean }): Promise<void> {
-  const args = ["simctl", "bootstatus"];
+  const args = ["simctl", "bootstatus", stripRemotePrefix(udid)];
   if (opts?.boot) args.push("-b");
-  args.push(stripRemotePrefix(udid));
   // Cold boot can take minutes.
   await run(args, { timeoutMs: 5 * 60_000 });
 }

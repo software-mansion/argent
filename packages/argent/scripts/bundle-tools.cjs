@@ -562,18 +562,6 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.copyFileSync(src, dest);
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
-    // Screen-sharing agent resources (jar + per-ABI .so) the `android_device`
-    // controller pushes to a connected phone. simulator-server resolves them
-    // relative to its working directory, which the spawn sets to its own
-    // platform dir. Optional: physical-device support degrades without them.
-    const resourcesSrc = path.join(BIN_SRC_ROOT, platform, "resources");
-    if (fs.existsSync(resourcesSrc)) {
-      const resourcesDest = path.join(destDir, "resources");
-      fs.cpSync(resourcesSrc, resourcesDest, { recursive: true });
-      console.log(
-        `✓ Copied screen-sharing agent resources (${platform}) → ${path.relative(process.cwd(), resourcesDest)}`
-      );
-    }
   } else if (platform === "darwin" && process.platform === "darwin") {
     throw new Error(
       `simulator-server binary not found at ${src}.\n` +
@@ -582,6 +570,20 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   } else {
     console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
   }
+}
+
+// Screen-sharing agent resources (host-independent jar + per-ABI .so the
+// `android_device` controller pushes to a connected phone over adb): one shared
+// copy at the bin root; simulatorServerRunDir() points the spawn cwd here.
+// Optional: physical-device support degrades without them.
+const RESOURCES_SRC = path.join(BIN_SRC_ROOT, "resources");
+if (fs.existsSync(RESOURCES_SRC)) {
+  fs.cpSync(RESOURCES_SRC, path.join(BIN_DIR, "resources"), { recursive: true });
+  console.log(
+    `✓ Copied screen-sharing agent resources → ${path.relative(process.cwd(), BIN_DIR)}/resources`
+  );
+} else {
+  console.warn(`⚠ screen-sharing agent resources not found at ${RESOURCES_SRC} — skipping`);
 }
 
 // The Android helper APK is the only Android native artifact left (the trace

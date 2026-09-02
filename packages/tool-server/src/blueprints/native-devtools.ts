@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as readline from "node:readline";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
@@ -910,102 +910,97 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const server = net.createServer((socket) => {
       let bundleId: string | null = null;
-      const rl = readline.createInterface({ input: socket });
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
+        onMessage: (parsed) => {
+          // JSON.parse("null") succeeds, and a TypeError in this handler would
+          // surface as an uncaughtException and crash the whole tool-server.
+          if (parsed === null || typeof parsed !== "object") return;
+          const msg = parsed as { type: string; payload: any };
 
-      rl.on("line", (raw) => {
-        let msg: { type: string; payload: any };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        // JSON.parse("null") succeeds, and a TypeError on the line handler below
-        // would surface as an uncaughtException and crash the whole tool-server.
-        if (msg == null || typeof msg !== "object") return;
+          // Handshake: must be the first message.
+          if (bundleId === null) {
+            if (msg.type !== "Control") return;
+            // The socket is local and unauthenticated, but a peer id is not inert:
+            // it becomes a map key, can supersede another app's live socket, and —
+            // since the injection-failed diagnosis cites connected peers as
+            // evidence — is interpolated verbatim into agent-facing prose. Only a
+            // plain bundle identifier (letters, digits, dot, hyphen, underscore;
+            // no whitespace, separators or control characters) is admitted.
+            const requested = msg.payload?.bundleId;
+            if (
+              typeof requested !== "string" ||
+              requested.length === 0 ||
+              requested.length > 256 ||
+              !/^[A-Za-z0-9][A-Za-z0-9.\-_]*$/.test(requested)
+            ) {
+              socket.destroy();
+              return;
+            }
+            bundleId = requested;
 
-        // Handshake: must be the first message.
-        if (bundleId === null) {
-          if (msg.type !== "Control") return;
-          // The socket is local and unauthenticated, but a peer id is not inert:
-          // it becomes a map key, can supersede another app's live socket, and —
-          // since the injection-failed diagnosis cites connected peers as
-          // evidence — is interpolated verbatim into agent-facing prose. Only a
-          // plain bundle identifier (letters, digits, dot, hyphen, underscore;
-          // no whitespace, separators or control characters) is admitted.
-          const requested = msg.payload?.bundleId;
-          if (
-            typeof requested !== "string" ||
-            requested.length === 0 ||
-            requested.length > 256 ||
-            !/^[A-Za-z0-9][A-Za-z0-9.\-_]*$/.test(requested)
-          ) {
-            socket.destroy();
+            // The same app reconnecting (fast restart) supersedes the old socket.
+            const existing = connections.get(bundleId);
+            if (existing) {
+              existing.socket.destroy();
+            }
+
+            connections.set(bundleId, { socket, networkLog: [] });
+            // The handshake is the success signal for the relaunch remedy, and the
+            // only moment it is observable — an app can connect and drop again
+            // between two readings, and clearing on a `connected` reading would
+            // miss that and hold a verdict against a process that did register.
+            relaunchAdvised.delete(bundleId);
+
+            if (activatedBundleIds.has(bundleId)) {
+              socket.write(
+                JSON.stringify({
+                  type: "Control",
+                  payload: { command: "activateNetworkInspection" },
+                }) + "\n"
+              );
+            }
             return;
           }
-          bundleId = requested;
 
-          // The same app reconnecting (fast restart) supersedes the old socket.
-          const existing = connections.get(bundleId);
-          if (existing) {
-            existing.socket.destroy();
-          }
-
-          connections.set(bundleId, { socket, networkLog: [] });
-          // The handshake is the success signal for the relaunch remedy, and the
-          // only moment it is observable — an app can connect and drop again
-          // between two readings, and clearing on a `connected` reading would
-          // miss that and hold a verdict against a process that did register.
-          relaunchAdvised.delete(bundleId);
-
-          if (activatedBundleIds.has(bundleId)) {
-            socket.write(
-              JSON.stringify({
-                type: "Control",
-                payload: { command: "activateNetworkInspection" },
-              }) + "\n"
-            );
-          }
-          return;
-        }
-
-        if (msg.type === "CDP") {
-          const p = msg.payload;
-          // Unsolicited events have method but no id
-          if (p.method && p.id === undefined) {
-            const conn = connections.get(bundleId);
-            if (conn) {
-              if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
-                conn.networkLog.shift();
+          if (msg.type === "CDP") {
+            const p = msg.payload;
+            // Unsolicited events have method but no id
+            if (p.method && p.id === undefined) {
+              const conn = connections.get(bundleId);
+              if (conn) {
+                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
+                  conn.networkLog.shift();
+                }
+                conn.networkLog.push({
+                  method: p.method,
+                  params: p.params,
+                  timestamp: Date.now(),
+                });
               }
-              conn.networkLog.push({
-                method: p.method,
-                params: p.params,
-                timestamp: Date.now(),
-              });
             }
           }
-        }
 
-        if (msg.type === "ViewInspector") {
-          const p = msg.payload;
-          const pending = pendingRpc.get(p.id);
-          if (!pending) return;
-          pendingRpc.delete(p.id);
-          if (p.error) {
-            pending.reject(
-              new FailureError(p.error.message, {
-                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
-                failure_stage: "native_devtools_rpc_response",
-                failure_area: "tool_server",
-                error_kind: "subprocess",
-              })
-            );
-          } else pending.resolve(p.result);
-        }
+          if (msg.type === "ViewInspector") {
+            const p = msg.payload;
+            const pending = pendingRpc.get(p.id);
+            if (!pending) return;
+            pendingRpc.delete(p.id);
+            if (p.error) {
+              pending.reject(
+                new FailureError(p.error.message, {
+                  error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+                  failure_stage: "native_devtools_rpc_response",
+                  failure_area: "tool_server",
+                  error_kind: "subprocess",
+                })
+              );
+            } else pending.resolve(p.result);
+          }
+        },
       });
 
       socket.on("close", () => {
-        rl.close();
         if (bundleId !== null) {
           // A fast reconnect may have already replaced this socket.
           if (connections.get(bundleId)?.socket === socket) {

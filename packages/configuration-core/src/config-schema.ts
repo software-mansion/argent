@@ -101,6 +101,19 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     manageCommand: "argent telemetry",
   },
   {
+    key: "allowlist.enabled",
+    description:
+      "Whether `argent update` re-applies editor auto-approve allowlist rules. Unset (the " +
+      "default) keeps the current behavior: update refreshes the rules for editors that " +
+      "already have argent configured. Set to `false` to keep update from touching editor " +
+      "allowlists. `false` in either scope wins, so a committed project opt-out holds for " +
+      "every teammate.",
+    scopes: ["project", "global"],
+    parse: asBoolean,
+    merge: "prioritize-restrictive",
+    example: "false",
+  },
+  {
     key: "lens.agent",
     description: "Coding-agent id remembered by `argent lens` to skip the picker.",
     scopes: ["project", "global"],
