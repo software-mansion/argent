@@ -179,6 +179,12 @@ describe("findFocusedTextField", () => {
       hierarchy({ text: "hello", alsoFocused: { rid: "com.example:id/other" } })
     );
     expect(alone?.idShared).toBe(false);
+    // Counted over the whole capture, not the field's own window: an id a
+    // background window also carries identifies the field no better for it.
+    const acrossWindows = findFocusedTextField(
+      hierarchy({ text: "hello", secondWindow: { rid: FIELD_RID, focused: false } })
+    );
+    expect(acrossWindows?.idShared).toBe(true);
   });
 
   it("returns null when the focused view is not editable (a focused Button)", () => {
@@ -310,7 +316,7 @@ describe("classifyTypedText", () => {
   it("stops the selection reading at the work cap the repair search uses", () => {
     // The edges bound the offsets, not the comparisons at each one: a field that
     // is one character repeated keeps every offset matching almost to the end of
-    // the typed string, which is 925 ms of synchronous CPU here (measured). An
+    // the typed string, which is ~1.1 s of synchronous CPU here (measured). An
     // ordinary field never reaches the cap - its offsets fail on their first
     // character - so only this shape gives up its verdict for the thread.
     const field = "a".repeat(200_000);
@@ -896,7 +902,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     // order. `adb input text` reaches the dialog, so comparing the background
     // field reads a landing as a total failure — and the repair then retypes the
     // whole string into the dialog, which now holds it twice. Android focuses one
-    // view per window, so a second focused view with `windowCount: 2` is exactly
+    // view per window, so a focused view in a second window subtree is exactly
     // that shape, and nothing in the dump says which window takes typing.
     const bothFocused = hierarchy({
       text: "stale",
@@ -1445,9 +1451,10 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
   });
 
   it("takes the FIRST focused editable node in document order", async () => {
-    // A multi-window dump can carry a stale `focused="true"` in a background
-    // window; the frontmost window's node comes first. Walking children in reverse
-    // would silently baseline against the wrong field.
+    // One window can report two focused editables - a recycled row's twin, an
+    // OTP form's boxes - and the walk must take the one document order puts
+    // first. Walking children in reverse would silently baseline against the
+    // stale one. (Two WINDOWS reporting focus is declined instead, above.)
     const field = findFocusedTextField(
       hierarchy({ text: "front", alsoFocused: { text: "stale-background" } })
     );
@@ -1489,7 +1496,7 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
-  it("never puts the field's text in the result, on any verification outcome", async () => {
+  it("never puts the field's text in the result, on any outcome that reads it", async () => {
     // The read-back holds whatever the field shows — which on a `{{secret:…}}`
     // type is the resolved plaintext. No outcome may echo it, so the notes carry
     // structural facts and counts only. Asserted against the whole serialised
@@ -1532,6 +1539,21 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
       const res = await type(registry, "abcdefghijkl");
       expect(JSON.stringify(res), label).not.toContain(onScreen);
     }
+  });
+
+  it("keeps the field's text out of the note a successful repair returns", async () => {
+    // The read that confirms a repair holds the whole typed value - the plaintext,
+    // on a `{{secret:…}}` type - and `repairedNote` is built straight after it.
+    // The case above cannot cover this one: a reading that classifies as landed
+    // has no room for a marker in it.
+    const { registry } = registryServing([
+      hierarchy({ text: "XY" }),
+      hierarchy({ text: "XYabcdefgh" }),
+      hierarchy({ text: "XYabcdefghijkl" }),
+    ]);
+    const res = await type(registry, "abcdefghijkl");
+    expect(res.verified).toBe(true);
+    expect(JSON.stringify(res)).not.toContain("XYabcdefghijkl");
   });
 
   it("keeps a resolved secret out of the result while reading it back off the screen", async () => {
@@ -1996,8 +2018,8 @@ describe("android keyboard read-back — cancellation", () => {
         signal: controller.signal,
       })
     ).rejects.toThrow(/part-way repaired/);
-    // 100 backspaces is two calls at 64 keycodes each; the second never goes out,
-    // and no retype follows it.
+    // 100 backspaces is two calls, 64 then 36; the second never goes out, and no
+    // retype follows it.
     expect(cmds()).toEqual([
       `input text '${text}'`,
       `input keyevent ${Array(64).fill(67).join(" ")}`,

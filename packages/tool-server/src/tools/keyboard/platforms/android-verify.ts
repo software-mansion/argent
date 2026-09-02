@@ -189,12 +189,15 @@ interface FocusedField {
  *    really takes input, which no dump says — so the field this walk picked may
  *    be a stale one behind a dialog. Two inside ONE window is a different shape,
  *    the recycled row's twin, which `isSameField` handles.
- *  - `empty`: no window at all. The helper emits a bare `<hierarchy/>` when
- *    `getWindows()` yields nothing AND the active window has no root — a screen
- *    mid-transition or a display gone off — and that supports no finding about
- *    focus. The helper's own `windowCount` is not read for either: it counts
- *    every interactive window, and the IME and the system bars make it 3 on the
- *    plain Settings search box every read-back runs against (measured, API 34).
+ *  - `empty`: no window at all. The helper emits a bare `<hierarchy/>` when its
+ *    windows pass writes nothing — `getWindows()` empty or throwing, or every
+ *    root failing the refresh it does below API 34 — and the active window has no
+ *    root either, which a screen mid-transition or a display gone off gives. It
+ *    supports no finding about focus.
+ *
+ * The helper's own `windowCount` is not read for either: it counts every
+ * interactive window, and the IME and the system bars make it 3 on the plain
+ * Settings search box every read-back runs against (measured, API 34).
  */
 function findFocused(xml: string): {
   field: FocusedField | null;
@@ -452,7 +455,7 @@ function replacedSelection(before: string, after: string, text: string): boolean
   // Capped like `plannedUndoDeletions`, and counting characters compared rather
   // than offsets tried so only a genuinely quadratic reading pays: a field that
   // is one character repeated keeps every offset matching almost to the end of
-  // `text`, measured at 925 ms for 200 kB against a 2,000-character string, while
+  // `text`, measured at ~1.1 s for 200 kB against a 2,000-character string, while
   // an ordinary field fails most offsets on their first character. Exhausting the
   // cap answers "cannot rule this out", which reads as indeterminate and repairs
   // nothing.

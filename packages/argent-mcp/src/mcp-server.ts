@@ -319,7 +319,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           ...content,
           {
             type: "text" as const,
-            text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The typing already went out — do not send that step again, or the field will hold two copies of it; where the result carries `verified: false`, part of the value landed and re-sending it would append to that. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
+            text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The typing already went out — do not send that step again, or the field will hold two copies of it; where the result says the text did not land, some of the value may already be in the field and re-sending it would append to that. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
       } else if (udid && (wantScreenshot || wantTree)) {

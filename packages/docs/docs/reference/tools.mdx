@@ -99,11 +99,11 @@ a flow `tool: keyboard` step, and a flow `tool: run-sequence` step that holds on
 passes with a `note` carries that note as the step warning. This covers a `type` step, a
 raw `tool: keyboard` step, and a `run-sequence` that holds one.
 
-A cancelled call stops the typing. Argent types nothing when the cancel arrives before the
+A cancelled call stops the typing. Argent types nothing when it sees the cancel before the
 first keystroke. The iOS and Chromium backends stop between keys. An Android call
-stops when the burst it is in has gone out. Argent sees a mid-typing cancel after the
-read-back that follows the burst, and a cancel inside a repair at the next chunk or batch of
-backspaces. A call that skips the read-back types the string and returns. A TV target and
+stops when the burst it is in has gone out. On the path that verifies, Argent sees a mid-typing
+cancel after the read-back that follows the burst, and a cancel inside a repair at the next chunk
+or batch of backspaces. A call that skips the read-back sees it right after the burst. A TV target and
 Vega type the whole string regardless. A cancel inside an Android repair can leave the
 field with fewer characters than it held before the call, because the repair deletes before
 it types.

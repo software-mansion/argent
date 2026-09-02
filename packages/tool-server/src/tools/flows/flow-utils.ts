@@ -245,8 +245,9 @@ export interface RecordedStepWarning {
    * - `wait` — the live wait itself came back `success: false`, so the probe
    *   was skipped. Nothing here is about conversion: a genuine miss is a step
    *   FAILURE at replay, and the other causes leave the step unjudged.
-   * - `typed` — a `keyboard` step whose Android read-back came back
-   *   `verified: false`, the same shape as `wait` for a different tool: the
+   * - `typed` — a recorded call whose Android read-back came back
+   *   `verified: false`: a `keyboard` step, or a `run-sequence` stopped by one of
+   *   its own keyboard steps. The same shape as `wait` for a different tool: the
    *   recorder wrote the step because the tool returned, and the runner fails it
    *   at replay. Counted apart so the finish does not report a typing problem as
    *   a wait that did not pass.
