@@ -375,7 +375,7 @@ describe("a step the recorder refuses", () => {
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("output reference");
+    expect((err as Error).message).toContain("unsupported template syntax");
     expect(parseFlow(await onDisk("poison")).steps).toEqual([{ kind: "echo", message: "one" }]);
 
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "two" });
@@ -404,7 +404,7 @@ describe("a step the recorder refuses", () => {
       .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id}}" })
       .catch((e: unknown) => e as Error);
 
-    expect((err as Error).message).toContain("output reference");
+    expect((err as Error).message).toContain("unsupported template syntax");
     const session = await getRecordingSession(clientRoot, "poison");
     expect(session?.flow.steps).toEqual([{ kind: "echo", message: "one" }]);
   });
@@ -430,8 +430,8 @@ describe("a step the recorder refuses", () => {
       .catch((e: unknown) => e as Error);
 
     expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "{{output:code}}" });
-    expect((err as Error).message).toContain("`keyboard` call already ran");
-    expect((err as Error).message).toContain("output reference");
+    expect((err as Error).message).toContain("`keyboard` call ran");
+    expect((err as Error).message).toContain("unsupported template syntax");
     expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
     expect(parseFlow(await onDisk("already-ran")).steps).toEqual([]);
   });
@@ -467,10 +467,10 @@ describe("a step the recorder refuses", () => {
     expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "hi" });
     // The call ran, so that half stands — but the field the scan refused is the
     // hand-edited step's, and the wrap has to say so.
-    expect(message).toContain("`keyboard` call already ran");
-    expect(message).toContain("ALREADY in the flow file");
+    expect(message).toContain("`keyboard` call ran");
+    expect(message).toContain("an existing flow step failed validation");
     expect(message).toContain("Step 1 (`echo`)");
-    expect(message).not.toContain("recording it failed");
+    expect(message).not.toContain("its step failed validation");
   });
 
   // The other half of that claim: the tool's description tells an agent a
@@ -3037,10 +3037,11 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
     expect(schema.properties["args"]).toMatchObject({ type: "string" });
   });
 
-  it("still opens its description with the sentence those fixtures quote verbatim", () => {
-    expect(createFlowAddStepTool({} as unknown as Registry).description).toContain(
-      "Execute a tool call and record it as a step in the flow named by `name` + `project_root`"
-    );
+  it("keeps the description focused on how to use the tool", () => {
+    const description = createFlowAddStepTool({} as unknown as Registry).description!;
+    expect(description).toContain("Execute one MCP tool and record its flow step");
+    expect(description).toContain("Call recording tools, including `flow-add-script`, directly");
+    expect(description.split(/\s+/).length).toBeLessThan(80);
   });
 });
 

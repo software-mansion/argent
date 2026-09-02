@@ -433,9 +433,9 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("gone");
 
     expect(result.steps[0]).toMatchObject({ status: "fail", kind: "script" });
-    expect(result.steps[0]!.reason).toContain('script "../../scripts/gone.mjs" does not exist');
+    expect(result.steps[0]!.reason).toContain('Script "../../scripts/gone.mjs" does not exist');
     expect(result.steps[0]!.reason).toMatch(
-      /resolved to \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\)$/
+      /Resolved path: \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\.$/
     );
   });
 
@@ -512,12 +512,12 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/CreateUser.mjs"'
+      'Script path "../../scripts/CreateUser.mjs" has the wrong letter case'
     );
-    expect(result.steps[0]!.reason).toContain('write it as "../../scripts/createUser.mjs"');
+    expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.mjs"');
   });
 
-  it("refuses a mis-cased .sh the same way, quoting the widened pattern", async () => {
+  it("refuses a mis-cased .sh the same way", async () => {
     await write("scripts/createUser.sh", `exit 0\n`);
     await flow("cased-sh", "steps:\n  - script: { path: ../../scripts/CreateUser.sh }\n");
 
@@ -525,20 +525,26 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/CreateUser.sh"'
+      'Script path "../../scripts/CreateUser.sh" has the wrong letter case'
     );
-    expect(result.steps[0]!.reason).toContain('write it as "../../scripts/createUser.sh"');
+    expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.sh"');
   });
 
-  it("asks for a rename quoting a pattern that names both extensions", async () => {
+  // `ALT.SH` is not a name the widened pattern accepts, so the spelling on disk
+  // is unaddressable and the step asks for a rename rather than for the flow to
+  // be rewritten. `SCRIPT_FILE_NAME_PATTERN` itself is pinned against both
+  // extensions in flow-script-step-parse.test.ts.
+  it("asks for a rename when the spelling on disk is one no `script` path may name", async () => {
     await write("scripts/ALT.SH", `exit 0\n`);
     await flow("noncase-sh", "steps:\n  - script: { path: ../../scripts/alt.sh }\n");
 
     const { result } = await runFlow("noncase-sh");
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
-    expect(result.steps[0]!.reason).toContain('rename "ALT.SH" to "alt.sh" to run it');
-    expect(result.steps[0]!.reason).toContain("mjs|sh");
+    expect(result.steps[0]!.reason).toContain(
+      'Script path "../../scripts/alt.sh" has the wrong letter case'
+    );
+    expect(result.steps[0]!.reason).toContain('Rename "ALT.SH" to "alt.sh"');
   });
 
   it("refuses a mis-cased spelling of a script reached through a cross-directory symlink", async () => {
@@ -555,7 +561,7 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/createUser.mjs"'
+      'Script path "../../scripts/createUser.mjs" has the wrong letter case'
     );
   });
 
@@ -566,8 +572,8 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("noncase");
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
-    expect(result.steps[0]!.reason).toContain('rename "ALT.MJS" to "alt.mjs" to run it');
-    expect(result.steps[0]!.reason).not.toContain("write it as");
+    expect(result.steps[0]!.reason).toContain('Rename "ALT.MJS" to "alt.mjs"');
+    expect(result.steps[0]!.reason).not.toContain("Use");
   });
 
   it("treats a hyphen difference as an ordinary missing file, not a casing problem", async () => {
@@ -577,7 +583,7 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("hyphen");
 
     expect(result.steps[0]!.reason).toContain("does not exist");
-    expect(result.steps[0]!.reason).not.toContain("mis-cased");
+    expect(result.steps[0]!.reason).not.toContain("wrong letter case");
   });
 });
 

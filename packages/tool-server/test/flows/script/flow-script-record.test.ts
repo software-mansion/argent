@@ -150,14 +150,14 @@ describe("recording a script step", () => {
     expect(await steps("checkout")).toEqual([{ kind: "script", path: "../../scripts/seed.mjs" }]);
   });
 
-  it("says the output document is not readable from a flow step yet", async () => {
+  it("does not add output details to the success message", async () => {
     await write("scripts/seed.mjs", `output.user = { id: "u_1" };`);
     await start("checkout");
 
     const result = await addScript("checkout", "../../scripts/seed.mjs");
 
     expect(result.outputJson).toBe('{"user":{"id":"u_1"}}');
-    expect(result.message).toContain("no flow step can reference it yet");
+    expect(result.message).toBe('Added script step to "checkout" flow.');
   });
 
   it("hands the document over as text, so nothing in it is read as a directive", async () => {
@@ -190,7 +190,7 @@ describe("recording a script step", () => {
     expect(deepFindMarker(result)).toBeNull();
   });
 
-  it("cuts a document too large to hand on, and says it cut it", async () => {
+  it("cuts a document too large to hand on without adding output prose", async () => {
     await write("scripts/big.mjs", `output.blob = "y".repeat(1024 * 1024 - 200);`);
     await start("big");
 
@@ -201,11 +201,7 @@ describe("recording a script step", () => {
     expect(result.outputTruncated).toBe(true);
     expect(result.outputJson).toMatch(/^\{"blob":"y+$/);
     expect(result.stepCount).toBe(1);
-    // A cut document stops being JSON, so the pass message must not read as a
-    // whole-document guarantee — `outputTruncated` alone contradicting it puts
-    // the correction in a field the sentence tells the reader not to need.
-    expect(result.message).toContain("the rest was cut, so it no longer parses as JSON");
-    expect(result.message).not.toContain("is what the script returned");
+    expect(result.message).toBe('Added script step to "big" flow.');
     expect(() => JSON.parse(result.outputJson!)).toThrow();
   });
 
@@ -290,7 +286,8 @@ describe("recording a script step", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toMatch(/cancelled/i);
     expect(result.durationMs).toBeLessThan(15_000);
-    expect(result.message).toContain("nothing was rolled back");
+    expect(result.message).toContain("no step was recorded");
+    expect(result.message).toContain("Check or restore its changes before you retry");
     expect(await steps("cancelled")).toEqual([]);
   });
 
@@ -305,8 +302,8 @@ describe("recording a script step", () => {
       );
 
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/ran and passed in \d+ms/);
-      expect((err as Error).message).toContain("nothing it did was rolled back");
+      expect((err as Error).message).toContain("passed, but the step was not recorded");
+      expect((err as Error).message).toContain("Check the script's changes before you retry");
       expect(getFailureSignal(err as Error)?.failure_stage).toBe("flow_file_write");
     } finally {
       await fs.chmod(flowsDir, 0o700);
@@ -331,7 +328,8 @@ describe("recording a script step", () => {
     expect(signal?.failure_stage).toBe("flow_add_script_append");
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
     expect(signal?.error_kind).toBe("unknown");
-    expect((err as Error).message).toContain("nothing it did was rolled back");
+    expect((err as Error).message).toContain("passed, but the step was not recorded");
+    expect((err as Error).message).toContain("Check the script's changes before you retry");
   });
 
   it("blames the hand-edited step, not the script, when the re-parse refuses an earlier one", async () => {
@@ -352,9 +350,8 @@ describe("recording a script step", () => {
     )) as Error;
 
     expect(err).toBeInstanceOf(Error);
-    expect(err.message).toMatch(/ran and passed in \d+ms/);
-    expect(err.message).toContain("a step ALREADY in the flow file spells an output reference");
-    expect(err.message).toContain("not this script");
+    expect(err.message).toContain("passed, but the step was not recorded");
+    expect(err.message).toContain("Fix the existing step named below");
     expect(err.message).toContain(flowPath("handedited"));
     expect(err.message).toContain("Step 1 (`echo`)");
     // The refusal keeps its own signal; only the framing around it changed.
@@ -378,7 +375,7 @@ describe("recording a script step", () => {
 
     expect(result.outputJson).toBe(JSON.stringify({ blob: "y".repeat(1000) }));
     expect(result).not.toHaveProperty("outputTruncated");
-    expect(result.message).toContain("`outputJson` is what the script returned");
+    expect(result.message).toBe('Added script step to "small" flow.');
   });
 
   it("never cuts a multi-byte character in half", async () => {
@@ -553,7 +550,7 @@ describe("recording a bash step", () => {
     expect(JSON.stringify(result)).not.toContain("created 2 of 3 records");
     expect(result).not.toHaveProperty("recorded");
     expect(result).not.toHaveProperty("outputJson");
-    expect(result.message).toContain("nothing was rolled back");
+    expect(result.message).toContain("Check or restore its changes");
     expect(await steps("failing")).toEqual([]);
   });
 
@@ -613,14 +610,14 @@ describe("a script that did not pass records nothing", () => {
     );
   });
 
-  it("says nothing was recorded, and that the side effects were not rolled back", async () => {
+  it("says the failed script was not recorded and gives the next action", async () => {
     await write("scripts/half.mjs", `throw new Error("boom");`);
     await start("failing");
 
     const result = await addScript("failing", "../../scripts/half.mjs");
 
-    expect(result.message).toContain("nothing was recorded");
-    expect(result.message).toContain("nothing was rolled back");
+    expect(result.message).toContain("no step was recorded");
+    expect(result.message).toContain("Check or restore its changes before you retry");
   });
 
   it("counts the steps the flow FILE holds, as the success path does", async () => {
@@ -657,8 +654,7 @@ describe("a script that did not pass records nothing", () => {
     expect(failed.status).toBe("fail");
     // The in-memory snapshot, while the file itself holds two steps.
     expect(failed.stepCount).toBe(1);
-    expect(failed.message).toContain("could not be read and parsed");
-    expect(failed.message).toContain("last valid in-memory snapshot");
+    expect(failed.message).toContain("Could not verify stepCount from");
   });
 
   it("leaves the count unqualified while the file still parses", async () => {
@@ -679,8 +675,8 @@ describe("a script that did not pass records nothing", () => {
 
     const result = await addScript("gone", "../../scripts/gone.mjs");
 
-    expect(result.message).toContain("Nothing ran, so there is nothing to clean up");
-    expect(result.message).not.toContain("rolled back");
+    expect(result.message).toContain("did not run");
+    expect(result.message).toContain("Fix the reason before you retry");
   });
 
   // A cancellation reaches this tool from both sides of the fork under one
@@ -703,8 +699,8 @@ describe("a script that did not pass records nothing", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toContain("before the script started");
-    expect(result.message).toContain("Nothing ran, so there is nothing to clean up");
-    expect(result.message).not.toContain("is still done");
+    expect(result.message).toContain("did not run");
+    expect(result.message).toContain("Fix the reason before you retry");
     await expect(fs.access(marker)).rejects.toThrow();
     expect(await steps("cancelled")).toEqual([]);
   });
@@ -715,12 +711,12 @@ describe("a script that did not pass records nothing", () => {
     const result = await addScript("gone", "../../scripts/gone.mjs");
 
     expect(result.status).toBe("fail");
-    expect(result.reason).toContain('script "../../scripts/gone.mjs" does not exist');
+    expect(result.reason).toContain('Script "../../scripts/gone.mjs" does not exist');
     // Anchored at the flow file that named the step, with its `..` segments
     // intact: only the kernel may collapse one, since a lexical collapse past a
     // symlinked component names another file.
     const flowsDir = path.dirname(await fs.realpath(flowPath("gone")));
-    expect(result.reason).toContain(`resolved to ${flowsDir}${path.sep}../../scripts/gone.mjs`);
+    expect(result.reason).toContain(`Resolved path: ${flowsDir}${path.sep}../../scripts/gone.mjs`);
     expect(result).not.toHaveProperty("durationMs");
     expect(result).not.toHaveProperty("log");
     expect(await steps("gone")).toEqual([]);
@@ -751,8 +747,10 @@ describe("a script that did not pass records nothing", () => {
     const result = await addScript("cased", "../../scripts/CreateUser.mjs");
 
     expect(result.status).toBe("error");
-    expect(result.reason).toContain('mis-cased script path "../../scripts/CreateUser.mjs"');
-    expect(result.reason).toContain('write it as "../../scripts/createUser.mjs"');
+    expect(result.reason).toContain(
+      'Script path "../../scripts/CreateUser.mjs" has the wrong letter case'
+    );
+    expect(result.reason).toContain('Use "../../scripts/createUser.mjs"');
     expect(await steps("cased")).toEqual([]);
   });
 });
@@ -860,8 +858,8 @@ describe("a recording this server cannot reach", () => {
 
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     expect(signal?.failure_stage).toBe("flow_add_script_client_mode");
-    expect(message).toContain("not on the tool server's filesystem");
-    expect(message).toContain("add the `script:` step to the YAML by hand");
+    expect(message).toContain('Cannot access the script for flow "remote"');
+    expect(message).toContain("add the `script:` step to the YAML");
     await expect(fs.stat(marker)).rejects.toThrow();
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
     expect((await getRecordingSession(CLIENT_ROOT, "remote"))?.flow.steps).toEqual([]);

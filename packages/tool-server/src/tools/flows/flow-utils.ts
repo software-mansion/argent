@@ -3133,11 +3133,8 @@ function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void
         ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
         : `\`${field.where}\``;
       throw new FailureError(
-        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} holds an output reference ` +
-          `(\`${OUTPUT_REFERENCE_MARKER}…}}\`), which arrives with a later release — this one has ` +
-          `no flow output to read, so the text would be used literally and the step would pass ` +
-          `having done the wrong thing. Remove it and write the value the flow needs: ` +
-          `${JSON.stringify(rendered)}`,
+        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
+          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
         {
           error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
           failure_stage: "flow_output_reference",

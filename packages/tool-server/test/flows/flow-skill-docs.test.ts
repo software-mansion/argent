@@ -205,16 +205,6 @@ describe("create-flow idle docs", () => {
 
 describe("create-flow directive-answer docs", () => {
   const answered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) !== undefined);
-  const withoutRecordingTool = answered.filter((key) =>
-    directiveCommandHint(key)!.includes("records one")
-  );
-  const withRecordingTool = answered.filter((key) => !withoutRecordingTool.includes(key));
-
-  function sentenceWith(paragraph: string, marker: string): string {
-    const hit = paragraph.split(". ").find((s) => s.includes(marker));
-    expect(hit, `no sentence mentions "${marker}"`).toBeDefined();
-    return hit!;
-  }
 
   function commandParamDescription(): string {
     const schema = zodObjectToJsonSchema(createFlowAddStepTool({} as Registry).zodSchema!) as {
@@ -225,23 +215,22 @@ describe("create-flow directive-answer docs", () => {
     return described!;
   }
 
-  it("names every directive it answers, so a new one cannot go unmentioned", () => {
-    expect(answered.length).toBeGreaterThan(0);
-    const clause = sentenceWith(commandParamDescription(), "is answered with guidance");
-    for (const key of answered) expect(clause, key).toContain(`"${key}"`);
+  it("keeps directive guidance out of the command schema", () => {
+    const description = commandParamDescription();
+    expect(description).toContain("MCP tool to execute and record");
+    expect(description).toContain("Do not pass a flow directive or a recording tool");
+    expect(description).toContain("Call flow-add-script directly");
+    expect(description.split(/\s+/).length).toBeLessThan(40);
   });
 
-  it("names each directive that has no recording tool, on both surfaces", () => {
-    expect(withoutRecordingTool.length).toBeGreaterThan(0);
-    const { description } = createFlowAddStepTool({} as Registry);
-    expect(description, "flow-add-step no longer declares a description").toBeDefined();
-    for (const key of withoutRecordingTool) {
-      expect(sentenceWith(description!, "have no recording tool"), key).toContain(`\`${key}\``);
-      expect(commandParamDescription(), key).toContain(`"${key}"`);
+  it("returns guidance for each answered directive", () => {
+    expect(answered.length).toBeGreaterThan(0);
+    for (const key of answered) {
+      expect(directiveCommandHint(key), key).toContain(`"${key}"`);
     }
-    for (const key of withRecordingTool) {
-      expect(sentenceWith(description!, "have no recording tool"), key).not.toContain(`\`${key}\``);
-    }
+    expect(directiveCommandHint("script")).toBe(
+      '"script" is a flow directive. Call `flow-add-script` directly.'
+    );
   });
 });
 

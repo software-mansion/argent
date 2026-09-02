@@ -3,15 +3,19 @@
  * `flow-script-runner.mjs` child it forks: an `execute` request out, then
  * `started` and one terminal response back.
  *
+ * What the script PRINTS is not among them, and putting it here would not be a
+ * transport decision to make: the executor drains stdout and stderr precisely
+ * so that console text never reaches the report, because nothing in a flow file
+ * declares what a script prints is safe to forward. A script with something to
+ * say has to `throw` it or return it in `output` — both of which travel here,
+ * and both of which are bounded by the limits below.
+ *
  * The runner has two modes, and `interpreter` is what picks one. In `node` mode
  * it rides in as an `--import` preload in front of the script itself, and the
  * document crosses this channel in both directions. In `bash` mode it is the
  * entry module and spawns bash as its own child, so the document travels
  * through the two files the executor names in the request instead — bash has no
  * IPC channel, and the runner closes its own to what it starts.
- *
- * Script logs never travel here — they ride stdout/stderr, which the parent
- * drains and discards.
  */
 
 export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;

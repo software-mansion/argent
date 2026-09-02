@@ -1422,16 +1422,8 @@ describe("a restart that lands while a step is still running", () => {
     expect((err as Error).message).toContain("the script already ran");
     expect((err as Error).message).not.toContain("already ran on the device");
     expect((err as Error).message).toContain("fresh name");
-    expect((err as Error).message).toMatch(
-      /ran and passed in \d+ms and nothing it did was rolled back/
-    );
-    expect((err as Error).message).toContain("output document is lost");
-    // The append-failure message forks on whether the refusal was about a step
-    // ALREADY in the file. Only this arm is reachable without a hand edit, and
-    // both arms end "…is lost with this error", so pin the half that names
-    // which one the author is being sent to.
-    expect((err as Error).message).toContain("recording it failed");
-    expect((err as Error).message).not.toContain("a step ALREADY in the flow file");
+    expect((err as Error).message).toContain("passed, but the step was not recorded");
+    expect((err as Error).message).toContain("Check the script's changes before you retry");
 
     expect(await readMarkers(root, "alpha")).toEqual([]);
   });
@@ -1459,13 +1451,12 @@ describe("a restart that lands while a step is still running", () => {
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
     expect(result.message).not.toContain("the flow is exactly as it was");
-    expect(result.message).toContain("no longer active");
-    expect(result.message).toContain("it was restarted while the script was running");
-    expect(result.message).toContain("fresh name");
+    expect(result.message).toContain('Recording "alpha" was replaced');
+    expect(result.message).toContain("Use a new flow name");
     // The replacement take owns the file and holds no steps; the count that
     // comes back is this take's own, and the message says which it is.
     expect(result.stepCount).toBe(2);
-    expect(result.message).toContain("this take's own last count");
+    expect(result.message).toContain("stepCount is from the ended recording");
     expect(await readMarkers(root, "alpha")).toEqual([]);
   });
 
@@ -1488,11 +1479,8 @@ describe("a restart that lands while a step is still running", () => {
 
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
-    expect(result.message).toContain(
-      "it was finished (or dropped by the concurrent-recording cap)"
-    );
-    expect(result.message).toContain("holds that finished take");
-    expect(result.message).not.toContain("belongs to another take");
+    expect(result.message).toContain('Recording "alpha" ended');
+    expect(result.message).toContain("Use a new flow name");
     expect(result.message).not.toContain("the flow is exactly as it was");
   });
 
