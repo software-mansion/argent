@@ -1294,7 +1294,9 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toContain("Check the device against the state the recorded prefix");
-    expect(result.message).toContain("relaunching the app does NOT reproduce that prefix");
+    expect(result.message).toContain(
+      "Relaunching the app reproduces that prefix only while the prefix is the recorded launch step alone"
+    );
   });
 
   it("still warns when the composed flow failed with NO step passing", async () => {
