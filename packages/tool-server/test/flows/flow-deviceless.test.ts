@@ -32,11 +32,14 @@ const TOOLS: Record<string, { inputSchema?: unknown } | undefined> = {
   "flow-execute": { inputSchema: { properties: { name: {}, device: {} } } },
 };
 
-function mockRegistry(opts: { booted?: string[] } = {}) {
+function mockRegistry(opts: { booted?: string[]; devices?: object[] } = {}) {
   const invokeTool = vi.fn(async (id: string) => {
     if (id === "list-devices") {
       return {
-        devices: (opts.booted ?? []).map((udid) => ({ platform: "ios", udid, state: "Booted" })),
+        devices: [
+          ...(opts.booted ?? []).map((udid) => ({ platform: "ios", udid, state: "Booted" })),
+          ...(opts.devices ?? []),
+        ],
       };
     }
     return { ok: true };
@@ -225,6 +228,38 @@ describe("a flow that does touch a device still demands one", () => {
   it("when the tool is unknown to the registry", async () => {
     await writeFlow("mystery", [{ kind: "tool", name: "not-a-tool", args: {} }]);
     await expectDemandsDevice("mystery");
+  });
+
+  it("when the only device is a paired (unreachable) physical iPhone", async () => {
+    // list-devices keeps a paired phone listed for days after it was last
+    // seen, with state "paired". Auto-bind never counts a physical device as
+    // booted, so the run fails up front with the resolution error
+    // (enumerating the phone) instead of binding an unreachable device and
+    // failing opaquely mid-flow.
+    await writeFlow("stale-phone", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({
+      devices: [
+        { platform: "ios", kind: "device", udid: "00008120-000A44443333801E", state: "paired" },
+      ],
+    });
+    await expect(runAuto(registry, "stale-phone")).rejects.toThrow(
+      /No booted device found.*\(ios, paired\)/
+    );
+  });
+
+  it("when the only device is a connected physical iPhone, which is named as the way out", async () => {
+    // A cabled phone is reachable, but a flow must never land on real
+    // hardware because nothing else was booted. The error tells the caller
+    // how to run on it deliberately.
+    await writeFlow("phone-only", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({
+      devices: [
+        { platform: "ios", kind: "device", udid: "00008120-000A44443333801E", state: "connected" },
+      ],
+    });
+    await expect(runAuto(registry, "phone-only")).rejects.toThrow(
+      /No booted device found.*A physical iPhone is connected \(00008120-000A44443333801E\); hardware is never picked automatically, pass --device <udid> to run on it\..*\(ios, connected\)/
+    );
   });
 
   it("when it composes another flow, even a narration-only one", async () => {
@@ -558,5 +593,59 @@ describe("a cleanup flow whose only step is stop-all-simulator-servers", () => {
     expect(run.device).toBe(DEVICE);
     expect(run.ok).toBe(true);
     expect(invokeTool).toHaveBeenCalledWith("stop-all-simulator-servers", { devices: [DEVICE] });
+  });
+});
+
+describe("a connected physical iPhone never competes with simulators", () => {
+  const PHONE = "00008120-000A44443333801E";
+  const phone = { platform: "ios", kind: "device", udid: PHONE, state: "connected" };
+
+  it("binds the one booted simulator when a phone is also on the cable", async () => {
+    // Before this guard a cabled phone counted as booted, so the lone
+    // simulator became a "2 booted devices matched" error that --platform ios
+    // could not resolve.
+    await writeFlow("tapping", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({ booted: [DEVICE], devices: [phone] });
+
+    const result = asRun(await runAuto(registry, "tapping"));
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe(DEVICE);
+  });
+
+  it("binds the one booted simulator under --platform ios with a phone on the cable", async () => {
+    await writeFlow("tapping", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({ booted: [DEVICE], devices: [phone] });
+    const runFlow = createRunFlowTool(registry);
+
+    const result = asRun(
+      await runFlow.execute({}, { name: "tapping", project_root: tmpDir, platform: "ios" })
+    );
+
+    expect(result.device).toBe(DEVICE);
+  });
+
+  it("does not name the phone when the run was scoped to another platform", async () => {
+    await writeFlow("tapping", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({ devices: [phone] });
+    const runFlow = createRunFlowTool(registry);
+
+    await expect(
+      runFlow.execute({}, { name: "tapping", project_root: tmpDir, platform: "android" })
+    ).rejects.toThrow(
+      /No booted android device found\. Pass a device id or platform explicitly\. Available devices/
+    );
+  });
+
+  it("runs on the phone when it is named explicitly", async () => {
+    await writeFlow("tapping", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    const { registry } = mockRegistry({ booted: [DEVICE], devices: [phone] });
+    const runFlow = createRunFlowTool(registry);
+
+    const result = asRun(
+      await runFlow.execute({}, { name: "tapping", project_root: tmpDir, device: PHONE })
+    );
+
+    expect(result.device).toBe(PHONE);
   });
 });

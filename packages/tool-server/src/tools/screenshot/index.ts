@@ -6,14 +6,19 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { getScreenshotScale } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
+import type { DeviceInfo } from "@argent/registry";
+import * as fs from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,7 +32,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones."
     ),
   scale: z
     .number()
@@ -49,7 +54,7 @@ const zodSchema = z.object({
     .enum(["lanczos3", "box", "bilinear", "nearest"])
     .optional()
     .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum."
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
     ),
 });
 
@@ -73,6 +78,29 @@ const capability: ToolCapability = {
 };
 
 /**
+ * Capture a physical-iOS screenshot through the on-device XCUITest runner.
+ */
+async function iosPhysicalScreenshot(
+  registry: Registry,
+  device: DeviceInfo,
+  scale: number
+): Promise<string> {
+  const file = path.join(
+    os.tmpdir(),
+    `argent-ios-device-screenshot-${device.id.slice(0, 8)}-${process.hrtime.bigint()}.png`
+  );
+
+  const ref = iosDeviceRunnerRef(device);
+  const runner = (await registry.resolveService(ref.urn, ref.options)) as IosDeviceRunnerApi;
+
+  // Client timeout must exceed the runner screenshot budget. A shorter window turns COMMAND_TIMED_OUT into a transport timeout.
+  await fs.writeFile(file, await captureRunnerScreenshotPng(runner, RUNNER_COMMAND_TIMEOUT_MS));
+  await downscalePngInPlace(file, scale);
+
+  return file;
+}
+
+/**
  * tvOS screenshot path: simulator-server has no tvOS backend, so capture with
  * `xcrun simctl io <udid> screenshot` and downscale via `sips` to match the
  * iOS/Android scale behaviour.
@@ -89,9 +117,11 @@ export async function tvScreenshot(
     os.tmpdir(),
     `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
   );
+
   await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["io", udid, "screenshot", file]), {
     signal,
   });
+
   // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
   // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
   // hardcoded 3840 would double the scale on a 1920 capture.
@@ -102,6 +132,7 @@ export async function tvScreenshot(
       // Best-effort: keep the full-resolution capture if sips fails.
     });
   }
+
   return file;
 }
 
@@ -109,17 +140,39 @@ export async function tvScreenshot(
 // dimension probe fails.
 export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
   let longSide = 3840;
+
   try {
     const { stdout } = await execFileAsync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file]);
     const width = Number(/pixelWidth:\s*(\d+)/.exec(stdout)?.[1]);
     const height = Number(/pixelHeight:\s*(\d+)/.exec(stdout)?.[1]);
+
     if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
       longSide = Math.max(width, height);
     }
   } catch {
     /* probe failed — keep the 4K fallback */
   }
+
   return Math.round(longSide * scale);
+}
+
+/**
+ * Best-effort in-place downscale via sips. Keeps the original file if sips fails.
+ */
+export async function downscalePngInPlace(
+  file: string,
+  scale: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (scale >= 1.0) {
+    return;
+  }
+
+  await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
+    signal,
+  }).catch(() => {
+    // Best-effort: keep the full-resolution capture if sips fails.
+  });
 }
 
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
@@ -130,7 +183,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
@@ -158,6 +211,17 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         });
         const image = await requireArtifacts(ctx).register({
           hostPath: capturedPath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        });
+        return { image };
+      }
+
+      // Physical devices use the runner. Probe tvOS only after this. simctl does not list hardware UDIDs.
+      if (isIosPhysicalDevice(device)) {
+        const pngPath = await iosPhysicalScreenshot(registry, device, scale);
+        const image = await requireArtifacts(ctx).register({
+          hostPath: pngPath,
           kind: "screenshot",
           mimeType: "image/png",
         });

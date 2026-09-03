@@ -1,0 +1,67 @@
+---
+sidebar_position: 9
+sidebar_label: Physical iOS devices
+title: Physical iOS devices
+sidebar_custom_props:
+  icon: smartphone
+---
+
+Argent drives a physical iPhone over a USB cable. The agent launches the app, reads the screen, taps, swipes and types on the real device, in the same loop it uses on a simulator. Physical iPads are not supported yet.
+
+## Requirements
+
+- A Mac with Xcode, and an Apple ID signed into Xcode.
+- The device connected by USB cable and unlocked. Argent does not control a device over Wi-Fi.
+- Developer Mode enabled on the device: Settings > Privacy & Security > Developer Mode.
+
+You do not need a paid Apple Developer account. A free Personal Team works, with the limits below.
+
+## How it works
+
+Apple allows one kind of process to drive arbitrary apps on real hardware: a UI test. Argent builds a small test runner, signs it with your team, and installs it on the device. The runner receives commands over the cable and executes them on the device.
+
+Signing is automatic. Argent reads your Apple Development certificate from the keychain of the Mac and detects the team from it. When the keychain holds certificates from several teams, the team with the newest certificate wins, and the result names the choice and the alternatives. When the keychain holds no certificate, the error tells you to sign in to Xcode and create one: Xcode > Settings > Accounts, then Manage Certificates > + > Apple Development. To select a team yourself, set the `ARGENT_IOS_TEAM_ID` [environment variable](/docs/reference/configuration#devices) in the environment of the tool-server.
+
+## The first run
+
+The first interaction with a device takes longer than the later ones:
+
+1. Argent builds the runner. A first build takes minutes. Later builds reuse a cache and take seconds.
+2. iOS asks you to trust the developer on the device: Settings > General > VPN & Device Management.
+3. An app named **ArgentRunner** appears on the home screen of the device. This app is the automation runner. Keep it installed.
+
+On a free Personal Team, the signature of the runner expires after about 7 days. The next interaction rebuilds and re-signs the runner.
+
+## One app at a time
+
+Automation on hardware is scoped to one app. The agent registers the target app when it launches the app. Every screen read and every gesture then goes to that app. To read the home screen or a system dialog, the agent registers the system UI instead, and registers the app again afterwards. The screenshot is the exception: it always captures the full screen of the device.
+
+Reading the screen does not change the screen. When the target app is in the background, a screen read fails and names the ways out, instead of pulling the app forward. A gesture or typed text does pull the app forward, and the result then says so.
+
+## What works
+
+The agent launches, restarts and reinstalls apps, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the hardware buttons, types text, waits for elements, and records and replays [flows](/docs/features/flows). A flow replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
+
+A web URL opens in Safari. For any other URL scheme, the agent names the app that receives the URL.
+
+Some simulator capabilities do not exist on hardware. Each one fails with a message that names the alternative:
+
+- Two-finger gestures such as pinch and rotate are not possible. The agent drives the zoom controls of the app instead.
+- The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
+- The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
+
+## Troubleshooting
+
+| Symptom                                           | Action                                                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| The device is missing from the device list        | Connect the cable and unlock the phone, then list again.                                             |
+| The transport is not wired                        | Connect the device by USB cable. Argent does not use Wi-Fi.                                          |
+| A launch fails on an unlocked device              | Check the screen of the phone. A pending system prompt, for example a default-app choice, blocks it. |
+| The runner does not become ready on the first run | Trust the developer on the device: Settings > General > VPN & Device Management.                     |
+| Signing fails without a certificate               | Sign in to Xcode (Settings > Accounts), then Manage Certificates > + > Apple Development.            |
+| The runner exits twice for the same app           | The current screen of the app is likely crashing the runner. Restart the app and retry.              |
+| The runner stops launching after about a week     | The free-team signature expired. Retry: the next interaction rebuilds and re-signs the runner.       |
+
+## In the device list
+
+The device appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.

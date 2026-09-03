@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
+import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
@@ -98,6 +99,7 @@ export function createRegistry(): Registry {
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
   registry.registerBlueprint(simulatorServerBlueprint);
+  registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
