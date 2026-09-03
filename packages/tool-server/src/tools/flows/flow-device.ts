@@ -72,8 +72,12 @@ function deviceEntryId(d: RawDevice): string | undefined {
 function isBooted(d: RawDevice): boolean {
   switch (d.platform) {
     case "ios":
-      // Simulators report Booted. Physical devices report connected with kind device.
-      return d.state === "Booted" || (d.kind === "device" && d.state === "connected");
+      // Simulators only. A physical iPhone reports `connected` and is never
+      // auto-bound: a flow written for a simulator must not run on real
+      // hardware because a phone happens to be on the cable, and a cabled
+      // phone must not turn a lone booted simulator into an ambiguity. Name
+      // the phone with `device` to run on it.
+      return d.state === "Booted";
     case "android":
       return d.state === "device";
     case "vega":
@@ -83,6 +87,24 @@ function isBooted(d: RawDevice): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * A connected physical iPhone is listed but never auto-bound, so when nothing
+ * qualifies the error says how to run on it. Silent when the run was scoped to
+ * another platform.
+ */
+function connectedIosDeviceHint(devices: RawDevice[], platform?: FlowPlatform): string {
+  if (platform && platform !== "ios") return "";
+  const ids = devices
+    .filter((d) => d.platform === "ios" && d.kind === "device" && d.state === "connected")
+    .map((d) => d.udid)
+    .filter((id): id is string => Boolean(id));
+  if (ids.length === 0) return "";
+  return (
+    ` A physical iPhone is connected (${ids.join(", ")}); hardware is never picked ` +
+    `automatically, pass --device <udid> to run on it.`
+  );
 }
 
 function describeDevice(d: RawDevice): string {
@@ -102,7 +124,8 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
 /**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device of `platform` → the single booted device overall →
- * throw, enumerating what is available.
+ * throw, enumerating what is available. A physical iPhone is reachable only
+ * through the explicit id; see {@link isBooted}.
  */
 export async function resolveFlowDevice(
   registry: Registry,
@@ -125,7 +148,10 @@ export async function resolveFlowDevice(
     const what = opts.platform
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
-    throw deviceResolutionError(`${what} Pass a device id or platform explicitly.`, devices);
+    throw deviceResolutionError(
+      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}`,
+      devices
+    );
   }
   throw deviceResolutionError(
     `${scoped.length} booted devices matched — pass --device or --platform to disambiguate.`,
