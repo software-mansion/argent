@@ -271,6 +271,11 @@ export class LogFileWriter {
   close(opts: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
+    // Before the keepalive goes and the fd with it: mtime is the only thing the
+    // sweep reads, and it otherwise stands at the last hourly tick — up to an
+    // hour before the crash — so a kept file would age out at 23h while every
+    // description of it says a day. A no-op on the unlink path below.
+    this.touch();
     if (this.keepalive !== null) {
       clearInterval(this.keepalive);
       this.keepalive = null;
@@ -295,9 +300,14 @@ export class LogFileWriter {
 const STALE_LOG_AGE_MS = 24 * 60 * 60 * 1000;
 /** Comfortably inside STALE_LOG_AGE_MS, so a live file is never a candidate. */
 const KEEPALIVE_MS = 60 * 60 * 1000;
-// The trailing pair is optional so the sweep still reaches files named by a
-// tool-server from before they were added; nothing else writes this directory.
-const LOG_NAME_RE = /^argent-logs-\d+-\d+(?:-\d+-\d+)?\.log$/;
+// Only the names this version mints. A name without the pid-and-sequence pair
+// came from a writer with no keepalive, whose mtime moves only when a line is
+// written — so a live session capturing nothing, or one past MAX_ENTRIES, is
+// indistinguishable from an orphan there, and that writer has no `hasFile()` to
+// report the unlink either. Installs of different versions share this directory
+// and run their servers side by side, so the older shape is swept by nobody
+// rather than by everybody; nothing mints it any more, so the set is bounded.
+const LOG_NAME_RE = /^argent-logs-\d+-\d+-\d+-\d+\.log$/;
 
 /**
  * Drop log files left behind by earlier sessions — the writer keeps its file
@@ -307,11 +317,11 @@ const LOG_NAME_RE = /^argent-logs-\d+-\d+(?:-\d+-\d+)?\.log$/;
  * can enumerate the others' sessions; `touch`'s keepalive is what earns that,
  * refreshing an open file's mtime whether or not it is being written to, so a
  * file this stale has no writer behind it in any process that runs this code.
- * The gaps are a tool-server old enough to predate the keepalive, and a
- * filesystem that refuses `futimes` (which `touch` swallows); both are why the
- * cutoff is a day rather than an hour, since the file has to look abandoned for
- * far longer than a session plausibly sits idle. Opening a writer is the only
- * thing that runs this, so a host that stops debugging keeps what it has.
+ * The remaining gap is a filesystem that refuses `futimes` (which `touch`
+ * swallows), which is why the cutoff is a day rather than an hour: the file has
+ * to look abandoned for far longer than a session plausibly sits idle. Opening
+ * a writer is the only thing that runs this, so a host that stops debugging
+ * keeps what it has.
  */
 function pruneStaleLogs(dir: string): void {
   const cutoff = Date.now() - STALE_LOG_AGE_MS;

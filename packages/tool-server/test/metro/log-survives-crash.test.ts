@@ -100,6 +100,15 @@ function stallAndFlood(): () => void {
   };
 }
 
+/** Wait for `ready()`; the throw names the step that never happened, not "slow". */
+async function until(ready: () => boolean, what: string, budgetMs = 4000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${budgetMs}ms waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 /** How many sockets opened since `known` are still up, once they have had time to drain. */
 async function countLeakedSockets(known: Set<WebSocket>): Promise<number> {
   const opened = () => [...wss.clients].filter((socket) => !known.has(socket));
@@ -461,7 +470,7 @@ describe("console logs across an app crash", () => {
       expect(secondLog).not.toBe(firstLog);
 
       cdpConn!.terminate();
-      await new Promise((r) => setTimeout(r, 500));
+      await until(() => !fs.existsSync(firstLog), "the first round's log to be reclaimed");
 
       // One file per device, not one per round.
       expect(fs.existsSync(firstLog)).toBe(false);
@@ -492,7 +501,13 @@ describe("console logs across an app crash", () => {
     } finally {
       logicalDeviceId = undefined;
     }
-  });
+    // Raised because this case is the file's longest: two full crash rounds,
+    // each a connect, a resolve, a registry read and a socket teardown, on top
+    // of fixed waits for the dispose cascades. Its headroom under the default
+    // is spent by any single CDP round-trip that has to wait out
+    // DEFAULT_TIMEOUT_MS. Positional, since vi.setConfig does not reach a case
+    // that is already registered.
+  }, 20_000);
 
   it("reports the kept file from debugger-connect, the step crash recovery prescribes", async () => {
     // `debugger-connect` consumes the breadcrumb — deliberately, so a stale one

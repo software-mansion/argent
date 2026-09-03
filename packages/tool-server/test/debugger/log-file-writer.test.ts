@@ -101,20 +101,27 @@ describe("LogFileWriter", () => {
     });
 
     it("removes log files older than a day and leaves everything else", () => {
-      const stale = path.join(logDir, "argent-logs-1111-1700000000000.log");
-      const recent = path.join(logDir, "argent-logs-2222-1700000000000.log");
+      const stale = path.join(logDir, "argent-logs-1111-1700000000000-4242-0.log");
+      const recent = path.join(logDir, "argent-logs-2222-1700000000000-4242-1.log");
       const foreign = path.join(logDir, "not-a-log.txt");
+      // The shape a tool-server from before the keepalive writes. Its writer
+      // refreshes mtime only when a line is written, so a live session that has
+      // captured nothing for a day reads as an orphan — and that version has no
+      // `hasFile()` to report the unlink. Two installs run side by side during
+      // any rollout, so this sweep leaves the older shape alone.
+      const legacy = path.join(logDir, "argent-logs-3333-1700000000000.log");
       // Sorts ahead of every `argent-logs-` name, so a sweep that stopped at
       // the first foreign entry rather than skipping past it would reach none
       // of the files below it.
       const foreignFirst = path.join(logDir, "0-not-a-log.txt");
-      for (const f of [stale, recent, foreign, foreignFirst]) fs.writeFileSync(f, "x");
-      for (const f of [stale, foreign, foreignFirst]) age(f, DAY_MS + 60_000);
+      for (const f of [stale, recent, foreign, foreignFirst, legacy]) fs.writeFileSync(f, "x");
+      for (const f of [stale, foreign, foreignFirst, legacy]) age(f, DAY_MS + 60_000);
       age(recent, DAY_MS - 60 * 60 * 1000);
 
       const pruner = new LogFileWriter(3333);
 
       expect(fs.existsSync(stale)).toBe(false);
+      expect(fs.existsSync(legacy)).toBe(true);
       // A concurrent tool-server's live writer touches its file hourly, so the
       // cutoff has to clear that by a long way: this one is an hour short of it
       // and still in use.
@@ -151,14 +158,44 @@ describe("LogFileWriter", () => {
       }
     });
 
+    it("dates a kept file from the crash, not from the last keepalive tick", () => {
+      // mtime is the whole of what the sweep reads, and between ticks it stands
+      // up to KEEPALIVE_MS behind. Closing without a final touch starts the
+      // day-old clock as much as an hour before the crash, and the worst case
+      // is the crash this feature exists for: an app that logs at startup and
+      // dies quietly an hour later. Everything that describes the window - the
+      // docs, the metro-debugger reference, this class's own JSDoc, the note
+      // the store hands an agent - says a day.
+      vi.useFakeTimers();
+      try {
+        const crashed = new LogFileWriter(7778);
+        crashed.write({ id: 1, timestamp: "t", level: "error", message: "CRITICAL pre-crash" });
+        const kept = crashed.getFilePath();
+        // The last tick was an hour ago and nothing has been written since,
+        // which is where an idle session sits when its runtime dies.
+        age(kept, 60 * 60 * 1000);
+        crashed.close({ keepFile: true });
+
+        // Half an hour short of a day SINCE THE CRASH, so a file dated from
+        // that last tick is already past the cutoff and this one is not.
+        vi.advanceTimersByTime(DAY_MS - 30 * 60 * 1000);
+        const later = new LogFileWriter(8889);
+
+        expect(fs.existsSync(kept)).toBe(true);
+        later.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("finishes the sweep when a candidate cannot be removed", () => {
       // The sweep runs from every writer's constructor — inside every connect —
       // and races every other tool-server on the machine for this directory, so
       // a candidate can stop being there, or stop being ours, between the
       // listing and the unlink. A directory wearing a log file's name is that
       // same failure on demand.
-      const undeletable = path.join(logDir, "argent-logs-4321-1700000000000.log");
-      const stale = path.join(logDir, "argent-logs-4322-1700000000000.log");
+      const undeletable = path.join(logDir, "argent-logs-4321-1700000000000-4242-0.log");
+      const stale = path.join(logDir, "argent-logs-4322-1700000000000-4242-1.log");
       fs.mkdirSync(undeletable);
       fs.writeFileSync(stale, "x");
       age(undeletable, DAY_MS + 60_000);
