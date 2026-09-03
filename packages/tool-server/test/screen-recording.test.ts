@@ -3,7 +3,7 @@ import { EventEmitter } from "events";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
+import { getFailureSignal, FAILURE_CODES, FailureError, type DeviceInfo } from "@argent/registry";
 import type { ChildProcess } from "child_process";
 
 vi.mock("child_process", async (importOriginal) => {
@@ -1596,6 +1596,32 @@ describe("server-side recording", () => {
     };
   }
 
+  /**
+   * The FailureError `stopServerRecording`/`recordingPost` produce for a stop
+   * whose request TIMED OUT — simulator-server accepted the connection and never
+   * answered. This is the one rejection that keeps the recording recoverable.
+   */
+  function stopTimedOut(): FailureError {
+    return new FailureError("screen-recording-stop timed out", {
+      error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+      failure_stage: "screen_recording_server_stop",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+      network_failure: "timeout",
+    });
+  }
+
+  /** The FailureError produced when the simulator-server is gone at stop time. */
+  function stopConnectionRefused(): FailureError {
+    return new FailureError("cannot connect to simulator-server (connection refused)", {
+      error_code: FAILURE_CODES.SIMULATOR_NETWORK_CONNECTION_REFUSED,
+      failure_stage: "screen_recording_server_stop",
+      failure_area: "tool_server",
+      error_kind: "network",
+      network_failure: "connection_refused",
+    });
+  }
+
   async function startOnServer(
     api: ScreenRecordingSessionApi,
     server: ServerRecordingControl,
@@ -1681,6 +1707,25 @@ describe("server-side recording", () => {
     const stopped = await stopCapture(api);
 
     expect(stopped.durationMs).toBe(2_000);
+    expect(stopped).not.toHaveProperty("trimmedMs");
+    expect(stopped).not.toHaveProperty("wallClockMs");
+    await fs.rm(stopped.outputFile, { force: true });
+    await fs.rm(server.serverDir, { recursive: true, force: true });
+  });
+
+  it("omits the trim fields when trimming ran but collapsed nothing", async () => {
+    const api = await makeSession(iosDevice);
+    // trimming was ON but nothing was static long enough to cut: the server
+    // reports `trimmed_ms: 0`, distinct from the `null` it sends when trimming
+    // is off. Both mean no dead air was removed, so the trim-only fields — which
+    // the contract says are "present only when trimming actually removed frames"
+    // — must be absent. `0 ?? null` is 0, so a naive non-null check leaks them.
+    const server = await fakeServer({ durationMs: 3_029, wallClockMs: 3_029, trimmedMs: 0 });
+    await startOnServer(api, server, {});
+
+    const stopped = await stopCapture(api);
+
+    expect(stopped.durationMs).toBe(3_029);
     expect(stopped).not.toHaveProperty("trimmedMs");
     expect(stopped).not.toHaveProperty("wallClockMs");
     await fs.rm(stopped.outputFile, { force: true });
@@ -1970,18 +2015,19 @@ describe("server-side recording", () => {
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
-  it("keeps the recording recoverable when the stop request itself fails", async () => {
+  it("keeps the recording recoverable when the stop request times out", async () => {
     const api = await makeSession(iosDevice);
     const server = await fakeServer();
     await startOnServer(api, server, {});
     // The class of failure `RECORDING_STOP_TIMEOUT_MS` exists for: the server
-    // accepts the connection and never answers, or dies mid-mux. The request
-    // rejects, but the recording inside simulator-server is untouched.
+    // accepts the connection and never answers. The request rejects on the
+    // timeout, but the recording inside simulator-server is untouched — so a
+    // retry can still finalize it.
     server.stop.mockImplementationOnce(async () => {
-      throw new Error("the operation was aborted");
+      throw stopTimedOut();
     });
 
-    await expect(stopCapture(api)).rejects.toThrow("aborted");
+    await expect(stopCapture(api)).rejects.toThrow("timed out");
 
     // The failed request must not throw away the only handle that can still
     // end the recording: dispose decides from `serverStop`, and a retried stop
@@ -2003,23 +2049,55 @@ describe("server-side recording", () => {
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
-  it("still ends the recording on dispose after its stop request failed", async () => {
+  it("still ends the recording on dispose after its stop request timed out", async () => {
     const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
       device: iosDevice,
     } as never);
     const server = await fakeServer();
     await startOnServer(instance.api, server, {});
     server.stop.mockImplementationOnce(async () => {
-      throw new Error("connection reset");
+      throw stopTimedOut();
     });
     await stopCapture(instance.api).catch(() => {});
 
     await instance.dispose();
 
     // The preserved handle is what lets the teardown end a recording the
-    // failed stop left running inside simulator-server.
+    // timed-out stop left running inside simulator-server.
     expect(server.stop).toHaveBeenCalledTimes(2);
     expect(instance.api.serverStop).toBeNull();
+    await fs.rm(server.serverDir, { recursive: true, force: true });
+  });
+
+  it("resets the session to startable when the stop fails against a gone server", async () => {
+    // A stop that fails any way OTHER than a timeout resolves the recording's
+    // fate: connection refused/reset means the server (and the recording) is
+    // gone; an error/malformed reply means it answered definitively. Parking on
+    // `pendingRetrieval` there wedges the device — every retried stop repeats the
+    // same failure and every start is refused with "already active" — for the
+    // tool-server's whole life. Only a timeout keeps the recovery handles.
+    const api = await makeSession(iosDevice);
+    const server = await fakeServer();
+    await startOnServer(api, server, {});
+    server.stop.mockImplementationOnce(async () => {
+      throw stopConnectionRefused();
+    });
+
+    await expect(stopCapture(api)).rejects.toThrow("connection refused");
+
+    // No retry could recover it, so the session must be fully startable again,
+    // not parked waiting for a stop that can never succeed.
+    expect(api.serverStop).toBeNull();
+    expect(api.pendingRetrieval).toBe(false);
+    expect(api.recordingActive).toBe(false);
+    expect(api.stopPending).toBe(false);
+    expect(api.outputFile).toBeNull();
+    // The reminder is cleared rather than left claiming a retrievable video.
+    expect(getActiveScreenRecordings()).toEqual([]);
+    // A fresh start is admitted — the wedge is gone.
+    const restarted = await startOnServer(api, await fakeServer(), {});
+    expect(restarted.status).toBe("recording");
+    await stopCapture(api).then((s) => fs.rm(s.outputFile, { force: true }));
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 

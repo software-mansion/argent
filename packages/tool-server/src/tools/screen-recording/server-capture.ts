@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 import type { ServerRecordingResult } from "../../utils/simulator-client";
 import {
@@ -175,9 +175,15 @@ export async function stopServerCapture(
   // simulator-server whose session directory the copy below reads from.
   api.serverStop = null;
 
-  // Set when the stop REQUEST itself failed — timeout, network drop, non-JSON
-  // reply. Unlike every other failure below, that one leaves the fate of the
-  // recording inside simulator-server unresolved: it may well still be live.
+  // Set only when the stop request TIMED OUT: simulator-server accepted the
+  // connection and never answered within the finalize budget. That is the one
+  // rejection that leaves the recording's fate unresolved — it may well still be
+  // live inside simulator-server — so a retry can recover it. Every other
+  // rejection resolves the fate the other way and cannot be recovered by a
+  // retry: a connection refused or reset means the server (and the recording
+  // with it) is gone, and an error/malformed/non-JSON reply means it answered
+  // definitively. Those reset the session to startable below rather than parking
+  // it on a retry that would only repeat the same failure.
   let finalizeRequestFailed = false;
 
   try {
@@ -189,7 +195,7 @@ export async function stopServerCapture(
     try {
       result = await stop();
     } catch (err) {
-      finalizeRequestFailed = true;
+      finalizeRequestFailed = getFailureSignal(err)?.network_failure === "timeout";
       throw err;
     }
     // Copy rather than reference: the video sits in simulator-server's temp
@@ -254,8 +260,10 @@ export async function stopServerCapture(
       sizeBytes: size,
       durationMs: result.durationMs,
       // Only report the trim fields when trimming actually collapsed something,
-      // matching the fallback path's contract.
-      ...(result.trimmedMs !== null
+      // matching the fallback path's `trimmedAnyFrames` contract. `trimmed_ms`
+      // is null when trimming was off, but 0 when it was on and removed nothing
+      // — both mean "no dead air was cut", so neither may surface the fields.
+      ...(result.trimmedMs !== null && result.trimmedMs > 0
         ? { wallClockMs: result.wallClockMs, trimmedMs: result.trimmedMs }
         : {}),
       ...(warning ? { warning } : {}),
@@ -272,14 +280,15 @@ export async function stopServerCapture(
     throw err;
   } finally {
     if (finalizeRequestFailed) {
-      // The request failed, not the recording: simulator-server may still be
-      // recording (the timeout this path exists for accepts the connection and
-      // never answers). Dropping the handles here — the old behaviour — would
-      // orphan it for good: dispose skips a session without `serverStop`, a
-      // retried stop is refused with "No active screen recording", and every
-      // later start is rejected by the server's own "already running" guard.
-      // So keep exactly what recovery needs and flip the reminder to "ended,
-      // still to retrieve", pointing the caller at the retry.
+      // The stop timed out, so the recording is not known to be over:
+      // simulator-server accepted the connection and never answered, and it may
+      // still be recording. Dropping the handles here — as every other failure
+      // does — would orphan it for good: dispose skips a session without
+      // `serverStop`, a retried stop is refused with "No active screen
+      // recording", and every later start is rejected by the server's own
+      // "already running" guard. So keep exactly what recovery needs and flip
+      // the reminder to "ended, still to retrieve", pointing the caller at the
+      // retry.
       api.stopPending = false;
       api.pendingRetrieval = true;
       api.serverStop = stop;
