@@ -72,7 +72,13 @@ run_phase() {
   assert_ok   "$P" button back   "{\"udid\":\"$DEV\",\"button\":\"back\"}"
   assert_ok   "$P" rotate landscape "{\"udid\":\"$DEV\",\"orientation\":\"LandscapeLeft\"}"
   assert_ok   "$P" rotate portrait  "{\"udid\":\"$DEV\",\"orientation\":\"Portrait\"}"
-  assert_ok   "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}"
+  # `.verified != false`, not just a 200: the Android read-back reports a detected
+  # landing failure as `verified: false` in the body, which `assert_ok` would pass.
+  # Nothing editable holds focus on the launcher, so a healthy call returns an
+  # ABSENT verdict here — `!= false` admits that and true, and fails loudly if a
+  # focused launcher field ever makes the text land short, which is also the
+  # unstated premise the run-sequence below rests on.
+  assert_field "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}" '(.verified != false)' 'true'
   assert_ok   "$P" keyboard key  "{\"udid\":\"$DEV\",\"key\":\"enter\"}"
   # Both halves in ONE call is rejected — a guard the two legal calls above
   # cannot exercise. The 400 comes from `execute`, not from schema validation:
