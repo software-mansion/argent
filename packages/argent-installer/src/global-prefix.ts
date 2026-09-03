@@ -229,6 +229,31 @@ export function blockedGlobalTargetCause(
 }
 
 /** What a printed remedy may assume about the machine it is printed on. */
+/**
+ * The existing directory `dir` would be created under, when it is proven
+ * unwritable on the same evidence {@link probeGlobalInstallTarget} uses; null
+ * where nothing was proven. `npm install -g` links its shims into
+ * `<prefix>/bin`, which is nowhere under the package directory that probe walks.
+ */
+export function provenUnwritableDir(dir: string): string | null {
+  if (process.platform === "win32") return null;
+  const existing = nearestExistingDir(dir);
+  if (existing === null) return null;
+  try {
+    fs.accessSync(existing, fs.constants.W_OK);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code !== undefined && BLOCKING_ERRNOS.has(code) ? existing : null;
+  }
+  return null;
+}
+
+/** Directory npm links global commands into, or null when npm cannot be asked. */
+export function npmGlobalBinDir(): string | null {
+  const prefix = queryAbsolutePath("npm", ["prefix", "-g"]);
+  return prefix === null ? null : path.join(prefix, "bin");
+}
+
 export interface RemedyContext {
   /** There is a package.json to hold the devDependency a local install adds. */
   localViable: boolean;
@@ -274,6 +299,19 @@ function writablePrefixRemedy(pm: PackageManager): string {
   );
 }
 
+// Only for a directory outside the store: `sudo chown` on a store path is
+// undone by the next rebuild, which is the whole reason the Nix cause exists.
+// The prefix remedy is a no-op where the blocked directory sits under a prefix
+// the user already chose and an earlier `sudo npm i -g` left root-owned, and
+// this is the way out for exactly that case.
+function ownershipRemedy(target: GlobalInstallTarget): string | null {
+  if (target.nixStore) return null;
+  return (
+    `  Or take ownership of the directory that is blocking it:\n` +
+    `    ${pc.cyan(`sudo chown -R "$(whoami)" ${target.dir}`)}`
+  );
+}
+
 /** The cause plus the ways out, spelled as commands to run. */
 export function unwritableGlobalTargetMessage(
   target: GlobalInstallTarget,
@@ -281,9 +319,11 @@ export function unwritableGlobalTargetMessage(
   verb: "install" | "update",
   ctx: RemedyContext
 ): string {
-  const remedies = [writablePrefixRemedy(pm), localInstallRemedy(ctx)].filter(
-    (remedy): remedy is string => remedy !== null
-  );
+  const remedies = [
+    writablePrefixRemedy(pm),
+    ownershipRemedy(target),
+    localInstallRemedy(ctx),
+  ].filter((remedy): remedy is string => remedy !== null);
 
   return `${blockedGlobalTargetCause(target, pm, verb)}\n\n${remedies.join("\n\n")}`;
 }

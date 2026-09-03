@@ -10,7 +10,11 @@ import {
   isGloballyInstalled,
   isLocallyInstalled,
 } from "../src/utils.js";
-import { probeGlobalInstallTarget } from "../src/global-prefix.js";
+import {
+  probeGlobalInstallTarget,
+  provenUnwritableDir,
+  npmGlobalBinDir,
+} from "../src/global-prefix.js";
 import { InitCancelled } from "../src/init-args.js";
 import { log, select } from "@clack/prompts";
 import { track } from "@argent/telemetry";
@@ -46,10 +50,15 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
-// Only the probe is faked — the messages the recovery prints are the real ones.
+// Only the probes are faked — the messages the recovery prints are the real ones.
 vi.mock("../src/global-prefix.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/global-prefix.js")>();
-  return { ...original, probeGlobalInstallTarget: vi.fn() };
+  return {
+    ...original,
+    probeGlobalInstallTarget: vi.fn(),
+    provenUnwritableDir: vi.fn(() => null),
+    npmGlobalBinDir: vi.fn(() => null),
+  };
 });
 
 // Real clack spinners animate on a TTY; stub the UI surface entirely.
@@ -272,6 +281,8 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(log.warn).mockReset();
     vi.mocked(hasProjectPackageJson).mockReturnValue(true);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
+    vi.mocked(provenUnwritableDir).mockReturnValue(null);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(null);
     savedPath = process.env.PATH;
     // The prompts below only exist for a user who can answer them.
     savedIsTty = process.stdin.isTTY;
@@ -339,6 +350,47 @@ describe("a global install whose target directory cannot be written", () => {
     expect(decisions()).toEqual(["set_prefix", "install"]);
   });
 
+  it("stops when the moved prefix can be written but its bin directory cannot", async () => {
+    // `npm install -g` also links its commands into <prefix>/bin, which the
+    // package-directory probe never walks.
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Only the prefix move ran — no install against a directory npm cannot
+    // link into.
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands).toEqual([
+      expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
+    ]);
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(message).toContain(binDir);
+    expect(message).toContain("npx @swmansion/argent init --local");
+  });
+
+  it("reports a bin directory the shells cannot see, with no recovery involved", async () => {
+    // The recovery's `npm config set prefix` outlives its run, so a later init
+    // installs into that prefix without ever entering the recovery.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(outcome.pathHint).toBe(binDir);
+    expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+  });
+
   it("reports no PATH step when the new bin directory is already on it", async () => {
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
@@ -349,7 +401,9 @@ describe("a global install whose target directory cannot be written", () => {
 
   it("stops when the moved prefix is not writable either, without prescribing the move again", async () => {
     vi.mocked(select).mockResolvedValue("prefix" as never);
-    vi.mocked(probeGlobalInstallTarget).mockReturnValueOnce(blocked).mockReturnValue({
+    // The blocked target the recovery starts from is passed in, not probed —
+    // the one call on this path is the re-probe after the move.
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue({
       dir: "/home/dev/.npm-global/lib/node_modules",
       blocked: true,
       nixStore: false,
@@ -366,6 +420,7 @@ describe("a global install whose target directory cannot be written", () => {
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
     const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(message).toContain("/home/dev/.npm-global/lib/node_modules");
     expect(message).toContain("npx @swmansion/argent init --local");
     expect(message).not.toContain("npm config set prefix");
     expect(tel.trackPackageAction).toHaveBeenCalledWith(
@@ -392,6 +447,8 @@ describe("a global install whose target directory cannot be written", () => {
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
     const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    // npm's own error alone names neither argent nor a way forward.
+    expect(message).toContain("would not record a global prefix");
     expect(message).toContain("EACCES ~/.npmrc");
     expect(message).toContain("npx @swmansion/argent init --local");
   });
@@ -570,6 +627,14 @@ describe("a global install whose target directory cannot be written", () => {
       expect(track).toHaveBeenCalledWith(
         "installation:update_decision",
         expect.objectContaining({ decision: "skip" })
+      );
+      // Not attempted is not the same as declined: the code separates "we did
+      // not try" from "npm tried and failed".
+      expect(tel.trackPackageAction).toHaveBeenCalledWith(
+        "update_failed",
+        expect.any(Number),
+        false,
+        INSTALL_GLOBAL_PREFIX_UNWRITABLE
       );
     } finally {
       vi.mocked(isGloballyInstalled).mockReturnValue(false);

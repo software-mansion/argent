@@ -73,6 +73,10 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+// The messages are styled with picocolors, which stays on under CI.
+// eslint-disable-next-line no-control-regex
+const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+
 class ExitSentinel extends Error {
   constructor(public readonly code: number | undefined) {
     super(`process.exit(${code})`);
@@ -183,8 +187,10 @@ describe("update — interactive decline", () => {
       expect(promptsMock.confirm).not.toHaveBeenCalled();
       expect(killToolServerForInstallDir).not.toHaveBeenCalled();
       expect(npmInstallCalls()).toHaveLength(0);
-      const errors = promptsMock.log.error.mock.calls.map(([m]) => m as string);
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
       expect(errors.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(true);
+      // update only ever runs from an installed argent, so the way out names it.
+      expect(errors.some((m) => m.includes("\n    argent init --local"))).toBe(true);
       expect(telemetryMock.track).toHaveBeenCalledWith(
         "installation:package_action",
         expect.objectContaining({
@@ -192,6 +198,53 @@ describe("update — interactive decline", () => {
           error_code: "UPDATE_GLOBAL_PREFIX_UNWRITABLE",
         })
       );
+      // The code that reaches the funnel as the run's terminal failure.
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_update_fail",
+        expect.objectContaining({ error_code: "UPDATE_GLOBAL_PREFIX_UNWRITABLE" })
+      );
+    }
+  );
+
+  // needsInstall also covers "nothing installed for this mode", where calling
+  // it an update names an operation the reader never asked for.
+  it.skipIf(!canTestUnwritable)(
+    "calls it an install when there is no global install to update",
+    async () => {
+      topologyState.globalInstalled = false;
+      const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
+      fs.mkdirSync(globalRoot, { recursive: true });
+      fs.chmodSync(globalRoot, 0o555);
+      childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+        args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
+
+      await expect(update(["--global"])).rejects.toThrow(ExitSentinel);
+
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+      expect(errors.some((m) => m.includes("cannot install @swmansion/argent globally"))).toBe(
+        true
+      );
+      expect(errors.some((m) => m.includes("cannot update"))).toBe(false);
+      // Nothing is installed, so a bare `argent` is not on PATH to run.
+      expect(errors.some((m) => m.includes("npx @swmansion/argent init --local"))).toBe(true);
+    }
+  );
+
+  it.skipIf(!canTestUnwritable)(
+    "leaves out the per-project way out when there is no package.json to hold it",
+    async () => {
+      fs.rmSync(path.join(projDir, "package.json"));
+      const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
+      fs.mkdirSync(globalRoot, { recursive: true });
+      fs.chmodSync(globalRoot, 0o555);
+      childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+        args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+      expect(errors.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(true);
+      expect(errors.some((m) => m.includes("init --local"))).toBe(false);
     }
   );
 

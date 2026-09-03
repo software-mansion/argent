@@ -122,8 +122,10 @@ export async function init(args: string[]): Promise<void> {
     // Two ways a blocked global install leaves nothing to ask: no terminal to
     // answer on (a rendered menu never settles — the run would exit 0 having
     // installed nothing), and nothing argent could carry out even if it were
-    // answered. Take the global path so the install step below says why, with
-    // the remedies spelled out, instead of offering a choice that ends there.
+    // answered. Fall back to what the project already recorded, the same answer
+    // resolveInstallModeFromFlags gives `--yes` for this situation; without a
+    // record the global path makes the install step below say why, with the
+    // remedies spelled out, instead of offering a choice that ends there.
     const skipBlockedModePrompt =
       blockedGlobal !== null &&
       (process.stdin.isTTY !== true ||
@@ -131,26 +133,9 @@ export async function init(args: string[]): Promise<void> {
     tel.installMode =
       modeFromFlags ??
       (skipBlockedModePrompt
-        ? "global"
+        ? (recordedMode ?? "global")
         : await promptInstallMode(recordedMode ?? "global", blockedGlobal));
     track("installation:install_mode_decision", { install_mode: tel.installMode });
-
-    // `--local --no-telemetry`: the global opt-out above only covers this
-    // machine. A local install is meant to be committed, so also record the
-    // opt-out in the project config — `false` there wins on every clone.
-    let wroteProjectTelemetryOptOut = false;
-    if (parsed.noTelemetry && tel.installMode === "local") {
-      try {
-        writeConsentFlag(false, "project", { cwd: initProjectRoot });
-        wroteProjectTelemetryOptOut = true;
-        p.log.info(
-          `${pc.bold("Telemetry")} ${pc.dim("also disabled for this project —")} ` +
-            `${pc.cyan(".argent/config.json")} ${pc.dim("(commit it so the opt-out applies to every clone).")}`
-        );
-      } catch (err) {
-        p.log.warn(`Could not write the project telemetry opt-out: ${err}`);
-      }
-    }
 
     // Step 0 — install / update check.
 
@@ -169,6 +154,25 @@ export async function init(args: string[]): Promise<void> {
     // instead; every step below configures the install that exists, not the one
     // that was asked for.
     tel.installMode = installed.installMode;
+
+    // `--no-telemetry` with a local install: the global opt-out above only
+    // covers this machine. A local install is meant to be committed, so also
+    // record the opt-out in the project config — `false` there wins on every
+    // clone. Reads the mode the install landed in, which a recovery can have
+    // changed from the one that was asked for.
+    let wroteProjectTelemetryOptOut = false;
+    if (parsed.noTelemetry && tel.installMode === "local") {
+      try {
+        writeConsentFlag(false, "project", { cwd: initProjectRoot });
+        wroteProjectTelemetryOptOut = true;
+        p.log.info(
+          `${pc.bold("Telemetry")} ${pc.dim("also disabled for this project —")} ` +
+            `${pc.cyan(".argent/config.json")} ${pc.dim("(commit it so the opt-out applies to every clone).")}`
+        );
+      } catch (err) {
+        p.log.warn(`Could not write the project telemetry opt-out: ${err}`);
+      }
+    }
 
     p.log.step(pc.bold("Step 1: MCP Server Configuration"));
 

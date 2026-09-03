@@ -23,6 +23,8 @@ import {
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   isNixStorePath,
+  npmGlobalBinDir,
+  provenUnwritableDir,
   npmUserConfigPath,
   probeGlobalInstallTarget,
   unwritableGlobalTargetMessage,
@@ -234,6 +236,7 @@ describe("canRecoverBlockedGlobal", () => {
 describe("isNixStorePath", () => {
   it("recognizes the default store and rejects lookalike prefixes", () => {
     expect(isNixStorePath("/nix/store/abc123-nodejs-22.16.0/lib/node_modules")).toBe(true);
+    expect(isNixStorePath("/nix/store")).toBe(true);
     expect(isNixStorePath("/nix/storeroom/abc")).toBe(false);
     expect(isNixStorePath("/usr/local/lib/node_modules")).toBe(false);
   });
@@ -271,7 +274,8 @@ describe("unwritableGlobalTargetMessage", () => {
     // Root can write a single-user store's 0555 paths — Nix undoing the write
     // is what actually rules sudo out, and it rules it out everywhere.
     expect(message).toContain("sudo install into it is undone");
-    expect(message).toContain("argent init --local");
+    // Anchored: `npx @swmansion/argent init --local` contains the bare form.
+    expect(message).toMatch(/^\s*argent init --local$/m);
   });
 
   it("claims nothing about a run that has not happened yet", () => {
@@ -288,6 +292,21 @@ describe("unwritableGlobalTargetMessage", () => {
     expect(
       plain(unwritableGlobalTargetMessage(nixTarget, "pnpm", "install", installed))
     ).not.toContain("config set prefix");
+  });
+
+  it("offers taking ownership of an ordinary unwritable directory", () => {
+    // The prefix remedy is a no-op where the blocked directory sits under a
+    // prefix the user already chose and `sudo npm i -g` left root-owned.
+    const message = plain(unwritableGlobalTargetMessage(plainTarget, "npm", "install", installed));
+
+    expect(message).toContain(`sudo chown -R "$(whoami)" ${plainTarget.dir}`);
+  });
+
+  it("never offers to chown a store path", () => {
+    // Nix undoes it at the next rebuild — the same reason sudo is ruled out.
+    expect(
+      plain(unwritableGlobalTargetMessage(nixTarget, "npm", "install", installed))
+    ).not.toContain("chown");
   });
 
   it("does not blame Nix for an ordinary unwritable prefix", () => {
@@ -398,5 +417,36 @@ describe("forgetInheritedNpmPrefix", () => {
     } finally {
       delete process.env.PREFIX;
     }
+  });
+});
+
+describe("provenUnwritableDir", () => {
+  it("names the nearest existing ancestor when it is proven unwritable", () => {
+    if (!canTestUnwritable) return;
+    fs.chmodSync(tmpRoot, 0o555);
+
+    // The directory an install would have to create its entry under.
+    expect(provenUnwritableDir(path.join(tmpRoot, "bin"))).toBe(tmpRoot);
+  });
+
+  it("stays quiet where nothing was proven", () => {
+    expect(provenUnwritableDir(path.join(tmpRoot, "bin"))).toBeNull();
+  });
+});
+
+describe("npmGlobalBinDir", () => {
+  it("asks npm for the prefix its commands are linked under", () => {
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+
+    expect(npmGlobalBinDir()).toBe(path.join(tmpRoot, "bin"));
+    expect(mockExecFileSync).toHaveBeenCalledWith("npm", ["prefix", "-g"], expect.anything());
+  });
+
+  it("is null when npm cannot be asked", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    expect(npmGlobalBinDir()).toBeNull();
   });
 });

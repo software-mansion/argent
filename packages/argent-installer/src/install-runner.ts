@@ -29,14 +29,16 @@ import {
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   localInstallRemedy,
+  npmGlobalBinDir,
   npmUserConfigPath,
   probeGlobalInstallTarget,
+  provenUnwritableDir,
   suggestedNpmPrefix,
   unwritableGlobalTargetMessage,
   type GlobalInstallTarget,
   type RemedyContext,
 } from "./global-prefix.js";
-import { PACKAGE_NAME } from "./constants.js";
+import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
 import { InitCancelled } from "./init-args.js";
@@ -373,7 +375,10 @@ async function recoverBlockedGlobalInstall(opts: {
     // way forward — where there is one.
     spinner.stop(pc.red("Could not set the npm prefix."));
     const localWayOut = localInstallRemedy(remedies);
-    await failWith(localWayOut === null ? `${err}` : `${err}\n\n${localWayOut}`);
+    const cause =
+      `npm would not record a global prefix at ${npmUserConfigPath()}, so there is ` +
+      `nowhere writable to install into:\n${err}`;
+    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
   }
   spinner.stop(`npm prefix set to ${prefix}.`);
   // The write outlives this run whether or not the install ahead succeeds, and
@@ -396,22 +401,37 @@ async function recoverBlockedGlobalInstall(opts: {
     const localWayOut = localInstallRemedy(remedies);
     await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
   }
+  // probeGlobalInstallTarget walks the package directory; npm also links its
+  // commands into <prefix>/bin, which an earlier `sudo npm i -g --prefix` here
+  // can have left root-owned.
+  const blockedBin = provenUnwritableDir(path.join(prefix, "bin"));
+  if (blockedBin !== null) {
+    const localWayOut = localInstallRemedy(remedies);
+    const cause =
+      `npm can write to ${prefix} but not to ${blockedBin}, where it links the ` +
+      `${MCP_BINARY_NAME} command — the install would fail there.`;
+    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
+  }
 
-  const binDir = path.join(prefix, "bin");
-  if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir))
-    return { local: false, pathHint: null };
+  return { local: false, pathHint: adoptGlobalBinDir(path.join(prefix, "bin")) };
+}
 
-  // Put it on PATH for the rest of THIS run so the install can be verified and
-  // the configs written here name a binary that resolves. The user's own shells
-  // still need the line — and argent does not add it for them: on the
-  // Nix-managed machines this exists for, the shell profile is itself a
-  // read-only store symlink.
+/**
+ * Make `binDir` resolvable for the rest of THIS run so the install can be
+ * verified and the configs written here name a binary that resolves, and
+ * report it. The user's own shells still need the line — and argent does not
+ * add it for them: on the Nix-managed machines this exists for, the shell
+ * profile is itself a read-only store symlink. Null when PATH already has it
+ * and there is nothing to say.
+ */
+function adoptGlobalBinDir(binDir: string): string | null {
+  if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir)) return null;
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
   p.log.warn(
     `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:\n` +
       `    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
   );
-  return { local: false, pathHint: binDir };
+  return binDir;
 }
 
 async function runGlobal(opts: {
@@ -473,6 +493,13 @@ async function runGlobal(opts: {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
+      // The recovery's `npm config set prefix` outlives its run, so a later
+      // init installs into that prefix without ever entering the recovery —
+      // and the MCP entries written below name a bare `argent`.
+      if (pathHint === null && pm === "npm" && !isGloballyInstalled()) {
+        const binDir = npmGlobalBinDir();
+        if (binDir !== null) pathHint = adoptGlobalBinDir(binDir);
+      }
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));

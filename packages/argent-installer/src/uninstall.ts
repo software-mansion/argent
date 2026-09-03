@@ -699,15 +699,20 @@ export async function uninstall(args: string[]): Promise<void> {
         // npm_config_prefix outranks the config file `argent init`'s prefix
         // recovery writes, so the two can disagree. Believing the exit code
         // there announces a removal that did not happen, leaves the package on
-        // PATH, and still clears the machine-wide state below. Re-runs the PATH
-        // probe that found the install rather than looking for its directory:
-        // `npm install -g <folder>` links the global entry at the source, which
-        // outlives the removal by design. Local installs have no prefix to
-        // diverge from.
-        if (removable.kind === "global" && isGloballyInstalled()) {
+        // PATH, and still clears the machine-wide state below. Re-runs the
+        // discovery and compares what it finds: looking for the directory alone
+        // would call a `npm install -g <folder>` removal a failure (the entry is
+        // a link to a source that outlives it), and asking only whether some
+        // argent is still on PATH would catch a project's node_modules/.bin.
+        if (
+          removable.kind === "global" &&
+          removable.installDir !== null &&
+          getGloballyInstalledPackageRoot() === removable.installDir
+        ) {
           throw new Error(
-            `${removable.cmd.bin} reported success but ${MCP_BINARY_NAME} is still on your PATH. ` +
-              `Check that its global prefix is the one this install lives under.`
+            `${removable.cmd.bin} reported success but ${MCP_BINARY_NAME} still resolves to ` +
+              `${removable.installDir}. Check that its global prefix is the one this install ` +
+              `lives under.`
           );
         }
         p.log.success(`Removed ${removable.kind} package.`);
