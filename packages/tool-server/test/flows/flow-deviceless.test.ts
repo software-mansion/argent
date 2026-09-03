@@ -258,7 +258,7 @@ describe("a flow that does touch a device still demands one", () => {
       ],
     });
     await expect(runAuto(registry, "phone-only")).rejects.toThrow(
-      /No booted device found.*A physical iPhone is connected \(00008120-000A44443333801E\); hardware is never picked automatically, pass --device <udid> to run on it\..*\(ios, connected\)/
+      /No booted device found.*A physical iPhone is connected \(00008120-000A44443333801E\); hardware is never picked automatically, pass device <udid> \(--device on the CLI\) to run on it\..*\(ios, connected\)/
     );
   });
 

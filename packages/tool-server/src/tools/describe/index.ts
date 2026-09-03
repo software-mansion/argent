@@ -176,7 +176,7 @@ The tree carries no z-order or occlusion information: an element listed at a poi
 by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
-use native-describe-screen with an explicit bundleId instead (iOS only).
+use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 
 On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns
