@@ -63,6 +63,7 @@ function stateUpToDate() {
 describe("update-argent tool", () => {
   // Re-import per test so the module-level `updateScheduled` flag resets.
   let updateArgentTool: typeof import("../src/tools/system/update-argent").updateArgentTool;
+  let scheduleAutomaticUpdate: typeof import("../src/tools/system/update-argent").scheduleAutomaticUpdate;
   let savedInstallKind: string | undefined;
   let savedProjectRoot: string | undefined;
   let originalCwd: string;
@@ -98,6 +99,7 @@ describe("update-argent tool", () => {
     process.chdir(tmpDir);
     const mod = await import("../src/tools/system/update-argent");
     updateArgentTool = mod.updateArgentTool;
+    scheduleAutomaticUpdate = mod.scheduleAutomaticUpdate;
   });
 
   afterEach(() => {
@@ -133,6 +135,32 @@ describe("update-argent tool", () => {
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
       }
+    );
+  });
+
+  it("automatic update reuses the updater for the running global install", () => {
+    expect(scheduleAutomaticUpdate("99.0.0")).toBe(true);
+
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--global", "--version", "99.0.0"],
+      expect.objectContaining({ detached: true, stdio: "ignore" })
+    );
+  });
+
+  it("automatic update pins the project root for the running local install", () => {
+    const projDir = stageDeclaringProject();
+    process.env.ARGENT_INSTALL_KIND = "local";
+    process.env.ARGENT_PROJECT_ROOT = projDir;
+
+    expect(scheduleAutomaticUpdate("99.0.0")).toBe(true);
+    vi.advanceTimersByTime(2000);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "argent",
+      ["update", "--yes", "--local", "--version", "99.0.0", "--project-root", projDir],
+      expect.objectContaining({ detached: true, stdio: "ignore" })
     );
   });
 

@@ -8,6 +8,7 @@ import {
   fetchRegistryInfo,
   pickInstallableTarget,
 } from "@argent/update-core";
+import { getConfigValueByKey } from "@argent/configuration-core";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
@@ -96,7 +97,12 @@ function isNewerVersion(latest: string, current: string): boolean {
   return semver.gt(latest, current);
 }
 
-async function check(): Promise<void> {
+export interface UpdateCheckerOptions {
+  /** Called when an eligible update is found and autoUpdate.enabled is true. */
+  onAutoUpdate?: (version: string) => void;
+}
+
+async function check(options: UpdateCheckerOptions): Promise<void> {
   const info = await fetchRegistryInfo(REGISTRY_URL);
   if (info === null) return;
 
@@ -116,6 +122,9 @@ async function check(): Promise<void> {
 
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
+    if (getConfigValueByKey("autoUpdate.enabled") === true) {
+      options.onAutoUpdate?.(target.version);
+    }
   } else if (updateAvailable && minReleaseAgeMs > 0) {
     process.stderr.write(
       `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
@@ -125,17 +134,17 @@ async function check(): Promise<void> {
 }
 
 /** Checks immediately, then every 24h. Returns a dispose fn for the timer. */
-export function startUpdateChecker(): { dispose(): void } {
+export function startUpdateChecker(options: UpdateCheckerOptions = {}): { dispose(): void } {
   // Clear any leaked interval from a prior call.
   if (interval) {
     clearInterval(interval);
   }
 
   // Fire-and-forget initial check — don't block startup.
-  check().catch(() => {});
+  check(options).catch(() => {});
 
   interval = setInterval(() => {
-    check().catch(() => {});
+    check(options).catch(() => {});
   }, CHECK_INTERVAL_MS);
   interval.unref();
 
