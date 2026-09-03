@@ -196,6 +196,12 @@ export type FlowStepResult = {
    * "⚠" suffix (see StepReport.warning in the tool-server's flow-run).
    */
   warning?: string;
+  /**
+   * The runner had begun this step when the run was cancelled, so its `skip` is
+   * no proof the device is untouched; rendered as a "(device may have moved)"
+   * suffix (see StepReport.reached in the tool-server's flow-run).
+   */
+  reached?: true;
   tool?: string;
   message?: string;
   result?: unknown;
@@ -292,9 +298,13 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    // A cancelled step the runner had begun renders the same as one it never
+    // started without this, so the reader cannot tell a device that moved from
+    // one that did not.
+    const reached = step.reached ? " (device may have moved)" : "";
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${reached}${warning}`,
     });
 
     if (step.result !== undefined) {

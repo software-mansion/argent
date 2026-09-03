@@ -447,6 +447,26 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("separates a cancelled step the runner had begun from one it never started", async () => {
+    // Both are `skip ... run aborted`. Without the marker the report says the
+    // same thing for a device that moved and one that did not, which is the one
+    // question a cancelled run leaves open.
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        { index: 0, kind: "tap", status: "skip", reason: "run aborted", reached: true },
+        { index: 1, kind: "tap", status: "skip", reason: "run aborted" },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks[1]).toEqual({
+      type: "text",
+      text: "[1] · tap — run aborted (device may have moved)",
+    });
+    expect(blocks[2]).toEqual({ type: "text", text: "[2] · tap — run aborted" });
+  });
+
   it("materializes only the diff and inlines it on failure", async () => {
     const pngBytes = [...PNG_SIGNATURE, 0x02];
     const fetchImpl = vi.fn(fetchReturning(pngBytes));

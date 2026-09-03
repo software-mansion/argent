@@ -27,6 +27,11 @@ export interface StepReport {
   reason?: string;
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
+  /**
+   * Set by the tool-server on a step the runner had already begun when the run
+   * was cancelled, so its `skip` is no proof the device is untouched.
+   */
+  reached?: true;
   tool?: string;
   flow?: string;
   message?: string;
@@ -228,8 +233,12 @@ export function renderStepLine(s: StepReport, n: number, topFlow: string): strin
   const what = s.tool ?? s.target;
   const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
+  // A cancelled step the runner had begun renders the same as one it never
+  // started without this, so the reader cannot tell a device that moved from
+  // one that did not.
+  const reached = s.reached ? " (device may have moved)" : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}${reached}`;
 }
 
 /**

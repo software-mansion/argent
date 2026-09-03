@@ -98,6 +98,26 @@ describe("flow report rendering", () => {
     expect(renderStepLine(step, 1, "checkout")).toBe("  ⚠  1 snapshot");
   });
 
+  it("separates a cancelled step the runner had begun from one it never started", () => {
+    // Both are `skip ... run aborted`. Without the marker the report tells the
+    // reader nothing about whether the device moved, which is the one question
+    // a cancelled run leaves open.
+    const begun: StepReport = {
+      index: 0,
+      kind: "tap",
+      status: "skip",
+      target: '"Continue"',
+      reason: "run aborted",
+      reached: true,
+    };
+    const never: StepReport = { ...begun, target: '"Submit"', reached: undefined };
+
+    expect(renderStepLine(begun, 2, "checkout")).toBe(
+      '  ·  2 tap "Continue" — run aborted (device may have moved)'
+    );
+    expect(renderStepLine(never, 3, "checkout")).toBe('  ·  3 tap "Submit" — run aborted');
+  });
+
   it("renders a skipped echo distinctly from one that ran", () => {
     // A `when:` block that didn't run reports its echo as skipped. It must not
     // print identically to an echo that executed, or the report lies about
