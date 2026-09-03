@@ -18,7 +18,11 @@ const execFileAsync = promisify(execFile);
 export interface DetectedSigningTeam {
   /** Apple Developer Team ID, the certificate subject OU. */
   teamId: string;
-  /** Certificate subject CN, e.g. "Apple Development: dev@example.com (ABCD123456)". */
+  /**
+   * Certificate kind and key id, e.g. "Apple Development (ABCD123456)". The
+   * subject CN also carries the account identity (an Apple ID, often an
+   * e-mail), which is dropped here.
+   */
   label: string;
   /** The newest certificate's notBefore, epoch ms. Orders the auto-pick. */
   issuedAtMs: number;
@@ -68,6 +72,18 @@ function subjectValue(subject: string, key: string): string | null {
 }
 
 /**
+ * "Apple Development: dev@example.com (ABCD123456)" -> "Apple Development (ABCD123456)".
+ * A CN without the expected shape keeps only the text before the colon, or all
+ * of it when there is no colon, so no identity leaks through an unusual
+ * certificate either.
+ */
+export function signingLabel(commonName: string): string {
+  const match = /^([^:]+):.*\(([A-Za-z0-9]+)\)\s*$/.exec(commonName);
+  if (match) return `${match[1].trim()} (${match[2]})`;
+  return commonName.split(":")[0]!.trim();
+}
+
+/**
  * Parse concatenated PEM output into teams: dedup by team id keeping each
  * team's newest certificate, newest team first, notBefore ties broken by team
  * id so the auto-pick is deterministic. Blocks that do not parse as a
@@ -86,12 +102,14 @@ export function parseSigningTeams(pem: string): DetectedSigningTeam[] {
     }
 
     const teamId = subjectValue(cert.subject, "OU");
-    const label = subjectValue(cert.subject, "CN");
+    const commonName = subjectValue(cert.subject, "CN");
     const issuedAtMs = Date.parse(cert.validFrom);
 
-    if (!teamId || !label || Number.isNaN(issuedAtMs)) {
+    if (!teamId || !commonName || Number.isNaN(issuedAtMs)) {
       continue;
     }
+
+    const label = signingLabel(commonName);
 
     const known = newestByTeam.get(teamId);
 

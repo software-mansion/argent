@@ -202,7 +202,7 @@ reasonCode?}`.
 `APP_BACKGROUNDED` (`snapshot` only: the target is alive but backgrounded, and
 observation never re-fronts it), `TEXT_INPUT_NOT_FOCUSED`,
 `UNSUPPORTED_OPERATION` (hardware or an API the device lacks: an absent
-button, a tap count above 2), `RUNNER_BUSY` (the one
+button), `RUNNER_BUSY` (the one
 retryable code), `RUNNER_WEDGED` (recycle the session),
 `XCTEST_RECORDED_FAILURE` (a mutation ran but XCTest recorded a real failure
 during it), `SNAPSHOT_FAILED`, `COMMAND_TIMED_OUT`, `COMMAND_FAILED`.

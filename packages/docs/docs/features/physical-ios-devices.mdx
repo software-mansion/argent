@@ -40,15 +40,16 @@ Reading the screen does not change the screen. When the target app is in the bac
 
 ## What works
 
-The agent launches, restarts and reinstalls apps, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the hardware buttons, types text, waits for elements, and records and replays [flows](/docs/features/flows). A flow replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
+The agent launches, restarts and reinstalls apps, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the home and volume buttons, and the action button on models that have one, types text, waits for elements, and records and replays [flows](/docs/features/flows). A flow replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
 
-A web URL opens in Safari. For any other URL scheme, the agent names the app that receives the URL.
+A web URL opens in Safari, not in the app that owns the link. The agent names the app to hand it the URL. For any other URL scheme, the agent names the app that receives the URL.
 
-Some simulator capabilities do not exist on hardware. Each one fails with a message that names the alternative:
+Some simulator capabilities do not exist on hardware. Each one fails with a `not supported on ios device` message. The alternatives:
 
 - Two-finger gestures such as pinch and rotate are not possible. The agent drives the zoom controls of the app instead.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
 - The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
+- JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only.
 
 ## Troubleshooting
 

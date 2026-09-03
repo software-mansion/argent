@@ -31,7 +31,10 @@ function stubRegistry(): Registry {
         return {
           id: "test-tool",
           description: "A stub tool for testing",
-          inputSchema: { type: "object", properties: { udid: { type: "string" } } },
+          inputSchema: {
+            type: "object",
+            properties: { udid: { type: "string" }, device: { type: "string" } },
+          },
           services: () => ({}),
           execute: async () => ({ ok: true }),
         };
@@ -45,7 +48,7 @@ function stubRegistry(): Registry {
 const DETECTED_TEAM = [
   {
     teamId: "ABCDE12345",
-    label: "Apple Development: alice@example.com (ALICEKEY01)",
+    label: "Apple Development (ALICEKEY01)",
     issuedAtMs: Date.parse("2024-01-15T12:00:00Z"),
   },
 ];
@@ -115,5 +118,24 @@ describe("HTTP signing-detection note", () => {
       .send({ udid: PHONE })
       .expect(200);
     expect(phone.body.note).toContain("Signing the on-device runner with team ABCDE12345");
+  });
+
+  it("recognises the phone under flow-execute's `device` spelling", async () => {
+    // A session that only replays flows on the phone names it as `device`,
+    // never as `udid`; the note must not wait for a call that never comes.
+    stageNote();
+    handle = createHttpApp(stubRegistry());
+
+    const simulatorFlow = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ device: "7AFBC98C-76B5-4BD4-8B7F-24AE3E30BA37" })
+      .expect(200);
+    expect(simulatorFlow.body).not.toHaveProperty("note");
+
+    const phoneFlow = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ device: PHONE })
+      .expect(200);
+    expect(phoneFlow.body.note).toContain("Signing the on-device runner with team ABCDE12345");
   });
 });

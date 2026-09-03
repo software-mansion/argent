@@ -103,7 +103,7 @@ function connectedIosDeviceHint(devices: RawDevice[], platform?: FlowPlatform): 
   if (ids.length === 0) return "";
   return (
     ` A physical iPhone is connected (${ids.join(", ")}); hardware is never picked ` +
-    `automatically, pass --device <udid> to run on it.`
+    `automatically, pass device <udid> (--device on the CLI) to run on it.`
   );
 }
 
