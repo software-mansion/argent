@@ -161,12 +161,29 @@ describe("init — a blocked global install decides the mode step", () => {
   it("does not ask when argent could carry out neither way out", async () => {
     fs.rmSync(path.join(tmpDir, "package.json"));
     const { detectPackageManager } = await import("../src/utils.js");
+    // Restored by hand: mock implementations outlive vi.clearAllMocks, and
+    // every test after this one reads as npm.
     vi.mocked(detectPackageManager).mockReturnValue("pnpm");
-
-    await init(["--no-telemetry"]);
+    try {
+      await init(["--no-telemetry"]);
+    } finally {
+      vi.mocked(detectPackageManager).mockReturnValue("npm");
+    }
 
     expect(promptInstallMode).not.toHaveBeenCalled();
     expect(installArgs()).toMatchObject({ globalBlockAcknowledged: false });
+  });
+
+  it("offers the mode the project recorded as the highlighted answer", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+
+    await init(["--no-telemetry"]);
+
+    expect(vi.mocked(promptInstallMode).mock.lastCall?.[0]).toBe("local");
   });
 
   it("falls back to the mode the project recorded, not to global", async () => {
@@ -219,7 +236,10 @@ describe("init — the mode the install landed in governs the rest of the run", 
     // only known after the install, so the write cannot precede it.
     await init(["--global", "--no-telemetry"]);
 
-    expect(writeConsentFlag).toHaveBeenCalledWith(false, "project", expect.anything());
+    // realpath: process.chdir resolves the symlink macOS puts in front of tmp.
+    expect(writeConsentFlag).toHaveBeenCalledWith(false, "project", {
+      cwd: fs.realpathSync(tmpDir),
+    });
   });
 
   it("leaves the project alone when the install stayed global", async () => {
@@ -232,5 +252,36 @@ describe("init — the mode the install landed in governs the rest of the run", 
     await init(["--global", "--no-telemetry"]);
 
     expect(writeConsentFlag).not.toHaveBeenCalledWith(false, "project", expect.anything());
+  });
+});
+
+describe("init — a global install nothing is blocking", () => {
+  beforeEach(() => {
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue({
+      dir: "/usr/local/lib/node_modules",
+      blocked: false,
+      nixStore: false,
+    });
+  });
+
+  it("asks the mode step with no block to describe", async () => {
+    await init(["--no-telemetry"]);
+
+    expect(promptInstallMode).toHaveBeenCalledWith("global", null);
+    expect(installArgs()).toMatchObject({ globalBlockAcknowledged: false });
+  });
+
+  it("does not spend a package-manager query where no fresh install can happen", async () => {
+    topologyState.globalInstalled = true;
+
+    await init(["--no-telemetry"]);
+
+    expect(probeGlobalInstallTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not probe for a run that asked to install locally", async () => {
+    await init(["--local", "--no-telemetry"]);
+
+    expect(probeGlobalInstallTarget).not.toHaveBeenCalled();
   });
 });

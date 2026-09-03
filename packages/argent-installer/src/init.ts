@@ -119,9 +119,8 @@ export async function init(args: string[]): Promise<void> {
       ? { target: globalTarget, pm: detectPackageManager() }
       : null;
 
-    // Two ways a blocked global install leaves nothing to ask: no terminal to
-    // answer on (a rendered menu never settles — the run would exit 0 having
-    // installed nothing), and nothing argent could carry out even if it were
+    // Two ways a blocked global install leaves nothing to ask: no terminal for
+    // the menu to settle on, and nothing argent could carry out even if it were
     // answered. Fall back to what the project already recorded, the same answer
     // resolveInstallModeFromFlags gives `--yes` for this situation; without a
     // record the global path makes the install step below say why, with the

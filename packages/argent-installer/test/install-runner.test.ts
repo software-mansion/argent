@@ -286,8 +286,10 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(provenUnwritableDir).mockReturnValue(null);
     vi.mocked(npmGlobalBinDir).mockReturnValue(null);
     // Implementations outlive vi.clearAllMocks, so every mock a test in here
-    // reshapes has to be put back — the version read is PATH-sensitive in one.
+    // reshapes has to be put back — one makes the version read PATH-sensitive,
+    // another moves off npm.
     vi.mocked(getGloballyInstalledVersion).mockReturnValue("2.0.0");
+    vi.mocked(detectPackageManager).mockReturnValue("npm");
     savedPath = process.env.PATH;
     // The prompts below only exist for a user who can answer them.
     savedIsTty = process.stdin.isTTY;
@@ -424,6 +426,31 @@ describe("a global install whose target directory cannot be written", () => {
     expect(select).not.toHaveBeenCalled();
     expect(outcome.pathHint).toBe(binDir);
     expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+    // The line is the whole point: PATH here is this process's, and the user's
+    // own shells only learn about the directory if they are told.
+    const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
+    expect(warning).toContain(`Add ${binDir} to your PATH`);
+    expect(warning).toContain(`export PATH="${binDir}:$PATH"`);
+  });
+
+  it("does not answer a non-npm install with npm's global bin directory", async () => {
+    // The remedy is `npm prefix -g`; pointing a pnpm user at it names a
+    // directory their install did not go into.
+    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(outcome.pathHint).toBeNull();
+    expect(process.env.PATH?.split(path.delimiter)).not.toContain(binDir);
   });
 
   it("reads the installed version through the PATH it just repaired", async () => {
