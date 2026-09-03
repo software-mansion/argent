@@ -2395,9 +2395,9 @@ describe("server recording wire protocol", () => {
       vi.fn(async () => new Response("", { status: 500 }))
     );
 
-    await expect(
-      stopServerRecording(fakeApi, "rec-1")
-    ).rejects.toMatchObject({ message: expect.stringContaining("HTTP 500") });
+    await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toMatchObject({
+      message: expect.stringContaining("HTTP 500"),
+    });
   });
 
   it("fails a stop against a route that vanished, classified as unsupported", async () => {
