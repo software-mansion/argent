@@ -303,13 +303,15 @@ function writablePrefixRemedy(pm: PackageManager): string {
   );
 }
 
-// Only for a directory outside the store: `sudo chown` on a store path is
-// undone by the next rebuild, which is the whole reason the Nix cause exists.
 // The prefix remedy is a no-op where the blocked directory sits under a prefix
-// the user already chose and an earlier `sudo npm i -g` left root-owned, and
-// this is the way out for exactly that case.
+// the user already chose and an earlier `sudo npm i -g` left root-owned; this
+// is the way out for exactly that case. Never for a store path (Nix undoes the
+// chown at the next rebuild, which is the whole reason the Nix cause exists),
+// and never outside a node_modules tree: the probe reports the nearest EXISTING
+// ancestor, which can be /usr/local, and `chown -R` there is not a remedy.
 function ownershipRemedy(target: GlobalInstallTarget): string | null {
   if (target.nixStore) return null;
+  if (!target.dir.split(path.sep).includes("node_modules")) return null;
   return (
     `  Or take ownership of the directory that is blocking it:\n` +
     `    ${pc.cyan(`sudo chown -R "$(whoami)" ${target.dir}`)}`

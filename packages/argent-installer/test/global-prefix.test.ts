@@ -302,6 +302,16 @@ describe("unwritableGlobalTargetMessage", () => {
     expect(message).toContain(`sudo chown -R "$(whoami)" ${plainTarget.dir}`);
   });
 
+  it("never offers to chown its way out of a directory above node_modules", () => {
+    // The probe reports the nearest EXISTING ancestor, so a prefix whose
+    // lib/node_modules has not been created yet lands on the prefix itself.
+    const aboveTree = { dir: "/usr/local", blocked: true, nixStore: false };
+
+    expect(
+      plain(unwritableGlobalTargetMessage(aboveTree, "npm", "install", installed))
+    ).not.toContain("chown");
+  });
+
   it("never offers to chown a store path", () => {
     // Nix undoes it at the next rebuild — the same reason sudo is ruled out.
     expect(
