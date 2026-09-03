@@ -408,7 +408,9 @@ export async function stopServerRecording(
     // `serverStop` is only ever stamped by a start that the route answered, so
     // the same server answering 404 now means it stopped serving that route
     // mid-recording. Never observed; handled rather than falling back, because
-    // there is no video to hand over either way.
+    // there is no video to hand over either way. Classified `unsupported` (a
+    // route/capability problem, like the clipboard's missing-endpoint case), not
+    // `not_found` — that kind means "the video file is absent" everywhere else.
     throw new FailureError(
       `screen-recording-stop failed: simulator-server no longer exposes a recording endpoint, ` +
         `so the recording in progress cannot be finalized.`,
@@ -416,7 +418,7 @@ export async function stopServerRecording(
         error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
         failure_stage: "screen_recording_server_stop",
         failure_area: "tool_server",
-        error_kind: "not_found",
+        error_kind: "unsupported",
         failure_command: "simulator_server",
       }
     );
@@ -430,6 +432,7 @@ export async function stopServerRecording(
         failure_stage: "screen_recording_server_stop",
         failure_area: "tool_server",
         error_kind: "not_found",
+        failure_command: "simulator_server",
       }
     );
   }
@@ -450,16 +453,21 @@ export async function stopServerRecording(
  * no route at all, so its answer comes from the router's unmatched-route
  * fallback — 404 with an empty body, which that helper would surface as
  * "non-JSON response", indistinguishable from a server in a bad state and the
- * one answer callers must be able to act on. Every failure a recording handler
- * reports for itself comes back as HTTP 200 carrying an `error` field, so an
- * empty-bodied 404 identifies the missing route on its own.
+ * one answer callers must be able to act on. A present route (per
+ * software-mansion/radon#155) answers HTTP 200 with a JSON body for both
+ * outcomes — success, or an in-band `{error}` — so an empty-bodied 404
+ * identifies the missing route on its own.
  *
  * The body has to be part of that test, not just the status. A 404 that
  * carries one came from a handler, which means the route does exist and the
  * command was refused — falling back there would start a second capture over a
  * recording that is already running and strand the server's copy. Verified
  * against the shipped macOS simulator-server, which has no recording route:
- * `POST /api/recording/start` answers 404 with `content-length: 0`.
+ * `POST /api/recording/start` answers 404 with `content-length: 0`. The one
+ * ambiguity this cannot resolve — a handler answering an unknown id with a bare
+ * 404 — reads as "no route", which is harmless here: there is no video to hand
+ * over either way, and the fallback it triggers only ever runs at start, where
+ * a "route present" server would have answered 200.
  */
 async function recordingPost<T extends { error?: string }>(
   api: SimulatorServerApi,
@@ -521,6 +529,25 @@ async function recordingPost<T extends { error?: string }>(
         }
       );
     }
+  }
+  if (res.ok && body === null) {
+    // A 2xx from a present route always carries a JSON body — success or an
+    // in-band `{error}`. An empty one is an unreadable reply, not a rejection,
+    // so it is actionable the same way a non-JSON body is (restart), rather than
+    // blaming the server for refusing a command it never saw. (A non-2xx empty
+    // reply falls through to the rejection below, so an empty 500 still reads as
+    // "HTTP 500", distinct from the empty-404 missing route handled above.)
+    throw new FailureError(
+      `${toolLabel} failed: simulator-server returned an empty response (HTTP ${res.status}). ` +
+        `The server may be in a bad state. Restart the simulator-server and retry.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE,
+        failure_stage: "simulator_server_parse_response",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
   }
   if (!res.ok || !body || body.error) {
     throw new FailureError(

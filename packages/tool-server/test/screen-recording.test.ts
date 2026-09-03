@@ -2366,6 +2366,65 @@ describe("server recording wire protocol", () => {
     ).rejects.toMatchObject({ message: expect.stringContaining("instead of a status") });
   });
 
+  it("reports an empty 2xx body as unreadable, not as a rejection", async () => {
+    // The recording routes answer HTTP 200 with a JSON body for both success
+    // and an in-band error, so an empty 200 is a malformed reply — actionable as
+    // a restart, not "the server rejected the command" (which drops that hint
+    // and blames a refusal that never happened).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 200 }))
+    );
+
+    const err = await startServerRecording(fakeApi, {
+      watermark: true,
+      trimStatic: true,
+      timeLimitSeconds: 60,
+    }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("empty response");
+    expect((err as Error).message).toContain("Restart the simulator-server");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE);
+  });
+
+  it("still rejects an empty non-2xx body as an HTTP failure", async () => {
+    // The empty-body handling must not swallow a real failure status: an empty
+    // 500 is still a rejection, distinct from the empty-404 missing route.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 500 }))
+    );
+
+    await expect(
+      stopServerRecording(fakeApi, "rec-1")
+    ).rejects.toMatchObject({ message: expect.stringContaining("HTTP 500") });
+  });
+
+  it("fails a stop against a route that vanished, classified as unsupported", async () => {
+    // serverStop is only stamped by a start the route answered, so a 404 at stop
+    // means the route went away mid-recording — a capability problem, not a
+    // missing video file. Never falls back (there is no video either way).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 }))
+    );
+
+    const err = await stopServerRecording(fakeApi, "rec-1").catch((e: unknown) => e);
+    expect((err as Error).message).toContain("no longer exposes a recording endpoint");
+    expect(getFailureSignal(err)?.error_kind).toBe("unsupported");
+  });
+
+  it("fails a stop reply with no video path, tagged to the simulator-server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }))
+    );
+
+    const err = await stopServerRecording(fakeApi, "rec-1").catch((e: unknown) => e);
+    expect((err as Error).message).toContain("no video");
+    expect(getFailureSignal(err)?.failure_command).toBe("simulator_server");
+  });
+
   it("stop maps the recording result onto the session's field names", async () => {
     vi.stubGlobal(
       "fetch",
