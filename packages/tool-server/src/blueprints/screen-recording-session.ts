@@ -133,11 +133,12 @@ export interface ScreenRecordingSessionApi {
 const DISPOSE_FINALIZE_GRACE_MS = 1_500;
 const DISPOSE_REAP_MS = 1_000;
 /**
- * Same policy for a server-side recording: the salvage stop dispose issues to
- * end a recording running inside simulator-server gets this much time, not the
- * stop tool's own (much longer) finalize contract — the video here is being
- * abandoned, so a wedged or slow-to-mux simulator-server must not stall a
- * teardown sweep (or process shutdown) to obtain one.
+ * Same policy for a server-side recording: this bounds how long dispose WAITS on
+ * the salvage stop it issues, not how long that stop runs — the request keeps
+ * its own `RECORDING_STOP_TIMEOUT_MS` abort and may outlive the race; dispose
+ * simply stops waiting. The video here is being abandoned, so a wedged or
+ * slow-to-mux simulator-server must not stall a teardown sweep (or process
+ * shutdown) to the stop tool's own (much longer) finalize contract.
  */
 const DISPOSE_SERVER_STOP_MS = 1_500;
 

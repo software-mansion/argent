@@ -2,11 +2,12 @@
  * Process-global record of capture sessions a teardown reaped while they still
  * held data nobody had retrieved.
  *
- * `stop-all-simulator-servers` disposes every device-owned service, which since
- * the `devices` scope landed includes the three that hold captured output —
- * `ScreenRecordingSession` (a video), `NativeProfilerSession` (a trace) and
- * `JsRuntimeDebugger` (a console-log file). Disposing them is deliberate: each
- * owns a spawned process or an open fd that must not outlive the session.
+ * An unscoped `stop-all-simulator-servers` disposes every device-owned service
+ * (a scoped one only the named devices'), which includes the services that hold
+ * captured output — `ScreenRecordingSession` (a video), `NativeProfilerSession`
+ * (a trace) and the `JsRuntimeDebugger`/`ChromiumJsRuntimeDebugger` pair (a
+ * console-log file). Disposing them is deliberate: each owns a spawned process
+ * or an open fd that must not outlive the session.
  *
  * What is not deliberate is what the owner is then told. `Registry._teardown`
  * nulls the node's instance, so the next tool call resolves a FRESH service
@@ -86,9 +87,10 @@ export function takeReapedSession(
  * the message names the family rather than asserting one member.
  * `stop-all-simulator-servers` is the common one and is named first, but it is
  * not the only one: `stop-simulator-server` on Chromium cascades into the
- * debugger through `ChromiumCdp` (its documented behaviour), and
- * `react-profiler-start { force: true }` disposes the debugger and the profiler
- * session to reclaim them.
+ * debugger through `ChromiumCdp` (its documented behaviour), and a
+ * `react-profiler-start` takeover disposes a debugger it finds unhealthy or
+ * disconnected to reclaim it (the `force` flag itself does not — it stops the
+ * in-app profiler without disposing a service).
  */
 export function describeReapedSession(entry: ReapedSession, what: string): string {
   const secondsAgo = Math.max(0, Math.round((Date.now() - entry.atMs) / 1000));
@@ -96,7 +98,7 @@ export function describeReapedSession(entry: ReapedSession, what: string): strin
     `The ${what} for device ${entry.deviceId} was torn down ${secondsAgo}s ago — by a ` +
     `stop-all-simulator-servers, which reaps every service a device owns, or by another ` +
     `teardown that reaches the same services (a stop-simulator-server on Chromium, or a ` +
-    `react-profiler-start reclaiming the session with force). One tool-server serves every ` +
+    `react-profiler-start reclaiming a stale debugger). One tool-server serves every ` +
     `agent using this argent install, so this may have been another agent rather than your own ` +
     `call. It was not a session that never started.` +
     (entry.salvage ? ` ${entry.salvage}` : "")

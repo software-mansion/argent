@@ -98,7 +98,7 @@ By default every tap, swipe, drag, pinch and rotate is drawn into the video as a
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses — immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior — for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile } — the video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported). Where simulator-server cannot record for itself the video is encoded locally instead, and \`ffmpeg\` must be installed — the failure names it, so install it when that is what comes back rather than up front.`,
+Fails if a recording is already running on the device, the device is not booted, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported). Where simulator-server cannot record for itself the video is encoded locally instead, which needs \`ffmpeg\` on the host; that build's start fails with a message naming it, so it only has to be provided when a recording actually asks for it rather than up front.`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as

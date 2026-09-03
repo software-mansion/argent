@@ -667,9 +667,10 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     throw err;
   } finally {
     // Always return the session to a startable state — a failed stat must not
-    // wedge the next start behind "already active". The video is host-side, so
-    // unlike a device-side capture there is nothing a retried stop could
-    // recover.
+    // wedge the next start behind "already active". This stop already finalized
+    // the host file, so there is nothing a retried stop could recover — unlike
+    // the server path, which keeps a recording recoverable when its finalize
+    // request times out (see server-capture.ts).
     stopPump(api);
     await disablePointer(api);
     api.recordingActive = false;
