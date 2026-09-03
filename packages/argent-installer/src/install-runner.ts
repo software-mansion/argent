@@ -31,16 +31,17 @@ import {
   isNixStorePath,
   localInstallRemedy,
   ownershipRemedy,
+  blockedGlobalBinDir,
   npmGlobalBinDir,
+  unwritableGlobalBinMessage,
   npmUserConfigPath,
   probeGlobalInstallTarget,
-  provenUnwritableDir,
   suggestedNpmPrefix,
   unwritableGlobalTargetMessage,
   type GlobalInstallTarget,
   type RemedyContext,
 } from "./global-prefix.js";
-import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
+import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
 import { InitCancelled } from "./init-args.js";
@@ -393,13 +394,15 @@ async function recoverBlockedGlobalInstall(opts: {
       ])
     );
   }
-  return { local: false, binDir: path.join(prefix, "bin") };
+  // npmGlobalBinDir over path.join: one answer for where npm links its commands,
+  // and the prefix write above is what it now reports.
+  return { local: false, binDir: npmGlobalBinDir() ?? path.join(prefix, "bin") };
 }
 
 /**
- * The cause, then whichever remedies still apply. Everything here runs after the
- * user committed to the prefix move, so the remedy that prescribes it is left
- * out — it would only send them back through the step that just ran.
+ * The cause, then whichever remedies still apply. The recovery's own failures
+ * leave out the remedy that prescribes moving the prefix: it is the step that
+ * just ran.
  */
 function withRemedies(cause: string, remedies: (string | null)[]): string {
   const usable = remedies.filter((remedy): remedy is string => remedy !== null);
@@ -423,28 +426,20 @@ async function failGlobalInstall(
 }
 
 /**
- * Stop before an install npm would fail on a directory nothing else looks at:
- * it links its commands into `<prefix>/bin`, which is nowhere under the package
- * directory {@link probeGlobalInstallTarget} walks, and an earlier
- * `sudo npm i -g` can have left it root-owned. Returns where nothing was proven
- * — including for every other manager, none of whose bin directories argent
- * knows how to name.
+ * Stop before an install npm would fail on the one directory the package-
+ * directory preflight does not cover. Returns where nothing was proven.
  */
 async function confirmGlobalBinWritable(ctx: {
   pm: PackageManager;
   remedies: RemedyContext;
+  prefixJustMoved: boolean;
   startedAt: number;
   tel: InitTelemetry;
 }): Promise<void> {
-  if (ctx.pm !== "npm") return;
-  const binDir = npmGlobalBinDir();
-  const blocked = binDir === null ? null : provenUnwritableDir(binDir);
+  const blocked = blockedGlobalBinDir(ctx.pm);
   if (blocked === null) return;
-  const cause =
-    `npm cannot write to ${blocked}, where it links the ${MCP_BINARY_NAME} command — ` +
-    `the install would fail there.`;
   await failGlobalInstall(
-    withRemedies(cause, [ownableRemedy(blocked), localInstallRemedy(ctx.remedies)]),
+    unwritableGlobalBinMessage(blocked, "install", ctx.remedies, ctx.prefixJustMoved),
     ctx.startedAt,
     ctx.tel
   );
@@ -461,11 +456,14 @@ async function confirmGlobalBinWritable(ctx: {
 function adoptGlobalBinDir(binDir: string): string | null {
   if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir)) return null;
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
-  const line =
+  // No command spelled out on Windows: there is no one shell to write it for,
+  // and `setx` truncates a PATH longer than 1024 characters.
+  p.log.warn(
     process.platform === "win32"
-      ? "" // No one shell to write it for, and `setx` truncates a long PATH.
-      : `\n    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`;
-  p.log.warn(`Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:${line}`);
+      ? `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}.`
+      : `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:\n` +
+          `    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
+  );
   return binDir;
 }
 
@@ -517,7 +515,13 @@ async function runGlobal(opts: {
     // that wrote it, so a later init installs into that prefix with nothing but
     // the package directory preflighted. Ahead of adopting the directory, so a
     // run that is about to be refused never advertises it.
-    await confirmGlobalBinWritable({ pm, remedies, startedAt: preflightStartedAt, tel });
+    await confirmGlobalBinWritable({
+      pm,
+      remedies,
+      prefixJustMoved: recoveredBinDir !== null,
+      startedAt: preflightStartedAt,
+      tel,
+    });
     if (recoveredBinDir !== null) pathHint = adoptGlobalBinDir(recoveredBinDir);
 
     // No consent prompt here: choosing "Globally" (or --global) in the

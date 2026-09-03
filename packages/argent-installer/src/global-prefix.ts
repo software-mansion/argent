@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
-import { PACKAGE_NAME } from "./constants.js";
+import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { formatShellCommand, type PackageManager } from "./package-manager.js";
 
 // Where a package manager puts global installs, and whether this user can write
@@ -304,9 +304,12 @@ export function localInstallRemedy(ctx: RemedyContext): string | null {
 
 // Written as $HOME rather than the expanded suggestedNpmPrefix() so it can be
 // pasted into any shell — the two name the same directory.
-function writablePrefixRemedy(pm: PackageManager): string {
+function writablePrefixRemedy(pm: PackageManager, blocked: string): string | null {
   if (pm !== "npm")
     return `  Point ${pc.cyan(pm)} at a global directory you can write to, then retry.`;
+  // Already pointed there: moving it again changes nothing, and printing it
+  // first buries the remedy that does work.
+  if (blocked.startsWith(suggestedNpmPrefix())) return null;
   return (
     `  Point npm at a writable prefix, then retry:\n` +
     `    ${pc.cyan('npm config set prefix "$HOME/.npm-global"')}\n` +
@@ -330,7 +333,44 @@ export function ownershipRemedy(dir: string): string | null {
     (dir !== home && dir.startsWith(home + path.sep));
   if (!ownable) return null;
   const chown = formatShellCommand({ bin: "sudo", args: ["chown", "-R", "$(whoami)", dir] });
-  return `  Or take ownership of the directory that is blocking it:\n    ${pc.cyan(chown)}`;
+  return `  Take ownership of the directory that is blocking it:\n    ${pc.cyan(chown)}`;
+}
+
+/**
+ * The directory npm links its global commands into, when that one is proven
+ * unwritable; null where nothing was proven. `npm install -g` writes there as
+ * well as under the package directory {@link probeGlobalInstallTarget} walks,
+ * and an earlier `sudo npm i -g` can have left either root-owned. npm is the
+ * only manager whose bin directory argent knows how to name.
+ */
+export function blockedGlobalBinDir(pm: PackageManager): string | null {
+  // Ahead of the query, as probeGlobalInstallTarget does: provenUnwritableDir
+  // has nothing to say on Windows, so the subprocess would be spent for nothing.
+  if (pm !== "npm" || process.platform === "win32") return null;
+  const binDir = npmGlobalBinDir();
+  return binDir === null ? null : provenUnwritableDir(binDir);
+}
+
+/**
+ * The cause plus the ways out, for a bin directory that cannot be written.
+ * `prefixJustMoved` drops the remedy that prescribes moving the prefix: on that
+ * path it is the step that just ran.
+ */
+export function unwritableGlobalBinMessage(
+  dir: string,
+  verb: "install" | "update",
+  ctx: RemedyContext,
+  prefixJustMoved: boolean
+): string {
+  const remedies = [
+    prefixJustMoved ? null : writablePrefixRemedy("npm", dir),
+    isNixStorePath(dir) ? null : ownershipRemedy(dir),
+    localInstallRemedy(ctx),
+  ].filter((remedy): remedy is string => remedy !== null);
+  const cause =
+    `npm cannot ${verb} ${PACKAGE_NAME} globally: it cannot write to ${dir}, where it ` +
+    `links the ${MCP_BINARY_NAME} command.`;
+  return remedies.length === 0 ? cause : `${cause}\n\n${remedies.join("\n\n")}`;
 }
 
 /** The cause plus the ways out, spelled as commands to run. */
@@ -341,7 +381,7 @@ export function unwritableGlobalTargetMessage(
   ctx: RemedyContext
 ): string {
   const remedies = [
-    writablePrefixRemedy(pm),
+    writablePrefixRemedy(pm, target.dir),
     // Never for a store path: Nix undoes the chown at the next rebuild, which
     // is the whole reason the Nix cause exists.
     target.nixStore ? null : ownershipRemedy(target.dir),

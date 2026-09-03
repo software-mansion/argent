@@ -8,7 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
-import { log } from "@clack/prompts";
+import { log, outro } from "@clack/prompts";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -296,7 +296,7 @@ describe("uninstall — a global removal npm did not perform", () => {
     const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
     expect(successes).not.toContain("Removed global package.");
     const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
-    expect(errors.some((m) => m.includes("is still in its global directory"))).toBe(true);
+    expect(errors.some((m) => m.includes("is still at"))).toBe(true);
     // Machine-wide state must survive an install that is still on PATH.
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
@@ -740,7 +740,10 @@ describe("uninstall — local (committable) mode package removal", () => {
 
     // No -g call even though the mocked PATH probe reports a global install —
     // local mode must never nuke the user's shared global tool.
-    const globalCall = calls.find(([, args]) => Array.isArray(args) && args.includes("-g"));
+    // `uninstall` as well as `-g`: the verification asks `npm root -g` too.
+    const globalCall = calls.find(
+      ([, args]) => Array.isArray(args) && args.includes("-g") && args.includes("uninstall")
+    );
     expect(globalCall).toBeFalsy();
 
     expect(telemetryMock.track).toHaveBeenCalledWith(
@@ -890,7 +893,7 @@ describe("uninstall — scoped config cleanup", () => {
     expect(hasArgentEntry(globalCursor)).toBe(true);
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
-    expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+    expect(calls.some(([, args]) => args.includes("-g") && args.includes("uninstall"))).toBe(false);
   });
 
   it("--global keeps the committed project entries and the local-mode record", async () => {
@@ -1036,6 +1039,9 @@ describe("uninstall — an argent npm did not install", () => {
         has_uninstalled_package: false,
       })
     );
+    // The closing line is the last thing the user reads, so it cannot say the
+    // removal happened.
+    expect(vi.mocked(outro).mock.lastCall?.[0]).toContain("still installed globally");
   });
 
   it("still removes the project devDependency it was also asked to remove", async () => {
@@ -1056,7 +1062,7 @@ describe("uninstall — an argent npm did not install", () => {
       "Removed local package."
     );
     expect(vi.mocked(log.error).mock.calls.map(([m]) => m as string)).toContainEqual(
-      expect.stringContaining("npm has no global @swmansion/argent to remove")
+      expect.stringContaining("npm has nothing at")
     );
   });
 });
@@ -1095,5 +1101,102 @@ describe("uninstall — a link whose source was deleted", () => {
     expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
       "Removed global package."
     );
+  });
+});
+
+describe("uninstall — a global install another package manager owns", () => {
+  // pnpm's global directory has a shape argent cannot name, so its removal is
+  // not judged against npm's — which holds nothing, and would read as a no-op.
+  let savedHome: string | undefined;
+  let savedAgentHere: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedAgentHere = process.env.npm_config_user_agent;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "pnpm/10.0.0 npm/? node/v24.0.0 darwin arm64";
+    const pnpmPkg = path.join(tmpDir, "pnpm-global", "5", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(pnpmPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    const bin = path.join(tmpDir, "pnpm-home", "argent");
+    writeFile(bin, "#!/bin/sh\n");
+    fs.mkdirSync(path.join(tmpDir, "npm-global", "lib", "node_modules"), { recursive: true });
+    childProcessMock.execSync.mockImplementation(() => `${bin}\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
+        return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedAgentHere === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgentHere;
+  });
+
+  it("reports the removal pnpm made rather than what npm's directory holds", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      expect.arrayContaining(["remove", "-g"]),
+      expect.anything()
+    );
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+  });
+});
+
+describe("uninstall — a global install the shells cannot see yet", () => {
+  // What `argent init`'s prefix recovery leaves behind: installed under a new
+  // prefix whose bin directory is not on PATH until the user adds the line.
+  let savedHome: string | undefined;
+  let packageDir: string;
+  let realPackageDir: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    packageDir = path.join(globalRoot, "@swmansion", "argent");
+    writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    realPackageDir = fs.realpathSync(packageDir);
+    // Nothing on PATH at all.
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g"))
+        fs.rmSync(packageDir, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("removes what npm owns instead of reporting nothing to remove", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(packageDir)).toBe(false);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    // The teardown needs a directory to scope itself to, and PATH has none.
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(realPackageDir);
   });
 });

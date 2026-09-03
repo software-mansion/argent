@@ -13,7 +13,7 @@ import {
 } from "../src/utils.js";
 import {
   probeGlobalInstallTarget,
-  provenUnwritableDir,
+  blockedGlobalBinDir,
   npmGlobalBinDir,
 } from "../src/global-prefix.js";
 import { InitCancelled } from "../src/init-args.js";
@@ -58,7 +58,7 @@ vi.mock("../src/global-prefix.js", async (importOriginal) => {
   return {
     ...original,
     probeGlobalInstallTarget: vi.fn(),
-    provenUnwritableDir: vi.fn(() => null),
+    blockedGlobalBinDir: vi.fn(() => null),
     npmGlobalBinDir: vi.fn(() => null),
   };
 });
@@ -283,7 +283,7 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(log.warn).mockReset();
     vi.mocked(hasProjectPackageJson).mockReturnValue(true);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
-    vi.mocked(provenUnwritableDir).mockReturnValue(null);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(null);
     vi.mocked(npmGlobalBinDir).mockReturnValue(null);
     // Implementations outlive vi.clearAllMocks, so every mock a test in here
     // reshapes has to be put back — one makes the version read PATH-sensitive,
@@ -363,7 +363,7 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
     vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
-    vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(binDir);
 
     await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
 
@@ -374,9 +374,9 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands).toEqual([
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
-    expect(vi.mocked(provenUnwritableDir).mock.lastCall).toEqual([binDir]);
+    expect(vi.mocked(blockedGlobalBinDir).mock.lastCall).toEqual(["npm"]);
     const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
-    expect(message).toContain(`npm cannot write to ${binDir}`);
+    expect(message).toContain(`it cannot write to ${binDir}`);
     // A directory the user already chose: pointing npm at another one is what
     // just ran, so taking ownership is the way out this path can still offer.
     expect(message).toContain(`sudo chown -R $(whoami) ${binDir}`);
@@ -392,7 +392,7 @@ describe("a global install whose target directory cannot be written", () => {
     // Nothing preflights that prefix: the package directory under it is
     // writable, so the recovery never opens and only this check is left.
     vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
-    vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(binDir);
 
     await expect(
       runInstall({
@@ -408,9 +408,12 @@ describe("a global install whose target directory cannot be written", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(vi.mocked(runShellCommand).mock.calls).toEqual([]);
-    expect(plain(vi.mocked(log.error).mock.calls[0][0] as string)).toContain(
-      `npm cannot write to ${binDir}`
-    );
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain(`it cannot write to ${binDir}`);
+    // npm already points at the prefix this directory is under, so prescribing
+    // the move would be a no-op ahead of the remedy that works.
+    expect(failure).not.toContain("npm config set prefix");
+    expect(failure).toContain(`sudo chown -R $(whoami) ${binDir}`);
   });
 
   it("reports a bin directory the shells cannot see, with no recovery involved", async () => {

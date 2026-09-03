@@ -23,8 +23,10 @@ import {
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   isNixStorePath,
+  blockedGlobalBinDir,
   npmGlobalBinDir,
   npmGlobalPackagePath,
+  unwritableGlobalBinMessage,
   provenUnwritableDir,
   npmUserConfigPath,
   probeGlobalInstallTarget,
@@ -518,6 +520,29 @@ describe("npmGlobalBinDir", () => {
     expect(npmGlobalBinDir()).toBeNull();
   });
 
+  it("goes through a shell only on Windows, where npm is a .cmd shim", () => {
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+    npmGlobalBinDir();
+    expect(mockExecFileSync).toHaveBeenLastCalledWith(
+      "npm",
+      expect.anything(),
+      expect.objectContaining({ shell: false })
+    );
+
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      npmGlobalBinDir();
+      expect(mockExecFileSync).toHaveBeenLastCalledWith(
+        "npm",
+        expect.anything(),
+        expect.objectContaining({ shell: true })
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+  });
+
   it("names the prefix itself on Windows, where npm puts the shims", () => {
     mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
     const platform = process.platform;
@@ -527,6 +552,55 @@ describe("npmGlobalBinDir", () => {
     } finally {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
     }
+  });
+});
+
+describe("blockedGlobalBinDir", () => {
+  it("names npm's bin directory when it is proven unwritable", () => {
+    if (!canTestUnwritable) return;
+    fs.chmodSync(tmpRoot, 0o555);
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+
+    expect(blockedGlobalBinDir("npm")).toBe(tmpRoot);
+  });
+
+  it("does not answer for a manager whose bin directory argent cannot name", () => {
+    // The query and the message are both npm's; a pnpm install refused on
+    // npm's directory would be refused for a directory it never uses.
+    fs.chmodSync(tmpRoot, 0o555);
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+
+    expect(blockedGlobalBinDir("pnpm")).toBeNull();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("unwritableGlobalBinMessage", () => {
+  const ctx = { localViable: true, argentOnPath: false };
+
+  it("leads with the prefix move, unless the run just made one", () => {
+    const dir = "/opt/shared/bin";
+
+    expect(plain(unwritableGlobalBinMessage(dir, "install", ctx, false))).toContain(
+      "npm config set prefix"
+    );
+    expect(plain(unwritableGlobalBinMessage(dir, "install", ctx, true))).not.toContain(
+      "npm config set prefix"
+    );
+  });
+
+  it("never offers to chown a store path", () => {
+    // Nix undoes it at the next rebuild — same reason as the sibling message.
+    const stored = "/nix/store/aaaa-nodejs/bin";
+
+    expect(plain(unwritableGlobalBinMessage(stored, "install", ctx, true))).not.toContain("chown");
+  });
+
+  it("still names a way out when neither the prefix nor ownership applies", () => {
+    const message = plain(unwritableGlobalBinMessage("/usr/local/bin", "install", ctx, true));
+
+    expect(message).not.toContain("chown");
+    expect(message).toContain("npx @swmansion/argent init --local");
   });
 });
 

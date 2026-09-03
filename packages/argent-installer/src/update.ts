@@ -40,7 +40,12 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
-import { probeGlobalInstallTarget, unwritableGlobalTargetMessage } from "./global-prefix.js";
+import {
+  blockedGlobalBinDir,
+  probeGlobalInstallTarget,
+  unwritableGlobalBinMessage,
+  unwritableGlobalTargetMessage,
+} from "./global-prefix.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
@@ -385,27 +390,30 @@ export async function update(args: string[]): Promise<void> {
       // and before the tool-server teardown below stops a server for an install
       // that was never going to be replaced.
       if (mode === "global") {
+        // needsInstall also covers "not installed for this mode", which the
+        // confirm below and the failure text both call an install.
+        const verb = isInstalledForMode ? "update" : "install";
+        const remedies = {
+          localViable: hasProjectPackageJson(projectRoot),
+          argentOnPath: globallyInstalled,
+        };
         const globalTarget = probeGlobalInstallTarget(pm, getGloballyInstalledPackageRoot());
-        if (globalTarget?.blocked) {
+        // The package directory and the bin directory npm links commands into
+        // are separate permissions; an install needs both.
+        const blockedBin = globalTarget?.blocked === true ? null : blockedGlobalBinDir(pm);
+        const cause = globalTarget?.blocked
+          ? unwritableGlobalTargetMessage(globalTarget, pm, verb, remedies)
+          : blockedBin === null
+            ? null
+            : unwritableGlobalBinMessage(blockedBin, verb, remedies, false);
+        if (cause !== null) {
           await trackPackageAction(
             "update_failed",
             updateStartTime,
             false,
             UPDATE_GLOBAL_PREFIX_UNWRITABLE
           );
-          // needsInstall also covers "not installed for this mode", which the
-          // confirm below and the failure text both call an install.
-          p.log.error(
-            unwritableGlobalTargetMessage(
-              globalTarget,
-              pm,
-              isInstalledForMode ? "update" : "install",
-              {
-                localViable: hasProjectPackageJson(projectRoot),
-                argentOnPath: globallyInstalled,
-              }
-            )
-          );
+          p.log.error(cause);
           return { failed: UPDATE_GLOBAL_PREFIX_UNWRITABLE };
         }
       }

@@ -59,18 +59,29 @@ function pathPresent(target: string): boolean {
 function unremovedReason(entry: string, ownedBefore: boolean): string | null {
   if (!ownedBefore) {
     return (
-      `npm has no global ${PACKAGE_NAME} to remove. The ${MCP_BINARY_NAME} on your PATH ` +
-      `came from something else — another package manager, a Nix or Homebrew wrapper, or ` +
-      `a project's node_modules — and has to be removed with whatever installed it.`
+      `npm has nothing at ${entry}, so it removed nothing. The ${MCP_BINARY_NAME} on your ` +
+      `PATH came from somewhere else — another package manager, a Nix or Homebrew wrapper, ` +
+      `a project's node_modules, or an install under a different npm prefix — and has to be ` +
+      `removed with whatever installed it.`
     );
   }
   if (!pathPresent(entry)) return null;
-  // The prefix npm resolves is not the one the install lives under: an inherited
-  // npm_config_prefix outranks the config file `argent init`'s recovery writes.
-  return (
-    `npm reported success but ${PACKAGE_NAME} is still in its global directory at ` +
-    `${entry}. Check that the global prefix npm resolves is the one this install lives under.`
-  );
+  return `npm reported success but ${PACKAGE_NAME} is still at ${entry}.`;
+}
+
+/**
+ * The directory npm holds argent in, resolved through any link it made, or null
+ * when npm has nothing there or cannot be asked.
+ */
+function globalPackageOwnedByNpm(): string | null {
+  const entry = npmGlobalPackagePath();
+  if (entry === null || !pathPresent(entry)) return null;
+  try {
+    return fs.realpathSync(entry);
+  } catch {
+    // A link whose source is gone: npm still owns the entry it made.
+    return entry;
+  }
 }
 
 /**
@@ -426,7 +437,12 @@ export async function uninstall(args: string[]): Promise<void> {
     // Decided before anything is mutated, so an invalid flag or a cancelled
     // coexistence prompt aborts cleanly.
     const uninstallLocalProbe = probeLocalInstall(projectRoot);
-    const globalPresent = isGloballyInstalled();
+    // PATH answers with whatever comes first, which is not the same question as
+    // "is there a global install to remove": the prefix recovery `argent init`
+    // performs installs into a bin directory the user's shells do not know about
+    // yet, so npm's own global directory has to be asked too.
+    const npmGlobalPackage = globalPackageOwnedByNpm();
+    const globalPresent = isGloballyInstalled() || npmGlobalPackage !== null;
     const localPresent = installMode === "local" && uninstallLocalProbe.installed;
     const targetFlags = parseTargetFlags(args);
     // Default to the install that is actually PRESENT: a local-mode record whose
@@ -692,7 +708,7 @@ export async function uninstall(args: string[]): Promise<void> {
         cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
-        installDir: getGloballyInstalledPackageRoot(),
+        installDir: getGloballyInstalledPackageRoot() ?? npmGlobalPackage,
       };
     };
 
@@ -747,7 +763,8 @@ export async function uninstall(args: string[]): Promise<void> {
         if (unremoved !== null) {
           // Not thrown: the command itself did not fail, and the other targets
           // this run was asked to remove are still worth removing.
-          p.log.error(`${removable.kind} uninstall failed: ${unremoved}`);
+          // Not "failed": the command exited 0, it just had nothing to take away.
+          p.log.error(`The ${removable.kind} package was not removed. ${unremoved}`);
           packageActionFailed = true;
           continue;
         }
@@ -786,7 +803,12 @@ export async function uninstall(args: string[]): Promise<void> {
       }
     }
 
-    p.outro(pc.green("argent has been removed."));
+    p.outro(
+      packageActionFailed
+        ? // Only a global removal can set this, and only by removing nothing.
+          pc.yellow(`${MCP_BINARY_NAME} is still installed globally — see the error above.`)
+        : pc.green("argent has been removed.")
+    );
   } catch (err) {
     await finalizeUninstallTelemetry(
       hasPrunedContent,
