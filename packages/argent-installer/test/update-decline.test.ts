@@ -62,7 +62,11 @@ vi.mock("../src/update-target.js", () => ({
 }));
 // Mutable install topology read through the utils mock — tests flip these to
 // stage "the global install landed at v99" or "no global install at all".
-const topologyState = vi.hoisted(() => ({ globalInstalled: true, globalVersion: "1.0.0" }));
+const topologyState = vi.hoisted(() => ({
+  globalInstalled: true,
+  globalVersion: "1.0.0",
+  packageRoot: null as string | null,
+}));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/utils.js")>();
@@ -70,6 +74,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     ...original,
     isGloballyInstalled: vi.fn(() => topologyState.globalInstalled),
     getGloballyInstalledVersion: vi.fn(() => topologyState.globalVersion),
+    getGloballyInstalledPackageRoot: vi.fn(() => topologyState.packageRoot),
   };
 });
 
@@ -108,6 +113,7 @@ beforeEach(() => {
   childProcessMock.execFileSync.mockReset();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
+  topologyState.packageRoot = null;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -208,6 +214,31 @@ describe("update — interactive decline", () => {
 
   // needsInstall also covers "nothing installed for this mode", where calling
   // it an update names an operation the reader never asked for.
+  // pnpm, yarn and bun all leave `root -g` / `global dir` unanswerable on a
+  // machine with no global directory set up; the installed package's own
+  // directory is what the probe falls back to.
+  it.skipIf(!canTestUnwritable)(
+    "uses the installed package's own directory when the manager will not answer",
+    async () => {
+      const scopeDir = path.join(tmpDir, "store", "lib", "node_modules", "@swmansion");
+      fs.mkdirSync(scopeDir, { recursive: true });
+      fs.chmodSync(scopeDir, 0o555);
+      topologyState.packageRoot = path.join(scopeDir, "argent");
+      childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+        if (args[0] === "root") throw new Error("no global directory");
+        return undefined;
+      }) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+      expect(errors.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(true);
+      expect(errors.some((m) => m.includes(scopeDir))).toBe(true);
+      expect(npmInstallCalls()).toHaveLength(0);
+    }
+  );
+
   it.skipIf(!canTestUnwritable)(
     "calls it an install when there is no global install to update",
     async () => {

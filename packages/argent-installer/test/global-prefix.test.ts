@@ -450,3 +450,17 @@ describe("npmGlobalBinDir", () => {
     expect(npmGlobalBinDir()).toBeNull();
   });
 });
+
+describe("a queried directory whose whole tree is missing", () => {
+  // `prefix` under a top-level directory this box does not have. Walking up
+  // would otherwise stop at `/`, which is unwritable for any non-root user and
+  // would be reported as "its global package directory".
+  const gone = "/nonexistent-top-level-dir/npm-global/lib/node_modules";
+
+  it("is inconclusive rather than blocked at the filesystem root", () => {
+    mockExecFileSync.mockReturnValue(`${gone}\n`);
+
+    expect(probeGlobalInstallTarget("npm")).toBeNull();
+    expect(provenUnwritableDir(gone)).toBeNull();
+  });
+});

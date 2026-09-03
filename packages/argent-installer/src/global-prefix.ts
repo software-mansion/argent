@@ -111,13 +111,17 @@ function realPath(target: string): string {
 function nearestExistingDir(dir: string): string | null {
   let current = path.resolve(dir);
   for (;;) {
+    // The filesystem root is nobody's global package directory: reaching it
+    // means every ancestor of the queried path is missing, which says nothing
+    // about where an install would land. Checked before the stat so `/`, which
+    // always exists and is unwritable, is never the answer.
+    const parent = path.dirname(current);
+    if (parent === current) return null;
     try {
       if (fs.statSync(current).isDirectory()) return current;
     } catch {
       // Missing or unstattable — keep walking up.
     }
-    const parent = path.dirname(current);
-    if (parent === current) return null;
     current = parent;
   }
 }

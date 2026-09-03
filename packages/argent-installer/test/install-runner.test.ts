@@ -46,6 +46,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     detectPackageManager: vi.fn(() => "npm" as const),
     isGloballyInstalled: vi.fn(() => false),
     getGloballyInstalledVersion: vi.fn(() => "2.0.0"),
+    getGloballyInstalledPackageRoot: vi.fn(() => "/opt/argent/lib/node_modules/@swmansion/argent"),
     getLatestVersion: vi.fn(async () => null),
   };
 });
@@ -663,6 +664,14 @@ describe("a global install whose target directory cannot be written", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(runShellCommand).not.toHaveBeenCalled();
       expect(tel.finalize).toHaveBeenCalledWith(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+      // The installed package's own directory is the fallback for a manager
+      // whose global-directory query fails — pnpm, yarn and bun all can.
+      // lastCall, not toHaveBeenCalledWith: this mock keeps its history across
+      // the tests above, which would satisfy the matcher on their own calls.
+      expect(vi.mocked(probeGlobalInstallTarget).mock.lastCall).toEqual([
+        "npm",
+        "/opt/argent/lib/node_modules/@swmansion/argent",
+      ]);
     } finally {
       vi.mocked(isGloballyInstalled).mockReturnValue(false);
     }
