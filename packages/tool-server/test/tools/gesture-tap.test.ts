@@ -16,8 +16,23 @@ vi.mock("../../src/utils/simulator-client", () => ({
 }));
 
 import { gestureTapTool } from "../../src/tools/gesture-tap";
+import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 
 const touchServices = { simulatorServer: {} } as never;
+
+// Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the iosDevice
+// branch (see utils/device-info.ts).
+const DEVICE_UDID = "00008110-000978540290401E";
+
+// The device branch reads the viewport first, then taps; everything rides
+// the runner's `run`.
+function runnerRig() {
+  setCurrentIosDeviceApp(DEVICE_UDID, "com.example.app");
+  const run = vi.fn(async (req: Record<string, unknown>) =>
+    req.command === "viewport" ? { x: 0, y: 0, width: 390, height: 844 } : {}
+  );
+  return { run, services: { iosDeviceRunner: { udid: DEVICE_UDID, run } } as never };
+}
 
 beforeEach(() => {
   sent.length = 0;
@@ -34,6 +49,57 @@ describe("gesture-tap", () => {
     expect(sent.map((e) => e.type)).toEqual(["Down", "Up", "Down", "Up", "Down", "Up"]);
     // Every tap lands on the same point — a multi-tap, not a gesture path.
     expect(sent.every((e) => e.x === 0.4 && e.y === 0.6)).toBe(true);
+  });
+
+  it("physical iOS: a multi-tap rides ONE runner command carrying numberOfTaps", async () => {
+    // Fake timers pin the no-sleep contract: the old device branch awaited
+    // one tapAt wire round-trip per tap with a 100ms sleep between. Under
+    // fake timers that implementation never resolves. The runner owns the
+    // inter-tap timing on-device, so no gap belongs on this side of the wire.
+    vi.useFakeTimers();
+    try {
+      const { run, services } = runnerRig();
+      await gestureTapTool.execute(services, {
+        udid: DEVICE_UDID,
+        x: 0.5,
+        y: 0.5,
+        clickCount: 2,
+      });
+      const taps = run.mock.calls.filter(([req]) => req.command === "tap");
+      expect(taps).toHaveLength(1);
+      expect(taps[0][0]).toMatchObject({
+        command: "tap",
+        appBundleId: "com.example.app",
+        numberOfTaps: 2,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("physical iOS: a count above 2 still rides one runner command, documented as separate taps", async () => {
+    // Hardware has no N-tap API, so the runner loops single taps; the tool
+    // sends the count through unchanged and the description says the taps
+    // land separately rather than refusing the request.
+    const { run, services } = runnerRig();
+    await gestureTapTool.execute(services, { udid: DEVICE_UDID, x: 0.5, y: 0.5, clickCount: 3 });
+    const taps = run.mock.calls.filter(([req]) => req.command === "tap");
+    expect(taps).toHaveLength(1);
+    expect(taps[0][0]).toMatchObject({ numberOfTaps: 3 });
+    expect(gestureTapTool.zodSchema!.shape.clickCount.description).toContain("separate taps");
+  });
+
+  it("physical iOS: a single tap keeps its pre-numberOfTaps wire shape", async () => {
+    const { run, services } = runnerRig();
+    await gestureTapTool.execute(services, { udid: DEVICE_UDID, x: 0.5, y: 0.5 });
+    const taps = run.mock.calls.filter(([req]) => req.command === "tap");
+    expect(taps).toHaveLength(1);
+    expect(taps[0][0]).toEqual({
+      command: "tap",
+      appBundleId: "com.example.app",
+      x: 195,
+      y: 422,
+    });
   });
 
   it("escalates the CDP clickCount per click on chromium so dblclick fires", async () => {

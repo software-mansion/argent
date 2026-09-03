@@ -61,12 +61,12 @@ const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
-export interface BundledContentRemoval {
+interface BundledContentRemoval {
   removedPaths: string[];
   removedRoot: boolean;
 }
 
-export interface SkillsLockCleanup {
+interface SkillsLockCleanup {
   removedSkills: string[];
   removedFile: boolean;
 }

@@ -4,7 +4,7 @@ import { findDominantFunction, extractAppCallChain } from "./02-aggregate";
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
 
-export interface CorrelationResult {
+interface CorrelationResult {
   uiHangs: UiHang[];
   hangSampleTimestamps: Set<number>;
 }

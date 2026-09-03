@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
+import type { ToolContext } from "@argent/registry";
+import { ArtifactStore, Registry, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -454,7 +454,7 @@ describe("flow-add-step", () => {
       counts.push(result.stepCount);
       // The number `recorded` opens with IS the reported count, so the author
       // cannot be shown "3." while being told the flow holds one step.
-      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+      expect(result.recorded?.startsWith(`${result.stepCount}. `)).toBe(true);
     }
 
     expect(counts).toEqual([1, 2, 3]);
@@ -1195,6 +1195,51 @@ describe("flow-add-step", () => {
     });
   });
 
+  it("names the flow_path the author wrote when the rewritten call is rejected", async () => {
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const tool = createFlowAddStepTool(registry);
+    registry.registerTool(tool as never);
+
+    await flowStartRecordingTool.execute({}, { name: "reframe", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
+
+    const authored = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ flow_path: sibling, project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(authored).toContain("`platform`");
+    expect(authored).toContain("You sent: `flow_path`, `project_root`, `platform`.");
+    expect(authored).not.toContain("`name`");
+
+    const byName = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ name: "login", project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(byName).toContain("You sent: `name`, `project_root`, `platform`.");
+
+    expect(parseFlow(await onDisk("reframe")).steps).toEqual([]);
+  });
+
   it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
@@ -1783,6 +1828,86 @@ describe("flow-finish-recording", () => {
     );
 
     expect(result.summary).toEqual(["1. await: screen idle"]);
+  });
+
+  it("uses file-facing target labels in gesture summaries", async () => {
+    const name = "gesture-target-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "tap",
+            selector: { text: "Tap me" },
+          },
+          {
+            kind: "long-press",
+            x: 0.25,
+            y: 0.75,
+          },
+          {
+            kind: "swipe",
+            from: { selector: { text: "Card", loose: true } },
+            direction: "left",
+          },
+          {
+            kind: "swipe",
+            from: { x: 0.1, y: 0.2 },
+            to: { selector: { identifier: "destination" } },
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    expect(result.summary).toEqual([
+      '1. tap: {"text":"Tap me"}',
+      "2. long-press: (0.25, 0.75)",
+      '3. swipe: left from "Card"',
+      '4. swipe: to {"id":"destination"} from (0.1, 0.2)',
+    ]);
+  });
+
+  it("renders swipe options and by-deltas so distinct gestures stay distinguishable", async () => {
+    const name = "swipe-options-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // Raw YAML on purpose: `momentum: true` is normalized to absent by the
+    // parser, so step 2 IS a plain `swipe: left` and must render without noise.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      [
+        `executionPrerequisite: ${PREREQ}`,
+        "steps:",
+        "  - swipe: { direction: left, momentum: false }",
+        "  - swipe: { direction: left, momentum: true }",
+        "  - swipe: { direction: left, duration: 800 }",
+        "  - swipe: { by: { x: -0.31 } }",
+        "  - swipe: { direction: left, momentum: false, duration: 800 }",
+        "",
+      ].join("\n")
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    // `by` spelled exactly as the run report's stepTarget spells it.
+    expect(result.summary).toEqual([
+      "1. swipe: left (momentum-free)",
+      "2. swipe: left",
+      "3. swipe: left (800ms)",
+      "4. swipe: by x=-0.31",
+      "5. swipe: left (momentum-free, 800ms)",
+    ]);
   });
 
   it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
@@ -2706,6 +2831,12 @@ describe("flow-read-prerequisite", () => {
         { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one flow source");
+  });
+
+  it("rejects direct callers that provide NEITHER flow source", async () => {
+    await expect(flowReadPrerequisiteTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      "exactly one flow source"
+    );
   });
 });
 

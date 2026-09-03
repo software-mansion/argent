@@ -70,6 +70,41 @@ describe("zodObjectToJsonSchema", () => {
     expect((schema.properties as any).when).toEqual({});
   });
 
+  it("emits { not: {} } with no type for a retired z.never().optional() key", () => {
+    // Pinned at the producer because its consumers recognise a retired key by
+    // this exact shape - `not` present and empty, no `type` - and never by name:
+    // `isRetiredField` in packages/argent-cli/src/flag-parser.ts and
+    // `retiredKeyGuidance` in the tool-server's flow-run.ts. A converter swap
+    // emitting { type: "null" } or a bare {} would keep every other registry test
+    // green while turning `--settle` back into an offered flag.
+    const schema = zodObjectToJsonSchema(
+      z.object({
+        settle: z
+          .never({ error: "`settle` was renamed to `momentum`" })
+          .optional()
+          .describe("Retired: renamed to `momentum`"),
+        // Live sibling, so the assertions below match the retirement rather than
+        // everything the serializer emits for an optional field.
+        momentum: z.boolean().optional().describe("Whether the swipe releases with momentum"),
+      })
+    );
+    expect((schema.properties as any).settle).toEqual({
+      description: "Retired: renamed to `momentum`",
+      not: {},
+    });
+    expect((schema.properties as any).momentum).toEqual({
+      type: "boolean",
+      description: "Whether the swipe releases with momentum",
+    });
+    expect(schema.required).toBeUndefined();
+  });
+
+  it("emits { not: {} } for an undescribed z.never().optional()", () => {
+    const schema = zodObjectToJsonSchema(z.object({ settle: z.never().optional() }));
+    expect((schema.properties as any).settle).toEqual({ not: {} });
+    expect(schema.required).toBeUndefined();
+  });
+
   it("produces expected JSON Schema for a mixed object with required/optional/default fields", () => {
     const schema = zodObjectToJsonSchema(
       z.object({

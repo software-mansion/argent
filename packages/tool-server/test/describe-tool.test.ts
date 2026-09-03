@@ -1050,3 +1050,75 @@ describe("describe tool", () => {
     );
   });
 });
+
+describe("describe tool — ax-service read failure", () => {
+  beforeEach(() => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
+    __resetBootCaveatStateForTests();
+  });
+
+  function throwingAxApi(degraded: boolean): AXServiceApi {
+    return {
+      degraded,
+      describe: async () => {
+        throw new Error("ax-service query timed out: describe");
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+  }
+
+  // A query timeout on a sim that WAS booted through argent used to be reported
+  // as the boot caveat — "call boot-device with force=true" — sending the agent
+  // to reboot a healthy simulator. The read failure has to be named as itself.
+  it("names the read failure instead of the boot caveat when the sim was booted through argent", async () => {
+    const registry = makeMockRegistry({ axService: throwingAxApi(false) });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint).not.toContain("not booted through argent");
+  });
+
+  it("keeps the boot caveat ahead of the read failure when the sim was booted externally", async () => {
+    const registry = makeMockRegistry({ axService: throwingAxApi(true) });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.hint).toContain("not booted through argent");
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint!.indexOf("not booted")).toBeLessThan(result.hint!.indexOf("timed out"));
+  });
+
+  it("still serves the native-devtools tree after a read failure", async () => {
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: ["com.example.app"],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "Go",
+          },
+        ],
+      },
+    });
+    const registry = makeMockRegistry({
+      axService: throwingAxApi(false),
+      nativeDevtools: nativeApi,
+    });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("native-devtools");
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint).not.toContain("not booted through argent");
+  });
+});

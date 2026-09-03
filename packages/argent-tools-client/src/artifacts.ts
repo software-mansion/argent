@@ -358,7 +358,7 @@ export interface MaterializeContext {
   fetchImpl?: typeof fetch;
 }
 
-export interface MaterializeResult {
+interface MaterializeResult {
   /** The result with every artifact handle replaced by its local path string. */
   result: unknown;
   /** Image artifacts encountered, for inline rendering by the caller. */
