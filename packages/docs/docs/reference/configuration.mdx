@@ -38,7 +38,7 @@ argent config get ios.additionalDeviceSets
 | -------------------------- | --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file) |
 | `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                    |
-| `autoUpdate.enabled`       | global          | —                | Set to `true` to install eligible Argent updates automatically. Default `false`                                                         |
+| `autoUpdate.enabled`       | global only     | —                | Set to `true` to install eligible Argent updates automatically. Default `false`                                                         |
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                          |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths   |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                       |
