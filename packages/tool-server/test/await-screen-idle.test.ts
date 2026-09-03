@@ -653,19 +653,19 @@ describe("await-screen-idle tool", () => {
         send: async (method: string) => {
           if (method !== "Runtime.evaluate") return {};
           call += 1;
-          if (call === 1) {
-            await new Promise((r) => setTimeout(r, 5));
-            return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
-          }
+          if (call === 1) return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
           return new Promise(() => {});
         },
       },
     } as unknown as ChromiumCdpApi;
     const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
 
+    // The first read lands, the next is abandoned at the deadline: one sample, no
+    // failures. `minStableMs` above the budget keeps it from settling, and the
+    // generous timeout keeps the single success from ever being the abandoned one.
     const result = await tool.execute(
       { chromium },
-      { udid: CHROMIUM_ID, timeoutMs: 80, pollIntervalMs: 10, minStableMs: 250 }
+      { udid: CHROMIUM_ID, timeoutMs: 400, pollIntervalMs: 10, minStableMs: 5000 }
     );
 
     expect(result.settled).toBe(false);
@@ -694,9 +694,11 @@ describe("await-screen-idle tool", () => {
     } as unknown as ChromiumCdpApi;
     const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
 
+    // Budget wide enough that all three scripted reads (A, B, then the throw)
+    // reliably land before the final call hangs to the deadline.
     const result = await tool.execute(
       { chromium },
-      { udid: CHROMIUM_ID, timeoutMs: 200, pollIntervalMs: 10, minStableMs: 250 }
+      { udid: CHROMIUM_ID, timeoutMs: 400, pollIntervalMs: 10, minStableMs: 250 }
     );
 
     expect(result.settled).toBe(false);
@@ -709,6 +711,10 @@ describe("await-screen-idle tool", () => {
   // One read came back and earlier fetches failed: the window was mostly blind,
   // so the single sample is the failures' doing, not the schedule's.
   it("names earlier failures behind a single-sample verdict", async () => {
+    // Exactly one successful read, framed by failures: the first two calls throw,
+    // and every call after the single success hangs, so `samples` is 1 whatever
+    // the runner's scheduling fits — the schedule is never the reason there was
+    // one. `minStableMs` above the budget keeps that one read from settling.
     let call = 0;
     const chromium = {
       refreshViewport: async () => ({ width: 1024, height: 768 }),
@@ -716,8 +722,9 @@ describe("await-screen-idle tool", () => {
         send: async (method: string) => {
           if (method !== "Runtime.evaluate") return {};
           call += 1;
-          if (call <= 3) throw new Error("renderer detached");
-          return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
+          if (call <= 2) throw new Error("renderer detached");
+          if (call === 3) return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
+          return new Promise(() => {});
         },
       },
     } as unknown as ChromiumCdpApi;
@@ -725,12 +732,12 @@ describe("await-screen-idle tool", () => {
 
     const result = await tool.execute(
       { chromium },
-      { udid: CHROMIUM_ID, timeoutMs: 100, pollIntervalMs: 25, minStableMs: 250 }
+      { udid: CHROMIUM_ID, timeoutMs: 600, pollIntervalMs: 20, minStableMs: 5000 }
     );
 
     expect(result.settled).toBe(false);
     expect(result.note).toContain("earlier");
     expect(result.note).toMatch(/reads? failed/);
-    expect(result.note).not.toContain("pollIntervalMs (25ms) that leaves no room");
+    expect(result.note).not.toContain("pollIntervalMs (20ms) that leaves no room");
   });
 });

@@ -1293,6 +1293,11 @@ describe("await-ui-element tool", () => {
   // failures caused, nor quote an errored attempt's duration as "the slowest
   // fetch"; the window was mostly blind and the note has to say so.
   it("names the failures behind a single sample rather than the interval", async () => {
+    // Exactly one successful read among failures: the first two calls throw, one
+    // returns a tree (selector absent, so the wait keeps going), and every call
+    // after it hangs to the deadline. `samples` is 1 whatever the runner fits, so
+    // the note rests on the failure count, not the poll schedule — and it holds
+    // whether or not that lone read also reads as stale.
     let call = 0;
     const chromium = {
       refreshViewport: async () => ({ width: 1024, height: 768 }),
@@ -1300,26 +1305,29 @@ describe("await-ui-element tool", () => {
         send: async (method: string) => {
           if (method !== "Runtime.evaluate") return {};
           call += 1;
-          if (call <= 4) throw new Error("renderer detached");
-          return {
-            result: {
-              value: JSON.stringify({
-                tree: {
-                  role: "html",
-                  frame: { x: 0, y: 0, width: 1, height: 1 },
-                  children: [
-                    {
-                      role: "button",
-                      label: "Continue",
-                      frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
-                      children: [],
-                    },
-                  ],
-                },
-                truncated: false,
-              }),
-            },
-          };
+          if (call <= 2) throw new Error("renderer detached");
+          if (call === 3) {
+            return {
+              result: {
+                value: JSON.stringify({
+                  tree: {
+                    role: "html",
+                    frame: { x: 0, y: 0, width: 1, height: 1 },
+                    children: [
+                      {
+                        role: "button",
+                        label: "Continue",
+                        frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
+                        children: [],
+                      },
+                    ],
+                  },
+                  truncated: false,
+                }),
+              },
+            };
+          }
+          return new Promise(() => {});
         },
       },
     } as unknown as ChromiumCdpApi;
@@ -1331,15 +1339,15 @@ describe("await-ui-element tool", () => {
         udid: CHROMIUM_ID,
         condition: "visible",
         selector: { text: "ABSENT" },
-        timeoutMs: 1000,
-        pollIntervalMs: 200,
+        timeoutMs: 600,
+        pollIntervalMs: 50,
       }
     );
 
     expect(result.note).toMatch(/reads? failed/);
     expect(result.note).toMatch(/mostly-blind/);
-    expect(result.note ?? "").not.toMatch(/pollIntervalMs \(200ms\) leaves no room/);
-  });
+    expect(result.note ?? "").not.toMatch(/pollIntervalMs \(50ms\) leaves no room/);
+  }, 20_000);
 
   // A single read whose verdict is `unreadable` BECAUSE it is stale (one read,
   // then a poll interval as wide as the budget). The note must say how far behind

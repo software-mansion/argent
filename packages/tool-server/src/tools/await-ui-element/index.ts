@@ -354,32 +354,37 @@ function timeoutNote(
   // most blind first:
   //
   // - one sample, which can be the read taken before the element appeared. Name
-  //   the knob that applies: a single sample that is also STALE is `unreadable`
-  //   for that reason, so say how far back it sits (or the caveat contradicts
-  //   the cause); a window where earlier fetches FAILED was mostly blind, not
-  //   starved by the schedule; lowering the sleep helps only when the sleep is
-  //   what ran out, not when the deadline cut a fetch off, and not when the
-  //   fetches ate over half the budget between them (a second sample needs the
-  //   slowest one's length again plus the shortest sleep the schema takes —
-  //   which is a bound on reads THIS size, not a promise the next costs as
-  //   much, so the remedy is offered rather than ruled out).
+  //   the knob that applies, failures first: a window where earlier fetches
+  //   FAILED was mostly blind, and its single read may also read as STALE — but
+  //   the staleness is downstream of the blindness, so "restore the source" is
+  //   the remedy, not "poll more often". Only where nothing failed does a single
+  //   stale read mean the interval left it too far behind the deadline (say how
+  //   far, or the caveat contradicts the cause). Otherwise lowering the sleep
+  //   helps only when the sleep is what ran out, not when the deadline cut a
+  //   fetch off, and not when the fetches ate over half the budget between them
+  //   (a second sample needs the slowest one's length again plus the shortest
+  //   sleep the schema takes — a bound on reads THIS size, not a promise the
+  //   next costs as much, so the remedy is offered rather than ruled out).
   // - samples enough to compare, but the last one lies too far behind the
   //   deadline to speak for it. Without this the note is word-for-word a
   //   determinate miss, while `cause` says `unreadable`.
   let readCaveat = "";
   if (samples < 2) {
-    if (budget.staleReadMs !== undefined) {
+    if (budget.failedFetches > 0) {
+      // The window was mostly blind: the failures took the other samples, not the
+      // schedule, so restoring the source is the remedy even where the one read
+      // that landed is also stale.
+      readCaveat =
+        ` (only one tree read returned a tree — ${budget.failedFetches} earlier ` +
+        `${budget.failedFetches === 1 ? "read" : "reads"} failed — so this rests on that single sample from ` +
+        `a mostly-blind window; restore the tree source and re-run)`;
+    } else if (budget.staleReadMs !== undefined) {
       // The single read is what made the verdict `unreadable`: it is old. Say so,
       // rather than blaming a schedule that had nothing to do with it.
       readCaveat =
         ` (the one tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
         `screen after it, so this rests on a single, stale sample; lower pollIntervalMs ` +
         `(${budget.pollIntervalMs}ms))`;
-    } else if (budget.failedFetches > 0) {
-      readCaveat =
-        ` (only one tree read returned a tree — ${budget.failedFetches} earlier ` +
-        `${budget.failedFetches === 1 ? "read" : "reads"} failed — so this rests on that single sample from ` +
-        `a mostly-blind window; restore the tree source and re-run)`;
     } else if (
       budget.lastAttemptSettled &&
       2 * budget.slowestFetchMs + MIN_POLL_INTERVAL_MS <= budget.timeoutMs
