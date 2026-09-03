@@ -1,11 +1,8 @@
-import {
-  FAILURE_CODES,
-  FailureError,
-  getFailureSignal,
-  subprocessFailureMetadata,
-} from "@argent/registry";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, isTerminalAdbError, runAdb } from "../../../utils/adb";
+import { adbShell, isAdbTransportFailure, runAdb, ENRICH_TIMEOUT_MS } from "../../../utils/adb";
+import { InvalidToolInputError } from "../../../utils/capability";
+import { isWirelessAdbSerial } from "../../../utils/device-info";
 import { TEXT_SIZE_VALUES } from "../types";
 import type {
   SystemSetting,
@@ -15,7 +12,7 @@ import type {
 } from "../types";
 
 // appearance → `cmd uimode night <mode>` (the immediate, applies-now switch for
-// the system dark/light theme; API 29+).
+// the system dark/light theme).
 const NIGHT_MODE: Record<string, string> = { light: "no", dark: "yes" };
 
 // text-size → a `system.font_scale` float. iOS names 12 Dynamic Type categories
@@ -135,18 +132,6 @@ function androidChange(setting: SystemSetting, value: string): AndroidChange {
   }
 }
 
-// A dead or wedged adb transport is not a setting refusal: propagate the
-// classified FailureError (timeout kind, terminal-device-state message) so it
-// surfaces with its real cause, mirroring settings-permissions' runPm.
-function isTransportFailure(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return (
-    isTerminalAdbError(message) ||
-    getFailureSignal(err)?.error_kind === "timeout" ||
-    /cannot connect to daemon|protocol fault|connection reset by peer/i.test(message)
-  );
-}
-
 // The adb client prints its own notices on stderr on a call that then
 // succeeds: the daemon startup banner (`* daemon …`) after a server restart,
 // and a server-version mismatch ("adb server version (…) doesn't match this
@@ -188,9 +173,43 @@ function settingFailure(
   );
 }
 
+/**
+ * Refuse a change that would sever the adb transport it travels over.
+ *
+ * On a wirelessly-debugged device, adb rides the device's own Wi-Fi link. Both
+ * `svc wifi disable` and `cmd connectivity airplane-mode enable` take that link
+ * down, so the write lands and then nothing can reach the device again — not the
+ * response, and not the call that would undo it. Recovery needs a USB cable or
+ * physical access, so refuse up front rather than strand the session; over USB
+ * (or on an emulator, whose transport is the console socket) both are fine.
+ */
+function assertKeepsTransport(udid: string, setting: SystemSetting, value: string): void {
+  const dropsWifi =
+    (setting === "wifi" && value === "off") || (setting === "airplane-mode" && value === "on");
+  if (!dropsWifi || !isWirelessAdbSerial(udid)) return;
+  throw new InvalidToolInputError(
+    `Setting '${setting}' to '${value}' on ${udid} would switch off the Wi-Fi link adb reaches it over, ` +
+      `leaving no way to reach the device or undo the change. Connect it over USB and use that serial instead.`,
+    {
+      error_code: FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED,
+      failure_stage: "android_system_setting_self_disconnect",
+      error_kind: "unsupported",
+    }
+  );
+}
+
+/** Ceiling for the one `adb shell` that applies the setting. Summed with the
+ * API-level probe that can precede it, this has to stay under the MCP client's
+ * 30s per-attempt cap; above it the client aborts and replays the call while the
+ * abandoned `adb` keeps running, and this tool's own diagnostic — the device's
+ * verbatim refusal — never reaches the agent. */
+export const ADB_SETTING_TIMEOUT_MS = 15_000;
+
 /** The device's API level, or null when the property is missing/unparseable. */
 async function sdkLevel(udid: string): Promise<number | null> {
-  const raw = await adbShell(udid, "getprop ro.build.version.sdk", { timeoutMs: 15_000 });
+  const raw = await adbShell(udid, "getprop ro.build.version.sdk", {
+    timeoutMs: ENRICH_TIMEOUT_MS,
+  });
   const level = parseInt(raw.trim(), 10);
   return Number.isFinite(level) ? level : null;
 }
@@ -203,6 +222,8 @@ export const androidImpl: PlatformImpl<
   requires: ["adb"],
   handler: async (_services, params) => {
     const { udid, setting, value } = params;
+    assertKeepsTransport(udid, setting, value);
+
     const { shellCommand, applied, minSdk } = androidChange(setting, value);
 
     if (minSdk !== undefined) {
@@ -210,13 +231,17 @@ export const androidImpl: PlatformImpl<
       // cannot answer means the shell command could not have run either.
       const level = await sdkLevel(udid);
       if (level !== null && level < minSdk) {
-        settingFailure(
-          setting,
-          value,
-          udid,
-          `'${setting}' needs Android API ${minSdk}+; this device reports API ${level}. ` +
+        // Same class as the iOS "Android-only" rejection: this target cannot
+        // carry the change out and no retry will change that, so it is caller
+        // input (400) rather than a subprocess fault an agent would retry.
+        throw new InvalidToolInputError(
+          `'${setting}' needs Android API ${minSdk}+; ${udid} reports API ${level}. ` +
             `The write is accepted there but leaves the device unchanged.`,
-          "android_system_setting_api_floor"
+          {
+            error_code: FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED,
+            failure_stage: "android_system_setting_api_floor",
+            error_kind: "unsupported",
+          }
         );
       }
     }
@@ -230,9 +255,11 @@ export const androidImpl: PlatformImpl<
       // Android's default `Binder.handleShellCommand`, which prints
       // "No shell command implementation." on stderr and returns 0. Reading only
       // the exit code answers `applied` for a change the device refused.
-      ({ stderr } = await runAdb(["-s", udid, "shell", shellCommand], { timeoutMs: 15_000 }));
+      ({ stderr } = await runAdb(["-s", udid, "shell", shellCommand], {
+        timeoutMs: ADB_SETTING_TIMEOUT_MS,
+      }));
     } catch (err) {
-      if (isTransportFailure(err)) throw err;
+      if (isAdbTransportFailure(err)) throw err;
       const detail = err instanceof Error ? err.message : String(err);
       settingFailure(setting, value, udid, detail, "android_system_setting_adb", err);
     }

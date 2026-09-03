@@ -50,8 +50,11 @@ import {
   TEXT_SIZE_VALUES,
 } from "../src/tools/system-settings/types";
 import type { SystemSettingsParams } from "../src/tools/system-settings/types";
-import { adbShell, runAdb } from "../src/utils/adb";
-import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { adbShell, runAdb, ENRICH_TIMEOUT_MS } from "../src/utils/adb";
+import { ADB_SETTING_TIMEOUT_MS } from "../src/tools/system-settings/platforms/android";
+import { SIMCTL_UI_TIMEOUT_MS } from "../src/tools/system-settings/platforms/ios";
+import { isTvOsSimulator, SIMCTL_LIST_TIMEOUT_MS } from "../src/utils/ios-devices";
+import { PATH_LOOKUP_TIMEOUT_MS } from "../src/utils/command-on-path";
 import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { rememberDeviceSet, __resetDeviceSetCacheForTesting } from "../src/utils/ios-device-sets";
@@ -441,17 +444,23 @@ describe("system-settings iOS branch", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an Android-only setting with SYSTEM_SETTING_UNSUPPORTED and runs no command", async () => {
-    execFileSucceeds();
-    const rejection = expect(
-      iosImpl.handler({}, params({ setting: "wifi", value: "on" }), IOS_DEVICE)
-    ).rejects;
-    await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
-    await rejection.toSatisfy((err) => getFailureSignal(err)?.error_kind === "unsupported");
-    await rejection.toBeInstanceOf(InvalidToolInputError);
-    await rejection.toThrow(/Android-only/);
-    expect(execFileMock).not.toHaveBeenCalled();
-  });
+  // Every one of them, not a representative: a setting that slipped out of
+  // IOS_SUPPORTED_SETTINGS' complement would reach `iosMechanism` and die on its
+  // unreachable default instead of returning the 400 the agent can act on.
+  it.each(SYSTEM_SETTINGS.filter((s) => !IOS_SUPPORTED_SETTINGS.includes(s)))(
+    "rejects Android-only '%s' with SYSTEM_SETTING_UNSUPPORTED and runs no command",
+    async (setting) => {
+      execFileSucceeds();
+      const rejection = expect(
+        iosImpl.handler({}, params({ setting, value: SETTING_VALUES[setting][0] }), IOS_DEVICE)
+      ).rejects;
+      await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
+      await rejection.toSatisfy((err) => getFailureSignal(err)?.error_kind === "unsupported");
+      await rejection.toBeInstanceOf(InvalidToolInputError);
+      await rejection.toThrow(/Android-only/);
+      expect(execFileMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("a shutdown-simulator failure carries a boot-device hint + IOS_SYSTEM_SETTING_FAILED", async () => {
     execFileFails(
@@ -648,8 +657,9 @@ describe("system-settings Android branch", () => {
 
   it("maps every category to the exact font_scale of that Dynamic Type size", async () => {
     // The scale is each iOS body-text point size divided by `large` (17pt) —
-    // 14/15/16/17 then the AX range 28/33/40/47/53. Pin every value: a swapped
-    // entry silently mis-sizes Android text while still looking well-formed.
+    // 14/15/16/17/19/21/23 then the AX range 28/33/40/47/53. Pin every value: a
+    // swapped entry silently mis-sizes Android text while still looking
+    // well-formed.
     const expected: Record<string, string> = {
       "extra-small": "0.82",
       "small": "0.88",
@@ -896,8 +906,18 @@ describe("system-settings Android branch", () => {
       const rejection = expect(
         androidImpl.handler({}, params({ setting: "location", value: "off" }), androidDevice)
       ).rejects;
-      await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
-      await rejection.toThrow(/needs Android API 29\+; this device reports API 24/);
+      // The device can't carry the change out and no retry will change that, so
+      // this is caller input (400), not a subprocess fault (500) an agent would
+      // retry — same class as the iOS "Android-only" rejection.
+      await rejection.toThrow(InvalidToolInputError);
+      await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
+      await rejection.toSatisfy((err) => getFailureSignal(err)?.error_kind === "unsupported");
+      await rejection.toSatisfy(
+        (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_api_floor"
+      );
+      await rejection.toThrow(
+        new RegExp(`needs Android API 29\\+; ${ANDROID_SERIAL} reports API 24`)
+      );
       expect(mockRunAdb).not.toHaveBeenCalled();
     });
 
@@ -985,5 +1005,178 @@ describe("system-settings dispatch wiring (through tool.execute)", () => {
       { timeoutMs: 15_000 }
     );
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+// The MCP client caps a tool call at 30s per attempt and then replays it up to
+// four more times (`FETCH_TIMEOUT_MS` / `MAX_RETRIES` in
+// packages/argent-mcp/src/mcp-server.ts); `system-settings` claims no
+// `longRunning`, so it gets that cap. Every timeout on a handler's path runs in
+// SERIES, so their sum is what the tool actually needs to answer a wedged
+// CoreSimulatorService or adb server. Above the cap the tool can never surface
+// its own diagnostic — the client aborts first and re-POSTs while the abandoned
+// `simctl`/`adb` child keeps running against the same wedged service.
+const MCP_CLIENT_ATTEMPT_BUDGET_MS = 30_000;
+// A real margin, not just "<": a slow-but-completing call on a loaded machine
+// must still land inside the client's attempt.
+const MIN_BUDGET_MARGIN_MS = 5_000;
+
+describe("worst-case time budget vs the MCP client's per-attempt cap", () => {
+  it("the iOS `simctl ui` path fits, dependency check and tvOS probe included", () => {
+    // `ensureDeps(["xcrun"])` → one PATH lookup, then `isTvOsSimulator` → one
+    // `simctl list devices --json`, then the `simctl ui` call itself.
+    const worstCase = PATH_LOOKUP_TIMEOUT_MS + SIMCTL_LIST_TIMEOUT_MS + SIMCTL_UI_TIMEOUT_MS;
+    expect(worstCase).toBeLessThan(MCP_CLIENT_ATTEMPT_BUDGET_MS);
+    expect(MCP_CLIENT_ATTEMPT_BUDGET_MS - worstCase).toBeGreaterThanOrEqual(MIN_BUDGET_MARGIN_MS);
+  });
+
+  it("the Android path fits, dependency check and API-level probe included", () => {
+    // `ensureDeps(["adb"])` → one PATH lookup, then `location`'s `getprop`
+    // probe (the only setting that runs one), then the `adb shell` that applies
+    // the change.
+    const worstCase = PATH_LOOKUP_TIMEOUT_MS + ENRICH_TIMEOUT_MS + ADB_SETTING_TIMEOUT_MS;
+    expect(worstCase).toBeLessThan(MCP_CLIENT_ATTEMPT_BUDGET_MS);
+    expect(MCP_CLIENT_ATTEMPT_BUDGET_MS - worstCase).toBeGreaterThanOrEqual(MIN_BUDGET_MARGIN_MS);
+  });
+});
+
+describe("a change that would cut the adb link it travels over", () => {
+  const WIRELESS_SERIAL = "192.168.1.42:5555";
+  const USB_SERIAL = "R58M1234ABC";
+
+  function run(udid: string, setting: string, value: string) {
+    return androidImpl.handler(
+      {},
+      { udid, setting, value } as SystemSettingsParams,
+      { id: udid, platform: "android", kind: "device" } as const
+    );
+  }
+
+  // Wireless debugging carries adb over the device's own Wi-Fi. Switching that
+  // off applies the change and then strands the device: no response, and no
+  // later call — including the one that would undo it — can reach it.
+  it.each([
+    ["wifi", "off"],
+    ["airplane-mode", "on"],
+  ])("refuses %s=%s on a wirelessly debugged device", async (setting, value) => {
+    const rejection = expect(run(WIRELESS_SERIAL, setting, value)).rejects;
+    await rejection.toThrow(InvalidToolInputError);
+    await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
+    await rejection.toSatisfy(
+      (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_self_disconnect"
+    );
+    // The recovery is not obvious from the failure alone, so it is named.
+    await rejection.toThrow(/Connect it over USB/);
+    expect(mockRunAdb).not.toHaveBeenCalled();
+  });
+
+  // Only the two that take the Wi-Fi link down, and only in the direction that
+  // takes it down — a blanket refusal would block changes that work fine.
+  it.each([
+    [WIRELESS_SERIAL, "wifi", "on"],
+    [WIRELESS_SERIAL, "airplane-mode", "off"],
+    [WIRELESS_SERIAL, "cellular", "off"],
+    [ANDROID_SERIAL, "wifi", "off"],
+    [ANDROID_SERIAL, "airplane-mode", "on"],
+    [USB_SERIAL, "wifi", "off"],
+    [USB_SERIAL, "airplane-mode", "on"],
+  ])("still applies %s %s=%s", async (udid, setting, value) => {
+    await expect(run(udid, setting, value)).resolves.toMatchObject({ setting, value });
+    expect(mockRunAdb).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the wirelessly debugged device it refused", async () => {
+    // One session can hold several serials; the message has to say which.
+    await expect(run(WIRELESS_SERIAL, "wifi", "off")).rejects.toThrow(
+      new RegExp(WIRELESS_SERIAL.replace(/\./g, "\\."))
+    );
+  });
+});
+
+describe("what a failure carries", () => {
+  const androidDevice = { id: ANDROID_SERIAL, platform: "android", kind: "emulator" } as const;
+
+  function androidParams(setting = "wifi", value = "on"): SystemSettingsParams {
+    return { udid: ANDROID_SERIAL, setting, value } as SystemSettingsParams;
+  }
+
+  // The telemetry fields are what a failure is bucketed by; a wrong or dropped
+  // one silently merges this tool's failures into another's bucket.
+  it("tags an adb throw with adb's own subprocess metadata", async () => {
+    mockRunAdb.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: 7 }));
+    const err = await androidImpl
+      .handler({}, androidParams(), androidDevice)
+      .catch((e: unknown) => e);
+    const signal = getFailureSignal(err);
+    expect(signal?.error_code).toBe(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED);
+    expect(signal?.failure_stage).toBe("android_system_setting_adb");
+    expect(signal?.failure_area).toBe("tool_server");
+    expect(signal?.error_kind).toBe("subprocess");
+    expect(signal?.failure_command).toBe("adb");
+    expect(signal?.failure_exit_code).toBe(7);
+    // Named so an agent can tell which of several devices refused.
+    expect((err as Error).message).toContain(ANDROID_SERIAL);
+  });
+
+  it("tags a simctl throw with xcrun's subprocess metadata", async () => {
+    execFileFails("kaboom");
+    const err = await iosImpl
+      .handler({}, { udid: IOS_UDID, setting: "appearance", value: "dark" }, IOS_DEVICE)
+      .catch((e: unknown) => e);
+    const signal = getFailureSignal(err);
+    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_SYSTEM_SETTING_FAILED);
+    expect(signal?.failure_stage).toBe("ios_system_setting_apply");
+    expect(signal?.failure_area).toBe("tool_server");
+    expect(signal?.error_kind).toBe("subprocess");
+    expect(signal?.failure_command).toBe("xcrun_simctl");
+    expect((err as Error).message).toContain(IOS_UDID);
+  });
+
+  it("tells an agent to boot the simulator, without also blaming the runtime", async () => {
+    // A shutdown simulator refuses `spawn` with "…device is not booted." — a
+    // message the runtime-unsupported regex also matches on "not support"-like
+    // wording. Both hints at once would send the agent looking for a newer
+    // runtime when all it has to do is boot the one it has.
+    execFileFails("Process spawn via launchd failed because device is not booted.");
+    const err = await iosImpl
+      .handler({}, { udid: IOS_UDID, setting: "reduce-motion", value: "on" }, IOS_DEVICE)
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toContain("use boot-device");
+    expect((err as Error).message).not.toContain("newer runtime");
+  });
+
+  it("lists what iOS does support when it rejects an Android-only setting", async () => {
+    const err = await iosImpl
+      .handler({}, { udid: IOS_UDID, setting: "wifi", value: "on" }, IOS_DEVICE)
+      .catch((e: unknown) => e);
+    // Without the list the agent has to guess which of the ten to retry with.
+    for (const supported of IOS_SUPPORTED_SETTINGS) {
+      expect((err as Error).message).toContain(supported);
+    }
+  });
+
+  it("reads an indented daemon banner as chatter, not as the device's refusal", async () => {
+    // adb indents the banner on some hosts; matching it only at column 0 turns
+    // a successful call into a reported failure.
+    mockRunAdb.mockResolvedValueOnce({ stdout: "", stderr: "  * daemon started successfully" });
+    await expect(androidImpl.handler({}, androidParams(), androidDevice)).resolves.toMatchObject({
+      applied: "wifi=enabled",
+    });
+  });
+
+  it("propagates a daemon-transport failure instead of reporting a refusal", async () => {
+    // The command never reached the device, so calling it a setting refusal
+    // would blame the device for the adb server restarting underneath it.
+    const transport = new Error("protocol fault (couldn't read status): Connection reset by peer");
+    mockRunAdb.mockRejectedValueOnce(transport);
+    await expect(androidImpl.handler({}, androidParams(), androidDevice)).rejects.toBe(transport);
+  });
+
+  it("probes the API level of the device the call names", async () => {
+    mockAdbShell.mockResolvedValueOnce("34");
+    await androidImpl.handler({}, androidParams("location", "on"), androidDevice);
+    expect(mockAdbShell).toHaveBeenCalledWith(ANDROID_SERIAL, "getprop ro.build.version.sdk", {
+      timeoutMs: ENRICH_TIMEOUT_MS,
+    });
   });
 });

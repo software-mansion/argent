@@ -6,6 +6,7 @@ import { parse as parseIni } from "ini";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   subprocessFailureMetadata,
   type FailureSignal,
 } from "@argent/registry";
@@ -532,6 +533,36 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
  */
 export function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+// `isTerminalAdbError` covers the device-state shapes; these cover the
+// client<->daemon leg (`protocol fault ... Connection reset by peer` from the
+// shared adb server restarting mid-command, `cannot connect to daemon` from it
+// being down). They are matched separately because `isTerminalAdbError` also
+// gates `waitForBootCompleted`, where a reconnecting daemon mid-boot is a
+// transient it deliberately swallows and retries.
+const ADB_DAEMON_TRANSPORT_PATTERNS: RegExp[] = [
+  /connection reset by peer/i,
+  /cannot connect to daemon/i,
+  /protocol fault/i,
+];
+
+/**
+ * True when an adb failure means the command never reached the device — a dead
+ * or wedged transport, not the device's own answer.
+ *
+ * Callers that reinterpret a non-zero exit as "the target refused" need this to
+ * tell the two apart: a transport failure has to propagate with adb's own
+ * classification, or a dead device is reported as a refusal the device never
+ * made.
+ */
+export function isAdbTransportFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    isTerminalAdbError(message) ||
+    ADB_DAEMON_TRANSPORT_PATTERNS.some((pattern) => pattern.test(message)) ||
+    getFailureSignal(err)?.error_kind === "timeout"
+  );
 }
 
 /**

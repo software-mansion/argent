@@ -4,6 +4,10 @@ import { win32 as pathWin32 } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
+/** Ceiling for one PATH lookup. Exported so a tool that preflights its binaries
+ * can sum this into its own end-to-end budget. */
+export const PATH_LOOKUP_TIMEOUT_MS = 2_000;
+
 /**
  * Resolve a command name to its absolute path via the OS' own PATH-lookup tool,
  * without executing the command itself (a bare `xcrun` can pop the Xcode
@@ -20,7 +24,7 @@ export async function commandOnPath(name: string): Promise<string | null> {
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   try {
     if (process.platform === "win32") {
-      const { stdout } = await execFileAsync("where", [name], { timeout: 2_000 });
+      const { stdout } = await execFileAsync("where", [name], { timeout: PATH_LOOKUP_TIMEOUT_MS });
       // Explicit win32 semantics: correct on a real Windows host, and
       // unit-testable on POSIX CI.
       const cwd = pathWin32.resolve(process.cwd()).toLowerCase();
@@ -33,7 +37,7 @@ export async function commandOnPath(name: string): Promise<string | null> {
       return match ?? null;
     }
     const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
-      timeout: 2_000,
+      timeout: PATH_LOOKUP_TIMEOUT_MS,
     });
     const trimmed = stdout.trim();
     return trimmed || null;

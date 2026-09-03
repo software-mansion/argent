@@ -54,6 +54,16 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 }
 
 /**
+ * `adb connect` addresses a wirelessly-debugged device as `<host>:<port>`; USB
+ * hardware serials and `emulator-<port>` never carry one. The adb transport to
+ * such a device therefore rides the device's own Wi-Fi link, so anything that
+ * takes that link down also takes the transport down.
+ */
+export function isWirelessAdbSerial(serial: string): boolean {
+  return !isAndroidEmulatorSerial(serial) && /:\d+$/.test(serial);
+}
+
+/**
  * Kind is defaulted by shape; platform impls can enrich the result with
  * name/state/sdkLevel from simctl/adb/sim-remote.
  *

@@ -11,6 +11,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/** Ceiling for one `xcrun simctl list devices --json`. Exported so callers that
+ * run it ahead of their own work can sum it into their end-to-end budget. */
+export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
 export interface IosSimulator {
   udid: string;
   name: string;
@@ -42,7 +46,7 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];

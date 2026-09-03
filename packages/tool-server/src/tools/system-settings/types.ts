@@ -2,7 +2,8 @@
 // command in `platforms/` — the abstract name here is the vocabulary the agent
 // uses and the platform files own the translation. Some settings are
 // cross-platform (display / accessibility), others are Android-only because the
-// iOS simulator has no host-side control over them (radios, location, rotation);
+// iOS simulator exposes no toggle for them (the radios, the location master
+// switch, rotation lock);
 // `IOS_SUPPORTED_SETTINGS` records which the iOS simulator can carry out.
 export const SYSTEM_SETTINGS = [
   "appearance",
@@ -75,10 +76,10 @@ export const SETTING_VALUE_VOCABULARY = [
 
 // The settings the iOS simulator can change: the three `simctl ui` options plus
 // the two accessibility toggles reachable through the `com.apple.Accessibility`
-// defaults domain. The rest are radios / location / rotation, which the iOS
-// simulator has no host-side control over — the iOS handler rejects them with a
-// clear "Android-only" message rather than reaching for a command that can't
-// exist.
+// defaults domain. The rest are the radios, the location master switch and
+// rotation lock, none of which the iOS simulator exposes a toggle for — the iOS
+// handler rejects them with a clear "Android-only" message rather than reaching
+// for a command that can't exist.
 export const IOS_SUPPORTED_SETTINGS: readonly SystemSetting[] = [
   "appearance",
   "text-size",

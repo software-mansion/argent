@@ -17,9 +17,15 @@ import type {
 const execFileAsync = promisify(execFile);
 
 /** Ceiling for `xcrun simctl ui`, which drives CoreSimulatorService rather than
- * spawning inside the guest. Same wedged-service hazard as
- * `SIMCTL_SPAWN_TIMEOUT_MS`, so it carries `SIMCTL_KILL_SIGNAL` too. */
-const SIMCTL_UI_TIMEOUT_MS = 30_000;
+ * spawning inside the guest — the same wedged-service hazard as
+ * `SIMCTL_SPAWN_TIMEOUT_MS`, so the same ceiling and `SIMCTL_KILL_SIGNAL`.
+ *
+ * It is also this handler's long pole: the dependency check, the tvOS probe and
+ * this call run in series, and that sum has to stay under the MCP client's 30s
+ * per-attempt cap. Above it the client aborts and replays the whole call while
+ * the abandoned `simctl` keeps running, and the tool's own diagnostic — which
+ * says what to do about a shut-down simulator — never reaches the agent. */
+export const SIMCTL_UI_TIMEOUT_MS = 10_000;
 
 // How the iOS simulator applies each setting it supports. Two mechanisms:
 //  - `simctl ui`: the three options a runtime models natively. The value is the
@@ -51,10 +57,10 @@ function iosMechanism(setting: SystemSetting, value: string): IosMechanism {
     case "reduce-motion":
       return { via: "defaults", key: "ReduceMotionEnabled", enabled: value === "on" };
     case "invert-colors":
-      // `InvertColorsEnabled` is the key libAccessibility reads; it drives Smart
-      // Invert, the only inversion control iOS exposes. The obvious-looking
-      // `ClassicInvertColorsEnabled` appears nowhere in the runtime, so writing
-      // that one persists a preference nothing observes.
+      // `InvertColorsEnabled` is the key libAccessibility reads for Smart
+      // Invert. The obvious-looking `ClassicInvertColorsEnabled` is not a string
+      // the runtime contains at all, so writing that one persists a preference
+      // nothing observes.
       return { via: "defaults", key: "InvertColorsEnabled", enabled: value === "on" };
     default:
       // Unreachable: the handler rejects non-iOS settings before this is called.
@@ -126,7 +132,7 @@ export const iosImpl: PlatformImpl<
       // invalid-value path, so the agent redirects instead of retrying.
       throw new InvalidToolInputError(
         `The '${setting}' system setting can't be changed on the iOS simulator — it's Android-only ` +
-          `(the simulator has no host-side control over radios, location, or rotation). ` +
+          `(the simulator exposes no toggle for the radios, the location master switch, or rotation lock). ` +
           `iOS-supported settings: ${IOS_SUPPORTED_SETTINGS.join(", ")}.`,
         {
           error_code: FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED,
