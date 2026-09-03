@@ -900,7 +900,8 @@ describe("system-settings Android branch", () => {
   it("a transport failure keeps adb's own classification instead of being relabelled", async () => {
     // A wedged/dead device is a transport fault, not a setting refusal — the
     // timeout kind and ANDROID_ADB_COMMAND_FAILED code must survive to the
-    // caller, matching settings-permissions' isTransportFailure propagation.
+    // caller, via the shared isAdbTransportFailure that settings-permissions
+    // routes through too.
     const transport = new FailureError("adb timed out", {
       error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
       failure_stage: "android_adb_command",
