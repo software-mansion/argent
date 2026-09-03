@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { PACKAGE_NAME } from "./constants.js";
-import type { PackageManager } from "./package-manager.js";
+import { formatShellCommand, type PackageManager } from "./package-manager.js";
 
 // Where a package manager puts global installs, and whether this user can write
 // there. Nix-managed toolchains are the motivating case: npm derives its global
@@ -312,10 +312,11 @@ function writablePrefixRemedy(pm: PackageManager): string {
 function ownershipRemedy(target: GlobalInstallTarget): string | null {
   if (target.nixStore) return null;
   if (!target.dir.split(path.sep).includes("node_modules")) return null;
-  return (
-    `  Or take ownership of the directory that is blocking it:\n` +
-    `    ${pc.cyan(`sudo chown -R "$(whoami)" ${target.dir}`)}`
-  );
+  const chown = formatShellCommand({
+    bin: "sudo",
+    args: ["chown", "-R", "$(whoami)", target.dir],
+  });
+  return `  Or take ownership of the directory that is blocking it:\n    ${pc.cyan(chown)}`;
 }
 
 /** The cause plus the ways out, spelled as commands to run. */

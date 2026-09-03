@@ -299,7 +299,20 @@ describe("unwritableGlobalTargetMessage", () => {
     // prefix the user already chose and `sudo npm i -g` left root-owned.
     const message = plain(unwritableGlobalTargetMessage(plainTarget, "npm", "install", installed));
 
-    expect(message).toContain(`sudo chown -R "$(whoami)" ${plainTarget.dir}`);
+    expect(message).toContain(`sudo chown -R $(whoami) ${plainTarget.dir}`);
+  });
+
+  it("quotes a blocked directory whose path has spaces", () => {
+    const spaced = {
+      dir: "/Users/dev/Application Support/lib/node_modules/@swmansion",
+      blocked: true,
+      nixStore: false,
+    };
+
+    // Unquoted, chown would be handed three path fragments and change nothing.
+    expect(plain(unwritableGlobalTargetMessage(spaced, "npm", "install", installed))).toContain(
+      `sudo chown -R $(whoami) "${spaced.dir}"`
+    );
   });
 
   it("never offers to chown its way out of a directory above node_modules", () => {
