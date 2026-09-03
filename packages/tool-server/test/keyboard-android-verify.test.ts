@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { DeviceInfo, Registry } from "@argent/registry";
+import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 
 // Capture the adb command strings instead of shelling out. Keep `shellQuote` real
 // (android-input relies on it) and stub only the transport plus the `isAndroidTv`
@@ -18,10 +18,12 @@ import {
   classifyTypedText,
   findFocusedTextField,
   plannedUndoDeletions,
+  __resetHelperAvailabilityForTests,
 } from "../src/tools/keyboard/platforms/android-verify";
 import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { injectAndroidKeycodeRepeated } from "../src/utils/android-input";
+import { formatErrorForAgent } from "../src/utils/format-error";
 import type { KeyboardParams, KeyboardResult } from "../src/tools/keyboard/types";
 
 const SERIAL = "emulator-5554";
@@ -153,6 +155,9 @@ beforeEach(() => {
   adbShell.mockResolvedValue("");
   isAndroidTv.mockReset();
   isAndroidTv.mockResolvedValue(false);
+  // The helper-unavailable negative cache is module state — clear it so one
+  // case's resolve failure does not skip the next case's read-back.
+  __resetHelperAvailabilityForTests();
 });
 
 describe("findFocusedTextField", () => {
@@ -322,7 +327,11 @@ describe("classifyTypedText", () => {
     const field = "a".repeat(200_000);
     const started = Date.now();
     expect(classifyTypedText(field, field, `${"a".repeat(1_999)}b`)).toBe("indeterminate");
-    expect(Date.now() - started).toBeLessThan(300);
+    // Generous, and only there to catch the cap being removed — which turns this
+    // into O(field x text), seconds of blocking CPU. A tighter wall-clock bound
+    // flakes under the concurrent full-suite load, where the sibling bounds above
+    // already allow 1-2 s for comparable capped work.
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 
@@ -744,6 +753,39 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     expect(cmds()).toEqual(["input text 'abc'"]);
   });
 
+  it("does not re-resolve a helper that just failed, on the next call", async () => {
+    // A READY-handshake timeout costs the blueprint's whole 30 s, and the registry
+    // re-attempts every call, so a sequence or flow would pay it per typed string.
+    // The second call must skip the resolve and type unverified straight away.
+    const resolveService = vi.fn(async () => {
+      throw new Error("adb install -t rejected");
+    });
+    const registry = { resolveService } as unknown as Registry;
+    const first = await type(registry, "abc");
+    expect(first.note).toMatch(/android-devtools helper could not be reached for this call/);
+    const second = await type(registry, "def");
+    expect(second.note).toMatch(/android-devtools helper could not be reached for this call/);
+    // Resolved once for the first call; the second was served from the cache.
+    expect(resolveService).toHaveBeenCalledTimes(1);
+    expect(cmds()).toEqual(["input text 'abc'", "input text 'def'"]);
+  });
+
+  it("resumes read-back once the failure window elapses", async () => {
+    // The cache is bounded, so a helper that recovers is verified against, not
+    // skipped forever.
+    const failing = {
+      resolveService: vi.fn(async () => {
+        throw new Error("adb install -t rejected");
+      }),
+    } as unknown as Registry;
+    const blocked = await type(failing, "abc");
+    expect(blocked.verified).toBeUndefined();
+    __resetHelperAvailabilityForTests(); // stand in for the TTL elapsing
+    const { registry } = registryServing([hierarchy({ text: "" }), hierarchy({ text: "abc" })]);
+    const res = await type(registry, "abc");
+    expect(res).toMatchObject({ verified: true });
+  });
+
   it("types and reports the reason when no editable field holds focus", async () => {
     const { registry } = registryServing([hierarchy({ focused: false })]);
     const res = await type(registry, "abc");
@@ -855,6 +897,30 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     const at = (text: string) => hierarchy({ text, rid: "", bounds: "[540,1200][540,1200]" });
     const { registry } = registryServing([at("XY"), at("XYabcdefghijkl")]);
     await expect(type(registry, "abcdefghijkl")).resolves.toMatchObject({ verified: true });
+  });
+
+  it("re-matches a degenerate field that resized between the two reads", async () => {
+    // A zero-height field carries no area for a strict overlap test, so the read
+    // after typing — which moves the field's right edge, as it does the Settings
+    // box (1080 -> 933) — shared no pixel with the baseline and reported a focus
+    // change on a field that never moved. The isolating pair is a single pixel of
+    // height: a one-pixel-tall field of the same shape already verified.
+    const at = (text: string, right: number) =>
+      hierarchy({ text, rid: "", bounds: `[126,300][${right},300]` });
+    const { registry } = registryServing([at("XY", 1080), at("XYabcdefghijkl", 933)]);
+    await expect(type(registry, "abcdefghijkl")).resolves.toMatchObject({ verified: true });
+  });
+
+  it("still reads a degenerate field that translated clear as a focus change", async () => {
+    // A zero-area point that physically moves is a moved field; declining the
+    // destructive repair rather than gambling is the same choice every other
+    // moved field gets.
+    const at = (text: string, x: number) =>
+      hierarchy({ text, rid: "", bounds: `[${x},1200][${x},1200]` });
+    const { registry } = registryServing([at("XY", 540), at("XYabcdefghijkl", 545)]);
+    const res = await type(registry, "abcdefghijkl");
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/no longer the one the text was typed into/);
   });
 
   it("declines a field it cannot place, rather than matching it to anything", async () => {
@@ -1583,6 +1649,42 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     vi.unstubAllEnvs();
   });
 
+  it("keeps a fragment of a resolved secret off a repair chunk that fails as the caller gives up", async () => {
+    // The repair retypes eight characters per `input text`, so a chunk of a
+    // resolved `{{secret:…}}` is a fragment of the credential. When that chunk
+    // fails while the caller has gone, it rides out as the abort's `cause` — and
+    // the downstream whole-value scrub cannot match a fragment. The whole error,
+    // head and cause, must hold no fragment of the value.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2secret");
+    const controller = new AbortController();
+    // before empty, after holds "hunter2s" — 8 of 13 landed, a provable 8-deletion
+    // repair whose first chunk is `input text 'hunter2s'`, exactly one fragment.
+    const { registry } = registryServing([
+      hierarchy({ text: "" }),
+      hierarchy({ text: "hunter2s" }),
+    ]);
+    adbShell.mockImplementation(async (serial: string, cmd: string) => {
+      if (cmd === "input text 'hunter2s'") {
+        controller.abort();
+        throw new Error(`adb -s ${serial} shell ${cmd} failed: closed`);
+      }
+      return "";
+    });
+    const tool = createKeyboardTool(registry);
+    const err = await tool
+      .execute({}, { udid: SERIAL, text: "{{secret:APP_PASSWORD}}" }, {
+        signal: controller.signal,
+      } as unknown as ToolContext)
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    const flattened = formatErrorForAgent(err);
+    expect(flattened).not.toContain("hunter2s");
+    expect(flattened).not.toContain("hunter2secret");
+    expect(flattened).toContain("input text <redacted>");
+    vi.unstubAllEnvs();
+  });
+
   it("leaves a named-key-only press unverified and un-noted (nothing to read back)", async () => {
     const { registry } = registryServing([]);
     const res = await makeAndroidImpl(registry).handler(
@@ -1592,6 +1694,30 @@ describe("android keyboard read-back — cannot verify (never a silent success)"
     );
     expect(res).toEqual({ typed: "enter", keys: 1 });
     expect(cmds()).toEqual(["input keyevent 66"]);
+  });
+
+  it("does not press a named key once the caller cancels during the TV probe", async () => {
+    // `isAndroidTv` runs after the tool's own abort check and before the key is
+    // injected — up to the 5 s adb timeout — so a cancel landing in it must still
+    // stop the press. The text path re-checks after the same probe; the key path
+    // is the submit half of the prescribed type-then-Enter sequence.
+    const controller = new AbortController();
+    isAndroidTv.mockImplementation(async () => {
+      controller.abort();
+      return false;
+    });
+    const { registry } = registryServing([]);
+    await expect(
+      makeAndroidImpl(registry).handler(
+        {},
+        { udid: SERIAL, key: "enter" } as KeyboardParams,
+        PHONE,
+        {
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toThrow(/abort/i);
+    expect(cmds()).toEqual([]);
   });
 });
 

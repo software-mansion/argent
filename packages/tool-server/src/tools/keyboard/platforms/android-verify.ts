@@ -48,9 +48,13 @@ import type { KeyboardVerification } from "../types";
  * re-renders per keystroke can lose a single character. What IS gated is the
  * transport: without the android-devtools helper the only read-back is a
  * `uiautomator dump` per read, with no persistent connection to amortise, so
- * verification is skipped and said to be skipped rather than charging a
- * locked-down device (exactly the device where `adb install -t` is blocked) two
- * dumps per typed string.
+ * verification is skipped rather than charging a locked-down device (exactly the
+ * device where `adb install -t` is blocked) two dumps per typed string.
+ * Discovering the helper is unavailable is not itself free: resolving it can pay
+ * the blueprint's whole 30 s READY timeout on a device where it installs but
+ * never signals ready. A recent failure is therefore cached per serial
+ * (HELPER_UNAVAILABLE_TTL_MS), so that resolve is charged once per window rather
+ * than on every call in a sequence or flow.
  *
  * No read passes `waitForIdleMs`, so each takes the blueprint's 500 ms settle.
  * Zeroing it on the "before" read would save that, but that read follows the
@@ -94,6 +98,35 @@ const DELETE_KEYCODES_PER_CALL = 64;
 // Half the helper's own 60 s socket read timeout, so one missed tick still
 // leaves the connection open.
 const DEVTOOLS_KEEPALIVE_MS = 30_000;
+
+/**
+ * How long a serial whose helper resolve just failed is treated as unverifiable
+ * before it is tried again. Resolving a helper that installs but never completes
+ * its READY handshake costs the blueprint's whole 30 s timeout, and the registry
+ * keeps no memory of the failure — an `ERROR` node falls back to `STARTING` on
+ * the next resolve — so without this every `keyboard` call in a sequence or flow
+ * pays it again only to skip verification. `describe` re-resolves each call
+ * because its fallback (a `uiautomator dump`) IS its work; here the fallback is
+ * to type unverified, so a second 30 s resolve buys nothing. Bounded rather than
+ * permanent so a helper that becomes reachable — the device unlocked, `describe`
+ * installed it — resumes verification within the window, and dated from the
+ * failure (not each skip) so a steady stream of calls still re-probes on schedule.
+ */
+const HELPER_UNAVAILABLE_TTL_MS = 60_000;
+const helperUnavailableUntil = new Map<string, number>();
+
+function helperRecentlyUnavailable(serial: string): boolean {
+  const until = helperUnavailableUntil.get(serial);
+  if (until === undefined) return false;
+  if (Date.now() < until) return true;
+  helperUnavailableUntil.delete(serial);
+  return false;
+}
+
+/** Reset the negative cache. Exported for tests, which drive it across cases. */
+export function __resetHelperAvailabilityForTests(): void {
+  helperUnavailableUntil.clear();
+}
 
 interface FocusedField {
   /**
@@ -253,18 +286,24 @@ function isSameField(a: FocusedField, b: FocusedField): boolean {
 }
 
 /**
- * Whether two parsed bounds share any pixel, with an identical rectangle always
- * matching itself: a keystroke-capture `TextInput` dumps `[540,1200][540,1200]`,
- * and an area test excludes a zero-area rect from its own area, refusing to match
- * such a field even against its own unchanged read. (`framesOverlap` in
- * `flows/flow-actions.ts` shares the blind spot.) Two DIFFERENT untagged fields
- * drawn at one point stay indistinguishable, which is the price. Unparseable
- * bounds identify nothing.
+ * Whether two parsed bounds share any pixel. A field with a zero width or height
+ * — a keystroke-capture `TextInput` dumps `[540,1200][540,1200]`, a field
+ * mid-layout a zero-height line — shares no pixel with anything under a strict
+ * area test, not even its own read after it grew or resized, so each zero extent
+ * is given a minimal 1px width here before the test. An identical rectangle then
+ * matches itself whatever its area; a degenerate field that translated clear of
+ * where it was reads as a focus change, as any other moved field does.
+ * (`framesOverlap` in `flows/flow-actions.ts` still has the blind spot.) Two
+ * DIFFERENT untagged fields drawn at one point stay indistinguishable, which is
+ * the price. Unparseable bounds identify nothing.
  */
 function boundsOverlap(a: FocusedField["bounds"], b: FocusedField["bounds"]): boolean {
   if (!a || !b) return false;
-  if (a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h) return true;
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const aw = Math.max(a.w, 1);
+  const ah = Math.max(a.h, 1);
+  const bw = Math.max(b.w, 1);
+  const bh = Math.max(b.h, 1);
+  return a.x < b.x + bw && b.x < a.x + aw && a.y < b.y + bh && b.y < a.y + ah;
 }
 
 /**
@@ -533,8 +572,30 @@ async function injectInChunks(serial: string, text: string, signal?: AbortSignal
   for (let i = 0; i < text.length; i += REPAIR_CHUNK_CHARS) {
     if (i > 0) await sleep(REPAIR_CHUNK_DELAY_MS);
     abortRepair(signal, `${i} of ${text.length} characters retyped`);
-    await injectAndroidText(serial, text.slice(i, i + REPAIR_CHUNK_CHARS));
+    try {
+      await injectAndroidText(serial, text.slice(i, i + REPAIR_CHUNK_CHARS));
+    } catch (err) {
+      throw redactInputTextArgv(err);
+    }
   }
+}
+
+// A failing `adb ... input text '<chunk>'` echoes the chunk in its message, and a
+// chunk of a resolved `{{secret:…}}` is a fragment of the credential. This error
+// can ride out as the abort's `cause` below, and the downstream `redactSecrets`
+// matches WHOLE values only — an eight-character fragment survives it. So the
+// quoted argument is elided at the source, the adb stderr that follows it left
+// intact. The primary injection needs no such handling: it sends the whole value
+// on one line, which whole-value redaction covers. Anchored to the exact command
+// the repair issues, POSIX-quoted argument and all (`'\''`-escaped quotes
+// included), so any chunk content and any `%`-split segment is covered.
+const INPUT_TEXT_ARGV_RE = /input text '(?:[^']|'\\'')*'/g;
+function redactInputTextArgv(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const scrub = (s: string) => s.replace(INPUT_TEXT_ARGV_RE, "input text <redacted>");
+  err.message = scrub(err.message);
+  if (err.stack) err.stack = scrub(err.stack);
+  return err;
 }
 
 /**
@@ -956,7 +1017,18 @@ export async function typeAndroidTextVerified(
   signal?: AbortSignal
 ): Promise<KeyboardVerification> {
   const serial = device.id;
-  const devtools = await resolveDevtools(registry, device);
+  // A recent resolve failure short-circuits to an unverified type rather than
+  // paying the READY timeout again (see HELPER_UNAVAILABLE_TTL_MS). Only a real
+  // resolve attempt updates the cache: a hit leaves the earlier failure's clock
+  // running, a success clears it.
+  let devtools: AndroidDevtoolsApi | null;
+  if (helperRecentlyUnavailable(serial)) {
+    devtools = null;
+  } else {
+    devtools = await resolveDevtools(registry, device);
+    if (devtools) helperUnavailableUntil.delete(serial);
+    else helperUnavailableUntil.set(serial, Date.now() + HELPER_UNAVAILABLE_TTL_MS);
+  }
   // Resolving installs the helper APK on a cold device and spawns it, which can
   // take minutes, so the caller can be gone before anything would be typed —
   // nothing is waiting for those keystrokes and they would land in whatever holds
@@ -1035,6 +1107,15 @@ async function verifyAgainstDevtools(
   if (verdict === "landed") return { verified: true };
   if (verdict === "indeterminate") return { note: INDETERMINATE_NOTE };
 
+  // A read-modify-write with no per-serial lock: the backspace count below is
+  // derived from the two reads above, and nothing serialises tool calls per
+  // device, so a second `keyboard` call on this serial (another agent, or a
+  // second `flow-execute`) injecting between them makes the repair's undo count
+  // rest on characters this call did not type. It is not locked because device
+  // allocation gives one agent a device at a time, and interleaving almost always
+  // makes the reading ambiguous — `plannedUndoDeletions` then returns null and
+  // deletes nothing (below) — so the window where it would delete another call's
+  // characters is narrow. The docs name the non-atomicity as a limitation.
   const deletions = plannedUndoDeletions(before.text, after.field.text, text);
   if (deletions === null) {
     return { verified: false, note: mismatchNote(text.length, after.field.text.length, false) };

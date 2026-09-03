@@ -22,7 +22,8 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 export async function typeTv(
   registry: Registry,
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  signal?: AbortSignal
 ): Promise<KeyboardResult> {
   if (params.key) {
     throw new UnsupportedOperationError(
@@ -35,6 +36,12 @@ export async function typeTv(
   const text = params.text ?? "";
   if (text) {
     const api = await resolveTvApi(registry, device.id);
+    // `resolveTvApi` and the runtime-kind probe above it can spend seconds before
+    // anything is typed, so re-check after them: nothing waits for the keystrokes
+    // once the caller is gone. The daemon then types the whole string in one shot
+    // and cannot be interrupted mid-string (as Vega's single shot cannot), which
+    // the tool description states.
+    signal?.throwIfAborted();
     await api.type(text);
   }
   // Codepoints, not UTF-16 units: a non-BMP char reports `keys: 1`, matching the

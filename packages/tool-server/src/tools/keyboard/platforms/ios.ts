@@ -13,7 +13,7 @@ export function makeIosImpl(
   return {
     handler: async (_services, params, device, options) =>
       (await isTvOsSimulator(device.id))
-        ? typeTv(registry, device, params)
+        ? typeTv(registry, device, params, options?.signal)
         : typeSimulatorServer(registry, device, params, options?.signal),
   };
 }

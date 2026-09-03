@@ -44,6 +44,11 @@ async function typeAndroidPhone(
     keysPressed += params.text.length;
   }
   if (params.key) {
+    // The `isAndroidTv` probe (up to the 5 s adb timeout) stands between the
+    // `execute` abort check and this injection, so re-check: a named key is a
+    // single event the text path already guards against, and the submit half of
+    // the prescribed type-then-Enter sequence is what would fire here otherwise.
+    options?.signal?.throwIfAborted();
     await injectAndroidNamedKey(device.id, params.key);
     keysPressed++;
   }
@@ -63,7 +68,7 @@ export function makeAndroidImpl(
     requires: ["adb"],
     handler: async (_services, params, device, options) =>
       (await isAndroidTv(device.id))
-        ? typeTv(registry, device, params)
+        ? typeTv(registry, device, params, options?.signal)
         : typeAndroidPhone(registry, device, params, options),
   };
 }
