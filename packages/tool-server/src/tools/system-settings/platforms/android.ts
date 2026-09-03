@@ -48,6 +48,10 @@ interface AndroidChange {
   // a command that stays silent below its floor — one that refuses out loud is
   // caught by the exit-code/stderr check instead and needs no probe.
   minSdk?: number;
+  // Only for a chained `shellCommand`: what the device is left holding when a
+  // write part-way down the chain fails. The caller cannot infer it from the
+  // error, and the state is neither the old one nor the one it asked for.
+  partialOnFailure?: string;
 }
 
 /** Android 10 — the first release where `location_mode` is the master switch. */
@@ -87,6 +91,9 @@ function androidChange(setting: SystemSetting, value: string): AndroidChange {
           `settings put global transition_animation_scale ${scale} && ` +
           `settings put global animator_duration_scale ${scale}`,
         applied: `animation_scales=${scale}`,
+        partialOnFailure:
+          `The three scales are written one after another, so some may already hold ${scale}. ` +
+          `Each write sets an absolute value, so repeating this call finishes the change.`,
       };
     }
     case "invert-colors": {
@@ -170,6 +177,10 @@ function adbSubprocessMetadata(cause: unknown): Partial<FailureSignal> {
   };
 }
 
+function withPartialState(detail: string, partialOnFailure: string | undefined): string {
+  return partialOnFailure === undefined ? detail : `${detail.trim()} ${partialOnFailure}`;
+}
+
 function settingFailure(
   setting: SystemSetting,
   value: string,
@@ -245,7 +256,7 @@ export const androidImpl: PlatformImpl<
     const { udid, setting, value } = params;
     assertKeepsTransport(udid, setting, value);
 
-    const { shellCommand, applied, minSdk } = androidChange(setting, value);
+    const { shellCommand, applied, minSdk, partialOnFailure } = androidChange(setting, value);
 
     if (minSdk !== undefined) {
       // adb's own failures propagate with adb's classification — a probe that
@@ -282,11 +293,25 @@ export const androidImpl: PlatformImpl<
     } catch (err) {
       if (isAdbTransportFailure(err)) throw err;
       const detail = err instanceof Error ? err.message : String(err);
-      settingFailure(setting, value, udid, detail, "android_system_setting_adb", err);
+      settingFailure(
+        setting,
+        value,
+        udid,
+        withPartialState(detail, partialOnFailure),
+        "android_system_setting_adb",
+        err
+      );
     }
 
     const refusal = stripAdbBanner(stderr);
-    if (refusal) settingFailure(setting, value, udid, refusal, "android_system_setting_refused");
+    if (refusal)
+      settingFailure(
+        setting,
+        value,
+        udid,
+        withPartialState(refusal, partialOnFailure),
+        "android_system_setting_refused"
+      );
 
     return { setting, value, applied };
   },

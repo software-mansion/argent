@@ -763,6 +763,41 @@ describe("system-settings Android branch", () => {
     );
   });
 
+  describe("a failure part-way through a chained write", () => {
+    // `reduce-motion` is the one setting that needs several `settings put`
+    // calls, chained with `&&`. The chain short-circuits, so the writes before
+    // the failing one already landed and the device holds a mix — say so, or
+    // the caller reads the error as "nothing changed".
+    it("says what the device may already hold, and that a retry finishes it", async () => {
+      mockRunAdb.mockRejectedValueOnce(new Error("settings: killed"));
+      const rejection = expect(
+        androidImpl.handler({}, params({ setting: "reduce-motion", value: "on" }), androidDevice)
+      ).rejects;
+      await rejection.toThrow(
+        /three scales are written one after another, so some may already hold 0/
+      );
+      await rejection.toThrow(/repeating this call finishes the change/);
+    });
+
+    it("says it for a refusal adb reports on stderr too, not only a thrown error", async () => {
+      mockRunAdb.mockResolvedValueOnce({ stdout: "", stderr: "settings: permission denied" });
+      await expect(
+        androidImpl.handler({}, params({ setting: "reduce-motion", value: "off" }), androidDevice)
+      ).rejects.toThrow(/some may already hold 1/);
+    });
+
+    it("stays off a single-command setting, which either applied or did not", async () => {
+      mockRunAdb.mockRejectedValueOnce(new Error("settings: killed"));
+      await expect(
+        androidImpl.handler(
+          {},
+          params({ setting: "increase-contrast", value: "on" }),
+          androidDevice
+        )
+      ).rejects.not.toThrow(/may already hold|repeating this call/);
+    });
+  });
+
   it("a terminal adb state propagates adb's own failure instead of being relabelled", async () => {
     mockRunAdb.mockRejectedValueOnce(new Error("error: device 'emulator-5554' offline"));
     const rejection = expect(androidImpl.handler({}, params({}), androidDevice)).rejects;
