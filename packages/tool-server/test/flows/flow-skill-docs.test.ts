@@ -100,6 +100,22 @@ describe("nested wait docs", () => {
   });
 });
 
+describe("the recorder's silent-refusal enumeration", () => {
+  it("places a batch whose only completed step sent nothing, on both surfaces", () => {
+    // `run-sequence` completes an `await-ui-element` without sending anything
+    // to the device, so a refusal that reports completing a step can still be
+    // one that reached none. An enumeration that stops at "rejected before its
+    // first step" leaves an agent no case to read that silence as.
+    const { description } = createFlowAddStepTool({} as unknown as Registry);
+    expect(description).toContain(
+      "`await-ui-element` waits, which poll the tree and act on nothing"
+    );
+
+    const reference = readFileSync(LIVE_AUTHORING, "utf8");
+    expect(reference).toContain("`await-ui-element` waits, which poll the tree and act on nothing");
+  });
+});
+
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
 // warn-instead-of-fail change: the two agent-facing descriptions of `idle`
