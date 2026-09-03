@@ -159,10 +159,13 @@ describe("what reaches the collector, against the real OTLP exporter", () => {
   it("reads no file an OTLP certificate variable names", () => {
     // The SDK resolves these with a synchronous fs.readFileSync while the
     // exporter is constructed, and only then discards the https agent it built
-    // from them in favour of the explicit httpAgentOptions. So the file is read
-    // for nothing - and a path that never answers, a dead network mount or a
-    // fifo with no writer, hangs the command that emitted the event instead
-    // (measured: the constructor never returned).
+    // from them in favour of the explicit httpAgentOptions. So the read is for
+    // nothing - and a path that never answers, a dead network mount or a fifo
+    // with no writer, hangs the command that emitted the event instead
+    // (measured: the constructor never returned). createExporter clears the
+    // variables so the read is never attempted; the SDK emits a "Failed to
+    // read ..." warning only when it does attempt one and fails, so the absence
+    // of that warning is what says the clear held.
     const warnings: string[] = [];
     diag.setLogger(
       {
@@ -191,7 +194,13 @@ describe("what reaches the collector, against the real OTLP exporter", () => {
       diag.disable();
     }
 
-    expect(warnings).toEqual([]);
+    // Only the certificate-read warnings, not the whole diag stream: an invalid
+    // OTEL_EXPORTER_OTLP_COMPRESSION or _TIMEOUT in the ambient environment
+    // warns unconditionally, and createExporter deliberately leaves those two in
+    // place (the explicit option already beats them), so matching every warning
+    // would fail this cert test on an unrelated env var.
+    const certReadWarnings = warnings.filter((message) => message.startsWith("Failed to read "));
+    expect(certReadWarnings).toEqual([]);
   });
 
   it("leaves the OTLP environment as it found it", () => {

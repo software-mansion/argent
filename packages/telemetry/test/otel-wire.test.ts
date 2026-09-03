@@ -155,12 +155,11 @@ describe("the OTLP request Argent sends", () => {
     // default anything could flip.
     expect(request.headers["content-type"]).toBe("application/json");
 
-    // No compression - which `createExporter` has to pin, because the SDK
-    // otherwise takes it from OTEL_EXPORTER_OTLP_COMPRESSION and any machine
-    // that already runs OpenTelemetry sets that. Nothing here would notice: the
-    // exporter treats a gzipped 2xx as delivered just the same, and the request
-    // this suite and the deploy-time smoke test are written against silently
-    // stops being the request argent sends.
+    // Uncompressed on the wire - the encoding the ingestion side is sized and
+    // smoke-tested against, and the one a gzipped 2xx would silently replace
+    // with nothing here noticing. This pins the shipped value, not the env-var
+    // precedence: this file sets no OTEL_EXPORTER_OTLP_COMPRESSION, so it is
+    // otel-endpoint{,-live}.test.ts that prove a hostile env cannot flip it.
     expect(request.headers["content-encoding"]).toBeUndefined();
 
     expect(request.headers.authorization).toBe("Bearer wire-probe-token");
@@ -179,6 +178,12 @@ describe("the OTLP request Argent sends", () => {
     const resourceLogs = payload.resourceLogs[0]!;
     const scopeLogs = resourceLogs.scopeLogs[0]!;
     const record = scopeLogs.logRecords[0]!;
+
+    // These values are this suite's own literals, mirrored from OtelClient (see
+    // the file header). What the markers below pin is where each lands in the
+    // OTLP/JSON envelope - the field the collector reads that column out of -
+    // not that argent still names them this. A SERVICE_NAME or LOGGER_NAME
+    // rename, or moving the event off `body`, is caught in otel-endpoint.test.ts.
 
     // -> ClickHouse ServiceName. The ingestion smoke test asserts "argent".
     expect(attributeMap(resourceLogs.resource?.attributes)["service.name"]?.stringValue).toBe(

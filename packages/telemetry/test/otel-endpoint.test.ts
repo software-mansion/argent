@@ -221,6 +221,12 @@ describe("otel endpoint invariance", () => {
     });
 
     const record = otelMock.providers[0]!.emit.mock.calls[0]![0] as EmittedRecord;
+    // toEqual treats a key whose value is undefined as absent, so on its own it
+    // cannot tell os_version being dropped from os_version surviving as
+    // undefined - only the null half of the guard would be under test. Assert
+    // both keys are gone explicitly so a guard that dropped only null fails here.
+    expect("cloud_agent" in record.attributes).toBe(false);
+    expect("os_version" in record.attributes).toBe(false);
     expect(record.attributes).toEqual({
       "distinct_id": "d".repeat(64),
       "event.name": "tool:invoke",
