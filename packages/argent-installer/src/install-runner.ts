@@ -311,21 +311,17 @@ async function recoverBlockedGlobalInstall(opts: {
   // rendered menu, exit 0, and have installed nothing.
   const canAsk = !nonInteractive && process.stdin.isTTY === true;
 
-  // Nothing to carry out. Where the block was already shown and a global
-  // install chosen anyway, that choice still happened, so the funnel hears
-  // where it ended.
-  if (!canRecoverBlockedGlobal(pm, canInstallLocally)) {
-    if (acknowledged) track("installation:global_install_decision", { decision: "unrecoverable" });
-    return failWithAdvice(target);
-  }
-  // Nobody to ask — spell the ways out as commands instead of rendering a menu
-  // that is never answered.
-  if (!canAsk) return failWithAdvice(target);
+  // Nobody to ask, or nothing to offer them — spell the ways out as commands
+  // instead of opening a prompt whose only option is to give up. init skips its
+  // own mode step on the same two conditions, so an acknowledged choice never
+  // reaches here.
+  if (!canAsk || !canRecoverBlockedGlobal(pm, canInstallLocally)) return failWithAdvice(target);
 
   if (acknowledged) {
     // Chosen knowing the block, but for a manager whose directory argent
-    // cannot relocate — the local install is the only thing left, and it was
-    // just declined by choosing "Globally".
+    // cannot relocate — the project install was the other option and picking
+    // "Globally" declined it. The choice still happened, so the funnel hears
+    // where it ended.
     if (!canMovePrefix) {
       track("installation:global_install_decision", { decision: "unrecoverable" });
       return failWithAdvice(target);

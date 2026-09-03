@@ -621,22 +621,4 @@ describe("a global install whose target directory cannot be written", () => {
       vi.mocked(detectPackageManager).mockReturnValue("npm");
     }
   });
-
-  // Same cohort, reached through the install-mode selector rather than
-  // --global: the prompt there drops the local option and leaves "Globally" as
-  // the only choice, so taking it must not open a second menu that offers
-  // nothing either.
-  it("reports the dead end for an acknowledged global choice it cannot carry out", async () => {
-    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
-    vi.mocked(hasProjectPackageJson).mockReturnValue(false);
-    try {
-      await expect(globalInstall(makeTel(), { acknowledged: true })).rejects.toThrow(ExitCalled);
-
-      expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(select).not.toHaveBeenCalled();
-      expect(decisions()).toEqual(["unrecoverable"]);
-    } finally {
-      vi.mocked(detectPackageManager).mockReturnValue("npm");
-    }
-  });
 });
