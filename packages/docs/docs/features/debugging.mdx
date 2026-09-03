@@ -39,7 +39,7 @@ For Chromium and Electron apps, Argent uses the Chrome DevTools Protocol. The ag
 
 ## Reproduction
 
-The agent reproduces a failed state. The agent restarts the app, reloads the Metro bundle, grants or resets a permission, or opens a URL. On a Chromium app the user quits the app and starts it again. Then the agent does the steps again, and reads the logs and the component tree after each step.
+The agent reproduces a failed state. The agent restarts the app, reloads the Metro bundle, grants or resets a permission, or opens a URL. On a Chromium app the user restarts it instead, by quitting the app and starting it again. Then the agent does the steps again, and reads the logs and the component tree after each step.
 
 ## Example instructions
 
