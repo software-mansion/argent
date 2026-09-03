@@ -694,6 +694,24 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        // `npm uninstall -g` prints "up to date" and exits 0 when its resolved
+        // prefix is not the one the install lives under — an inherited
+        // npm_config_prefix outranks the config file `argent init`'s prefix
+        // recovery writes, so the two can disagree. Believing the exit code
+        // there announces a removal that did not happen, leaves the package on
+        // PATH, and still clears the machine-wide state below. Global only:
+        // a local install has no prefix to diverge from, and under Yarn PnP
+        // there is no directory to look for.
+        if (
+          removable.kind === "global" &&
+          removable.installDir !== null &&
+          fs.existsSync(removable.installDir)
+        ) {
+          throw new Error(
+            `${removable.cmd.bin} reported success but ${removable.installDir} is still there — ` +
+              `it resolved a different global prefix than the one this install lives under.`
+          );
+        }
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
         if (removable.kind === "global") hasUninstalledGlobalPackage = true;

@@ -362,7 +362,7 @@ describe("a global install whose target directory cannot be written", () => {
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
     const [message] = vi.mocked(log.error).mock.calls[0] as [string];
-    expect(message).toContain("argent init --local");
+    expect(message).toContain("npx @swmansion/argent init --local");
     expect(message).not.toContain("npm config set prefix");
     expect(tel.trackPackageAction).toHaveBeenCalledWith(
       "fresh_install",
@@ -389,7 +389,7 @@ describe("a global install whose target directory cannot be written", () => {
     ]);
     const [message] = vi.mocked(log.error).mock.calls[0] as [string];
     expect(message).toContain("EACCES ~/.npmrc");
-    expect(message).toContain("argent init --local");
+    expect(message).toContain("npx @swmansion/argent init --local");
   });
 
   // `npx @swmansion/argent init` inherits npm's own prefix as an environment
@@ -444,7 +444,10 @@ describe("a global install whose target directory cannot be written", () => {
     expect(runShellCommand).not.toHaveBeenCalled();
     const [message] = vi.mocked(log.error).mock.calls[0] as [string];
     expect(message).toContain("read-only Nix store");
-    expect(message).toContain("argent init --local");
+    // `argent` is not on PATH here by construction: this run came in through
+    // `npx @swmansion/argent init`, so a bare `argent` would not resolve.
+    expect(message).toContain("npx @swmansion/argent init --local");
+    expect(message).not.toMatch(/^\s*argent init --local$/m);
     expect(tel.trackPackageAction).toHaveBeenCalledWith(
       "fresh_install",
       expect.any(Number),
@@ -516,16 +519,18 @@ describe("a global install whose target directory cannot be written", () => {
     expect(infos.some((m) => m.includes("npm config delete prefix"))).toBe(true);
   });
 
-  // A plain PREFIX inherited from the shell also outranks the ~/.npmrc the
-  // move just wrote — leaving it set would send the install straight back.
-  it("drops an inherited plain PREFIX along with npm's own", async () => {
-    process.env.PREFIX = "/nix/store/abc-nodejs-22.16.0";
+  // Measured on npm 11: a plain PREFIX is only the default for an npmrc with
+  // no prefix key, so once the move has written that key npm ignores it. It is
+  // a general-purpose variable the install and every step after it inherit,
+  // and dropping it would be a change to a run argent does not own.
+  it("leaves a plain PREFIX alone — it cannot outrank the prefix just written", async () => {
+    process.env.PREFIX = "/usr/local";
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
     try {
       await globalInstall(makeTel());
 
-      expect(process.env.PREFIX).toBeUndefined();
+      expect(process.env.PREFIX).toBe("/usr/local");
     } finally {
       delete process.env.PREFIX;
     }
@@ -607,7 +612,29 @@ describe("a global install whose target directory cannot be written", () => {
       expect(select).not.toHaveBeenCalled();
       expect(runShellCommand).not.toHaveBeenCalled();
       const [message] = vi.mocked(log.error).mock.calls[0] as [string];
-      expect(message).toContain("argent init --local");
+      // The per-project install is not a way out with no package.json to hold
+      // the devDependency: printing it would send the reader into
+      // installLocally's precondition error, which points back at --global.
+      expect(message).not.toContain("init --local");
+      expect(message).toContain("Point pnpm at a global directory you can write to");
+    } finally {
+      vi.mocked(detectPackageManager).mockReturnValue("npm");
+    }
+  });
+
+  // Same cohort, reached through the install-mode selector rather than
+  // --global: the prompt there drops the local option and leaves "Globally" as
+  // the only choice, so taking it must not open a second menu that offers
+  // nothing either.
+  it("reports the dead end for an acknowledged global choice it cannot carry out", async () => {
+    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
+    vi.mocked(hasProjectPackageJson).mockReturnValue(false);
+    try {
+      await expect(globalInstall(makeTel(), { acknowledged: true })).rejects.toThrow(ExitCalled);
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(select).not.toHaveBeenCalled();
+      expect(decisions()).toEqual(["unrecoverable"]);
     } finally {
       vi.mocked(detectPackageManager).mockReturnValue("npm");
     }

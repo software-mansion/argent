@@ -22,6 +22,12 @@ import type { PackageManager } from "./package-manager.js";
 // probes an ancestor of the real module directory rather than the directory
 // itself, so a module dir made root-owned by an earlier `sudo yarn global add`
 // or `sudo bun add -g` is not caught.
+//
+// npm is the only one that answers on a machine that has not set a global
+// directory up yet: `pnpm root -g` exits 1 until its bin directory is on PATH
+// ("Run pnpm setup"), and `bun pm bin -g` exits 1 on a global directory with no
+// package.json — after creating it. Both leave the probe with null and the
+// preflight silently inapplicable, so in practice the guarantee is npm's.
 const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
   npm: ["root", "-g"],
   pnpm: ["root", "-g"],
@@ -32,10 +38,10 @@ const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
 
 const QUERY_TIMEOUT_MS = 5_000;
 
-function queryGlobalInstallDir(pm: PackageManager): string | null {
+function queryAbsolutePath(bin: string, args: readonly string[]): string | null {
   let stdout: string;
   try {
-    stdout = execFileSync(pm, [...GLOBAL_DIR_QUERY[pm]], {
+    stdout = execFileSync(bin, [...args], {
       encoding: "utf8",
       timeout: QUERY_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
@@ -54,17 +60,48 @@ function queryGlobalInstallDir(pm: PackageManager): string | null {
   return line !== undefined && path.isAbsolute(line) ? line : null;
 }
 
+function queryGlobalInstallDir(pm: PackageManager): string | null {
+  return queryAbsolutePath(pm, GLOBAL_DIR_QUERY[pm]);
+}
+
+/**
+ * The file `npm config set` writes to — `~/.npmrc` only while
+ * `npm_config_userconfig` points nowhere else, which a home-manager machine
+ * (the kind this recovery exists for) is exactly the sort to do. Falls back to
+ * the default name when npm cannot be asked, so the hint is never blank.
+ */
+export function npmUserConfigPath(): string {
+  return (
+    queryAbsolutePath("npm", ["config", "get", "userconfig"]) ?? path.join(os.homedir(), ".npmrc")
+  );
+}
+
 /**
  * True when `target` is inside the Nix store. Honors NIX_STORE_DIR, which only
  * a relocated Nix (a custom build or an admin-exported override) sets to
  * something other than the /nix/store default — nix-portable virtualizes
  * /nix/store but keeps those paths, and nix's own --store is a per-invocation
  * flag that exports nothing.
+ *
+ * Symlinks are resolved, because the writability probe follows them too: a
+ * home-manager `~/.npm-global` pointing into the store is just as immutable,
+ * and comparing the literal path would report it as merely unwritable and drop
+ * the note that rules out sudo.
  */
 export function isNixStorePath(target: string): boolean {
-  const storeDir = path.resolve(process.env.NIX_STORE_DIR || "/nix/store");
-  const resolved = path.resolve(target);
+  const storeDir = realPath(process.env.NIX_STORE_DIR || "/nix/store");
+  const resolved = realPath(target);
   return resolved === storeDir || resolved.startsWith(storeDir + path.sep);
+}
+
+// realpath, or the lexically resolved path when there is nothing on disk to
+// resolve — a store path that does not exist is still a store path by name.
+function realPath(target: string): string {
+  try {
+    return fs.realpathSync(path.resolve(target));
+  } catch {
+    return path.resolve(target);
+  }
 }
 
 // Nearest ancestor of `dir` that exists — the directory an install would really
@@ -147,17 +184,21 @@ export function suggestedNpmPrefix(): string {
 }
 
 /**
- * Drop every prefix npm honors from the environment. `npx @swmansion/argent
- * init` inherits the old prefix through `npm_config_prefix` (npm exports it
- * into everything it spawns), and a shell may export plain `PREFIX` or
- * `NPM_CONFIG_PREFIX` — each outranks the `~/.npmrc` that `npm config set
- * prefix` writes, so any one left set sends the install that follows a prefix
- * move right back to the directory that could not be written.
+ * Drop the inherited prefix npm reads from the environment. `npx
+ * @swmansion/argent init` inherits the old one through `npm_config_prefix` (npm
+ * exports it into everything it spawns), and a shell may export
+ * `NPM_CONFIG_PREFIX`; either outranks the config file `npm config set prefix`
+ * writes, so one left set sends the install that follows a prefix move right
+ * back to the directory that could not be written.
+ *
+ * Plain `PREFIX` is deliberately left alone: measured on npm 11, it is only the
+ * default for an npmrc that has no `prefix` key, so once the move has written
+ * that key npm ignores it — and it is a general-purpose variable the install and
+ * every step after it inherit.
  */
 export function forgetInheritedNpmPrefix(): void {
   delete process.env.npm_config_prefix;
   delete process.env.NPM_CONFIG_PREFIX;
-  delete process.env.PREFIX;
 }
 
 /**
@@ -186,11 +227,37 @@ export function blockedGlobalTargetCause(
   );
 }
 
-/** The per-project install, as the command that gets there. */
-export function localInstallRemedy(): string {
+/** What a printed remedy may assume about the machine it is printed on. */
+export interface RemedyContext {
+  /** There is a package.json to hold the devDependency a local install adds. */
+  localViable: boolean;
+  /** A bare `argent` resolves on PATH, so a remedy can name it directly. */
+  argentOnPath: boolean;
+}
+
+/**
+ * Whether a blocked global install leaves argent anything to carry out: moving
+ * npm's prefix (the only manager whose knob argent knows — the equivalent
+ * differs for every other one, and yarn berry has no global install at all), or
+ * installing into the project, which needs a package.json to hold the
+ * devDependency. With neither, there is nothing to ask about.
+ */
+export function canRecoverBlockedGlobal(pm: PackageManager, localViable: boolean): boolean {
+  return pm === "npm" || localViable;
+}
+
+/**
+ * The per-project install, as a command the reader can actually run — or null
+ * where it is not a way out at all. It needs a package.json to add the
+ * devDependency to, and on the fresh-install path there is no `argent` on PATH
+ * yet: that run was started by `npx @swmansion/argent init`.
+ */
+export function localInstallRemedy(ctx: RemedyContext): string | null {
+  if (!ctx.localViable) return null;
+  const command = ctx.argentOnPath ? "argent init --local" : `npx ${PACKAGE_NAME} init --local`;
   return (
     `  Use ${PACKAGE_NAME} per project instead — no global directory needed:\n` +
-    `    ${pc.cyan("argent init --local")}`
+    `    ${pc.cyan(command)}`
   );
 }
 
@@ -210,9 +277,12 @@ function writablePrefixRemedy(pm: PackageManager): string {
 export function unwritableGlobalTargetMessage(
   target: GlobalInstallTarget,
   pm: PackageManager,
-  verb: "install" | "update"
+  verb: "install" | "update",
+  ctx: RemedyContext
 ): string {
-  const remedies = [writablePrefixRemedy(pm), localInstallRemedy()];
+  const remedies = [writablePrefixRemedy(pm), localInstallRemedy(ctx)].filter(
+    (remedy): remedy is string => remedy !== null
+  );
 
   return `${blockedGlobalTargetCause(target, pm, verb)}\n\n${remedies.join("\n\n")}`;
 }

@@ -55,11 +55,22 @@ begin() { printf '\n=== %s ===\n' "$1"; }
 
 # Assertions read the captured output of the run under test. `absent` is what
 # pins the actual regression: the fix is that npm's error never reaches the user.
+#
+# Both strip ANSI first. picocolors colours whenever CI is set — which Actions
+# always sets, TTY or not — so a `pc.dim(...)` span puts an escape inside lines
+# like `Running: <dim>npm install -g …`, and a raw grep for a fragment that
+# straddles one can never match. An `absent` that can never match passes for
+# the wrong reason, which is the failure mode this whole file exists to catch.
+plain() { LC_ALL=C sed $'s/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1"; }
 contains() {
-  if grep -qF -- "$2" "$1"; then pass "output contains: $2"; else fail "output MISSING: $2"; fi
+  if plain "$1" | grep -qF -- "$2"; then pass "output contains: $2"; else fail "output MISSING: $2"; fi
 }
 absent() {
-  if grep -qF -- "$2" "$1"; then fail "output should NOT contain: $2"; else pass "output free of: $2"; fi
+  if plain "$1" | grep -qF -- "$2"; then
+    fail "output should NOT contain: $2"
+  else
+    pass "output free of: $2"
+  fi
 }
 exit_is() {
   if [[ "$1" == "$2" ]]; then pass "exit code $2"; else fail "exit code $1, expected $2"; fi
@@ -129,7 +140,9 @@ if [[ "$PHASE" == "preinstall" ]]; then
   contains "$out" "cannot install @swmansion/argent globally"
   contains "$out" "read-only Nix store"
   contains "$out" "$GLOBAL_ROOT"
-  contains "$out" "argent init --local"
+  # Through npx, because this run reached the preflight without a global
+  # install: a bare `argent` is not on PATH for whoever reads this.
+  contains "$out" "npx @swmansion/argent init --local"
   absent "$out" "npm error"
   absent "$out" "EACCES"
 
@@ -143,8 +156,27 @@ if [[ "$PHASE" == "preinstall" ]]; then
   (cd "$project" && HOME="$home" node "$CLI" init --global --no-telemetry </dev/null) >"$out" 2>&1
   exit_is "$?" 1
   contains "$out" "cannot install @swmansion/argent globally"
-  contains "$out" "argent init --local"
+  contains "$out" "npx @swmansion/argent init --local"
   absent "$out" "How would you like to proceed"
+
+  # The same, without --global. This one reaches the install-mode selector
+  # first, which is a menu of its own — it has to be skipped for the same
+  # reason, or the run ends there having installed nothing and exits 0.
+  begin "A3. argent init with no mode flag and no terminal to prompt on"
+  home="$(new_home a3)"
+  project="$(new_project a3)"
+  out="$WORK/a3.log"
+  (cd "$project" && HOME="$home" node "$CLI" init --no-telemetry </dev/null) >"$out" 2>&1
+  exit_is "$?" 1
+  contains "$out" "cannot install @swmansion/argent globally"
+  contains "$out" "npx @swmansion/argent init --local"
+  absent "$out" "How should argent be installed"
+  absent "$out" "How would you like to proceed"
+  if [[ -d "$project/node_modules/@swmansion/argent" ]]; then
+    fail "a run that could not ask installed anyway"
+  else
+    pass "nothing installed"
+  fi
 
   # The writable prefix argent tells the user to configure has to actually
   # work, and the preflight must not stand in its way once it is set.
@@ -207,6 +239,9 @@ elif [[ "$PHASE" == "update" ]]; then
   contains "$out" "cannot update @swmansion/argent globally"
   contains "$out" "read-only Nix store"
   contains "$out" "$GLOBAL_ROOT"
+  # Here argent IS on PATH — the reader can run it directly, unlike A/A2/A3.
+  contains "$out" "argent init --local"
+  absent "$out" "npx @swmansion/argent init --local"
   # No EACCES check here: the pinned --version means npm rejects the target
   # before it ever touches the filesystem, so its absence would prove nothing.
   # That the install is not even attempted is the assertion that bites.

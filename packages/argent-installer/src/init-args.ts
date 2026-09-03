@@ -38,13 +38,7 @@ export function parseInitArgs(args: string[]): InitArgs {
 // the recovery offered when the global directory cannot be written: choosing
 // the global install mode (or --global) IS the consent, so a missing global
 // package otherwise installs without a second question.
-type CancelStep =
-  | "install_mode"
-  | "global_install"
-  | "editors"
-  | "scope"
-  | "allowlist"
-  | "skills";
+type CancelStep = "install_mode" | "global_install" | "editors" | "scope" | "allowlist" | "skills";
 
 // Thrown by a step module on a cancelled prompt (Ctrl-C / Esc); the orchestrator
 // emits `cli_init_cancel { step }`, finalizes telemetry and exits 0.

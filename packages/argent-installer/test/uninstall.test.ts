@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { log } from "@clack/prompts";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -231,6 +232,68 @@ describe("uninstall — telemetry consent preservation", () => {
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────
+
+// `argent init`'s prefix recovery writes a prefix into npm's user config, which
+// an inherited npm_config_prefix outranks. npm then uninstalls from a prefix
+// this install does not live under, prints "up to date" and exits 0.
+describe("uninstall — a global removal npm did not perform", () => {
+  let savedHome: string | undefined;
+  let packageDir: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    packageDir = path.join(tmpDir, "npm-global", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(packageDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const binPath = path.join(tmpDir, "npm-global", "bin", "argent");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), binPath);
+    childProcessMock.execSync.mockImplementation(() => `${binPath}\n`);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("does not report a removal that left the package where it was", async () => {
+    // The command "succeeds" and removes nothing — npm's no-op exit 0.
+    childProcessMock.execFileSync.mockImplementation(() => undefined);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g"]),
+      expect.anything()
+    );
+    expect(fs.existsSync(packageDir)).toBe(true);
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).not.toContain("Removed global package.");
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("still there"))).toBe(true);
+    // Machine-wide state must survive an install that is still on PATH.
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("reports the removal once the package is actually gone", async () => {
+    childProcessMock.execFileSync.mockImplementation((() => {
+      fs.rmSync(packageDir, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+
+    await uninstall(["--yes"]);
+
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).toContain("Removed global package.");
+    expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalled();
+  });
+});
 
 describe("uninstall — MCP entry removal", () => {
   for (const adapter of ALL_ADAPTERS) {

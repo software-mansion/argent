@@ -393,7 +393,19 @@ export async function update(args: string[]): Promise<void> {
             false,
             UPDATE_GLOBAL_PREFIX_UNWRITABLE
           );
-          p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "update"));
+          // needsInstall also covers "not installed for this mode", which the
+          // confirm below and the failure text both call an install.
+          p.log.error(
+            unwritableGlobalTargetMessage(
+              globalTarget,
+              pm,
+              isInstalledForMode ? "update" : "install",
+              {
+                localViable: hasProjectPackageJson(projectRoot),
+                argentOnPath: globallyInstalled,
+              }
+            )
+          );
           return { failed: UPDATE_GLOBAL_PREFIX_UNWRITABLE };
         }
       }

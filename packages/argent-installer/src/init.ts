@@ -15,6 +15,7 @@ import {
   resolveProjectRoot,
   resolveInstallModeFromFlags,
   InstallModeFlagError,
+  hasProjectPackageJson,
   isDeclaredLocally,
   isGloballyInstalled,
   readInstallRecord,
@@ -31,7 +32,7 @@ import {
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode, type BlockedGlobalInstall } from "./init-mode-prompt.js";
-import { probeGlobalInstallTarget } from "./global-prefix.js";
+import { canRecoverBlockedGlobal, probeGlobalInstallTarget } from "./global-prefix.js";
 import { runInstall } from "./install-runner.js";
 import { chooseAdapters } from "./init-adapters.js";
 import { chooseScope, type Scope } from "./init-scope.js";
@@ -118,8 +119,20 @@ export async function init(args: string[]): Promise<void> {
       ? { target: globalTarget, pm: detectPackageManager() }
       : null;
 
+    // Two ways a blocked global install leaves nothing to ask: no terminal to
+    // answer on (a rendered menu never settles — the run would exit 0 having
+    // installed nothing), and nothing argent could carry out even if it were
+    // answered. Take the global path so the install step below says why, with
+    // the remedies spelled out, instead of offering a choice that ends there.
+    const skipBlockedModePrompt =
+      blockedGlobal !== null &&
+      (process.stdin.isTTY !== true ||
+        !canRecoverBlockedGlobal(blockedGlobal.pm, hasProjectPackageJson(initProjectRoot)));
     tel.installMode =
-      modeFromFlags ?? (await promptInstallMode(recordedMode ?? "global", blockedGlobal));
+      modeFromFlags ??
+      (skipBlockedModePrompt
+        ? "global"
+        : await promptInstallMode(recordedMode ?? "global", blockedGlobal));
     track("installation:install_mode_decision", { install_mode: tel.installMode });
 
     // `--local --no-telemetry`: the global opt-out above only covers this
@@ -147,7 +160,8 @@ export async function init(args: string[]): Promise<void> {
       nonInteractive: parsed.nonInteractive,
       version,
       globalTarget,
-      globalBlockAcknowledged: modeFromFlags === null && blockedGlobal !== null,
+      globalBlockAcknowledged:
+        modeFromFlags === null && blockedGlobal !== null && !skipBlockedModePrompt,
       tel,
     });
     version = installed.version;

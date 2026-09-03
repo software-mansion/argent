@@ -26,12 +26,15 @@ import type { PackageManager } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import {
   blockedGlobalTargetCause,
+  canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   localInstallRemedy,
+  npmUserConfigPath,
   probeGlobalInstallTarget,
   suggestedNpmPrefix,
   unwritableGlobalTargetMessage,
   type GlobalInstallTarget,
+  type RemedyContext,
 } from "./global-prefix.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
@@ -280,10 +283,11 @@ async function recoverBlockedGlobalInstall(opts: {
   pm: PackageManager;
   nonInteractive: boolean;
   acknowledged: boolean;
+  remedies: RemedyContext;
   startedAt: number;
   tel: InitTelemetry;
 }): Promise<BlockedGlobalRecovery> {
-  const { target, pm, nonInteractive, acknowledged, startedAt, tel } = opts;
+  const { target, pm, nonInteractive, acknowledged, remedies, startedAt, tel } = opts;
 
   const failWith = async (message: string): Promise<never> => {
     p.log.error(message);
@@ -297,26 +301,31 @@ async function recoverBlockedGlobalInstall(opts: {
     process.exit(1);
   };
   const failWithAdvice = (blocked: GlobalInstallTarget): Promise<never> =>
-    failWith(unwritableGlobalTargetMessage(blocked, pm, "install"));
+    failWith(unwritableGlobalTargetMessage(blocked, pm, "install", remedies));
 
-  // npm is the only manager whose global directory argent can relocate: the
-  // equivalent knob differs for every other one, and yarn berry has no global
-  // install at all.
+  // npm is the only manager whose global directory argent can relocate.
   const canMovePrefix = pm === "npm";
   // A local install needs a package.json to add the devDependency to.
-  const canInstallLocally = hasProjectPackageJson(resolveProjectRoot(process.cwd()));
+  const canInstallLocally = remedies.localViable;
   // A prompt with no terminal behind it never settles: the run would end at a
   // rendered menu, exit 0, and have installed nothing.
   const canAsk = !nonInteractive && process.stdin.isTTY === true;
 
-  // Nobody to ask, or nothing to offer them — spell the ways out as commands
-  // instead of opening a prompt whose only option is to give up.
-  if (!canAsk || !(canMovePrefix || canInstallLocally)) return failWithAdvice(target);
+  // Nothing to carry out. Where the block was already shown and a global
+  // install chosen anyway, that choice still happened, so the funnel hears
+  // where it ended.
+  if (!canRecoverBlockedGlobal(pm, canInstallLocally)) {
+    if (acknowledged) track("installation:global_install_decision", { decision: "unrecoverable" });
+    return failWithAdvice(target);
+  }
+  // Nobody to ask — spell the ways out as commands instead of rendering a menu
+  // that is never answered.
+  if (!canAsk) return failWithAdvice(target);
 
   if (acknowledged) {
     // Chosen knowing the block, but for a manager whose directory argent
-    // cannot relocate — there is nothing left to carry out. The choice still
-    // happened, so the funnel hears where it ended.
+    // cannot relocate — the local install is the only thing left, and it was
+    // just declined by choosing "Globally".
     if (!canMovePrefix) {
       track("installation:global_install_decision", { decision: "unrecoverable" });
       return failWithAdvice(target);
@@ -362,16 +371,22 @@ async function recoverBlockedGlobalInstall(opts: {
   try {
     await runShellCommand({ bin: "npm", args: ["config", "set", "prefix", prefix] });
   } catch (err) {
-    // Reachable where this recovery exists: home-manager can own ~/.npmrc as a
-    // read-only store symlink, leaving the project install as the way forward.
+    // Reachable where this recovery exists: home-manager can own the npm user
+    // config as a read-only store symlink, leaving the project install as the
+    // way forward — where there is one.
     spinner.stop(pc.red("Could not set the npm prefix."));
-    await failWith(`${err}\n\n${localInstallRemedy()}`);
+    const localWayOut = localInstallRemedy(remedies);
+    await failWith(localWayOut === null ? `${err}` : `${err}\n\n${localWayOut}`);
   }
   spinner.stop(`npm prefix set to ${prefix}.`);
-  // The write outlives this run whether or not the install ahead succeeds.
+  // The write outlives this run whether or not the install ahead succeeds, and
+  // it lands in npm's user config — `~/.npmrc` only when npm_config_userconfig
+  // does not point somewhere else, which is exactly what a home-manager machine
+  // is likely to do.
   p.log.info(
     pc.dim(
-      `Recorded in ~/.npmrc — future global installs land there too. Undo later with ${pc.cyan("npm config delete prefix")}.`
+      `Recorded in ${npmUserConfigPath()} — future global installs land there too. ` +
+        `Undo later with ${pc.cyan("npm config delete prefix")}.`
     )
   );
   forgetInheritedNpmPrefix();
@@ -382,7 +397,9 @@ async function recoverBlockedGlobalInstall(opts: {
   // back through the step that just ran.
   const moved = probeGlobalInstallTarget(pm);
   if (moved?.blocked) {
-    await failWith(`${blockedGlobalTargetCause(moved, pm, "install")}\n\n${localInstallRemedy()}`);
+    const cause = blockedGlobalTargetCause(moved, pm, "install");
+    const localWayOut = localInstallRemedy(remedies);
+    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
   }
 
   const binDir = path.join(prefix, "bin");
@@ -414,6 +431,13 @@ async function runGlobal(opts: {
   let version = opts.version;
   let pathHint: string | null = null;
   const globallyInstalled = isGloballyInstalled();
+  // Without a global install there is no `argent` on PATH: that run came in
+  // through `npx @swmansion/argent init`, so a remedy naming a bare `argent`
+  // would be `command not found` for the person reading it.
+  const remedies: RemedyContext = {
+    localViable: hasProjectPackageJson(resolveProjectRoot(process.cwd())),
+    argentOnPath: globallyInstalled,
+  };
 
   if (!globallyInstalled) {
     // Nowhere to install to: the manager's global directory cannot be written
@@ -427,6 +451,7 @@ async function runGlobal(opts: {
         pm,
         nonInteractive,
         acknowledged: globalBlockAcknowledged,
+        remedies,
         startedAt: preflightStartedAt,
         tel,
       });
@@ -478,7 +503,7 @@ async function runGlobal(opts: {
     // fresh one would.
     const globalTarget = probeGlobalInstallTarget(pm, getGloballyInstalledPackageRoot());
     if (globalTarget?.blocked) {
-      p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "install"));
+      p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "install", remedies));
       await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
       process.exit(1);
     }
@@ -550,7 +575,7 @@ async function runGlobal(opts: {
       // Offering an update argent cannot perform asks a question whose "yes"
       // only produces an EACCES dump. init's real work still succeeds against
       // the installed version, so this warns rather than aborting.
-      p.log.warn(unwritableGlobalTargetMessage(globalTarget, updatePm, "update"));
+      p.log.warn(unwritableGlobalTargetMessage(globalTarget, updatePm, "update", remedies));
       track("installation:update_decision", {
         from_major: fromMajor,
         to_major: toMajor,

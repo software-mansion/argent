@@ -15,14 +15,15 @@ on:
   pull_request:
     branches:
       - main
+    # The whole installer and the CLI that dispatches to it, not just the files
+    # that implement the preflight: every scenario runs through `argent init` /
+    # `argent update`, and its assertions are strings the installer builds
+    # (PACKAGE_NAME, the flag parsing, the captured npm stderr). Listing only
+    # the preflight files let a change to any of those land without a run.
     paths:
-      - "packages/argent-installer/src/global-prefix.ts"
-      - "packages/argent-installer/src/init.ts"
-      - "packages/argent-installer/src/init-mode-prompt.ts"
-      - "packages/argent-installer/src/install-runner.ts"
-      - "packages/argent-installer/src/update.ts"
-      - "packages/argent-installer/src/uninstall.ts"
-      - "packages/argent-installer/src/package-manager.ts"
+      - "packages/argent-installer/src/**"
+      - "packages/argent/src/**"
+      - "packages/argent/scripts/**"
       - "scripts/ci/nix-install/**"
       - ".github/workflows/nix-install-e2e.yml"
 
