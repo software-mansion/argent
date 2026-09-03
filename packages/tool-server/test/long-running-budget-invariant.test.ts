@@ -5,6 +5,7 @@ import { reinstallAppTool } from "../src/tools/reinstall-app/index";
 import { createRestartAppTool } from "../src/tools/restart-app/index";
 import { createDescribeTool } from "../src/tools/describe/index";
 import { createLaunchAppTool } from "../src/tools/launch-app/index";
+import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 
 /**
  * The MCP client aborts a tool call at FETCH_TIMEOUT_MS (30s) unless the tool
@@ -53,6 +54,12 @@ const CAN_OUTLIVE_THE_CLIENT_CAP: ReadonlyArray<{
     // 10_000 resolve-activity + 30_000 am start (launch-app/platforms/android.ts)
     budget: "~40s on Android",
     longRunning: createLaunchAppTool(new Registry()).longRunning,
+  },
+  {
+    name: "native-profiler-start",
+    // 10_000 detect + 2 × 10_000 xctrace attach + 1_200 retry (native-profiler/platforms/ios.ts)
+    budget: "~31s worst case (iOS cold-start retry)",
+    longRunning: nativeProfilerStartTool.longRunning,
   },
 ];
 
