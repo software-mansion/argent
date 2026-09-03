@@ -15,19 +15,20 @@ import type { PackageManager } from "./package-manager.js";
 // run the install and hand the user npm's stack trace.
 
 // Argument vector that makes each manager print a directory its global installs
-// live under. Only npm's and pnpm's name the node_modules itself; yarn classic
-// prints its parent and bun the bin directory it links shims into — near enough
-// to answer "can this user write there", which is all the probe asks. The cost
-// of that near-enough: for yarn/bun, walking up from <queried>/@swmansion/argent
-// probes an ancestor of the real module directory rather than the directory
-// itself, so a module dir made root-owned by an earlier `sudo yarn global add`
-// or `sudo bun add -g` is not caught.
+// live under. Only npm's names the node_modules itself: yarn classic prints its
+// parent, bun the bin directory it links shims into, and pnpm 10 answers
+// `<PNPM_HOME>/global/5/node_modules` before its first global install and
+// `<PNPM_HOME>/global/v11` after, with the package a level deeper still. Near
+// enough to answer "can this user write there", which is all the probe asks —
+// at the cost that walking up from <queried>/@swmansion/argent probes an
+// ancestor of the real module directory, so one made root-owned by an earlier
+// `sudo yarn global add`, `sudo pnpm add -g` or `sudo bun add -g` is missed.
 //
-// npm is the only one that answers on a machine that has not set a global
-// directory up yet: `pnpm root -g` exits 1 until its bin directory is on PATH
-// ("Run pnpm setup"), and `bun pm bin -g` exits 1 on a global directory with no
-// package.json — after creating it. Both leave the probe with null and the
-// preflight silently inapplicable, so in practice the guarantee is npm's.
+// npm is also the only one that answers at all before a global directory has
+// been set up: `pnpm root -g` exits 1 until its bin directory is on PATH, and
+// `bun pm bin -g` exits 1 on a global directory with no package.json — after
+// creating it. Both leave the probe with null and the preflight inapplicable,
+// so in practice the guarantee is npm's.
 const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
   npm: ["root", "-g"],
   pnpm: ["root", "-g"],
@@ -65,10 +66,9 @@ function queryGlobalInstallDir(pm: PackageManager): string | null {
 }
 
 /**
- * The file `npm config set` writes to — `~/.npmrc` only while
- * `npm_config_userconfig` points nowhere else, which a home-manager machine
- * (the kind this recovery exists for) is exactly the sort to do. Falls back to
- * the default name when npm cannot be asked, so the hint is never blank.
+ * The file `npm config set` writes to. That is `~/.npmrc` only while
+ * `npm_config_userconfig` points nowhere else. Falls back to the default name
+ * when npm cannot be asked, so the hint is never blank.
  */
 export function npmUserConfigPath(): string {
   return (

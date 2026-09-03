@@ -376,9 +376,7 @@ async function recoverBlockedGlobalInstall(opts: {
   }
   spinner.stop(`npm prefix set to ${prefix}.`);
   // The write outlives this run whether or not the install ahead succeeds, and
-  // it lands in npm's user config — `~/.npmrc` only when npm_config_userconfig
-  // does not point somewhere else, which is exactly what a home-manager machine
-  // is likely to do.
+  // it lands wherever npm's user config resolves — not always `~/.npmrc`.
   p.log.info(
     pc.dim(
       `Recorded in ${npmUserConfigPath()} — future global installs land there too. ` +
