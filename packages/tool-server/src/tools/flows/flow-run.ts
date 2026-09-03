@@ -45,6 +45,7 @@ import {
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { isUnlandedKeyboardTextResult, keyboardResultNote } from "../keyboard";
@@ -83,7 +84,7 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -517,6 +518,20 @@ async function treeSourceGate(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
+  if (isIosPhysicalDevice(device) && !signal?.aborted) {
+    // Physical devices read the XCUITest runner, not native devtools.
+    // Resolve it here. Cold start must not eat the next step's auto-wait.
+    try {
+      const ref = iosDeviceRunnerRef(device);
+      await registry.resolveService(ref.urn, ref.options);
+      return null;
+    } catch (err) {
+      return (
+        `the on-device XCUITest runner did not become ready for ${device.id}: ` +
+        `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
   if (device.platform === "ios" && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {

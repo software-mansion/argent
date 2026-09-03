@@ -30,6 +30,7 @@ import {
   buildScreenRecordingNote,
   getActiveScreenRecordings,
 } from "./utils/screen-recording-reminder";
+import { consumePendingSigningDetectionNote } from "./utils/ios-device/team-detect";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
@@ -39,7 +40,7 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
-import { resolveDevice } from "./utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
@@ -156,6 +157,19 @@ function extractDeviceArg(data: unknown): string | null {
     return record.devices[0];
   }
   return null;
+}
+
+/**
+ * Whether the call names a physical iPhone as the device it acts on. Reads
+ * `device` as well as the three spellings above: `flow-execute` names its
+ * target that way, and a session that only replays flows on the phone must
+ * still be handed the signing note.
+ */
+function targetsIosPhysicalDevice(data: unknown): boolean {
+  const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const flowDevice = typeof record?.device === "string" ? record.device : null;
+  const deviceArg = extractDeviceArg(data) ?? flowDevice;
+  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
 }
 
 type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
@@ -749,9 +763,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             res.status(400).json({ error: err.message });
             return;
           }
-          // Anything other than UnsupportedOperationError (today only a custom
-          // supports() refiner can throw one) is an internal fault, not a client
-          // validation error — 500/unknown rather than 400/validation.
+          // Anything else (today only a custom supports() refiner can throw one)
+          // is an internal fault, not a client validation error: 500/unknown
+          // rather than 400/validation.
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
@@ -875,6 +889,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const activeRecordings = getActiveScreenRecordings();
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
+        }
+        // Staged once when keychain team detection first signs the on-device
+        // runner (utils/ios-device/team-detect); drained here into the first
+        // completed call that targets a physical iPhone, so the agent driving
+        // the hardware learns which team was picked and how to override, and a
+        // caller on another platform sharing this tool-server never does.
+        const signingNote = targetsIosPhysicalDevice(parsedData)
+          ? consumePendingSigningDetectionNote()
+          : null;
+        if (signingNote) {
+          notes.push(signingNote);
         }
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {

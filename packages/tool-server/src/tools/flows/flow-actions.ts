@@ -6,6 +6,7 @@ import {
   type DescribeSource,
   type DescribeTreeData,
 } from "../describe/contract";
+import { isBlindRead } from "../describe/blind-read";
 import {
   selectorToFrame,
   findAll,
@@ -23,6 +24,7 @@ import {
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { isUnlandedKeyboardTextResult, keyboardResultNote } from "../keyboard";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { isIosPhysicalDevice } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -222,9 +224,13 @@ const POLL_INTERVAL_MS = 300;
 const TYPE_FOCUS_SETTLE_MS = 500;
 const TYPE_FOCUS_TIMEOUT_MS = 3000;
 
-// Tree sources that surface `focused`. A source outside this set (Vega's
-// toolkit page source) never reports it, so polling would burn the whole
-// timeout on every type step — skip the focus wait there instead.
+// Tree sources whose `focused` flag the focus wait may poll. A source outside
+// the set gets one look and then bails, leaving typing only the fixed
+// TYPE_FOCUS_SETTLE_MS head start. Both exclusions are deliberate:
+//
+// - Vega's toolkit page source never reports `focused`; polling would burn
+//   the whole timeout on every type step.
+// - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
@@ -847,6 +853,16 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
     };
   }
+  // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
+  if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
+    return {
+      ok: false,
+      reason:
+        step.kind === "pinch"
+          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's zoom UI with tap steps instead"
+          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's rotate controls with tap steps instead",
+    };
+  }
   switch (step.kind) {
     case "tap":
       return runTap(env, step);
@@ -1021,7 +1037,8 @@ const DEFAULT_LONG_PRESS_MS = 800;
 /**
  * Press-and-hold on a target (same resolution as tap) for `duration` ms. Touch
  * platforms dispatch ONE `gesture-custom` train (Down, then Up delayed by the
- * duration) so the hold length is exact; Chromium has no touch, so the closest
+ * duration) so the hold length is exact. On a physical iOS device the train
+ * maps to the runner longPress. Chromium has no touch, so the closest
  * honest mapping is a mouse press-hold-release (`gesture-drag` with from == to)
  * — apps implementing pointer-based long-press respond, anything else sees a
  * slow click. A desktop context menu is a *right*-click, deliberately not
@@ -1566,7 +1583,8 @@ async function runType(
  * - `assert` ({@link DEFAULT_ASSERT_TIMEOUT_MS}) — a correctness check that only
  *   absorbs the latency of an update landing a frame after an action.
  *
- * Mirrors `await-ui-element`'s blind-read guard: an EMPTY tree is not
+ * Applies the shared blind-read guard ({@link isBlindRead}), the same one
+ * `await-ui-element` polls with: an EMPTY tree is not
  * trustworthy evidence for `hidden` (the only condition an empty tree satisfies)
  * when the adapter flagged the read as degraded or the selector had matched on
  * an earlier poll — a transient blank frame mid-navigation must not confirm the
@@ -1602,8 +1620,7 @@ async function waitForCondition(
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      const blind =
-        data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
+      const blind = isBlindRead(data, everMatched);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (

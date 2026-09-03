@@ -23,7 +23,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 | Platform          | Targets                                                                 | Interaction      |
 | ----------------- | ----------------------------------------------------------------------- | ---------------- |
-| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **iOS**           | Simulators and physical iPhones                                         | Touch / gesture  |
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
