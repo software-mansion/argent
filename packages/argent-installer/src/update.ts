@@ -40,12 +40,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
-import {
-  blockedGlobalBinDir,
-  probeGlobalInstallTarget,
-  unwritableGlobalBinMessage,
-  unwritableGlobalTargetMessage,
-} from "./global-prefix.js";
+import { blockedGlobalInstallMessage } from "./global-prefix.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
@@ -397,15 +392,12 @@ export async function update(args: string[]): Promise<void> {
           localViable: hasProjectPackageJson(projectRoot),
           argentOnPath: globallyInstalled,
         };
-        const globalTarget = probeGlobalInstallTarget(pm, getGloballyInstalledPackageRoot());
-        // The package directory and the bin directory npm links commands into
-        // are separate permissions; an install needs both.
-        const blockedBin = globalTarget?.blocked === true ? null : blockedGlobalBinDir(pm);
-        const cause = globalTarget?.blocked
-          ? unwritableGlobalTargetMessage(globalTarget, pm, verb, remedies)
-          : blockedBin === null
-            ? null
-            : unwritableGlobalBinMessage(blockedBin, verb, remedies, false);
+        const cause = blockedGlobalInstallMessage(
+          pm,
+          getGloballyInstalledPackageRoot(),
+          verb,
+          remedies
+        );
         if (cause !== null) {
           await trackPackageAction(
             "update_failed",

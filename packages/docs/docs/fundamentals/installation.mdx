@@ -50,9 +50,9 @@ argent init
 
 npm derives its global prefix from the location of the `node` binary. On a Nix-managed system that location is inside the Nix store. The store is read-only for your user, so `npm install -g` fails there with a permission error.
 
-`argent init` and `argent update` check the global directory before they run an install. When npm cannot write there, they print the cause and leave the existing install alone. Update stops before its confirmation prompt. Init offers the remedies below when it can ask. With `--yes`, or no terminal on stdin, it installs the mode the project already recorded. When there is no record, it stops and prints the remedies. It also stops rather than asking when neither of the two remedies it can carry out applies: another package manager, and no `package.json` to add a devDependency to.
+`argent init` and `argent update` check both directories a global install writes into before they run one: the one npm unpacks the package under, and the one it links the `argent` command into. When npm cannot write there, they print the cause and leave the existing install alone. Update stops before its confirmation prompt. Init offers the remedies below when it can ask. With `--yes`, or no terminal on stdin, it installs the mode the project already recorded. When there is no record, it stops and prints the remedies. It also stops rather than asking when neither of the two remedies it can carry out applies: another package manager, and no `package.json` to add a devDependency to.
 
-The remedies. Init offers the first two as a choice and prints the third:
+The remedies. Where init can ask, it offers the first two as a choice. Where it cannot, and in `argent update`, whichever of the three apply are printed as commands:
 
 - Run `argent init --local`. The project gets `@swmansion/argent` as a devDependency. The project needs no global directory.
 - Let Argent point npm at a writable prefix (`~/.npm-global`). Init records the new prefix in npm's user config file. That file is `~/.npmrc`, unless `npm_config_userconfig` points elsewhere. Init then installs globally and names the directory to add to your `PATH`. Undo the change later with `npm config delete prefix`.

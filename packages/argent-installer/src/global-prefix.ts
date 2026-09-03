@@ -32,6 +32,14 @@ const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
 
 const QUERY_TIMEOUT_MS = 5_000;
 
+/** What npm substitutes for a path segment it takes for a secret. */
+const REDACTED_SEGMENT = "***";
+
+/** Why sudo is no way out of a store path. */
+function nixStoreNote(): string {
+  return `Nix owns that directory — a ${pc.cyan("sudo")} install into it is undone by the next rebuild or garbage-collect.`;
+}
+
 function queryAbsolutePath(bin: string, args: readonly string[]): string | null {
   let stdout: string;
   try {
@@ -54,7 +62,12 @@ function queryAbsolutePath(bin: string, args: readonly string[]): string | null 
     .map((l) => l.trim())
     .filter(Boolean)
     .pop();
-  return line !== undefined && path.isAbsolute(line) ? line : null;
+  if (line === undefined || !path.isAbsolute(line)) return null;
+  // npm masks UUID-shaped segments in everything it prints, so a prefix under
+  // /tmp/<uuid>/… comes back with *** where the segment was. Naming a directory
+  // that does not exist is worse than having no answer: it reads as "npm holds
+  // nothing here".
+  return line.includes(REDACTED_SEGMENT) ? null : line;
 }
 
 function queryGlobalInstallDir(pm: PackageManager): string | null {
@@ -216,9 +229,7 @@ export function blockedGlobalTargetCause(
     : "its global package directory is not writable by this user";
   // Only the store's own note belongs here: this text also prefaces the prompt
   // that offers the ways out, before anything has been attempted.
-  const note = target.nixStore
-    ? `Nix owns that directory — a ${pc.cyan("sudo")} install into it is undone by the next rebuild or garbage-collect.`
-    : null;
+  const note = target.nixStore ? nixStoreNote() : null;
 
   return (
     `${pc.cyan(pm)} cannot ${verb} ${PACKAGE_NAME} globally: ${cause}.\n` +
@@ -308,8 +319,10 @@ function writablePrefixRemedy(pm: PackageManager, blocked: string): string | nul
   if (pm !== "npm")
     return `  Point ${pc.cyan(pm)} at a global directory you can write to, then retry.`;
   // Already pointed there: moving it again changes nothing, and printing it
-  // first buries the remedy that does work.
-  if (blocked.startsWith(suggestedNpmPrefix())) return null;
+  // first buries the remedy that does work. On a separator, as isNixStorePath
+  // and ownershipRemedy are: ~/.npm-global-old is a different prefix.
+  const suggested = suggestedNpmPrefix();
+  if (blocked === suggested || blocked.startsWith(suggested + path.sep)) return null;
   return (
     `  Point npm at a writable prefix, then retry:\n` +
     `    ${pc.cyan('npm config set prefix "$HOME/.npm-global"')}\n` +
@@ -369,7 +382,10 @@ export function unwritableGlobalBinMessage(
   ].filter((remedy): remedy is string => remedy !== null);
   const cause =
     `npm cannot ${verb} ${PACKAGE_NAME} globally: it cannot write to ${dir}, where it ` +
-    `links the ${MCP_BINARY_NAME} command.`;
+    `links the ${MCP_BINARY_NAME} command.` +
+    // Same note blockedGlobalTargetCause carries for the package directory: the
+    // chown remedy is missing above, and without this nothing says why.
+    (isNixStorePath(dir) ? `\n${nixStoreNote()}` : "");
   return remedies.length === 0 ? cause : `${cause}\n\n${remedies.join("\n\n")}`;
 }
 
@@ -388,5 +404,23 @@ export function unwritableGlobalTargetMessage(
     localInstallRemedy(ctx),
   ].filter((remedy): remedy is string => remedy !== null);
 
-  return `${blockedGlobalTargetCause(target, pm, verb)}\n\n${remedies.join("\n\n")}`;
+  const cause = blockedGlobalTargetCause(target, pm, verb);
+  return remedies.length === 0 ? cause : `${cause}\n\n${remedies.join("\n\n")}`;
+}
+
+/**
+ * Why a global install cannot proceed — the package directory npm writes under,
+ * or the bin directory it links commands into — or null where nothing was
+ * proven. `npm install -g` needs both, and they are separate permissions.
+ */
+export function blockedGlobalInstallMessage(
+  pm: PackageManager,
+  installedRoot: string | null,
+  verb: "install" | "update",
+  ctx: RemedyContext
+): string | null {
+  const target = probeGlobalInstallTarget(pm, installedRoot);
+  if (target?.blocked) return unwritableGlobalTargetMessage(target, pm, verb, ctx);
+  const binDir = blockedGlobalBinDir(pm);
+  return binDir === null ? null : unwritableGlobalBinMessage(binDir, verb, ctx, false);
 }

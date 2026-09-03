@@ -32,6 +32,7 @@ import {
   localInstallRemedy,
   ownershipRemedy,
   blockedGlobalBinDir,
+  blockedGlobalInstallMessage,
   npmGlobalBinDir,
   unwritableGlobalBinMessage,
   npmUserConfigPath,
@@ -569,11 +570,16 @@ async function runGlobal(opts: {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
     const pm = detectPackageManager();
-    // Replacing the existing install writes to the same unwritable directory a
+    // Replacing the existing install writes to the same unwritable directories a
     // fresh one would.
-    const globalTarget = probeGlobalInstallTarget(pm, getGloballyInstalledPackageRoot());
-    if (globalTarget?.blocked) {
-      p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "install", remedies));
+    const blockedCause = blockedGlobalInstallMessage(
+      pm,
+      getGloballyInstalledPackageRoot(),
+      "install",
+      remedies
+    );
+    if (blockedCause !== null) {
+      p.log.error(blockedCause);
       await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
       process.exit(1);
     }
@@ -629,9 +635,14 @@ async function runGlobal(opts: {
     const updatePm = detectPackageManager();
     // Probed only on the branch that would run the install — a --yes run skips
     // the update outright and must not pay for the package manager's query.
-    const globalTarget = nonInteractive
+    const blockedCause = nonInteractive
       ? null
-      : probeGlobalInstallTarget(updatePm, getGloballyInstalledPackageRoot());
+      : blockedGlobalInstallMessage(
+          updatePm,
+          getGloballyInstalledPackageRoot(),
+          "update",
+          remedies
+        );
     if (nonInteractive) {
       // Emit the same update_decision as the interactive branches so the
       // upgrade funnel isn't blind to --yes/CI runs.
@@ -641,11 +652,11 @@ async function runGlobal(opts: {
         decision: "skip",
       });
       await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
-    } else if (globalTarget?.blocked) {
+    } else if (blockedCause !== null) {
       // Offering an update argent cannot perform asks a question whose "yes"
       // only produces an EACCES dump. init's real work still succeeds against
       // the installed version, so this warns rather than aborting.
-      p.log.warn(unwritableGlobalTargetMessage(globalTarget, updatePm, "update", remedies));
+      p.log.warn(blockedCause);
       track("installation:update_decision", {
         from_major: fromMajor,
         to_major: toMajor,

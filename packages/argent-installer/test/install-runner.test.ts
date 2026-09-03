@@ -14,6 +14,7 @@ import {
 import {
   probeGlobalInstallTarget,
   blockedGlobalBinDir,
+  blockedGlobalInstallMessage,
   npmGlobalBinDir,
 } from "../src/global-prefix.js";
 import { InitCancelled } from "../src/init-args.js";
@@ -59,6 +60,7 @@ vi.mock("../src/global-prefix.js", async (importOriginal) => {
     ...original,
     probeGlobalInstallTarget: vi.fn(),
     blockedGlobalBinDir: vi.fn(() => null),
+    blockedGlobalInstallMessage: vi.fn(() => null),
     npmGlobalBinDir: vi.fn(() => null),
   };
 });
@@ -284,6 +286,7 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(hasProjectPackageJson).mockReturnValue(true);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
     vi.mocked(blockedGlobalBinDir).mockReturnValue(null);
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(null);
     vi.mocked(npmGlobalBinDir).mockReturnValue(null);
     // Implementations outlive vi.clearAllMocks, so every mock a test in here
     // reshapes has to be put back — one makes the version read PATH-sensitive,
@@ -719,7 +722,9 @@ describe("a global install whose target directory cannot be written", () => {
   it("warns instead of offering an update it cannot install, and still finishes", async () => {
     vi.mocked(isGloballyInstalled).mockReturnValue(true);
     vi.mocked(getLatestVersion).mockReturnValue("9.9.9");
-    vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(
+      "npm cannot update @swmansion/argent globally: it cannot write to /nix/store/x/bin."
+    );
     const tel = makeTel();
     try {
       const outcome = await runInstall({
@@ -762,6 +767,9 @@ describe("a global install whose target directory cannot be written", () => {
   // fresh one would — the --from path preflights too.
   it("refuses a --from reinstall whose target cannot be written", async () => {
     vi.mocked(isGloballyInstalled).mockReturnValue(true);
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(
+      "npm cannot install @swmansion/argent globally: it cannot write to /nix/store/x/bin."
+    );
     const tel = makeTel();
     try {
       await expect(
@@ -783,9 +791,11 @@ describe("a global install whose target directory cannot be written", () => {
       // whose global-directory query fails — pnpm, yarn and bun all can.
       // lastCall, not toHaveBeenCalledWith: this mock keeps its history across
       // the tests above, which would satisfy the matcher on their own calls.
-      expect(vi.mocked(probeGlobalInstallTarget).mock.lastCall).toEqual([
+      expect(vi.mocked(blockedGlobalInstallMessage).mock.lastCall).toEqual([
         "npm",
         "/opt/argent/lib/node_modules/@swmansion/argent",
+        "install",
+        { localViable: true, argentOnPath: true },
       ]);
     } finally {
       vi.mocked(isGloballyInstalled).mockReturnValue(false);

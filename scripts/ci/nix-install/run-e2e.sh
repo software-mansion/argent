@@ -232,6 +232,39 @@ if [[ "$PHASE" == "preinstall" ]]; then
     fail "globally installed argent reports '$installed', expected '$PACKED_VERSION'"
   fi
 
+  # The other half of the preflight. npm links its commands into <prefix>/bin,
+  # which the package-directory probe never walks, and an earlier
+  # `sudo npm i -g` leaves exactly that split: writable where the package goes,
+  # root-owned where the shim does. Every other scenario runs on a Nix node,
+  # where the package directory is blocked first and this check is never
+  # reached.
+  begin "B2. a writable prefix whose bin directory is not"
+  home="$(new_home b2)"
+  project="$(new_project b2)"
+  out="$WORK/b2.log"
+  prefix="$home/.npm-global"
+  mkdir -p "$prefix/lib/node_modules" "$prefix/bin"
+  chmod 0555 "$prefix/bin"
+  (
+    cd "$project" || exit 1
+    HOME="$home" npm config set prefix "$prefix"
+    HOME="$home" node "$CLI" init --global --yes --no-telemetry --from "$TGZ"
+  ) >"$out" 2>&1
+  exit_is "$?" 1
+  contains "$out" "it cannot write to $prefix/bin"
+  # Pointing npm at the prefix it already uses is no remedy; taking ownership
+  # of the directory that is blocking it is.
+  contains "$out" "Take ownership of the directory"
+  absent "$out" "npm config set prefix"
+  absent "$out" "npm error"
+  absent "$out" "EACCES"
+  chmod 0755 "$prefix/bin"
+  if [[ -d "$prefix/lib/node_modules/@swmansion/argent" ]]; then
+    fail "the install ran despite the refusal"
+  else
+    pass "nothing installed"
+  fi
+
   begin "C. argent init --local in the Nix-managed project"
   home="$(new_home c)"
   project="$(new_project c)"
@@ -312,8 +345,6 @@ fi
 
 printf '\n'
 if [[ "$failures" -gt 0 ]]; then
-  # Named, not just counted: the log upload is the only other way to see which
-  # assertion went, and a run that dies before it leaves nothing to read.
   printf '%s assertion(s) failed in phase %s:\n' "$failures" "$PHASE"
   printf '  x %s\n' "${failed_assertions[@]}"
   printf 'Logs in %s\n' "$WORK"
