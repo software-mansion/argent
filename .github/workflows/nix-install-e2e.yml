@@ -29,8 +29,16 @@ on:
       # colouring and wrapping every string assertion is written against.
       - "packages/argent/package.json"
       - "package-lock.json"
+      - "scripts/download-simulator-server.sh"
+      - "scripts/download-native-binaries.sh"
+      - "scripts/download-trace-processor.sh"
       - "scripts/ci/nix-install/**"
       - ".github/workflows/nix-install-e2e.yml"
+
+# A 30-minute job: a superseded push should not keep a runner for its whole run.
+concurrency:
+  group: nix-install-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   nix-install-e2e:

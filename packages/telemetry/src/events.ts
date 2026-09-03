@@ -54,8 +54,8 @@ export interface InstallationGlobalInstallDecisionProps {
    * relocate.
    *
    * Every decision but `set_prefix` ends the run's global path, so counting
-   * events counts runs. `set_prefix` is the exception: it says the recovery
-   * was entered, and an `install` follows it in the same run whenever the moved
+   * events counts runs. `set_prefix` is the exception: it says the prefix move
+   * was chosen, and an `install` follows it in the same run whenever the moved
    * prefix turns out to be usable.
    */
   decision:

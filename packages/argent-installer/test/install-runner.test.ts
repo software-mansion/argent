@@ -441,6 +441,29 @@ describe("a global install whose target directory cannot be written", () => {
     expect(warning).toContain(`export PATH="${binDir}:$PATH"`);
   });
 
+  it("spells out no shell command on Windows, where there is no one shell", async () => {
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+
+    const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
+    expect(warning).toContain(binDir);
+    expect(warning).not.toContain("export PATH=");
+  });
+
   it("does not answer a non-npm install with npm's global bin directory", async () => {
     // The remedy is `npm prefix -g`; pointing a pnpm user at it names a
     // directory their install did not go into.

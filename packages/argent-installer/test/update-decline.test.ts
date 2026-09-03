@@ -212,6 +212,37 @@ describe("update — interactive decline", () => {
     }
   );
 
+  // npm links its commands into <prefix>/bin, which the package-directory probe
+  // never walks — and an update writes there too.
+  it.skipIf(!canTestUnwritable)(
+    "refuses a global update whose bin directory cannot be written either",
+    async () => {
+      const prefix = path.join(tmpDir, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const binDir = path.join(prefix, "bin");
+      fs.mkdirSync(globalRoot, { recursive: true });
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.chmodSync(binDir, 0o555);
+      childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+        if (args[0] === "root") return `${globalRoot}\n`;
+        if (args[0] === "prefix") return `${prefix}\n`;
+        return undefined;
+      }) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      expect(promptsMock.confirm).not.toHaveBeenCalled();
+      expect(killToolServerForInstallDir).not.toHaveBeenCalled();
+      expect(npmInstallCalls()).toHaveLength(0);
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+      expect(errors.some((m) => m.includes(`it cannot write to ${binDir}`))).toBe(true);
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_update_fail",
+        expect.objectContaining({ error_code: "UPDATE_GLOBAL_PREFIX_UNWRITABLE" })
+      );
+    }
+  );
+
   // needsInstall also covers "nothing installed for this mode", where calling
   // it an update names an operation the reader never asked for.
   // pnpm, yarn and bun all leave `root -g` / `global dir` unanswerable on a

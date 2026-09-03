@@ -590,10 +590,14 @@ describe("unwritableGlobalBinMessage", () => {
   });
 
   it("never offers to chown a store path", () => {
-    // Nix undoes it at the next rebuild — same reason as the sibling message.
-    const stored = "/nix/store/aaaa-nodejs/bin";
+    // A node_modules tree, so only the store check can be what rejects it —
+    // and Nix undoes the chown at the next rebuild either way.
+    const stored = "/nix/store/aaaa-nodejs/lib/node_modules";
 
     expect(plain(unwritableGlobalBinMessage(stored, "install", ctx, true))).not.toContain("chown");
+    expect(
+      plain(unwritableGlobalBinMessage("/opt/lib/node_modules", "install", ctx, true))
+    ).toContain("chown");
   });
 
   it("still names a way out when neither the prefix nor ownership applies", () => {

@@ -37,8 +37,10 @@ PHASE="${1:?usage: run-e2e.sh <preinstall|update>}"
 WORK="${ARGENT_E2E_WORK:-$(mktemp -d)}"
 
 failures=0
+failed_assertions=()
 
 fail() {
+  failed_assertions+=("$1")
   printf '  x %s\n' "$1"
   failures=$((failures + 1))
 }
@@ -294,7 +296,11 @@ fi
 
 printf '\n'
 if [[ "$failures" -gt 0 ]]; then
-  printf '%s assertion(s) failed in phase %s. Logs in %s\n' "$failures" "$PHASE" "$WORK"
+  # Named, not just counted: the log upload is the only other way to see which
+  # assertion went, and a run that dies before it leaves nothing to read.
+  printf '%s assertion(s) failed in phase %s:\n' "$failures" "$PHASE"
+  printf '  x %s\n' "${failed_assertions[@]}"
+  printf 'Logs in %s\n' "$WORK"
   exit 1
 fi
 printf 'Phase %s passed.\n' "$PHASE"
