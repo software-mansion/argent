@@ -311,7 +311,8 @@ const KEEPALIVE_MS = 60 * 60 * 1000;
 // and run their servers side by side, so the choice is between an older install's
 // live files being swept by a newer one and the older shape being swept by
 // nobody. This takes the second: it leaves files behind, where the first would
-// delete a log a running session is still writing to.
+// delete the log of a live session that is merely between lines — the one case
+// the older shape cannot be told apart from an orphan.
 const LOG_NAME_RE = /^argent-logs-\d+-\d+-\d+-\d+\.log$/;
 
 /**

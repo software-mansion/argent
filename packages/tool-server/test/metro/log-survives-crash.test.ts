@@ -465,7 +465,8 @@ describe("console logs across an app crash", () => {
       expect(read.note).toContain(firstLog);
       expect(read.note).toContain("grep that file");
       // And it must not read this session's own counts as the dead one's.
-      expect(read.note).toContain("do not include anything that record is about");
+      expect(read.note).toContain("The counts here are the new session's own and do not");
+      expect(read.note).toContain("include anything that record is about");
       expect(read.note).not.toContain("this zero");
 
       // Spending it is what spares the file: the next death has nothing to

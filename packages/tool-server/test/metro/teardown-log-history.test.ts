@@ -275,7 +275,8 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
 
     expect(result.totalEntries).toBe(3);
     expect(result.note).toContain("An earlier session that answered here");
-    expect(result.note).toContain("do not include anything that record is about");
+    expect(result.note).toContain("The counts here are the new session's own and do not");
+    expect(result.note).toContain("include anything that record is about");
   });
 
   it("reports the loss once, not on every later empty read", async () => {

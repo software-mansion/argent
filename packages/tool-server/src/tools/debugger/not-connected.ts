@@ -54,8 +54,8 @@ const CDP_UNREACHABLE_RECOVERY =
   "(launch-app), then call debugger-connect and retry once.";
 const CDP_UNREACHABLE_NOTE_POINTER =
   " Before you relaunch anything: a session whose runtime died holding console logs keeps " +
-  "its file, and debugger-log-registry's note names it when there is one — or debugger-connect's note, once the relaunched " +
-  "app has logged.";
+  "its file, and debugger-log-registry's note names it when there is one — or debugger-connect's " +
+  "note; whichever answer carries it is the one that spent it.";
 const CHROMIUM_CDP_UNREACHABLE_RECOVERY =
   "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
   "detail). launch-app cannot start a Chromium app; make sure the app is running " +
@@ -91,8 +91,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   no_app_connected:
     "Metro is running but no app is attached. A crashed app reads as this too, and a session " +
     "whose runtime died holding console logs keeps its file: read debugger-log-registry's note, " +
-    "which names that file when there is one — or debugger-connect's note, whichever you reach " +
-    "first, since both report the record and the first to read it spends it. Do not retry immediately — " +
+    "which names that file when there is one — or debugger-connect's note; whichever answer " +
+    "carries it is the one that spent it. Do not retry immediately — " +
     "launch or restart the RN app on the target device (launch-app / restart-app), wait a few " +
     "seconds for the bundle to load, then retry once.",
   device_mismatch:
@@ -113,7 +113,7 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. That discard keeps " +
     "whatever console log the session had captured, and debugger-log-registry's note names the " +
-    "file when there is one — or debugger-connect's note, whichever you reach first. Restart the app " +
+    "file when there is one — or debugger-connect's note; whichever answer carries it spent it. Restart the app " +
     "(restart-app) if it is not running, then call " +
     "debugger-connect — the next call reconnects fresh.",
   reconnecting:
