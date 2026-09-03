@@ -531,7 +531,7 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
  * from a command-level rejection they can classify themselves (e.g. `pm`
  * refusing a permission).
  */
-export function isTerminalAdbError(message: string): boolean {
+function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
