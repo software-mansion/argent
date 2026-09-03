@@ -468,6 +468,20 @@ async function recordingPost<T extends { error?: string }>(
   signal?: AbortSignal
 ): Promise<T | null> {
   const toolLabel = `screen-recording-${stage}`;
+  // A start whose request may have been received but whose reply was lost (a
+  // timeout, or a generic network error) can leave a recording running inside
+  // simulator-server: same story the ambiguous-reply branch tells, but reached
+  // through the network path. Append it so the caller knows why the device is
+  // unrecordable and that waiting out the server's own cap is the fix, rather
+  // than reading a bare "the simulator may be unresponsive". `toSimulatorNetworkError`
+  // adds it only to the timeout and generic messages, never to connection-
+  // refused/reset — where the request never landed and no recording began.
+  const startHint =
+    stage === "start"
+      ? "A recording an earlier start attempt began may still be running inside " +
+        "simulator-server — for example one whose reply was lost — and ends at its own " +
+        "time limit; retrying after that should succeed."
+      : undefined;
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}/api/recording/${stage}`, {
@@ -477,7 +491,7 @@ async function recordingPost<T extends { error?: string }>(
       signal,
     });
   } catch (err) {
-    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl);
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
   }
 
   // Read as text, so a body that never finishes arriving stays a network
@@ -486,7 +500,7 @@ async function recordingPost<T extends { error?: string }>(
   try {
     raw = await res.text();
   } catch (err) {
-    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl);
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
   }
   if (res.status === 404 && raw.trim() === "") return null;
 

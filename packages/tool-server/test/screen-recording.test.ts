@@ -2269,6 +2269,53 @@ describe("server recording wire protocol", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE);
   });
 
+  it("warns a timed-out start may be recording server-side and to retry after the cap", async () => {
+    // The likeliest way to lose a start's reply — the request budget firing —
+    // goes through the network path, not the ambiguous-reply branch. It must
+    // still tell the caller a recording may now be running (so the device is
+    // unrecordable until the server's own cap) rather than a bare "unresponsive".
+    const abort = Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw abort;
+      })
+    );
+
+    const err = await startServerRecording(fakeApi, {
+      watermark: true,
+      trimStatic: true,
+      timeLimitSeconds: 600,
+    }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("timed out");
+    expect((err as Error).message).toContain("may still be running inside simulator-server");
+    expect((err as Error).message).toContain("retrying after that should succeed");
+  });
+
+  it("omits the may-be-recording hint when the start connection is refused", async () => {
+    // A refused connection means the request never landed, so no recording
+    // began — the retry-after-cap hint would be misleading there.
+    const refused = Object.assign(new Error("fetch failed"), {
+      cause: new Error("connect ECONNREFUSED 127.0.0.1:65500"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw refused;
+      })
+    );
+
+    const err = await startServerRecording(fakeApi, {
+      watermark: true,
+      trimStatic: true,
+      timeLimitSeconds: 600,
+    }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("connection refused");
+    expect((err as Error).message).not.toContain("may still be running inside simulator-server");
+  });
+
   it("bounds both recording commands so a silent sim-server cannot wedge the tool", async () => {
     // Without a signal these fall to undici's 300s header timeout, holding
     // startPending/stopPending — and so every other recording call on the
