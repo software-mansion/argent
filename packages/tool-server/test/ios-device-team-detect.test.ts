@@ -7,6 +7,7 @@ import {
   detectSigningTeams,
   parseSigningTeams,
   type DetectedSigningTeam,
+  signingLabel,
 } from "../src/utils/ios-device/team-detect";
 import {
   NO_TEAM_PEM,
@@ -23,14 +24,30 @@ import {
 beforeEach(() => __setCertificateListerForTests(async () => ""));
 afterEach(() => __setCertificateListerForTests(null));
 
+describe("signingLabel", () => {
+  it("keeps the certificate kind and key id and drops the account identity", () => {
+    expect(signingLabel("Apple Development: alice@example.com (ALICEKEY01)")).toBe(
+      "Apple Development (ALICEKEY01)"
+    );
+    expect(signingLabel("iPhone Developer: Alice Example (ALICEKEY01)")).toBe(
+      "iPhone Developer (ALICEKEY01)"
+    );
+  });
+
+  it("falls back to the kind alone when the CN has no key id", () => {
+    expect(signingLabel("Apple Development: alice@example.com")).toBe("Apple Development");
+    expect(signingLabel("Apple Development")).toBe("Apple Development");
+  });
+});
+
 describe("parseSigningTeams", () => {
-  it("reads team id (OU), label (CN) and notBefore out of a PEM block", () => {
+  it("reads team id (OU), the redacted label (CN) and notBefore out of a PEM block", () => {
     const teams = parseSigningTeams(TEAM_A_PEM);
 
     expect(teams).toEqual([
       {
         teamId: "ABCDE12345",
-        label: "Apple Development: alice@example.com (ALICEKEY01)",
+        label: "Apple Development (ALICEKEY01)",
         issuedAtMs: Date.parse("2024-01-15T12:00:00Z"),
       },
     ]);
@@ -52,7 +69,7 @@ describe("parseSigningTeams", () => {
     expect(teams).toHaveLength(1);
     expect(teams[0]).toMatchObject({
       teamId: "FGHIJ67890",
-      label: "Apple Development: bob@example.com (BOBKEY0002)",
+      label: "Apple Development (BOBKEY0002)",
     });
   });
 
@@ -152,7 +169,7 @@ describe("detectSigningTeams", () => {
 const ONE_TEAM: DetectedSigningTeam[] = [
   {
     teamId: "ABCDE12345",
-    label: "Apple Development: alice@example.com (ALICEKEY01)",
+    label: "Apple Development (ALICEKEY01)",
     issuedAtMs: Date.parse("2024-01-15T12:00:00Z"),
   },
 ];
@@ -160,13 +177,13 @@ const ONE_TEAM: DetectedSigningTeam[] = [
 const THREE_TEAMS: DetectedSigningTeam[] = [
   {
     teamId: "FGHIJ67890",
-    label: "Apple Development: bob@example.com (BOBKEY0002)",
+    label: "Apple Development (BOBKEY0002)",
     issuedAtMs: Date.parse("2025-06-01T09:00:00Z"),
   },
   ...ONE_TEAM,
   {
     teamId: "KLMNO13579",
-    label: "Apple Development: carol@example.com (CAROLKEY01)",
+    label: "Apple Development (CAROLKEY01)",
     issuedAtMs: Date.parse("2023-02-02T00:00:00Z"),
   },
 ];
@@ -175,7 +192,7 @@ describe("buildSigningDetectionNote", () => {
   it("names the single detected team and the override variable", () => {
     expect(buildSigningDetectionNote(ONE_TEAM)).toBe(
       "Signing the on-device runner with team ABCDE12345 " +
-        "(Apple Development: alice@example.com (ALICEKEY01)), detected from this Mac's " +
+        "(Apple Development (ALICEKEY01)), detected from this Mac's " +
         "keychain. Set ARGENT_IOS_TEAM_ID in the tool-server's environment to override."
     );
   });
@@ -183,10 +200,10 @@ describe("buildSigningDetectionNote", () => {
   it("lists the losing teams and the exact restart command when several exist", () => {
     expect(buildSigningDetectionNote(THREE_TEAMS)).toBe(
       "Signing the on-device runner with team FGHIJ67890 " +
-        "(Apple Development: bob@example.com (BOBKEY0002)), the newest of 3 signing " +
+        "(Apple Development (BOBKEY0002)), the newest of 3 signing " +
         "identities in this Mac's keychain. Also found: ABCDE12345 " +
-        "(Apple Development: alice@example.com (ALICEKEY01)), KLMNO13579 " +
-        "(Apple Development: carol@example.com (CAROLKEY01)). To sign under a different " +
+        "(Apple Development (ALICEKEY01)), KLMNO13579 " +
+        "(Apple Development (CAROLKEY01)). To sign under a different " +
         "team, set ARGENT_IOS_TEAM_ID in the tool-server's environment: " +
         "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
     );

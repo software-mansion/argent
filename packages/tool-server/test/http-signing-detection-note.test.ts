@@ -48,7 +48,7 @@ function stubRegistry(): Registry {
 const DETECTED_TEAM = [
   {
     teamId: "ABCDE12345",
-    label: "Apple Development: alice@example.com (ALICEKEY01)",
+    label: "Apple Development (ALICEKEY01)",
     issuedAtMs: Date.parse("2024-01-15T12:00:00Z"),
   },
 ];
