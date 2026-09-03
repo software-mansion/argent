@@ -1584,9 +1584,9 @@ export function getAdapterByName(name: string): McpConfigAdapter | undefined {
   return ALL_ADAPTERS.find((a) => a.name.toLowerCase() === name.toLowerCase());
 }
 
-export type AdapterConfigScope = "project" | "global";
+type AdapterConfigScope = "project" | "global";
 
-export interface ConfiguredAdapterScope {
+interface ConfiguredAdapterScope {
   adapter: McpConfigAdapter;
   scope: AdapterConfigScope;
   configPath: string;
@@ -1656,7 +1656,7 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
 }
 
-export type ManagedContentScope = "local" | "global";
+type ManagedContentScope = "local" | "global";
 
 export interface ManagedContentTarget {
   editorName: string;
@@ -1664,7 +1664,7 @@ export interface ManagedContentTarget {
   label: string;
 }
 
-export interface ManagedContentTargets {
+interface ManagedContentTargets {
   skillTargets: ManagedContentTarget[];
   ruleTargets: ManagedContentTarget[];
   agentTargets: ManagedContentTarget[];

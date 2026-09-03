@@ -231,9 +231,9 @@ describe("parseRunArgs", () => {
 
   it("rejects unknown flags instead of silently dropping them", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--verbose"])).toThrow(FlagParseException);
-    expect(() => parseRunArgs(["checkout.yaml", "--verbose"])).toThrow(/unknown flag/);
+    expect(() => parseRunArgs(["checkout.yaml", "--verbose"])).toThrow(/Unknown flag/);
     // A typo'd value flag must not fall back to device auto-detection.
-    expect(() => parseRunArgs(["checkout.yaml", "--platfrom=ios"])).toThrow(/unknown flag/);
+    expect(() => parseRunArgs(["checkout.yaml", "--platfrom=ios"])).toThrow(/Unknown flag/);
   });
 
   it("rejects extra positional arguments", () => {
@@ -245,7 +245,7 @@ describe("parseRunArgs", () => {
   it("takes everything after -- as the flow, so a name may start with a hyphen", () => {
     // The flow-name charset admits a leading "-", so without the marker such a
     // saved flow would be addressable by path only.
-    expect(() => parseRunArgs(["-nightly"])).toThrow(/unknown flag/);
+    expect(() => parseRunArgs(["-nightly"])).toThrow(/Unknown flag/);
     expect(parseRunArgs(["--device", "SIM-1", "--", "-nightly"])).toEqual({
       flowRef: "-nightly",
       device: "SIM-1",
@@ -414,7 +414,7 @@ describe("argent flow run", () => {
     );
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-    expect(errs.join("\n")).toContain("unknown flag");
+    expect(errs.join("\n")).toContain("Unknown flag");
   });
 
   it("exits 2 when no flow name or path is given", async () => {

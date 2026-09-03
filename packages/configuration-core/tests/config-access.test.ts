@@ -120,8 +120,8 @@ describe("setConfigValue — validation", () => {
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
     // A settable, global-only definition supplied through the registry param
-    // (telemetry.enabled is global-only too, but it's manageCommand-delegated so
-    // it throws ConfigManagedElsewhereError first — this isolates the scope check).
+    // (no shipped key is global-only any more, so a synthetic one isolates the
+    // scope check).
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -182,6 +182,27 @@ describe("setConfigValue — return value", () => {
   });
 });
 
+describe("getConfigValue — allowlist.enabled (prioritize-restrictive, no default)", () => {
+  it("reads as unset when never decided", () => {
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBeUndefined();
+  });
+
+  it("false in either scope wins over true in the other", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    setConfigValue("allowlist.enabled", false, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+
+    setConfigValue("allowlist.enabled", false, "global", opts());
+    setConfigValue("allowlist.enabled", true, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+  });
+
+  it("a lone true opts in", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(true);
+  });
+});
+
 describe("listConfig", () => {
   it("reports every schema entry with per-scope and effective values", () => {
     setConfigValue("lens.agent", "claude", "global", opts());
@@ -193,7 +214,7 @@ describe("listConfig", () => {
     expect(lens.effective).toBe("codex");
     const telemetry = entries.find((e) => e.key === "telemetry.enabled")!;
     expect(telemetry.manageCommand).toBe("argent telemetry");
-    expect(telemetry.scopes).toEqual(["global"]);
+    expect(telemetry.scopes).toEqual(["project", "global"]);
   });
 });
 

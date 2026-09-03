@@ -11,11 +11,14 @@ export interface LaunchAppParams {
 }
 
 export type LaunchAppResult =
-  | { launched: boolean; bundleId: string }
+  | {
+      launched: boolean;
+      bundleId: string;
+      note?: string;
+    }
   | NativeDevtoolsInitFailedResult;
 
 export interface LaunchAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
-export type LaunchAppAndroidServices = Record<string, never>;
 export type LaunchAppVegaServices = Record<string, never>;

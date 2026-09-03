@@ -25,10 +25,10 @@
  * "you never started a recording" blame a teardown from an hour ago.
  */
 
-/** Which session kind was reaped; scopes the key so two kinds can't collide. */
-export type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
+/** Scopes the key, so two kinds on one device can't collide. */
+type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
 
-export interface ReapedSession {
+interface ReapedSession {
   kind: ReapedSessionKind;
   deviceId: string;
   /** When the teardown ran, for "…N seconds ago" phrasing. */

@@ -47,7 +47,7 @@ import {
  * nothing once encoded.
  */
 
-export const OUTPUT_FPS = 30;
+const OUTPUT_FPS = 30;
 const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
 /** Cap a catch-up burst so a stalled pipe cannot trigger a write storm. */
 const MAX_CATCHUP_FRAMES = 5;

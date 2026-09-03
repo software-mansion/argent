@@ -1,4 +1,4 @@
-export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export const DEFAULT_INTER_STEP_DELAY_MS = 100;
 
@@ -18,7 +18,7 @@ export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<boolean>
   });
 }
 
-export type Settled<T> =
+type Settled<T> =
   | { type: "value"; value: T }
   // `error` is `cause.message`; `cause` is the rejection's own Error, for a
   // caller that rethrows it rather than just quoting it.

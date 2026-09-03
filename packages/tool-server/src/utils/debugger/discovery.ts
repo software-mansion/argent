@@ -18,7 +18,7 @@ export interface CDPTarget {
   };
 }
 
-export interface MetroInfo {
+interface MetroInfo {
   port: number;
   projectRoot: string;
   targets: CDPTarget[];
@@ -90,9 +90,11 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
 
   // Optional: only source-map / file:line resolution needs it, and its absence
   // costs a location rather than yielding a wrong one (source fragments fail
-  // closed; SourceMapsRegistry still matches by alias and suffix). Legacy Metro
-  // (RN 0.72, which Vega forks) never sends it, and hard-failing there would
-  // also take down evaluate, console logs and the network inspector.
+  // closed; SourceMapsRegistry takes no project root — it fetches the map a
+  // Debugger.scriptParsed names, drains it and keeps nothing, so it has no
+  // source path to resolve against). Legacy Metro (RN 0.72, which Vega forks)
+  // never sends it, and hard-failing there would also take down evaluate,
+  // console logs and the network inspector.
   const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
 
   let listRes: Response;

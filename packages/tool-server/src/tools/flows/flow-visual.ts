@@ -31,7 +31,7 @@ export interface SnapshotArtifacts {
   diff?: ArtifactHandle;
 }
 
-export interface VisualOutcome {
+interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
   /**
