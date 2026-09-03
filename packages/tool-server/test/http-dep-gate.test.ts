@@ -110,7 +110,7 @@ describe("http dependency gate", () => {
     expect(recordFailure).toHaveBeenCalledWith(
       "validated-thing",
       // Schema-declared names of the failing params only — never values —
-      // plus which zod constraint each broke.
+      // plus the deduped set of zod constraints they broke.
       { invalid_params: ["count"], invalid_param_issues: ["invalid_type"] },
       {
         error_code: "HTTP_ZOD_VALIDATION_FAILED",
