@@ -194,11 +194,15 @@ export function createExporter(config: ResolvedConfig): OTLPLogExporter {
       // armed when the socket is CREATED, so it also covers connect: it fires,
       // the request emits 'timeout', and the exporter's handler destroys it.
       //
-      // keepAlive is restated because supplying httpAgentOptions at all
-      // replaces the agent the SDK would otherwise build, and its default is
-      // keepAlive: true. Without it the long-lived tool-server pays a fresh
-      // TCP+TLS handshake for every 10s batch — measured as one socket per
-      // request against a loopback collector, versus one socket shared.
+      // keepAlive is restated to match the agent the SDK would otherwise build,
+      // whose default is keepAlive: true — supplying httpAgentOptions at all
+      // replaces it, and keepAlive: false would open and close a socket per
+      // request. It does NOT save the handshake across the 10s batch cadence:
+      // this same timeout reaps an idle keep-alive socket, so one parked in the
+      // pool between batches is destroyed at EXPORT_TIMEOUT_MS, long before the
+      // next batch reaches for it. Reuse survives only for batches flushed
+      // within the timeout of each other, e.g. a force-flush of a queue that
+      // spans more than one batch.
       httpAgentOptions: { timeout: EXPORT_TIMEOUT_MS, keepAlive: true },
     });
   } finally {
