@@ -166,6 +166,23 @@ describe("guidance content", () => {
     expect(guidance).not.toContain("debugger-connect's");
   });
 
+  // The same hedge on the reason a crashed renderer actually leaves standing.
+  // `keptAt` is `runtimeDied && logWriter.hasFile()`, so a writer whose `open()`
+  // failed has entries and no file — and the note then says those entries went
+  // with it. A pointer that promises the file outright sends the reader after a
+  // path no note will carry, which is what the two strings above hedge against.
+  it.each(["emulator-5554", "chromium-cdp-9222"] as const)(
+    "cdp_unreachable on %s hedges the kept file like its siblings",
+    (device_id) => {
+      const { guidance } = buildNotConnected(
+        "cdp_unreachable",
+        coded(FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED),
+        { port: 8081, device_id }
+      );
+      expect(guidance).toContain("note names it when there is one");
+    }
+  );
+
   // And scoped to the sessions that keep one: `keepFile` is
   // `runtimeDied && captured > 0`, so an explicit teardown deletes the file
   // however much it had captured. Promising the file to every session that

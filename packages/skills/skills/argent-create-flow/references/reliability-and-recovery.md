@@ -116,6 +116,7 @@ Classify before editing:
 | Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                             |
 | Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                      |
 | Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                       |
+| Debugger note      | A debugger step passes carrying a note         | Read it in this report — [the record is spent by the read](flow-yaml.md#directives), so no rerun repeats it; grep the log file where it names one       |
 
 Then:
 

@@ -21,8 +21,8 @@ interface LogRegistryResponse extends LogStats {
    * Whatever would make the rest of this answer misleading on its own, in the
    * two states where something does — and both sentences when both hold. The
    * first carries a further clause of its own where that teardown's record
-   * replaced an earlier one nobody read: how many went unreported, and whether
-   * one of their log files went with it, whether the rest are still on disk and
+   * replaced an earlier one nobody read: how many went unreported, and how many
+   * of their log files went with them, whether the rest are still on disk and
    * where, or both.
    *
    * - This registry is a new session's, minted after the previous one for this
@@ -150,7 +150,10 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
               `themselves. The writer either could not create it, or something has removed it ` +
               `since. Check that ~/.argent/tmp is writable. The writer opens its file once and ` +
               `does not try again, and debugger-connect hands back this same session, so end it ` +
-              `with stop-all-simulator-servers scoped to this device, then connect.`
+              `with stop-all-simulator-servers, passing in devices the id you called ` +
+              `debugger-connect WITH — a session opened under a logicalDeviceId answers to no ` +
+              `other, and { left_running } names it when the scope missed — then connect. That ` +
+              `scope reaps every service this device owns, another agent's included.`
           );
         }
         if (notes.length > 0) response.note = notes.join(" ");

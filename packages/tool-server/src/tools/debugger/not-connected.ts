@@ -54,7 +54,7 @@ const CDP_UNREACHABLE_RECOVERY =
   "(launch-app), then call debugger-connect and retry once.";
 const CDP_UNREACHABLE_NOTE_POINTER =
   " Before you relaunch anything: a session whose runtime died holding console logs keeps " +
-  "its file, and debugger-log-registry's note names it — or debugger-connect's note, once the relaunched " +
+  "its file, and debugger-log-registry's note names it when there is one — or debugger-connect's note, once the relaunched " +
   "app has logged.";
 const CHROMIUM_CDP_UNREACHABLE_RECOVERY =
   "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
@@ -63,7 +63,7 @@ const CHROMIUM_CDP_UNREACHABLE_RECOVERY =
   "electronAppPath relaunches it), then retry once.";
 const CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER =
   " Before you relaunch anything: a renderer that died holding console logs keeps its file, " +
-  "and debugger-log-registry's note names it — the record is filed under the CDP port, which " +
+  "and debugger-log-registry's note names it when there is one — the record is filed under the CDP port, which " +
   "is the device id, so relaunching on a port boot-device picks strands it.";
 
 /**
@@ -73,11 +73,14 @@ const CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER =
  * very CDP service that just failed, so pointing an agent at it from a
  * cdp_unreachable result would manufacture a guaranteed second failure.
  *
- * Three reasons carry no note pointer. `runtime_unresponsive` describes a
- * session that is still alive, so no record of it has been filed; `metro_not_running`
- * and `reconnecting` are transient, and their own recovery step lands on a
- * reason that does point — a retry once Metro is up answers `no_app_connected`
- * or connects, and either route reaches a tool that reports the note.
+ * Three reasons carry no note pointer, and neither of the transient two strands
+ * the record. `runtime_unresponsive` describes a session that is still alive, so
+ * none has been filed. `metro_not_running` and `reconnecting` are read from two
+ * tools that treat them differently: `debugger-status` spends nothing, so its
+ * retry once Metro is up answers `no_app_connected` or connects and reaches a
+ * tool that does report the note; `debugger-log-registry` attaches the record to
+ * its own `metro_not_running` answer there and then, and withholds it only for
+ * the `reconnecting` retry its guidance asks for.
  */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
