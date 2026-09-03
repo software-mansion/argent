@@ -54,7 +54,7 @@ The agent grants, denies or resets a runtime permission such as location, camera
 
 The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
 
-The agent also sets device-wide settings without opening the Settings app: dark mode, text size, reduce motion, airplane mode or Wi-Fi. This makes visual tests repeatable, because each run starts from a known theme and text size.
+The agent also sets device-wide settings without opening the Settings app: dark mode, text size and the accessibility toggles on both platforms, and on Android the radios, location and auto-rotate. This makes visual tests repeatable, because each run starts from a known theme and text size.
 
 <Video
   src="/video/shake.mp4"
@@ -82,6 +82,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 - TV targets are focus-driven. The agent does not use touch gestures on them.
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
+- Device-wide settings cover iOS simulators and Android; the radios, location and auto-rotate are Android only.
 - On Chromium, each action goes to the active tab.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.
