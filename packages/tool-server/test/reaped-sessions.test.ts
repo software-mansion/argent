@@ -16,6 +16,13 @@ import {
 } from "../src/utils/reaped-sessions";
 
 const UDID = "6DBF83B4-0000-0000-0000-000000000000";
+/**
+ * The id Metro gives the device, which the disposer files alongside the connect
+ * id. The store reclaims a replaced record's log only where both events name
+ * the same one, so a case that means to exercise the reclaim passes it; a case
+ * that leaves it out is a legacy inspector (Vega, RN 0.72), which reports none.
+ */
+const LOGICAL = "logical-abc";
 
 beforeEach(() => {
   __resetReapedSessionsForTesting();
@@ -292,13 +299,15 @@ describe("the reaped-session key", () => {
       const newer = path.join(dir, "argent-logs-3-4.log");
       fs.writeFileSync(older, "first");
       fs.writeFileSync(newer, "second");
-      recordReapedSession("js-runtime-debugger", [UDID], "first", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "first", {
         cause: "runtime-death",
         keptAt: older,
+        logicalId: LOGICAL,
       });
-      recordReapedSession("js-runtime-debugger", [UDID], "second", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "second", {
         cause: "runtime-death",
         keptAt: newer,
+        logicalId: LOGICAL,
       });
 
       const message = describeReapedSession(
@@ -438,17 +447,19 @@ describe("the reaped-session key", () => {
       expect(message).toContain("2 earlier sessions that answered here");
     });
 
-    it("keeps the file clause singular when the count carries", () => {
-      // At most one replaced record can have its file taken - no two live
-      // events share a filed id set - so the clause has one file to report
-      // however far the count reaches, and a subject that stays singular with
-      // it.
-      const files = ["8-1", "8-2", "8-3"].map((n) => path.join(dir, `argent-logs-${n}.log`));
+    it("counts every file the chain reclaimed, not the one this round took", () => {
+      // One write takes at most one file - no two live events share a filed id
+      // set - but each round of an unread crash loop takes the round before it,
+      // and the record that knew about those takes is itself replaced next time
+      // round. Reporting this write alone says one log is unrecoverable however
+      // many are, in the sentence whose whole job is that account.
+      const files = ["8-1", "8-2", "8-3", "8-4"].map((n) => path.join(dir, `argent-logs-${n}.log`));
       for (const [i, file] of files.entries()) {
         fs.writeFileSync(file, "x");
-        recordReapedSession("js-runtime-debugger", [UDID], `capture ${i}`, {
+        recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], `capture ${i}`, {
           cause: "runtime-death",
           keptAt: file,
+          logicalId: LOGICAL,
         });
       }
 
@@ -456,11 +467,46 @@ describe("the reaped-session key", () => {
         takeReapedSession("js-runtime-debugger", UDID)!,
         "JS-runtime debugger session"
       );
-      expect(message).toContain("2 earlier sessions that answered here");
-      expect(message).toContain("The log file one of them kept went with it");
+      expect(message).toContain("3 earlier sessions that answered here");
+      // "all", because every session the count reaches lost its file: "3 of
+      // them" out of three reads as a subset, and would leave a reader looking
+      // for the one that survived.
+      expect(message).toContain("The log files all 3 of them kept went with them");
       expect(message).not.toContain("still on disk");
-      expect(fs.existsSync(files[0])).toBe(false);
-      expect(fs.existsSync(files[1])).toBe(false);
+      for (const file of files.slice(0, 3)) expect(fs.existsSync(file)).toBe(false);
+      expect(fs.existsSync(files[3])).toBe(true);
+    });
+
+    it("counts the takes a chain made before the round that ends in a teardown", () => {
+      // The take is carried by the record that made it, and a teardown replaces
+      // that record while taking nothing of its own. Counting this write alone
+      // reports NO take at all, and the leave clause then asserts positively
+      // that every replaced session's log is still readable.
+      const files: string[] = [];
+      "cctcctc".split("").forEach((kind, i) => {
+        if (kind === "t") {
+          recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], `teardown ${i}`, {
+            logicalId: LOGICAL,
+          });
+          return;
+        }
+        const file = path.join(dir, `argent-logs-8b-${i}.log`);
+        fs.writeFileSync(file, "x");
+        files.push(file);
+        recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], `crash ${i}`, {
+          cause: "runtime-death",
+          keptAt: file,
+          logicalId: LOGICAL,
+        });
+      });
+
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", UDID)!,
+        "JS-runtime debugger session"
+      );
+      expect(files.filter((f) => !fs.existsSync(f))).toHaveLength(2);
+      expect(message).toContain("The log files 2 of them kept went with them");
+      expect(message).not.toContain("Any log file they left is still on disk");
     });
 
     it("still names a file when the count reaches past the one it took", () => {
@@ -472,17 +518,19 @@ describe("the reaped-session key", () => {
       const second = path.join(dir, "argent-logs-9-2.log");
       const third = path.join(dir, "argent-logs-9-3.log");
       for (const file of [first, second, third]) fs.writeFileSync(file, "x");
-      recordReapedSession("js-runtime-debugger", ["logical-abc"], "first", {
+      recordReapedSession("js-runtime-debugger", [LOGICAL], "first", {
         cause: "runtime-death",
         keptAt: first,
+        logicalId: LOGICAL,
       });
       for (const [salvage, keptAt] of [
         ["second", second],
         ["third", third],
       ] as const) {
-        recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], salvage, {
+        recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], salvage, {
           cause: "runtime-death",
           keptAt,
+          logicalId: LOGICAL,
         });
       }
 
@@ -568,6 +616,61 @@ describe("the reaped-session key", () => {
       expect(entry?.keptAt).toBe(owners);
     });
 
+    it("leaves a legacy device's file, which matching ids alone cannot prove is its own", () => {
+      // A legacy inspector (Vega, RN 0.72) reports no logicalDeviceId, so the
+      // disposer files the connect id alone - and after this device drops off
+      // Metro's target list, `selectTarget`'s one-device fallback mints the
+      // survivor's session on that same id, which files an identical key set.
+      // Matching ids therefore prove nothing here, and reclaiming on them takes
+      // the crash log of a device that never came back. It waits for the
+      // day-old sweep instead, and the note names it meanwhile.
+      const owners = path.join(dir, "argent-logs-22-1.log");
+      const strangers = path.join(dir, "argent-logs-22-2.log");
+      for (const file of [owners, strangers]) fs.writeFileSync(file, "x");
+      for (const [salvage, keptAt] of [
+        ["the device that crashed", owners],
+        ["the one Metro had left", strangers],
+      ] as const) {
+        recordReapedSession("js-runtime-debugger", ["amazon-4a27df03c9777152"], salvage, {
+          cause: "runtime-death",
+          keptAt,
+          scope: "8081",
+        });
+      }
+
+      expect(fs.existsSync(owners)).toBe(true);
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", "amazon-4a27df03c9777152", "8081")!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(`Any log file it left is still on disk, at ${owners}.`);
+      expect(message).not.toContain("went with it");
+    });
+
+    it("reclaims for a device Metro named, however few ids it filed", () => {
+      // The twin of the case above, and what stops that rule from disabling the
+      // bound outright: a `device_mismatch` re-target connects with the
+      // logicalDeviceId itself, so the two ids collapse to one key - and a
+      // Chromium session files one key always. Both name a device the runtime
+      // identified, which is what the reclaim actually turns on.
+      const older = path.join(dir, "argent-logs-23-1.log");
+      const newer = path.join(dir, "argent-logs-23-2.log");
+      for (const file of [older, newer]) fs.writeFileSync(file, "x");
+      for (const [salvage, keptAt] of [
+        ["first", older],
+        ["second", newer],
+      ] as const) {
+        recordReapedSession("js-runtime-debugger", ["chromium-cdp-9222"], salvage, {
+          cause: "runtime-death",
+          keptAt,
+          logicalId: "chromium-cdp-9222",
+        });
+      }
+
+      expect(fs.existsSync(older)).toBe(false);
+      expect(fs.existsSync(newer)).toBe(true);
+    });
+
     it("leaves the file alone once a reader has been given its path", () => {
       // The reclaim exists to bound a crash loop nobody reads. A read consumes the
       // whole event, so the next teardown finds nothing to replace — which is what
@@ -622,13 +725,15 @@ describe("the reaped-session key", () => {
       const newer = path.join(dir, "argent-logs-1-2.log");
       fs.writeFileSync(older, "x");
       fs.writeFileSync(newer, "y");
-      recordReapedSession("js-runtime-debugger", UDID, "first", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "first", {
         cause: "runtime-death",
         keptAt: older,
+        logicalId: LOGICAL,
       });
-      recordReapedSession("js-runtime-debugger", UDID, "second", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "second", {
         cause: "runtime-death",
         keptAt: newer,
+        logicalId: LOGICAL,
       });
 
       expect(fs.existsSync(older)).toBe(false);
@@ -644,14 +749,16 @@ describe("the reaped-session key", () => {
       const on8082 = path.join(dir, "argent-logs-8082-1.log");
       fs.writeFileSync(on8081, "first");
       fs.writeFileSync(on8082, "second");
-      recordReapedSession("js-runtime-debugger", UDID, "on 8081", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "on 8081", {
         cause: "runtime-death",
         keptAt: on8081,
+        logicalId: LOGICAL,
         scope: "8081",
       });
-      recordReapedSession("js-runtime-debugger", UDID, "on 8082", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "on 8082", {
         cause: "runtime-death",
         keptAt: on8082,
+        logicalId: LOGICAL,
         scope: "8082",
       });
 
@@ -668,13 +775,15 @@ describe("the reaped-session key", () => {
       // it is advertising.
       const kept = path.join(dir, "argent-logs-1-3.log");
       fs.writeFileSync(kept, "x");
-      recordReapedSession("js-runtime-debugger", UDID, "same", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "same", {
         cause: "runtime-death",
         keptAt: kept,
+        logicalId: LOGICAL,
       });
-      recordReapedSession("js-runtime-debugger", UDID, "same", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "same", {
         cause: "runtime-death",
         keptAt: kept,
+        logicalId: LOGICAL,
       });
 
       expect(fs.existsSync(kept)).toBe(true);
@@ -689,31 +798,32 @@ describe("the reaped-session key", () => {
     });
 
     it("names the subject of the leave sentence when the count carries", () => {
-      // A chain of crashes ended by a teardown, which keeps no file and so
-      // takes none: the newest crash's log is still there, and the sentence
-      // sending the agent to it has to agree with the subject above it.
-      const first = path.join(dir, "argent-logs-10-1.log");
-      const second = path.join(dir, "argent-logs-10-2.log");
-      for (const [file, salvage] of [
-        [first, "first"],
-        [second, "second"],
-      ] as const) {
-        fs.writeFileSync(file, "x");
-        recordReapedSession("js-runtime-debugger", [UDID], salvage, {
-          cause: "runtime-death",
-          keptAt: file,
+      // A crash and then two teardowns, neither of which keeps a file and so
+      // neither takes one: the crash's log is still there, and the sentence
+      // sending the agent to it has to agree with the subject above it. No take
+      // in the chain, so this is the arm that has a subject to get wrong.
+      const kept = path.join(dir, "argent-logs-10-1.log");
+      fs.writeFileSync(kept, "x");
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "first", {
+        cause: "runtime-death",
+        keptAt: kept,
+        logicalId: LOGICAL,
+      });
+      for (const salvage of ["second", "third"]) {
+        recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], salvage, {
+          cause: "teardown",
+          logicalId: LOGICAL,
         });
       }
-      recordReapedSession("js-runtime-debugger", [UDID], "third", { cause: "teardown" });
 
       const message = describeReapedSession(
         takeReapedSession("js-runtime-debugger", UDID)!,
         "JS-runtime debugger session"
       );
       expect(message).toContain("2 earlier sessions that answered here");
-      expect(message).toContain(`Any log file they left is still on disk, at ${second}.`);
-      expect(fs.existsSync(first)).toBe(false);
-      expect(fs.existsSync(second)).toBe(true);
+      expect(message).toContain(`Any log file they left is still on disk, at ${kept}.`);
+      expect(message).not.toContain("went with it");
+      expect(fs.existsSync(kept)).toBe(true);
     });
 
     it("names no file once the sweep has been through it", () => {
@@ -858,7 +968,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain(
-        `still on disk, at ${files[5]}, ${files[4]}, ${files[3]}, and 3 more in the same directory.`
+        `still on disk, at ${files[5]}, ${files[4]}, ${files[3]}, and 3 more this note does not name.`
       );
       expect(message).not.toContain(files[2]!);
       for (const file of files) expect(fs.existsSync(file)).toBe(true);
@@ -889,7 +999,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain(
-        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more in the same directory.`
+        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more this note does not name.`
       );
       expect(message).not.toContain(files[0]!);
     });
@@ -933,7 +1043,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain(
-        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more in the same directory.`
+        `still on disk, at ${files[3]}, ${files[2]}, ${files[1]}, and 1 more this note does not name.`
       );
       expect(message).not.toContain(files[0]!);
     });
@@ -962,7 +1072,7 @@ describe("the reaped-session key", () => {
         "JS-runtime debugger session"
       );
       expect(message).toContain(
-        `still on disk, at ${files[11]}, ${files[10]}, ${files[9]}, and 9 more in the same directory.`
+        `still on disk, at ${files[11]}, ${files[10]}, ${files[9]}, and 9 more this note does not name.`
       );
       // The three a text sort would have named instead.
       for (const i of [8, 7, 6]) expect(message).not.toContain(files[i]!);
@@ -1011,19 +1121,22 @@ describe("the reaped-session key", () => {
       const newest = path.join(dir, "argent-logs-15-2.log");
       const own = path.join(dir, "argent-logs-15-3.log");
       for (const file of [oldest, newest, own]) fs.writeFileSync(file, "x");
-      recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], "both ids", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "both ids", {
         cause: "runtime-death",
         keptAt: oldest,
+        logicalId: LOGICAL,
       });
       // A device_mismatch sends the next connect at the logicalDeviceId alone,
       // which is the id the session then answers to by itself.
-      recordReapedSession("js-runtime-debugger", ["logical-abc"], "logical only", {
+      recordReapedSession("js-runtime-debugger", [LOGICAL], "logical only", {
         cause: "runtime-death",
         keptAt: newest,
+        logicalId: LOGICAL,
       });
-      recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], "both ids again", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "both ids again", {
         cause: "runtime-death",
         keptAt: own,
+        logicalId: LOGICAL,
       });
 
       // The exact-ids match is the FIRST record, not the last.
@@ -1116,6 +1229,7 @@ describe("the reaped-session key", () => {
         recordReapedSession("js-runtime-debugger", [`logical-${i}`], `old ${i}`, {
           cause: "runtime-death",
           keptAt: file,
+          logicalId: `logical-${i}`,
         });
         return file;
       });
@@ -1127,6 +1241,7 @@ describe("the reaped-session key", () => {
       recordReapedSession("js-runtime-debugger", ["logical-4"], "newest", {
         cause: "runtime-death",
         keptAt: newest,
+        logicalId: "logical-4",
       });
       fs.chmodSync(locked, 0o500);
       try {
@@ -1141,6 +1256,7 @@ describe("the reaped-session key", () => {
         recordReapedSession("js-runtime-debugger", ["logical-4"], "reclaimer", {
           cause: "runtime-death",
           keptAt: own,
+          logicalId: "logical-4",
         });
         // Now one write over everything, so all five leaves meet the cap.
         recordReapedSession(
@@ -1173,9 +1289,10 @@ describe("the reaped-session key", () => {
       const own = path.join(dir, "argent-logs-18-2.log");
       const probe = path.join(locked, "probe");
       for (const file of [kept, own, probe]) fs.writeFileSync(file, "x");
-      recordReapedSession("js-runtime-debugger", [UDID], "first", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "first", {
         cause: "runtime-death",
         keptAt: kept,
+        logicalId: LOGICAL,
       });
       fs.chmodSync(locked, 0o500);
       try {
@@ -1189,9 +1306,10 @@ describe("the reaped-session key", () => {
           refused = true;
         }
         if (!refused) ctx.skip();
-        recordReapedSession("js-runtime-debugger", [UDID], "second", {
+        recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "second", {
           cause: "runtime-death",
           keptAt: own,
+          logicalId: LOGICAL,
         });
 
         expect(fs.existsSync(kept)).toBe(true);
@@ -1252,15 +1370,17 @@ describe("the reaped-session key", () => {
       const replacement = path.join(dir, "argent-logs-1-6.log");
       fs.writeFileSync(swept, "x");
       fs.writeFileSync(replacement, "y");
-      recordReapedSession("js-runtime-debugger", UDID, "first", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "first", {
         cause: "runtime-death",
         keptAt: swept,
+        logicalId: LOGICAL,
       });
       fs.rmSync(swept);
 
-      recordReapedSession("js-runtime-debugger", UDID, "second", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "second", {
         cause: "runtime-death",
         keptAt: replacement,
+        logicalId: LOGICAL,
       });
 
       expect(takeReapedSession("js-runtime-debugger", UDID)?.salvage).toBe("second");

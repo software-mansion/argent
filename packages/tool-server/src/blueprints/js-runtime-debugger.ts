@@ -374,6 +374,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           recordReapedSession("js-runtime-debugger", ids, describeLostHistory(captured, keptAt), {
             cause: runtimeDied ? "runtime-death" : "teardown",
             keptAt,
+            // What proves a later event is this same device rather than the one
+            // `selectTarget`'s fallback minted on this device's id: Metro names
+            // the device, the caller's id does not. Undefined for a legacy
+            // inspector, which is the whole of the reason the store will not
+            // reclaim on matching ids alone.
+            logicalId: api.logicalDeviceId,
             // This device can hold another session on another Metro port, with
             // its own log file; without the port that one's death would reclaim
             // this file, and its teardown would replace the record naming it.

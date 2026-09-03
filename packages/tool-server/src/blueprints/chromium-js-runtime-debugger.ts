@@ -298,7 +298,14 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
             "js-runtime-debugger",
             device.id,
             describeLostHistory(captured, keptAt),
-            { cause: runtimeDied ? "runtime-death" : "teardown", keptAt }
+            {
+              cause: runtimeDied ? "runtime-death" : "teardown",
+              keptAt,
+              // The same id, here: a Chromium device's `logicalDeviceId` IS its
+              // `device.id`. Passed all the same, because the store reclaims a
+              // replaced record's file only for an event that carries one.
+              logicalId: device.id,
+            }
           );
         }
         // After the socket read, not before it: an await here would let a

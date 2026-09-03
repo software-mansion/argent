@@ -23,10 +23,10 @@
  * "you never started a recording" blame a teardown from an hour ago.
  *
  * One entry can also own a file: this store unlinks the log a {@link
- * ReapedSession.keptAt} names when a later event under exactly the same ids
- * supersedes the entry AND kept a file of its own — a second crash, never a
- * teardown, which keeps none. So it is a lifetime owner, not only a message
- * board. Read that field's doc first.
+ * ReapedSession.keptAt} names when a later event on the same device supersedes
+ * the entry AND kept a file of its own — a second crash, never a teardown,
+ * which keeps none. So it is a lifetime owner, not only a message board. Read
+ * that field's doc first.
  */
 
 import * as fs from "node:fs";
@@ -63,8 +63,13 @@ interface ReapedSession {
    * unread crash loop replaces a replacer every time round.
    */
   superseded?: number;
-  /** …and the log one of them kept was unlinked with it. At most one ever is. */
-  supersededFileTaken?: boolean;
+  /**
+   * …and how many of their log files were unlinked with them. One write takes
+   * at most one — no two live records share a filed id set — but a chain takes
+   * once per round, and this count is the only thing that carries that forward:
+   * the record holding it is itself replaced next time round.
+   */
+  supersededFilesTaken?: number;
   /**
    * …and the logs the rest kept, which nothing but this field still names.
    * Paths, not a flag: the read hands them out, and the sweep may have taken
@@ -76,6 +81,14 @@ interface ReapedSession {
   supersededFilesLeft?: KeptFile[];
   /** Keys this event was filed under; later writes narrow what it answers to. */
   filedKeys: readonly string[];
+  /**
+   * The id the runtime itself gave this device — Metro's `logicalDeviceId`, or
+   * on Chromium the device id, which is the same thing there. Absent for a
+   * legacy inspector (Vega, RN 0.72), which reports none.
+   *
+   * The file reclaim needs it: see the rule in {@link recordReapedSession}.
+   */
+  logicalId?: string;
   cause: ReapedSessionCause;
   /**
    * What survived, as a ready-to-read clause (e.g. naming a salvaged file), or
@@ -117,6 +130,11 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * that `dispose()` ran; pass `"runtime-death"` where it can tell the runtime
  * went out from under the session, and `keptAt` where it left a file to read.
  *
+ * `logicalId` is the id the runtime itself gave the device, and is what lets a
+ * later event reclaim the file this one kept. Pass it wherever there is one;
+ * omit it for a legacy inspector, which reports none, and its files then wait
+ * for the day-old sweep rather than being taken on ids alone.
+ *
  * `scope` tells apart two sessions of one kind on one device, and readers must
  * pass the same one. A Metro-backed debugger is per port, each with its own log
  * file, so without the port a session ending on 8082 supersedes the crash
@@ -128,7 +146,12 @@ export function recordReapedSession(
   kind: ReapedSessionKind,
   deviceIds: string | string[],
   salvage?: string,
-  opts: { cause?: ReapedSessionCause; keptAt?: string; scope?: string } = {}
+  opts: {
+    cause?: ReapedSessionCause;
+    keptAt?: string;
+    scope?: string;
+    logicalId?: string;
+  } = {}
 ): void {
   const event = nextEvent++;
   const ids = new Set(typeof deviceIds === "string" ? [deviceIds] : deviceIds);
@@ -145,8 +168,10 @@ export function recordReapedSession(
     {
       keys: Set<string>;
       filedKeys: readonly string[];
+      logicalId?: string;
       keptAt?: string;
       carried: number;
+      carriedTaken: number;
       carriedFiles: readonly KeptFile[];
     }
   >();
@@ -158,9 +183,11 @@ export function recordReapedSession(
       displaced.set(entry.event, {
         keys: new Set([k]),
         filedKeys: entry.filedKeys,
+        logicalId: entry.logicalId,
         keptAt: entry.keptAt,
         // What it was already answering for; see {@link ReapedSession.superseded}.
         carried: entry.superseded ?? 0,
+        carriedTaken: entry.supersededFilesTaken ?? 0,
         carriedFiles: entry.supersededFilesLeft ?? [],
       });
   }
@@ -177,6 +204,7 @@ export function recordReapedSession(
     };
     if (salvage) entry.salvage = salvage;
     if (opts.keptAt) entry.keptAt = opts.keptAt;
+    if (opts.logicalId) entry.logicalId = opts.logicalId;
     reaped.set(key(kind, deviceId, opts.scope), entry);
     filedNow.push(entry);
   }
@@ -192,11 +220,15 @@ export function recordReapedSession(
   // store's key order, which is where each key was first written; and a chain
   // hands its files on, so a late teardown can carry an ancient log.
   const filesLeftUnnamed = new Map<string, number>();
+  // Takes this write inherits from the records it is replacing, for the same
+  // reason `carried` exists: the record that knew about them is going away.
+  let takenCarried = 0;
   for (const [event, previous] of displaced) {
     // An event still holding a key this one did not take goes on answering under
     // it, so nothing of its has gone unreported.
     if ([...previous.keys].some((k) => !keys.has(k))) continue;
     replacedUnread += 1 + previous.carried;
+    takenCarried += previous.carriedTaken;
     // Its FILE goes with it only where this event answers to exactly the same
     // ids. Nothing weaker proves one device: `selectTarget`'s one-device
     // fallback mints a stranger's session on a crashed device's logicalDeviceId,
@@ -215,8 +247,22 @@ export function recordReapedSession(
     // write that took one key off a two-id record leaves it answering to one,
     // and a narrower write after that would otherwise read as the exact match
     // this rule is the whole guard against.
+    //
+    // And both events have to name the same runtime-assigned id. Matching key
+    // sets prove one device only while a device files two keys; a legacy
+    // inspector (Vega, RN 0.72) reports no `logicalDeviceId`, so its disposer
+    // files the connect id alone and the fallback's stranger — minted on that
+    // same id, on the one device Metro had left — files a set identical to the
+    // owner's. `logicalId` is the id the runtime gave, so a stranger carries a
+    // different one or, being legacy itself, none; either way the owner's log
+    // waits for the day-old sweep rather than being taken from it. The cost is
+    // that a legacy crash LOOP keeps a file per round, the same treatment a
+    // loop with a teardown between rounds already gets.
     const sameIds =
-      previous.filedKeys.length === keys.size && previous.filedKeys.every((k) => keys.has(k));
+      previous.logicalId !== undefined &&
+      previous.logicalId === opts.logicalId &&
+      previous.filedKeys.length === keys.size &&
+      previous.filedKeys.every((k) => keys.has(k));
     const keptAt = previous.keptAt;
     if (keptAt !== undefined && keptAt !== opts.keptAt) {
       if (opts.keptAt !== undefined && sameIds) orphanedFiles.set(keptAt, event);
@@ -227,7 +273,7 @@ export function recordReapedSession(
   // Before the flags below, so they answer for what is on disk rather than what
   // was intended: an unlink the filesystem refuses leaves the file there for the
   // clause to name, which is a leave. One already gone is a take either way.
-  let anyTaken = false;
+  let takenNow = 0;
   for (const [file, event] of orphanedFiles) {
     try {
       fs.unlinkSync(file);
@@ -235,13 +281,14 @@ export function recordReapedSession(
       // already gone, or never ours
     }
     if (fs.existsSync(file)) filesLeftUnnamed.set(file, event);
-    else anyTaken = true;
+    else takenNow += 1;
   }
   if (replacedUnread > 0) {
     const left = [...filesLeftUnnamed].map(([file, event]) => ({ file, event }));
+    const taken = takenCarried + takenNow;
     for (const entry of filedNow) {
       entry.superseded = replacedUnread;
-      if (anyTaken) entry.supersededFileTaken = true;
+      if (taken > 0) entry.supersededFilesTaken = taken;
       if (left.length > 0) entry.supersededFilesLeft = left;
     }
   }
@@ -282,6 +329,7 @@ export function takeReapedSession(
 function describeReplacedRecords(entry: ReapedSession): string {
   const count = entry.superseded ?? 0;
   if (count === 0) return "";
+  const taken = entry.supersededFilesTaken ?? 0;
   const subject = count === 1 ? "An earlier session" : `${count} earlier sessions`;
   const they = count === 1 ? "it" : "they";
   // Naming a log file is the debugger's alone: `keptAt` comes from the two
@@ -297,32 +345,39 @@ function describeReplacedRecords(entry: ReapedSession): string {
     .sort((a, b) => b.event - a.event)
     .map(({ file }) => file)
     .filter((file) => fs.existsSync(file));
-  // The paths, not the directory holding them. A log file's name carries its
-  // port and nothing else, and ~/.argent/tmp holds every device's, every port's
-  // and every tool-server's, so a reader sent at the listing has to open each
-  // one to find the session's own — and the salvage clause above already hands
-  // out an absolute path under exactly the same conditions.
+  // The paths, not the directory holding them. A log file's name carries a port
+  // and a clock and nothing that says whose session it is, and ~/.argent/tmp
+  // holds every device's, every port's and every tool-server's, so a reader sent
+  // at the listing has to open each one to find the session's own — and the
+  // salvage clause above already hands out an absolute path under exactly the
+  // same conditions.
   //
   // Capped because the list grows by one path per unread supersession and this
   // string is a tool result: a crash loop with a teardown between the rounds
   // keeps every file, since neither event can reclaim across the one that kept
-  // none. The rest are counted rather than named — they share a directory with
-  // the ones shown.
+  // none. The rest are counted and not located: the directory is the locator
+  // the paragraph above rejects, and a name in it carries no device or session,
+  // so pointing a reader at it is the non-answer naming paths exists to avoid.
   const shown = left.slice(0, MAX_NAMED_FILES);
   const unnamed = left.length - shown.length;
   const where =
     ` still on disk, at ${shown.join(", ")}` +
-    (unnamed > 0 ? `, and ${unnamed} more in the same directory.` : `.`);
-  const file = entry.supersededFileTaken
-    ? // Which of them lost its file is not sayable past a count of one: a write
-      // replaces every record its ids reach, and the take falls on whichever was
-      // filed under exactly this id set — as readily the oldest as the newest.
-      // An order here would send a reader after the one file that is not there.
-      ` The log file ${count === 1 ? "it" : "one of them"} kept went with it.` +
-      (left.length > 0 ? ` Anything the others left is${where}` : ``)
-    : left.length > 0
-      ? ` Any log file ${they} left is${where}`
-      : ``;
+    (unnamed > 0 ? `, and ${unnamed} more this note does not name.` : `.`);
+  const file =
+    taken > 0
+      ? // How many, because a chain takes once per round and only this count
+        // survives the record that knew about the round before. WHICH of them
+        // lost a file stays unsayable: a write replaces every record its ids
+        // reach, and the take falls on whichever was filed under exactly this id
+        // set — as readily the oldest as the newest. An order here would send a
+        // reader after the one file that is not there.
+        (taken === 1
+          ? ` The log file ${count === 1 ? "it" : "one of them"} kept went with it.`
+          : ` The log files ${taken === count ? `all ${count}` : taken} of them kept went with ` +
+            `them.`) + (left.length > 0 ? ` Anything the others left is${where}` : ``)
+      : left.length > 0
+        ? ` Any log file ${they} left is${where}`
+        : ``;
   return (
     ` ${subject} that answered here ended holding output nobody read, and this event ` +
     `replaced what ${they} filed, so what ${they} captured is reported nowhere.` +

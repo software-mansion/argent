@@ -40,8 +40,8 @@ export const debuggerConnectTool: ToolDefinition<
      * been reclaimed, or — when there was no file to keep, because the teardown
      * deleted it, the writer never created one, or something removed it since —
      * that those entries went with it. Where it reports what this event
-     * replaced too, it says separately that one of those log files went with
-     * it, where the rest of them still are, or both — and neither where there
+     * replaced too, it says separately how many of those log files went with
+     * them, where the rest of them still are, or both — and neither where there
      * is nothing of theirs left for the agent to reach.
      * Reported here because this call is the prescribed recovery step after a
      * crash, and it consumes the record that names the file.
