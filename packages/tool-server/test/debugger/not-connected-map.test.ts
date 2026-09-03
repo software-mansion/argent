@@ -114,12 +114,18 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     // FuseboxClient.setClientMetadata, ReactNativeApplication.enable and
     // Runtime.enable and fails at 30.0s. The sentence exists to price a retry, so
     // "the full timeout" — one 10s send — understates it by 3x and 6x.
-    for (const { guidance } of [
-      metro(),
-      chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT),
+    // Each path runs a different number of 10s sends (Metro 3, Chromium 6), so
+    // each states its own figure; one OR-regex over both let the two swap.
+    for (const { guidance, cost } of [
+      { guidance: metro().guidance, cost: "costs about 30s" },
+      {
+        guidance: chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT)
+          .guidance,
+        cost: "costs about a minute",
+      },
     ]) {
       pinsOnce(guidance, "Do not retry in a loop");
-      expect(guidance, "prices the attempt in seconds").toMatch(/costs about (30s|a minute)/);
+      expect(guidance, `prices this platform's attempt: ${cost}`).toContain(cost);
       expect(guidance, "attributes the cost to the sequence, not to one send").toContain(
         "each waits out its own 10s timeout"
       );
@@ -439,6 +445,43 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       ).not.toContain(phrase);
     }
 
+    // The two INVALID_RESPONSE sub-phrases the same arm routes on: a reachable
+    // port answering non-2xx, or 200 with a body that is not JSON. Driven from
+    // real servers so a reword of either throw site strands the guidance's
+    // squatter routing, exactly as the two phrases above are guarded.
+    const HTTP_STATUS = "failed (HTTP";
+    const NOT_JSON = "returned a body that is not valid JSON";
+    async function discoveryError(onVersion: (res: http.ServerResponse) => void): Promise<string> {
+      const server = http.createServer((req, res) => {
+        if (req.url === "/json/version") return onVersion(res);
+        res.statusCode = 404;
+        res.end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as { port: number };
+      const err = await ensureCdpReachable(port).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      expect(err, "expected the discovery probe to reject").toBeDefined();
+      return (err as Error).message;
+    }
+    const httpFail = await discoveryError((res) => {
+      res.statusCode = 500;
+      res.end("boom");
+    });
+    const notJson = await discoveryError((res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end("this is not json");
+    });
+    expect(httpFail, "non-2xx discovery carries the sub-phrase the guidance routes on").toContain(
+      HTTP_STATUS
+    );
+    expect(notJson, "non-JSON discovery carries the sub-phrase the guidance routes on").toContain(
+      NOT_JSON
+    );
+
     const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
     // The three arms, each keyed on what the detail carries rather than on where
     // it carries it, and the instruction that makes them usable at all.
@@ -456,6 +499,8 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     );
     // The squatter half, and its remedy: there is no port-inspecting tool, so the
     // actor is the user, and no relaunch on that port clears it.
+    pinsOnce(guidance, `'${HTTP_STATUS} <status>)'`);
+    pinsOnce(guidance, `'${NOT_JSON}'`);
     pinsOnce(
       guidance,
       "means something that is not CDP holds the port, which no relaunch on that port " +
