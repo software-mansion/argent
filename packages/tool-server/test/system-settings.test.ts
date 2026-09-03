@@ -1066,7 +1066,7 @@ describe("a change that would cut the adb link it travels over", () => {
       (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_self_disconnect"
     );
     // The recovery is not obvious from the failure alone, so it is named.
-    await rejection.toThrow(/Connect it over USB/);
+    await rejection.toThrow(/Use a USB connection/);
     expect(mockRunAdb).not.toHaveBeenCalled();
   });
 
@@ -1132,12 +1132,12 @@ describe("what a failure carries", () => {
     expect((err as Error).message).toContain(IOS_UDID);
   });
 
-  it("tells an agent to boot the simulator, without also blaming the runtime", async () => {
-    // A shutdown simulator refuses `spawn` with "…device is not booted." — a
-    // message the runtime-unsupported regex also matches on "not support"-like
-    // wording. Both hints at once would send the agent looking for a newer
-    // runtime when all it has to do is boot the one it has.
-    execFileFails("Process spawn via launchd failed because device is not booted.");
+  it("tells an agent to boot the simulator rather than blame the runtime", async () => {
+    // The two hints are mutually exclusive by construction, and a refusal whose
+    // wording trips both regexes is what that ordering is for: "boot it" is
+    // actionable, "try a newer runtime" sends the agent installing runtimes to
+    // fix a simulator it only had to boot.
+    execFileFails("Operation not supported while the device is not booted.");
     const err = await iosImpl
       .handler({}, { udid: IOS_UDID, setting: "reduce-motion", value: "on" }, IOS_DEVICE)
       .catch((e: unknown) => e);

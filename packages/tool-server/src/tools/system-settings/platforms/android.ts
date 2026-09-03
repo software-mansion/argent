@@ -189,7 +189,8 @@ function assertKeepsTransport(udid: string, setting: SystemSetting, value: strin
   if (!dropsWifi || !isWirelessAdbSerial(udid)) return;
   throw new InvalidToolInputError(
     `Setting '${setting}' to '${value}' on ${udid} would switch off the Wi-Fi link adb reaches it over, ` +
-      `leaving no way to reach the device or undo the change. Connect it over USB and use that serial instead.`,
+      `leaving no way to reach the device or undo the change. Use a USB connection for this change, ` +
+      `or make it on the device itself.`,
     {
       error_code: FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED,
       failure_stage: "android_system_setting_self_disconnect",
