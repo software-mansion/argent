@@ -277,6 +277,15 @@ elif [[ "$PHASE" == "update" ]]; then
   absent "$out" "npm error"
   absent "$out" "EACCES"
 
+  # Same assertion D makes, for the other write path into the same directory:
+  # refusing the install has to leave the one already there alone.
+  still="$(argent --version 2>&1 | tail -1)"
+  if [[ "$still" == "$PACKED_VERSION" ]]; then
+    pass "the store install is untouched at v$still"
+  else
+    fail "global argent now reports '$still', expected '$PACKED_VERSION'"
+  fi
+
 else
   require "unknown phase '$PHASE' (expected preinstall or update)"
 fi

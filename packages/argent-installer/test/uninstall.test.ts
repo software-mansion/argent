@@ -1029,6 +1029,35 @@ describe("uninstall — an argent npm did not install", () => {
       "Removed global package."
     );
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_uninstalled_package: false,
+      })
+    );
+  });
+
+  it("still removes the project devDependency it was also asked to remove", async () => {
+    // The global target is listed first, so giving up on it would take the
+    // local removal with it.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^9.9.9" } })
+    );
+    writeFile(
+      path.join(tmpDir, "node_modules", "@swmansion", "argent", "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed local package."
+    );
+    expect(vi.mocked(log.error).mock.calls.map(([m]) => m as string)).toContainEqual(
+      expect.stringContaining("npm has no global @swmansion/argent to remove")
+    );
   });
 });
 

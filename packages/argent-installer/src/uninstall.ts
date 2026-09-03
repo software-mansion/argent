@@ -50,6 +50,30 @@ function pathPresent(target: string): boolean {
 }
 
 /**
+ * Why an exit-0 removal removed nothing, or null when it did remove something.
+ * `npm uninstall -g` prints "up to date" and exits 0 whether or not it had
+ * anything to take away, so only npm's own global directory tells the two
+ * apart — and `entry` has to be read before the command as well as after,
+ * because gone from both means npm never owned the argent PATH answers with.
+ */
+function unremovedReason(entry: string, ownedBefore: boolean): string | null {
+  if (!ownedBefore) {
+    return (
+      `npm has no global ${PACKAGE_NAME} to remove. The ${MCP_BINARY_NAME} on your PATH ` +
+      `came from something else — another package manager, a Nix or Homebrew wrapper, or ` +
+      `a project's node_modules — and has to be removed with whatever installed it.`
+    );
+  }
+  if (!pathPresent(entry)) return null;
+  // The prefix npm resolves is not the one the install lives under: an inherited
+  // npm_config_prefix outranks the config file `argent init`'s recovery writes.
+  return (
+    `npm reported success but ${PACKAGE_NAME} is still in its global directory at ` +
+    `${entry}. Check that the global prefix npm resolves is the one this install lives under.`
+  );
+}
+
+/**
  * Where `cmd`'s package manager would hold argent globally, or null when that
  * is not a question this command's manager can be asked — only npm's global
  * directory has a layout {@link npmGlobalPackagePath} can name.
@@ -687,6 +711,7 @@ export async function uninstall(args: string[]): Promise<void> {
       );
     }
 
+    let packageActionFailed = false;
     for (const removable of removables) {
       let shouldRemove = nonInteractive || removePreconfirmed;
       if (!nonInteractive && !removePreconfirmed) {
@@ -711,34 +736,20 @@ export async function uninstall(args: string[]): Promise<void> {
         throw err;
       }
 
-      // `npm uninstall -g` prints "up to date" and exits 0 whether or not it had
-      // anything to remove, so its exit code cannot tell a removal from a no-op.
-      // What npm holds in its own global directory can, and has to be read
-      // before the command as well as after: gone from both means npm never
-      // owned the argent that PATH answers with.
+      // Read before the command as well as after — see unremovedReason.
       const npmEntry = removable.kind === "global" ? globalPackagePathFor(removable.cmd) : null;
-      const npmOwnedBefore = npmEntry !== null && pathPresent(npmEntry);
+      const ownedBefore = npmEntry !== null && pathPresent(npmEntry);
 
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
-        if (npmEntry !== null && !npmOwnedBefore) {
-          throw new Error(
-            `npm has no global ${PACKAGE_NAME} to remove, so nothing was removed. The ` +
-              `${MCP_BINARY_NAME} on your PATH came from something else — another package ` +
-              `manager, a Nix or Homebrew wrapper, or a project's node_modules — and has to ` +
-              `be removed with whatever installed it.`
-          );
-        }
-        if (npmEntry !== null && pathPresent(npmEntry)) {
-          // The prefix npm resolves is not the one the install lives under: an
-          // inherited npm_config_prefix outranks the config file `argent init`'s
-          // prefix recovery writes, so the two can disagree.
-          throw new Error(
-            `npm reported success but ${PACKAGE_NAME} is still in its global directory at ` +
-              `${npmEntry}. Check that the global prefix npm resolves is the one this ` +
-              `install lives under.`
-          );
+        const unremoved = npmEntry === null ? null : unremovedReason(npmEntry, ownedBefore);
+        if (unremoved !== null) {
+          // Not thrown: the command itself did not fail, and the other targets
+          // this run was asked to remove are still worth removing.
+          p.log.error(`${removable.kind} uninstall failed: ${unremoved}`);
+          packageActionFailed = true;
+          continue;
         }
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
@@ -760,7 +771,11 @@ export async function uninstall(args: string[]): Promise<void> {
       }
     }
 
-    await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
+    await finalizeUninstallTelemetry(
+      hasPrunedContent,
+      hasUninstalledPackage,
+      packageActionFailed ? UNINSTALL_PACKAGE_ACTION_FAILED : undefined
+    );
     // Only once no global install is left behind: clearing machine-wide state out
     // from under an installation the user kept would be wrong.
     if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
