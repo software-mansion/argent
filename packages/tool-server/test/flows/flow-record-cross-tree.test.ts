@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
+import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 // `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
@@ -43,13 +44,18 @@ import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
 import { adaptVegaTreeForFlows } from "../../src/tools/flows/flow-vega-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import {
+  createFlowAddStepTool,
+  directiveCommandHint,
+  UNHINTED_DIRECTIVE_KEYS,
+} from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
   __resetRecordingsForTesting,
   parseFlow,
   serializeFlow,
+  STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { n } from "./harness";
 
@@ -141,7 +147,7 @@ function registryWhereWaitSucceeds(): Registry {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
       if (id === "gesture-tap") return { tapped: true };
-      throw new Error(`Tool "${id}" not found`);
+      throw new ToolNotFoundError(id);
     }),
     getTool: vi.fn(() => undefined),
   } as unknown as Registry;
@@ -2046,5 +2052,273 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).toThrow(/not supported on ios-remote/);
+  });
+});
+
+describe("a flow-directive name points at the tool that records it", () => {
+  beforeEach(async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, executionPrerequisite: "anywhere" }
+    );
+  });
+
+  const hint = async (command: string) => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    return tool.execute({}, { name: "hints", project_root: tmpDir, command });
+  };
+
+  it("answers EVERY directive the parser accepts, or lists it as deliberately unanswered", async () => {
+    const unanswered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) === undefined);
+    expect([...unanswered].sort()).toEqual([...UNHINTED_DIRECTIVE_KEYS].sort());
+  });
+
+  it("names no tool for the directives that have none, and says what to do instead", async () => {
+    const cases: [string, string][] = [
+      ["wait", "a fixed sleep is not a readiness signal"],
+      ["long-press", "there is no gesture-long-press"],
+      ["scroll-to", "it SEARCHES"],
+      ["snapshot", "compares the screen against a stored baseline"],
+      ["when", "it GUARDS the steps nested under it"],
+    ];
+    for (const [command, why] of cases) {
+      const result = await hint(command);
+      expect(result.message, command).toContain("is a flow directive, not a tool");
+      expect(result.message, command).toContain("records one");
+      expect(result.message, command).toContain(why);
+      expect(result.message, command).not.toContain("Record it by calling");
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("names gesture-pinch for `pinch`, stored raw", async () => {
+    const result = await hint("pinch");
+    expect(result.message).toContain("gesture-pinch");
+    expect(result.message).toContain("stored as a raw `tool: gesture-pinch` step");
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("names flow-add-echo for `echo`", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("no step was recorded");
+  });
+
+  it("explains that `wait` has no recording tool at all", async () => {
+    const result = await hint("wait");
+    expect(result.message).toContain("a fixed sleep is not a readiness signal");
+    expect(result.message).toContain("await-ui-element");
+  });
+
+  it("names restart-app for `launch`", async () => {
+    expect((await hint("launch")).message).toContain("restart-app");
+  });
+
+  it("refuses a recorder tool as `command` instead of nesting it", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of [
+      "flow-add-echo",
+      "flow-add-step",
+      "flow-start-recording",
+      "flow-finish-recording",
+    ]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{}" }
+      );
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("gives each refused recorder tool ITS OWN reason", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const reasons: [string, string[], string[]][] = [
+      [
+        "flow-add-echo",
+        ["must be called DIRECTLY", "fails on every replay"],
+        ["truncates", "ends the recording"],
+      ],
+      ["flow-add-step", ["cannot record itself"], ["truncates", "ends the recording"]],
+      ["flow-start-recording", ["truncates the flow it names", "erase"], ["ends the recording"]],
+      [
+        "flow-finish-recording",
+        ["ends the recording", "cannot also be a step in it"],
+        ["truncates"],
+      ],
+    ];
+    for (const [command, present, absent] of reasons) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{}" }
+      );
+      for (const fragment of present) {
+        expect(result.message, `${command} should say "${fragment}"`).toContain(fragment);
+      }
+      for (const fragment of absent) {
+        expect(result.message, `${command} should not say "${fragment}"`).not.toContain(fragment);
+      }
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("refuses a recorder tool BEFORE parsing `args`, so malformed `args` cannot pre-empt the guidance", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "flow-add-echo", args: "{not valid json" }
+    );
+    expect(result.message).toContain("must be called DIRECTLY");
+    expect(result.message).toContain("no step was recorded");
+    expect(result.stepCount).toBe(0);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("still answers a directive name when `args` is malformed", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of ["echo", "wait", "tap", "run"]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{not json" }
+      );
+      expect(result.message, command).toContain("is a flow directive");
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("lets a REGISTERED command's malformed `args` fail as the syntax error it is", async () => {
+    const registryWhereTapIsRegistered = {
+      invokeTool: vi.fn(async () => ({ ok: true })),
+      getTool: vi.fn((id: string) => (id === "tap" ? ({ id } as never) : undefined)),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapIsRegistered);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{not json" })
+    ).rejects.toThrow(SyntaxError);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("reports the step count as the hand-edited file now stands, not the stale snapshot", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const flowPath = path.join(tmpDir, ".argent", "flows", "hints.yaml");
+
+    await tool.execute(
+      {},
+      {
+        name: "hints",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: IOS, x: 0.5, y: 0.5 }),
+      }
+    );
+    expect(await recordedSteps("hints")).toHaveLength(1);
+
+    await fs.writeFile(flowPath, "steps:\n  - echo: one\n  - echo: two\n  - echo: three\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
+    );
+
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).not.toContain("could not be read");
+    expect(result.stepCount).toBe(3); // the file, not the snapshot's 1
+  });
+
+  it("qualifies the step count when the persisted flow can no longer be read", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "hints.yaml"),
+      "steps:\n  - [unclosed",
+      "utf8"
+    );
+
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
+    );
+
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("The persisted flow could not be read and parsed");
+    expect(result.message).toContain("last valid in-memory snapshot");
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("DIRECTLY");
+    expect(result.message).toContain("fails on every replay");
+  });
+
+  it("does not claim a rewrite for the commands the recorder stores raw", async () => {
+    for (const command of ["type", "await", "assert"]) {
+      const result = await hint(command);
+      expect(result.message, command).toContain("stored as a raw");
+      expect(result.message, command).toContain("polish pass");
+    }
+    expect((await hint("launch")).message).toContain("rewrites it into the `launch:` step");
+  });
+
+  it("names the TOOL that records each directive the recorder stores raw", async () => {
+    const named: [string, string][] = [
+      ["type", "keyboard"],
+      ["await", "await-ui-element"],
+      ["assert", "await-ui-element"],
+    ];
+    for (const [command, tool] of named) {
+      const message = (await hint(command)).message;
+      expect(message, command).toContain(`Record it by calling \`${tool}\` through flow-add-step`);
+      expect(message, command).toContain(`stored as a raw \`tool: ${tool}\` step`);
+    }
+    expect((await hint("type")).message).not.toContain("await-ui-element");
+    for (const command of ["await", "assert"]) {
+      expect((await hint(command)).message, command).not.toContain("`keyboard`");
+    }
+  });
+
+  it("qualifies a rewrite hint with the delayMs opt-out", async () => {
+    const tap = (await hint("tap")).message;
+    expect(tap).toContain("rewrites it into the `tap:` step");
+    expect(tap).toContain("delayMs");
+    expect(tap).toContain("raw `tool: gesture-tap`");
+  });
+
+  it("names flow-execute for `run`, with the sibling-flow rewrite condition", async () => {
+    const msg = (await hint("run")).message;
+    expect(msg).toContain("flow-execute");
+    expect(msg).toContain("rewrites it into the `run:` step");
+    expect(msg).toContain("sibling flow");
+    expect(msg).toContain("delayMs");
+    expect(msg).toContain("REMOTE");
+    expect(msg).toContain("refused outright and records nothing");
+  });
+
+  it("lets a genuine tool failure report itself", async () => {
+    await expect(hint("screenshot")).rejects.toThrow(/not found/i);
+  });
+
+  it("does not rewrite a REGISTERED tool's own 'not found' failure into a directive hint", async () => {
+    const registryWhereTapRanAndFailed = {
+      invokeTool: vi.fn(async () => {
+        throw new ToolExecutionError("tap", "element not found");
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapRanAndFailed);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{}" })
+    ).rejects.toThrow(/element not found/);
+  });
+
+  it("treats a prototype-member command name as a plain not-found, not a table hit", async () => {
+    for (const command of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      await expect(hint(command), command).rejects.toThrow(/not found/i);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
   });
 });

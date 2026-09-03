@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as readline from "node:readline";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
@@ -19,17 +19,18 @@ import {
 // Re-exported for native-devtools-env.test.ts, which imports it from here.
 export { buildDyldInsertLibraries };
 
-export type NativeDevtoolsTransport = "unix" | "tcp";
+type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
 /**
- * Whether the Argent native devtools dylib can ever be injected into an app.
+ * Whether an app is a supported target for the Argent native devtools.
  *
- * Apple system apps (bundle ids under `com.apple.`) are platform binaries with
- * library validation, so the simulator may or may not honour
- * `DYLD_INSERT_LIBRARIES` for them — runtime-dependent, and no relaunch changes
- * which way it goes (#453 recorded `connected: false` for
+ * Apple system apps (bundle ids under `com.apple.`) are not: they are never the
+ * app under test, and the ones seen connected are background-launched processes
+ * that may never service their main queue, so a read hangs or describes UI
+ * nobody is looking at — and whether one connects at all is
+ * runtime-dependent anyway (#453 recorded `connected: false` for
  * `com.apple.Preferences` on iOS 26.5, an E2E run `connected: true` on 18.5).
  * Answering "not injectable" for both gives the native-* tools a terminal
  * signal instead of an unbounded restart-app → retry loop; an app that MIGHT
@@ -311,16 +312,16 @@ export async function precheckNativeDevtools(
   // knowable without any env state, so this fires before the env plumbing below
   // — a given-up sim or a transient ensureEnvReady failure must not mask the
   // terminal signal behind init_failed's "re-boot the simulator" guidance (a
-  // reboot cannot make a system app injectable), and no env-setup work is spent
-  // on an app that may never load the dylib. Throwing (rather than returning a
+  // reboot cannot make a system app a supported target), and no env-setup work
+  // is spent on an app the gate refuses. Throwing (rather than returning a
   // restart-required block) makes the native-* feature tools surface a hard
   // error instead of an unbounded restart→retry loop. The 2-arg overload
   // (bundleId undefined) must NOT throw: native-devtools-status reports the
   // state instead, and launch-app / restart-app run it too — launching or
-  // restarting a system app is legitimate, it just may not inject.
+  // restarting a system app is legitimate, it just is not a target.
   if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
     throw new FailureError(
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools cannot be relied on to inject into it — treat it as unavailable rather than retrying. ` +
+      `${bundleId} is an Apple system app: it is never the app under test, so Argent native devtools refuse to read one — treat it as unavailable rather than retrying. ` +
         NON_INJECTABLE_RECOVERY,
       {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
@@ -704,78 +705,73 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const server = net.createServer((socket) => {
       let bundleId: string | null = null;
-      const rl = readline.createInterface({ input: socket });
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
+        onMessage: (parsed) => {
+          const msg = parsed as { type: string; payload: any };
 
-      rl.on("line", (raw) => {
-        let msg: { type: string; payload: any };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
+          // Handshake: must be the first message.
+          if (bundleId === null) {
+            if (msg.type !== "Control") return;
+            bundleId = msg.payload.bundleId as string;
 
-        // Handshake: must be the first message.
-        if (bundleId === null) {
-          if (msg.type !== "Control") return;
-          bundleId = msg.payload.bundleId as string;
+            // The same app reconnecting (fast restart) supersedes the old socket.
+            const existing = connections.get(bundleId);
+            if (existing) {
+              existing.socket.destroy();
+            }
 
-          // The same app reconnecting (fast restart) supersedes the old socket.
-          const existing = connections.get(bundleId);
-          if (existing) {
-            existing.socket.destroy();
+            connections.set(bundleId, { socket, networkLog: [] });
+
+            if (activatedBundleIds.has(bundleId)) {
+              socket.write(
+                JSON.stringify({
+                  type: "Control",
+                  payload: { command: "activateNetworkInspection" },
+                }) + "\n"
+              );
+            }
+            return;
           }
 
-          connections.set(bundleId, { socket, networkLog: [] });
-
-          if (activatedBundleIds.has(bundleId)) {
-            socket.write(
-              JSON.stringify({
-                type: "Control",
-                payload: { command: "activateNetworkInspection" },
-              }) + "\n"
-            );
-          }
-          return;
-        }
-
-        if (msg.type === "CDP") {
-          const p = msg.payload;
-          // Unsolicited events have method but no id
-          if (p.method && p.id === undefined) {
-            const conn = connections.get(bundleId);
-            if (conn) {
-              if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
-                conn.networkLog.shift();
+          if (msg.type === "CDP") {
+            const p = msg.payload;
+            // Unsolicited events have method but no id
+            if (p.method && p.id === undefined) {
+              const conn = connections.get(bundleId);
+              if (conn) {
+                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
+                  conn.networkLog.shift();
+                }
+                conn.networkLog.push({
+                  method: p.method,
+                  params: p.params,
+                  timestamp: Date.now(),
+                });
               }
-              conn.networkLog.push({
-                method: p.method,
-                params: p.params,
-                timestamp: Date.now(),
-              });
             }
           }
-        }
 
-        if (msg.type === "ViewInspector") {
-          const p = msg.payload;
-          const pending = pendingRpc.get(p.id);
-          if (!pending) return;
-          pendingRpc.delete(p.id);
-          if (p.error) {
-            pending.reject(
-              new FailureError(p.error.message, {
-                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
-                failure_stage: "native_devtools_rpc_response",
-                failure_area: "tool_server",
-                error_kind: "subprocess",
-              })
-            );
-          } else pending.resolve(p.result);
-        }
+          if (msg.type === "ViewInspector") {
+            const p = msg.payload;
+            const pending = pendingRpc.get(p.id);
+            if (!pending) return;
+            pendingRpc.delete(p.id);
+            if (p.error) {
+              pending.reject(
+                new FailureError(p.error.message, {
+                  error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+                  failure_stage: "native_devtools_rpc_response",
+                  failure_area: "tool_server",
+                  error_kind: "subprocess",
+                })
+              );
+            } else pending.resolve(p.result);
+          }
+        },
       });
 
       socket.on("close", () => {
-        rl.close();
         if (bundleId !== null) {
           // A fast reconnect may have already replaced this socket.
           if (connections.get(bundleId)?.socket === socket) {

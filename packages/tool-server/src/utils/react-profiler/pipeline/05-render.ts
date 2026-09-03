@@ -16,7 +16,7 @@ import { annotateComponentName } from "../component-names";
 const MAX_INLINE_COMMITS = 10;
 const REPORT_FILENAME = "react-profiler-report.md";
 
-export interface RenderInput {
+interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
   componentFindings: ComponentFinding[];
   sessionContext: SessionContext;
@@ -29,7 +29,7 @@ export interface RenderInput {
   maxCommitMs?: number;
 }
 
-export interface RenderOutput {
+interface RenderOutput {
   report: string;
   reportFile: string | null;
   hotCommitsTotal: number;

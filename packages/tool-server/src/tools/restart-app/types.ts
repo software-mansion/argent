@@ -16,5 +16,4 @@ export type RestartAppResult =
 export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
-export type RestartAppAndroidServices = Record<string, never>;
 export type RestartAppVegaServices = Record<string, never>;

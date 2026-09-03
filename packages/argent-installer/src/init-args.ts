@@ -1,7 +1,7 @@
 // Parsed `argent init` flags, plus the sentinel step modules throw to unwind to
 // the orchestrator on a cancelled prompt.
 
-export interface InitArgs {
+interface InitArgs {
   /** --yes / -y */
   nonInteractive: boolean;
   /** --no-telemetry */
@@ -38,7 +38,7 @@ export function parseInitArgs(args: string[]): InitArgs {
 // the recovery offered when the global directory cannot be written: choosing
 // the global install mode (or --global) IS the consent, so a missing global
 // package otherwise installs without a second question.
-export type CancelStep =
+type CancelStep =
   | "install_mode"
   | "global_install"
   | "editors"

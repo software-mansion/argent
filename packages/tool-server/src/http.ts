@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  describeParamIssues,
   getFailureSignal,
   type FailureSignal,
   type FileInputSpec,
@@ -29,6 +30,7 @@ import {
   buildScreenRecordingNote,
   getActiveScreenRecordings,
 } from "./utils/screen-recording-reminder";
+import { consumePendingSigningDetectionNote } from "./utils/ios-device/team-detect";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
@@ -38,7 +40,7 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
-import { resolveDevice } from "./utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
@@ -94,6 +96,15 @@ function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return findErrorInCauseChain(err, DependencyMissingError);
 }
 
+function omitKeys(args: unknown, keys: readonly string[]): unknown {
+  if (keys.length === 0 || args === null || typeof args !== "object" || Array.isArray(args)) {
+    return args;
+  }
+  const copy = { ...(args as Record<string, unknown>) };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
 /**
  * Wire-safe failure classification, so a caller can tell a per-request rejection
  * (e.g. `error_kind: "validation"`) from an infra fault without parsing the
@@ -146,6 +157,19 @@ function extractDeviceArg(data: unknown): string | null {
     return record.devices[0];
   }
   return null;
+}
+
+/**
+ * Whether the call names a physical iPhone as the device it acts on. Reads
+ * `device` as well as the three spellings above: `flow-execute` names its
+ * target that way, and a session that only replays flows on the phone must
+ * still be handed the signing note.
+ */
+function targetsIosPhysicalDevice(data: unknown): boolean {
+  const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const flowDevice = typeof record?.device === "string" ? record.device : null;
+  const deviceArg = extractDeviceArg(data) ?? flowDevice;
+  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
 }
 
 type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
@@ -230,7 +254,7 @@ function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknow
   return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
 }
 
-export interface HttpAppOptions {
+interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;
@@ -660,6 +684,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // neither in place nor via uploaded content.
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
+      let derivedTargets: string[];
       try {
         const resolved = await resolveFileInputs(def, req.body, (id) => {
           const entry = uploads.get(id);
@@ -668,6 +693,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         });
         bodyArgs = resolved.args;
         resolvedFileInputs = resolved.fileInputs;
+        derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
         res.once("close", () => void resolved.cleanup());
@@ -694,7 +720,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             req.body,
             { invalid_params: deriveInvalidParams(parseResult.error, declared) }
           );
-          res.status(400).json({ error: parseResult.error.message });
+          // `error` keeps the raw issue JSON. Every CLI released before
+          // `issues` existed reads this field and `JSON.parse`s it; prose here
+          // makes that parse throw, and the CLI then loses the flag
+          // attribution, the help block, exit 2, and `--json`'s object.
+          res.status(400).json({
+            error: parseResult.error.message,
+            message: describeParamIssues(parseResult.error, omitKeys(bodyArgs, derivedTargets)),
+            issues: parseResult.error.issues,
+          });
           return;
         }
         parsedData = parseResult.data;
@@ -729,9 +763,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             res.status(400).json({ error: err.message });
             return;
           }
-          // Anything other than UnsupportedOperationError (today only a custom
-          // supports() refiner can throw one) is an internal fault, not a client
-          // validation error — 500/unknown rather than 400/validation.
+          // Anything else (today only a custom supports() refiner can throw one)
+          // is an internal fault, not a client validation error: 500/unknown
+          // rather than 400/validation.
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
@@ -856,6 +890,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
+        // Staged once when keychain team detection first signs the on-device
+        // runner (utils/ios-device/team-detect); drained here into the first
+        // completed call that targets a physical iPhone, so the agent driving
+        // the hardware learns which team was picked and how to override, and a
+        // caller on another platform sharing this tool-server never does.
+        const signingNote = targetsIosPhysicalDevice(parsedData)
+          ? consumePendingSigningDetectionNote()
+          : null;
+        if (signingNote) {
+          notes.push(signingNote);
+        }
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {
           writeLine({ event: "result", data, ...notePayload });
@@ -904,6 +949,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
           res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
+          return;
+        }
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
+          res.status(400).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

@@ -1,6 +1,11 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
+import {
+  init as telemetryInit,
+  track,
+  warmTelemetryIdentitySync,
+  writeConsentFlag,
+} from "@argent/telemetry";
 import { ALL_ADAPTERS, copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
 import {
   RULES_DIR,
@@ -116,6 +121,23 @@ export async function init(args: string[]): Promise<void> {
     tel.installMode =
       modeFromFlags ?? (await promptInstallMode(recordedMode ?? "global", blockedGlobal));
     track("installation:install_mode_decision", { install_mode: tel.installMode });
+
+    // `--local --no-telemetry`: the global opt-out above only covers this
+    // machine. A local install is meant to be committed, so also record the
+    // opt-out in the project config — `false` there wins on every clone.
+    let wroteProjectTelemetryOptOut = false;
+    if (parsed.noTelemetry && tel.installMode === "local") {
+      try {
+        writeConsentFlag(false, "project", { cwd: initProjectRoot });
+        wroteProjectTelemetryOptOut = true;
+        p.log.info(
+          `${pc.bold("Telemetry")} ${pc.dim("also disabled for this project —")} ` +
+            `${pc.cyan(".argent/config.json")} ${pc.dim("(commit it so the opt-out applies to every clone).")}`
+        );
+      } catch (err) {
+        p.log.warn(`Could not write the project telemetry opt-out: ${err}`);
+      }
+    }
 
     // Step 0 — install / update check.
 
@@ -284,6 +306,7 @@ export async function init(args: string[]): Promise<void> {
       allowlistEnabled: allowlist.enabled,
       skillsMethod,
       copiedRules: copyResults.length > 0,
+      wroteProjectTelemetryOptOut,
     });
 
     p.note(
@@ -339,6 +362,8 @@ interface SummaryArgs {
   allowlistEnabled: boolean;
   skillsMethod: SkillsMethod;
   copiedRules: boolean;
+  /** `--no-telemetry` in local mode also wrote `.argent/config.json`. */
+  wroteProjectTelemetryOptOut: boolean;
 }
 
 function printSummary({
@@ -349,6 +374,7 @@ function printSummary({
   allowlistEnabled,
   skillsMethod,
   copiedRules,
+  wroteProjectTelemetryOptOut,
 }: SummaryArgs): void {
   const summaryLines = [
     `${pc.green("Install mode")} ${installMode === "local" ? "local (devDependency)" : "global"}`,
@@ -379,7 +405,7 @@ function printSummary({
         `${pc.bold("Commit")} so your team shares the same setup:`,
         `  ${pc.cyan("package.json")} + your lockfile`,
         `  the written MCP config (.mcp.json, .cursor/mcp.json, …)`,
-        `  ${pc.cyan(".argent/install.json")}, and the skills/rules/agents files`,
+        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills/rules/agents files`,
         "",
         `Teammates then get argent on ${pc.cyan("npm install")} — no global install, no ${pc.cyan("argent init")}.`,
         pc.dim(
@@ -391,7 +417,7 @@ function printSummary({
   }
 }
 
-export function printBanner(): void {
+function printBanner(): void {
   const lines = [
     " █████╗ ██████╗  ██████╗ ███████╗███╗   ██╗████████╗",
     "██╔══██╗██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",

@@ -1,6 +1,7 @@
 /**
- * Tunables and predicates for the screenshot the MCP layer appends after a
- * successful interaction tool call.
+ * Tunables and predicates for what the MCP layer appends after a successful
+ * interaction tool call: the auto-screenshot and the auto-describe element
+ * tree. Each has its own tool list and opt-out flag.
  */
 
 import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
@@ -57,12 +58,48 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
 }
 
 /**
+ * Tools whose result gets the accessibility element tree appended, so the
+ * agent has fresh tap frames without a separate `describe` round-trip.
+ * Independent of AUTO_SCREENSHOT_TOOLS; `describe` is absent because its own
+ * result already is the tree.
+ */
+export const AUTO_DESCRIBE_TOOLS = new Set([
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-scroll",
+  "gesture-drag",
+  "gesture-custom",
+  "gesture-pinch",
+  "gesture-rotate",
+  "button",
+  "keyboard",
+  "paste",
+  "rotate",
+  "launch-app",
+  "restart-app",
+  "open-url",
+  "run-sequence",
+]);
+
+// Opt-out only: the `disable-auto-describe` flag is off by default.
+export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
+  return !isFlagEnabled("disable-auto-describe", options);
+}
+
+/** Header line that introduces the element tree appended after an action. */
+export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
+
+export function shouldAutoDescribe(toolName: string): boolean {
+  return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
+}
+
+/**
  * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
  * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
  * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
  * on.
  */
-export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 /**
  * Deep-scan tool args for a secret placeholder; when one is present the

@@ -9,11 +9,11 @@ import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 // End-to-end companion to flow-ios-tree-no-windows.test.ts: that file pins the
 // guard at the unit level (queryFullHierarchyTree throws on a no-windows read);
-// this one proves the guard is what stands between a non-injectable target and
+// this one proves the guard is what stands between an unreadable target and
 // a false green flow. Nothing on the tree path is mocked — the runner goes
 // through the REAL fetchFlowTree → queryFullHierarchyTree against a
 // native-devtools API whose getFullHierarchy returns `{ windows: [] }` (the
-// non-injectable / no-readable-foreground-window shape). Without the guard,
+// no-attached-window shape). Without the guard,
 // that payload adapts to an empty tree the poll loop treats as TRUSTED — the
 // element was never seen, so the blind-read guard's everMatched backstop
 // doesn't engage — and a `hidden` assert evaluates true against it: the exact
@@ -44,7 +44,6 @@ function nativeApi(): NativeDevtoolsApi {
   return {
     listConnectedBundleIds: () => [APP],
     getAppState: async (id: string) => appState(id),
-    requiresAppRestart: async () => false,
     queryViewHierarchy: async () => ({ windows: [] }),
   } as unknown as NativeDevtoolsApi;
 }
@@ -97,6 +96,6 @@ describe("hidden assert against a no-windows target (end-to-end)", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
     expect(result.steps[0].reason).toMatch(/returned no windows for com\.example\.app/);
-    expect(result.steps[0].reason).toMatch(/not injectable/);
+    expect(result.steps[0].reason).toMatch(/no window attached to read/);
   });
 });
