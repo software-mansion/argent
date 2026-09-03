@@ -269,6 +269,39 @@ describe("system-settings schema", () => {
     const fromSettings = new Set(SYSTEM_SETTINGS.flatMap((s) => [...SETTING_VALUES[s]]));
     expect([...SETTING_VALUE_VOCABULARY].sort()).toEqual([...fromSettings].sort());
   });
+
+  it("pins the exact legal value set for every setting", () => {
+    // The exhaustive loops elsewhere draw each setting's value from this same
+    // table, so a wrong entry here — `location: light|dark`, say — passes all of
+    // them (the union stays identical, the loops feed a legal value through, and
+    // the handler tests bypass validation), while the schema then rejects every
+    // real `location on|off`. Compared against literals so that mutation dies here.
+    expect(SETTING_VALUES).toEqual({
+      "appearance": ["light", "dark"],
+      "text-size": [
+        "extra-small",
+        "small",
+        "medium",
+        "large",
+        "extra-large",
+        "extra-extra-large",
+        "extra-extra-extra-large",
+        "accessibility-medium",
+        "accessibility-large",
+        "accessibility-extra-large",
+        "accessibility-extra-extra-large",
+        "accessibility-extra-extra-extra-large",
+      ],
+      "increase-contrast": ["on", "off"],
+      "reduce-motion": ["on", "off"],
+      "invert-colors": ["on", "off"],
+      "wifi": ["on", "off"],
+      "cellular": ["on", "off"],
+      "airplane-mode": ["on", "off"],
+      "location": ["on", "off"],
+      "auto-rotate": ["on", "off"],
+    });
+  });
 });
 
 describe("system-settings value validation (platform-agnostic, runs before dispatch)", () => {
@@ -373,9 +406,9 @@ describe("system-settings iOS branch", () => {
 
   // The two `defaults`-backed settings must write the keys the runtime reads.
   // `strings` over libAccessibility.dylib on iOS 18.6 exports `ReduceMotionEnabled`
-  // and `InvertColorsEnabled`; the `ClassicInvertColorsEnabled` key that predates
-  // Smart Invert appears nowhere, and writing it leaves the screen untouched
-  // while the tool answers `applied`.
+  // and `InvertColorsEnabled`; the obvious-looking `ClassicInvertColorsEnabled`
+  // key appears nowhere, and writing it leaves the screen untouched while the
+  // tool answers `applied`.
   it.each([
     ["reduce-motion", "on", "ReduceMotionEnabled", "YES"],
     ["reduce-motion", "off", "ReduceMotionEnabled", "NO"],
@@ -426,10 +459,16 @@ describe("system-settings iOS branch", () => {
         params({ setting, value: setting === "appearance" ? "dark" : "on" }),
         IOS_DEVICE
       );
+      // Pinned to the exact ceiling each mechanism owns, not just `> 0`: an
+      // inline `{ timeout: 60_000 }` in ios.ts — the exact hazard the 27-line
+      // comment on SIMCTL_UI_TIMEOUT_MS exists to prevent — would clear a
+      // positive check while blowing the MCP client's per-attempt budget.
+      const expectedTimeout =
+        setting === "appearance" ? SIMCTL_UI_TIMEOUT_MS : SIMCTL_SPAWN_TIMEOUT_MS;
       for (const call of execFileMock.mock.calls) {
         const opts = call[2] as { timeout?: number; killSignal?: string };
         expect(opts.killSignal, setting).toBe("SIGKILL");
-        expect(opts.timeout, setting).toBeGreaterThan(0);
+        expect(opts.timeout, setting).toBe(expectedTimeout);
       }
     }
   });
@@ -565,6 +604,32 @@ describe("system-settings iOS branch", () => {
     const rejection = expect(iosImpl.handler({}, params({}), IOS_DEVICE)).rejects;
     await rejection.toSatisfy(failsWith(FAILURE_CODES.IOS_SYSTEM_SETTING_FAILED));
     await rejection.not.toThrow(/must be booted first|isn't supported/);
+  });
+
+  it("a mid-boot simulator earns a wait hint, distinct from the boot-it hint", async () => {
+    // `simctl ui` during the Booting window (exit 149, captured on Xcode 26.6 /
+    // iOS 26.4) answers "Unable to lookup in current state: Booting" — the action
+    // there is to wait, not to boot, so it must not read as the Shutdown hint.
+    execFileFails(
+      "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=405):\n" +
+        "Unable to lookup in current state: Booting"
+    );
+    const rejection = expect(iosImpl.handler({}, params({}), IOS_DEVICE)).rejects;
+    await rejection.toThrow(/still booting — wait for it to finish/);
+    await rejection.not.toThrow(/use boot-device/);
+  });
+
+  it("keeps the newer-runtime hint off the accessibility `defaults` path", async () => {
+    // `reduce-motion` / `invert-colors` are plain preference writes into
+    // com.apple.Accessibility, where runtime option support is not the variable —
+    // so a `defaults` failure whose text happens to say "not supported" must not
+    // tell the agent to try a newer runtime.
+    execFileFails("defaults: operation not supported");
+    const rejection = expect(
+      iosImpl.handler({}, params({ setting: "reduce-motion", value: "on" }), IOS_DEVICE)
+    ).rejects;
+    await rejection.toSatisfy(failsWith(FAILURE_CODES.IOS_SYSTEM_SETTING_FAILED));
+    await rejection.not.toThrow(/try a newer runtime|isn't supported by this simulator/);
   });
 
   // Every argv above omits `--set` because the UDID resolves to the default
@@ -858,6 +923,8 @@ describe("system-settings Android branch", () => {
   // returns stdout only, so an exit-code-only check answers `applied` there.
   describe("a refusal the device prints on stderr while adb exits 0", () => {
     it.each(SYSTEM_SETTINGS)("fails %s instead of reporting it applied", async (setting) => {
+      // `location`'s API-floor probe must clear so the setting itself reaches adb.
+      mockAdbShell.mockResolvedValue("34");
       mockRunAdb.mockResolvedValue({ stdout: "", stderr: "No shell command implementation." });
       const rejection = expect(
         androidImpl.handler(
@@ -870,7 +937,20 @@ describe("system-settings Android branch", () => {
       await rejection.toThrow(/No shell command implementation/);
     });
 
+    it("names the Android version as the cause when the service has no handler", async () => {
+      // Binder's default "No shell command implementation." says nothing about
+      // the API level; append what it means, the way the iOS branch appends its
+      // newer-runtime hint. `appearance` has no floor probe, so this is the pure
+      // refusal path.
+      mockRunAdb.mockResolvedValueOnce({ stdout: "", stderr: "No shell command implementation." });
+      await expect(
+        androidImpl.handler({}, params({ setting: "appearance", value: "dark" }), androidDevice)
+      ).rejects.toThrow(/This Android version has no handler for 'appearance'/);
+    });
+
     it("reads every setting off runAdb, never off the stderr-dropping adbShell", async () => {
+      // `location`'s floor probe reads a real level off adbShell, so give it one.
+      mockAdbShell.mockResolvedValue("34");
       for (const setting of SYSTEM_SETTINGS) {
         mockRunAdb.mockClear();
         mockAdbShell.mockClear();
@@ -1011,17 +1091,41 @@ describe("system-settings Android branch", () => {
       expect(result.applied).toBe("location_mode=3");
     });
 
-    it("applies it when the device does not report a parseable API level", async () => {
+    it("fails closed when the device does not report a parseable API level", async () => {
+      // An unreadable level can't clear the floor, and reporting a location
+      // change that may be inert is the exact outcome the floor prevents — so
+      // refuse rather than write, and never touch adb for the setting itself.
       mockAdbShell.mockResolvedValueOnce("");
-      const result = await androidImpl.handler(
-        {},
-        params({ setting: "location", value: "off" }),
-        androidDevice
+      const rejection = expect(
+        androidImpl.handler({}, params({ setting: "location", value: "off" }), androidDevice)
+      ).rejects;
+      await rejection.toBeInstanceOf(InvalidToolInputError);
+      await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
+      await rejection.toThrow(/did not report a readable API level/);
+      expect(mockRunAdb).not.toHaveBeenCalled();
+    });
+
+    it("wraps a non-transport probe failure with the call's own context", async () => {
+      // A `getprop` that fails for a non-transport reason must not reach the
+      // agent as a bare adb error with no setting/value/udid — `location` is the
+      // only setting whose failures can skip the `Failed to set …` wrapper, so
+      // the probe gets it too. A transport fault, by contrast, keeps adb's kind.
+      mockAdbShell.mockRejectedValueOnce(
+        new Error("adb -s X shell getprop ro.build.version.sdk failed: boom")
       );
-      expect(result.applied).toBe("location_mode=0");
+      const rejection = expect(
+        androidImpl.handler({}, params({ setting: "location", value: "on" }), androidDevice)
+      ).rejects;
+      await rejection.toThrow(/Failed to set 'location' to 'on' on/);
+      await rejection.toSatisfy(
+        (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_api_probe"
+      );
+      expect(mockRunAdb).not.toHaveBeenCalled();
     });
 
     it("is the only setting that probes the API level", async () => {
+      // A healthy level so `location` clears the floor and reaches its own write.
+      mockAdbShell.mockResolvedValue("34");
       for (const setting of SYSTEM_SETTINGS) {
         mockAdbShell.mockClear();
         await androidImpl.handler(

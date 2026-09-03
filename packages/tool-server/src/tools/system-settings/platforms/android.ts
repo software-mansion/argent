@@ -259,16 +259,37 @@ export const androidImpl: PlatformImpl<
     const { shellCommand, applied, minSdk, partialOnFailure } = androidChange(setting, value);
 
     if (minSdk !== undefined) {
-      // adb's own failures propagate with adb's classification — a probe that
-      // cannot answer means the shell command could not have run either.
-      const level = await sdkLevel(udid);
-      if (level !== null && level < minSdk) {
+      // The floor exists because the write is silently inert below it, so the
+      // level has to be known: an unverifiable one fails closed, since reporting
+      // `applied` for a change that may never have taken is the exact outcome the
+      // floor is here to prevent (an empty `getprop` is reachable on a device
+      // that is adb-visible but not finished booting). A transport failure keeps
+      // adb's classification; any other probe failure is wrapped with this call's
+      // own context, so it doesn't reach the agent as a bare `getprop` error.
+      let level: number | null;
+      try {
+        level = await sdkLevel(udid);
+      } catch (err) {
+        if (isAdbTransportFailure(err)) throw err;
+        settingFailure(
+          setting,
+          value,
+          udid,
+          err instanceof Error ? err.message : String(err),
+          "android_system_setting_api_probe",
+          err
+        );
+      }
+      if (level === null || level < minSdk) {
         // Same class as the iOS "Android-only" rejection: this target cannot
         // carry the change out and no retry will change that, so it is caller
         // input (400) rather than a subprocess fault an agent would retry.
         throw new InvalidToolInputError(
-          `'${setting}' needs Android API ${minSdk}+; ${udid} reports API ${level}. ` +
-            `The write is accepted there but leaves the device unchanged.`,
+          level === null
+            ? `'${setting}' needs Android API ${minSdk}+, but ${udid} did not report a readable API ` +
+                `level, so this can't confirm the write would take effect.`
+            : `'${setting}' needs Android API ${minSdk}+; ${udid} reports API ${level}. ` +
+                `The write is accepted there but leaves the device unchanged.`,
           {
             error_code: FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED,
             failure_stage: "android_system_setting_api_floor",
@@ -304,14 +325,23 @@ export const androidImpl: PlatformImpl<
     }
 
     const refusal = stripAdbBanner(stderr);
-    if (refusal)
+    if (refusal) {
+      // A binder service with no shell-command handler ("No shell command
+      // implementation.") or a command that answers with its own usage text is
+      // the device's Android version not implementing this — the same "try a
+      // newer runtime" situation the iOS branch names. The raw text alone reads
+      // like a bug in the tool, so say what it means.
+      const versionHint = /no shell command implementation|usage:\s*svc\b/i.test(refusal)
+        ? ` This Android version has no handler for '${setting}'; a newer system image may add it.`
+        : "";
       settingFailure(
         setting,
         value,
         udid,
-        withPartialState(refusal, partialOnFailure),
+        withPartialState(refusal, partialOnFailure) + versionHint,
         "android_system_setting_refused"
       );
+    }
 
     return { setting, value, applied };
   },

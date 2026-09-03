@@ -61,8 +61,14 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 const ADB_WIRELESS_MDNS_SERVICES = ["_adb._tcp", "_adb-tls-connect._tcp", "_adb-tls-pairing._tcp"];
 
 /** A serial on one of these hosts is a forwarded port — docker-android, a
- * tunnelled CI emulator — not a radio link. */
+ * tunnelled CI emulator — not a radio link. The whole 127.0.0.0/8 block is
+ * loopback too (`adb connect 127.0.0.2:5555`), so it is matched separately. */
 const LOOPBACK_ADB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function isLoopbackAdbHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  return LOOPBACK_ADB_HOSTS.has(lower) || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower);
+}
 
 /**
  * True when adb reaches this device over the device's own Wi-Fi, so switching
@@ -81,7 +87,7 @@ const LOOPBACK_ADB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 export function isWirelessAdbSerial(serial: string): boolean {
   if (ADB_WIRELESS_MDNS_SERVICES.some((service) => serial.includes(service))) return true;
   const host = /^(.+):\d+$/.exec(serial)?.[1];
-  return host !== undefined && !LOOPBACK_ADB_HOSTS.has(host.toLowerCase());
+  return host !== undefined && !isLoopbackAdbHost(host);
 }
 
 /**

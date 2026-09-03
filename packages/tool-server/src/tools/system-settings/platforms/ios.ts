@@ -62,11 +62,13 @@ function iosMechanism(setting: SystemSetting, value: string): IosMechanism {
     case "reduce-motion":
       return { via: "defaults", key: "ReduceMotionEnabled", enabled: value === "on" };
     case "invert-colors":
-      // `InvertColorsEnabled` is the key libAccessibility reads for Smart
-      // Invert. The obvious-looking `ClassicInvertColorsEnabled` is no key at
-      // all — the runtime carries it only inside symbol names, and spells the
-      // classic-invert preference `AXSClassicInvertColorsPreference` — so
-      // writing it persists something nothing observes.
+      // `InvertColorsEnabled` is the key libAccessibility reads for Classic
+      // Invert — the whole-screen inversion that reverses photos and media too,
+      // as opposed to Smart Invert, which leaves images alone and is a separate
+      // preference. The obvious-looking `ClassicInvertColorsEnabled` is no key at
+      // all: the runtime carries that name only inside symbols and spells the
+      // preference `AXSClassicInvertColorsPreference`, so writing it persists
+      // something nothing observes.
       return { via: "defaults", key: "InvertColorsEnabled", enabled: value === "on" };
     default:
       // Unreachable: the handler rejects non-iOS settings before this is called.
@@ -79,7 +81,11 @@ function throwIosSettingError(
   value: string,
   udid: string,
   err: unknown,
-  failureStage = "ios_system_setting_apply"
+  failureStage = "ios_system_setting_apply",
+  // The runtime-option hint below only makes sense for a `simctl ui` option; the
+  // `defaults` writes are plain preference stores where runtime support is not
+  // the variable, so it is suppressed for them.
+  runtimeOptionApplies = true
 ): never {
   const detail = err instanceof Error ? err.message : String(err);
   // `execFile` reports its own timeout as an ordinary failed child it killed,
@@ -90,13 +96,16 @@ function throwIosSettingError(
   const timeoutHint = timedOut
     ? " simctl was killed after its timeout — CoreSimulatorService is likely wedged."
     : "";
-  // `simctl ui` and `simctl spawn` both require a booted simulator but word the
-  // refusal differently — `ui` answers "Unable to lookup in current state:
-  // Shutdown", `spawn` "Process spawn via launchd failed because device is not
-  // booted." Neither tells an agent what to do about it, so match both.
-  const shutdownHint = /current state:\s*shutdown|not booted/i.test(detail)
+  // `simctl ui` and `simctl spawn` both require a booted simulator but each
+  // not-ready state needs a different response, and CoreSimulator spells none of
+  // them: Shutdown / "not booted" → boot it; Booting → wait it out. `ui` answers
+  // "Unable to lookup in current state: Shutdown" or "…: Booting", `spawn`
+  // "Process spawn via launchd failed because device is not booted."
+  const bootHint = /current state:\s*shutdown|not booted/i.test(detail)
     ? " The simulator must be booted first — use boot-device."
-    : "";
+    : /current state:\s*booting/i.test(detail)
+      ? " The simulator is still booting — wait for it to finish, then retry."
+      : "";
   // A runtime that doesn't model an option exits 45 with "Operation not
   // supported" and a line naming what is missing — the iOS CoreSimulatorBridge
   // carries "Runtime does not support userInterfaceStyle" and "…dynamic text".
@@ -105,11 +114,11 @@ function throwIosSettingError(
   // only the support wording keeps this hint off a case a newer runtime
   // wouldn't fix.
   const unsupportedHint =
-    !shutdownHint && /unsupported|not support/i.test(detail)
+    runtimeOptionApplies && !bootHint && /unsupported|not support/i.test(detail)
       ? ` The '${setting}' setting isn't supported by this simulator's iOS runtime; try a newer runtime.`
       : "";
   throw new FailureError(
-    `Failed to set '${setting}' to '${value}' on ${udid}: ${detail.trim()}${timeoutHint}${shutdownHint}${unsupportedHint}`,
+    `Failed to set '${setting}' to '${value}' on ${udid}: ${detail.trim()}${timeoutHint}${bootHint}${unsupportedHint}`,
     {
       error_code: FAILURE_CODES.IOS_SYSTEM_SETTING_FAILED,
       failure_stage: failureStage,
@@ -221,7 +230,7 @@ export const iosImpl: PlatformImpl<
         { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
       );
     } catch (err) {
-      throwIosSettingError(setting, value, udid, err);
+      throwIosSettingError(setting, value, udid, err, "ios_system_setting_apply", false);
     }
     return { setting, value, applied: `${mechanism.key}=${boolArg}` };
   },

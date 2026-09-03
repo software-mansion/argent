@@ -39,8 +39,11 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
-  // `simctl ui` edits the simulator's UI settings — physical iPhones have no
-  // host-side equivalent, so no `device: true` on apple.
+  // Simulator-only on Apple: `simctl ui` and the accessibility `defaults` writes
+  // edit a simulator, and a physical iPhone has no host-side equivalent. There
+  // is no `device` arm to reach anyway — a physical-iPhone udid doesn't match
+  // the 8-4-4-4-12 simulator shape, so `resolveDevice` never classifies one as
+  // apple (it falls to the Android branch by elimination).
   apple: { simulator: true },
   // No `appleRemote`, unlike the sibling settings-permissions: sim-remote
   // forwards a fixed set of simctl verbs and `ui` is not among them, so three
@@ -99,14 +102,14 @@ Settings and their values:
 - \`text-size\`: one of the 12 Dynamic Type categories from \`extra-small\` to \`accessibility-extra-extra-extra-large\` (\`large\` is the default).
 - \`increase-contrast\`: \`on\` | \`off\` — iOS's Increase Contrast; on Android the nearest equivalent, high-contrast text.
 - \`reduce-motion\`: \`on\` | \`off\` — reduce/disable UI animations.
-- \`invert-colors\`: \`on\` | \`off\` — invert the display colors (Smart Invert on iOS). Confirm it from this result, not a \`screenshot\`: on Android the capture path skips the display-level color transform, and on iOS the inversion reaches the captured frame in \`dark\` appearance but not in \`light\`.
-- \`wifi\`, \`cellular\`, \`airplane-mode\`, \`location\`, \`auto-rotate\`: \`on\` | \`off\` — Android only. A flow pins the status bar to a fixed demo state, so a screenshot taken inside one keeps showing full signal bars after a radio change — read this tool's result, not the bars.
+- \`invert-colors\`: \`on\` | \`off\` — invert the display colors (Classic Invert on iOS: the whole screen, photos and media included). Confirm it from this result, not a \`screenshot\`: on Android the capture path skips the display-level color transform, and on iOS the inversion reaches the captured frame in \`dark\` appearance but not in \`light\`.
+- \`wifi\`, \`cellular\`, \`airplane-mode\`, \`location\`, \`auto-rotate\`: \`on\` | \`off\` — Android only. A flow pins the status bar to a fixed demo state, so a screenshot taken inside one keeps showing full signal bars after a radio change — read this tool's result, not the bars. \`location\` here is the device-wide master switch for every app; for one app's location permission use \`settings-permissions\`, not this. \`auto-rotate\` is the rotation-*lock* toggle, not a way to rotate the screen (use \`rotate\` for that): it writes a stored flag, so on hardware with no accelerometer (Android TV) or during an active screen-sharing session on a physical device — which holds rotation fixed — the write lands but nothing turns.
 Platforms:
 - iOS simulator supports the first five (display / accessibility): \`appearance\`, \`text-size\`, and \`increase-contrast\` via \`simctl ui\`; \`reduce-motion\` and \`invert-colors\` via the accessibility preferences domain. The simulator must be booted. A setting the runtime doesn't model fails with the runtime's own refusal and a hint to try a newer one, and the five Android-only settings are rejected on iOS. Only a simulator \`simctl list\` reports as an available iOS one is accepted — an Apple TV simulator is rejected outright (neither mechanism reaches tvOS), and so is a UDID the listing cannot vouch for.
 - Android supports all ten, on emulators and real devices, via \`adb\` (\`cmd uimode night\`, \`font_scale\`, accessibility flags, \`svc wifi/data\`, \`cmd connectivity airplane-mode\`, \`location_mode\`, \`accelerometer_rotation\`). A setting whose \`cmd\`/\`svc\` service this Android version doesn't implement fails instead of reporting a change it never made; the \`settings put\` ones accept any key at any version, so \`location\` carries its own floor — it needs Android 10 (API 29)+, where \`location_mode\` became the master switch, and is refused below it. Over a network transport — an mDNS serial, or \`host:port\` for anything but loopback — \`wifi\` off and \`airplane-mode\` on are refused, since they would switch off the link adb reaches the device over.
 Re-run \`describe\` after \`text-size\` — every frame on screen moves with it.
-This is a device-wide toggle, not per-app — no bundleId. Some apps only re-read a display/accessibility setting on next launch, so relaunch the app afterwards if the change doesn't appear live.
-Returns { setting, value, applied }, where \`applied\` is the concrete platform-level change (e.g. \`content_size=large\`, \`night_mode=yes\`, \`ReduceMotionEnabled=YES\`, \`wifi=enabled\`). Fails if the value is invalid for the setting, the setting isn't available on the target platform or this Android version, the device isn't booted, or the platform command errors. A failed multi-part change (Android reduce-motion writes three animation scales) can leave part of it applied — run the same call again; every write is idempotent.`,
+This is a device-wide toggle, not per-app — no bundleId. The accessibility toggles (\`reduce-motion\`, \`invert-colors\`) post their own change notification, so running apps usually pick them up live; appearance and text size some apps re-read only on next launch, so relaunch if the change doesn't appear.
+Returns { setting, value, applied }, where \`applied\` is the concrete platform-level change (e.g. \`content_size=large\`, \`night_mode=yes\`, \`ReduceMotionEnabled=YES\`, \`wifi=enabled\`). Fails if the value is invalid for the setting, the setting isn't available on the target platform or this Android version, the device isn't booted, or the platform command errors. A failure after the write reaches the device — a timeout on any setting, or the multi-part Android \`reduce-motion\` write failing partway — can still leave the change applied or half-applied; every write sets an absolute value, so run the same call again to converge.`,
   searchHint:
     "dark light mode appearance theme color scheme text size font dynamic type increase contrast reduce motion animations invert colors accessibility wifi cellular mobile data airplane mode flight mode location gps auto rotate orientation radios system settings toggle",
   zodSchema,

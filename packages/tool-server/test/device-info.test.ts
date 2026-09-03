@@ -84,6 +84,9 @@ describe("isWirelessAdbSerial", () => {
     "39121FDJG0026R",
     "localhost:5555",
     "127.0.0.1:5555",
+    // Anywhere in 127.0.0.0/8 is loopback, not just .0.0.1.
+    "127.0.0.2:5555",
+    "127.0.1.1:5555",
     "[::1]:5555",
   ])("treats %s as reached over something else", (serial) => {
     expect(isWirelessAdbSerial(serial)).toBe(false);
