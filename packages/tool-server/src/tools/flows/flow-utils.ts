@@ -394,6 +394,20 @@ function touch(): number {
   return ++touchSeq;
 }
 
+/**
+ * Re-stamp a take at the END of a recorder call that appends nothing, as
+ * {@link appendStepToFlow} does on the path that appends.
+ * {@link requireRecordingSession} stamps at call ENTRY and the step then runs
+ * live, so without this the take carries the entry stamp for the whole run —
+ * and a nested orchestrator, the longest thing `flow-add-step` runs, is exactly
+ * the window in which every quick call elsewhere stamps later. The take that
+ * spent longest inside its own tool call would then be the one
+ * {@link evictIfOverCapacity} drops.
+ */
+export function touchRecordingSession(session: RecordingSession): void {
+  session.lastTouchedSeq = touch();
+}
+
 function evictIfOverCapacity(): void {
   while (recordings.size > MAX_RECORDINGS) {
     let oldestKey: string | undefined;

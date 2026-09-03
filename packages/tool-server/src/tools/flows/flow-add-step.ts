@@ -13,6 +13,7 @@ import {
   appendStepToFlow,
   assertSessionStillLive,
   dropMovedWarnings,
+  touchRecordingSession,
   withRecordingLock,
   appIdForPlatform,
   parseFlow,
@@ -669,6 +670,7 @@ async function activeFlowState(
 ): Promise<{ stepCount: number; note?: string }> {
   return withRecordingLock(session, async () => {
     assertSessionStillLive(session, ranOnDevice);
+    touchRecordingSession(session);
     if (session.persist === "host") {
       const before = session.flow.steps;
       try {

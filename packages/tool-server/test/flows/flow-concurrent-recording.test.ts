@@ -1924,6 +1924,42 @@ describe("the concurrent-recording cap", () => {
     expect(await readMarkers(root, "rec-0")).toEqual(["tool:slow", "echo:after"]);
   });
 
+  it("re-stamps a recording whose step was REFUSED, as one that appended is", async () => {
+    // A refusal returns instead of appending, so it never reaches the stamp in
+    // `appendStepToFlow` — and the nested run it refuses is the longest thing
+    // this tool does. Without a stamp of its own the take carries the one
+    // `requireRecordingSession` wrote at ENTRY for that whole run, which is
+    // exactly the window every other recording gets touched in.
+    const root = await makeRoot("touch-on-refusal");
+    const names = await fillRecordings(root);
+
+    // rec-0 resolves (stamping it), then parks inside a nested run-sequence
+    // that comes back with a failed step, so the recorder refuses it.
+    const gate = gateNextSubTool();
+    const refusing = addRawStep(root, "rec-0", "run-sequence", {
+      udid: "ABC",
+      steps: [
+        { tool: "keyboard", args: { text: "x" } },
+        { tool: "keyboard", args: { text: "y" } },
+      ],
+    });
+    await gate.reached;
+
+    for (const name of names.slice(1)) await addEcho(root, name, "touch");
+
+    gate.release();
+    expect((await refusing).message).toContain("step NOT recorded");
+
+    await start(root, "overflow");
+
+    // The refused take is still the one most recently used, so the victim is
+    // the recording whose last use really is the oldest.
+    expect(await getRecordingSession(root, "rec-0")).toBeDefined();
+    expect(await getRecordingSession(root, names[1])).toBeUndefined();
+    await addEcho(root, "rec-0", "after");
+    expect(await readMarkers(root, "rec-0")).toEqual(["echo:after"]);
+  });
+
   it("rejects an append whose recording was evicted while the step ran", async () => {
     const root = await makeRoot("evict-inflight");
     const names = await fillRecordings(root);
