@@ -60,7 +60,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -112,9 +112,14 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
+PHYSICAL iPHONE (USB)
+Skills: `argent-ios-device-setup` (cable, trust, signing), then `argent-ios-device-interact` (the app-scoped interaction contract)
+When: The user names a physical iPhone, a real device, or hardware, or the target `list-devices` iOS entry has kind `"device"`. Never for a simulator, and never because a cabled phone is listed first. On hardware every interaction starts with `launch-app`; `paste`, `settings-permissions`, two-finger gestures, `rotate` and `shake` do not exist there.
+Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
+
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
