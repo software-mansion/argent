@@ -52,9 +52,9 @@ function iosMechanism(setting: SystemSetting, value: string): IosMechanism {
       return { via: "defaults", key: "ReduceMotionEnabled", enabled: value === "on" };
     case "invert-colors":
       // `InvertColorsEnabled` is the key libAccessibility reads; it drives Smart
-      // Invert, the only inversion control iOS still exposes. The Classic Invert
-      // key it replaced appears nowhere in the runtime any more, so writing that
-      // one persists a preference nothing observes.
+      // Invert, the only inversion control iOS exposes. The obvious-looking
+      // `ClassicInvertColorsEnabled` appears nowhere in the runtime, so writing
+      // that one persists a preference nothing observes.
       return { via: "defaults", key: "InvertColorsEnabled", enabled: value === "on" };
     default:
       // Unreachable: the handler rejects non-iOS settings before this is called.
