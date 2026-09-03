@@ -281,6 +281,13 @@ describe("run-sequence", () => {
     expect(result.completed).toBe(1);
     expect(result.total).toBe(3);
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+
+    // The description promises `dispatched: false` for a wait "whether or not
+    // its condition held". This exit is the one that carries no entry to put it
+    // on, so the description has to name it — otherwise a caller reading that
+    // rule gets no answer for a cancelled wait at all.
+    expect(tool.description).toContain("A wait the run CANCELLED is the exception");
+    expect(tool.description).toContain("no entry for it at all");
   });
 
   it("continues past an await-ui-element step whose condition is met", async () => {
