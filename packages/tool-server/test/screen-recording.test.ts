@@ -1841,6 +1841,37 @@ describe("server-side recording", () => {
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
+  it("records the server salvage breadcrumb when disposed mid-stop", async () => {
+    // `stopServerCapture` clears `recordingActive` and hands `serverStop` over
+    // before its `await stop()`, so a teardown landing during that await sees
+    // neither and — without the fix — records no breadcrumb at all (`stopPending`
+    // was missing from the set), or the ffmpeg salvage story (read off the now
+    // -null `serverStop`) pointing the caller at a host file the server path
+    // never wrote. The video lived only inside the simulator-server this
+    // teardown killed.
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const server = await fakeServer();
+    const { outputFile } = await startOnServer(instance.api, server, {});
+    server.stop.mockImplementation(() => new Promise<never>(() => {})); // never answers
+    const stopping = stopCapture(instance.api);
+    stopping.catch(() => {});
+    await Promise.resolve(); // let stopServerCapture reach `await stop()`
+    await instance.dispose();
+
+    const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+    const message = (err as Error).message;
+    // A breadcrumb WAS recorded — not the "you never started one" answer for a
+    // recording that ran.
+    expect(message).toContain("torn down");
+    // And it is the server story, not the ffmpeg one naming a never-written file.
+    expect(message).not.toContain("ffmpeg");
+    expect(message).toContain("nothing was written to");
+    expect(message).toContain(outputFile);
+    await fs.rm(server.serverDir, { recursive: true, force: true });
+  });
+
   it("drops an earlier teardown breadcrumb when the new recording runs on the server", async () => {
     // The fallback path clears it at the same point. Left behind, it outlives a
     // recording that stops perfectly well — nothing consumes it — and then
@@ -2117,11 +2148,30 @@ describe("server-side recording", () => {
       disposed = true;
     });
     teardown.catch(() => {});
-    // Far past the documented dispose grace (~2.5s for the ffmpeg child), far
-    // short of the stop tool's own budget the salvage once waited out.
-    await vi.advanceTimersByTimeAsync(5_000);
-
+    // Pinned to the 1.5s grace, not just "under the 60s stop budget": still
+    // waiting at 1.4s, resolved by 1.6s. A looser assertion (advance 5s) passes
+    // even if the grace is set to 4.9s.
+    await vi.advanceTimersByTimeAsync(1_400);
+    expect(disposed).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
     expect(disposed).toBe(true);
+  });
+
+  it("does not hang the teardown when the salvage stop itself rejects", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const server = await fakeServer();
+    await startOnServer(instance.api, server, {});
+    // The salvage stop rejecting (network drop mid-mux) must resolve the race
+    // just like a hang does — the video is discarded either way.
+    server.stop.mockImplementation(async () => {
+      throw stopConnectionRefused();
+    });
+
+    await expect(instance.dispose()).resolves.toBeUndefined();
+    expect(instance.api.serverStop).toBeNull();
+    await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 });
 

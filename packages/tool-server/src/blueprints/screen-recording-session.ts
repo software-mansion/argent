@@ -72,11 +72,20 @@ export interface ScreenRecordingSessionApi {
   outputFile: string | null;
   /**
    * Finalizes a recording simulator-server is running and hands back the muxed
-   * video. Set only while a server-side capture is live, so it doubles as the
-   * marker for which side owns the recording: with it set there is no capture
-   * child, no frame stream and no pump, and stop goes to the server.
+   * video. Set while a server-side capture is live and its stop still owns it;
+   * with it set there is no capture child, no frame stream and no pump, and stop
+   * goes to the server. `stopServerCapture` nulls it the moment it takes the
+   * recording over, so it is NOT a reliable "which side" marker across that
+   * await — `serverCapture` is (see below).
    */
   serverStop: (() => Promise<ServerRecordingResult>) | null;
+  /**
+   * True from a server-side start until the session is reset to startable.
+   * Unlike `serverStop` it survives the stop's ownership hand-over, so a dispose
+   * landing mid-stop still knows the video was inside simulator-server (and the
+   * host `outputFile` was never written) when it builds the teardown breadcrumb.
+   */
+  serverCapture: boolean;
   /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
   logoFile: string | null;
   /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
@@ -140,6 +149,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.captureProcess = null;
   state.pendingChild = null;
   state.serverStop = null;
+  state.serverCapture = false;
   state.frameStream = null;
   state.lastFrameStreamError = null;
   state.pointerDisable = null;
@@ -196,6 +206,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       captureProcess: null,
       pendingChild: null,
       serverStop: null,
+      serverCapture: false,
       outputFile: null,
       logoFile: null,
       watermarkSkipped: null,
@@ -226,15 +237,24 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         // teardown below can no longer reap.
         state.disposed = true;
         // Whether this dispose is destroying an unretrieved capture, decided
-        // BEFORE the teardown below clears the flags it is read from. Both
-        // states owe the caller a video: one is still encoding, the other
-        // finished and is waiting to be handed over.
+        // BEFORE the teardown below clears the flags it is read from. Each state
+        // owes the caller a video: one is still encoding, one finished and waits
+        // to be handed over, and `stopPending` is a stop still in flight —
+        // covered too, because on the server path stop clears `recordingActive`
+        // and hands `serverStop` over before its await, so mid-stop this flag is
+        // the only one left true and the video lives only inside the
+        // simulator-server this teardown is killing.
         const hadUnretrievedCapture =
-          state.recordingActive || state.startPending || state.pendingRetrieval;
+          state.recordingActive ||
+          state.startPending ||
+          state.pendingRetrieval ||
+          state.stopPending;
         const abandonedOutput = state.outputFile;
-        // Which side held the video, read before the teardown below hands
-        // `serverStop` over — the two paths owe the caller opposite stories.
-        const serverCapture = state.serverStop !== null;
+        // Which side held the video. Read from `serverCapture`, not `serverStop`
+        // — stop nulls the latter as it takes the recording over, so a dispose
+        // landing mid-stop would otherwise read a server capture as a host one
+        // and offer its never-written `outputFile` as "usually playable".
+        const serverCapture = state.serverCapture;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;

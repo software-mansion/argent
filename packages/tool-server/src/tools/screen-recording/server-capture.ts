@@ -100,6 +100,7 @@ export async function startServerCapture(
   api.lastFrameStreamError = null;
   api.outputFile = params.outputFile;
   api.serverStop = stop;
+  api.serverCapture = true;
   api.trimStatic = params.trimStatic;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
@@ -309,6 +310,7 @@ export async function stopServerCapture(
       api.stopPending = false;
       api.pendingRetrieval = false;
       api.serverStop = null;
+      api.serverCapture = false;
       api.outputFile = null;
       api.pointerFailed = false;
       api.wallClockStartMs = null;
