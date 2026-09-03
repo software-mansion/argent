@@ -2425,6 +2425,34 @@ describe("server recording wire protocol", () => {
     expect(getFailureSignal(err)?.failure_command).toBe("simulator_server");
   });
 
+  it("fails a stop reply that carries a path but no duration", async () => {
+    // Both halves of the guard matter: a reply with a path but no numeric
+    // duration is still unusable, and dropping the duration check would return a
+    // result whose durationMs is undefined.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ path: "/tmp/x.mp4" }), { status: 200 }))
+    );
+
+    await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toThrow("no video");
+  });
+
+  it("makeServerRecordingControl.start returns null so a 404 build falls back host-side", async () => {
+    // The bridge every shipped build takes today: startServerRecording answers
+    // null on the empty-404, and the control forwards that null so startCapture
+    // records host-side. Nothing else pins this null-forwarding — the fallback
+    // path's own test drives a fake whose start already returns null.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 }))
+    );
+
+    const control = makeServerRecordingControl(fakeApi);
+    await expect(
+      control.start({ watermark: true, trimStatic: true, timeLimitSeconds: 60 })
+    ).resolves.toBeNull();
+  });
+
   it("stop maps the recording result onto the session's field names", async () => {
     vi.stubGlobal(
       "fetch",
