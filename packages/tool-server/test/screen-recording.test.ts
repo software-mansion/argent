@@ -1571,7 +1571,7 @@ describe("server-side recording", () => {
     overrides: {
       supported?: boolean;
       durationMs?: number;
-      wallClockMs?: number;
+      wallClockMs?: number | null;
       trimmedMs?: number | null;
       warning?: string | null;
       bytes?: Buffer;
@@ -1584,7 +1584,7 @@ describe("server-side recording", () => {
       path: serverFile,
       sizeBytes: 16,
       durationMs: overrides.durationMs ?? 2_000,
-      wallClockMs: overrides.wallClockMs ?? 2_000,
+      wallClockMs: overrides.wallClockMs === undefined ? 2_000 : overrides.wallClockMs,
       trimmedMs: overrides.trimmedMs === undefined ? null : overrides.trimmedMs,
       warning: overrides.warning ?? null,
     }));
@@ -1726,6 +1726,24 @@ describe("server-side recording", () => {
     const stopped = await stopCapture(api);
 
     expect(stopped.durationMs).toBe(3_029);
+    expect(stopped).not.toHaveProperty("trimmedMs");
+    expect(stopped).not.toHaveProperty("wallClockMs");
+    await fs.rm(stopped.outputFile, { force: true });
+    await fs.rm(server.serverDir, { recursive: true, force: true });
+  });
+
+  it("omits the trim fields when the server reports a trim but no wall clock", async () => {
+    const api = await makeSession(iosDevice);
+    // A reply that claims removed dead air (`trimmed_ms > 0`) but omits the wall
+    // clock it was measured against: surfacing the pair would state a removed
+    // span the numbers contradict, so both fields stay absent — never a wall
+    // clock faked from the video length.
+    const server = await fakeServer({ durationMs: 3_000, wallClockMs: null, trimmedMs: 2_000 });
+    await startOnServer(api, server, {});
+
+    const stopped = await stopCapture(api);
+
+    expect(stopped.durationMs).toBe(3_000);
     expect(stopped).not.toHaveProperty("trimmedMs");
     expect(stopped).not.toHaveProperty("wallClockMs");
     await fs.rm(stopped.outputFile, { force: true });
@@ -1920,6 +1938,42 @@ describe("server-side recording", () => {
     });
     expect(server.stop).toHaveBeenCalledTimes(1);
     expect(instance.api.recordingActive).toBe(false);
+    await fs.rm(server.serverDir, { recursive: true, force: true });
+  });
+
+  it("bounds the salvage stop for a start disposed mid-request at the short grace", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const server = await fakeServer();
+    // Park the start, dispose while it is in flight, then let it resume into the
+    // salvage stop that reaps the recording dispose could not see.
+    let admit: () => void;
+    const parked = new Promise<void>((resolve) => (admit = resolve));
+    server.start.mockImplementationOnce(async () => {
+      await parked;
+      return server.stop;
+    });
+    // That salvage stop hits a wedged simulator-server that never answers. As on
+    // dispose's own salvage, the wait must fall to the 1.5s grace, not the
+    // finalizer's 60s stop budget — the start is already doomed.
+    server.stop.mockImplementation(() => new Promise<never>(() => {}));
+
+    const promise = startOnServer(instance.api, server, {});
+    let settled = false;
+    promise.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await instance.dispose();
+    admit!();
+
+    await vi.advanceTimersByTimeAsync(1_400);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(promise).rejects.toMatchObject({
+      message: expect.stringContaining("shutting down"),
+    });
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
@@ -2421,20 +2475,21 @@ describe("server recording wire protocol", () => {
     );
 
     const err = await stopServerRecording(fakeApi, "rec-1").catch((e: unknown) => e);
-    expect((err as Error).message).toContain("no video");
+    expect((err as Error).message).toContain("video path or duration");
     expect(getFailureSignal(err)?.failure_command).toBe("simulator_server");
   });
 
   it("fails a stop reply that carries a path but no duration", async () => {
-    // Both halves of the guard matter: a reply with a path but no numeric
-    // duration is still unusable, and dropping the duration check would return a
-    // result whose durationMs is undefined.
+    // Both halves of the guard matter, and the message must name the half that
+    // failed: a reply with a path but no numeric duration is unusable (dropping
+    // the duration check would return a result whose durationMs is undefined),
+    // and the error must not claim the video path is missing when it is present.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ path: "/tmp/x.mp4" }), { status: 200 }))
     );
 
-    await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toThrow("no video");
+    await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toThrow("duration");
   });
 
   it("makeServerRecordingControl.start returns null so a 404 build falls back host-side", async () => {
@@ -2479,6 +2534,26 @@ describe("server recording wire protocol", () => {
       wallClockMs: 10_026,
       trimmedMs: 9_059,
       warning: null,
+    });
+  });
+
+  it("maps an absent wall_clock_ms to null rather than the video length", async () => {
+    // The reply reports a trim but omits its wall clock. Falling back to
+    // `duration_ms` would fabricate a wall clock equal to the video length and
+    // pair it with a non-zero trim — two numbers that cannot both hold. Keep the
+    // absence as null so the consumer omits the trim fields.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ path: "/tmp/x.mp4", duration_ms: 967, trimmed_ms: 9_059 }))
+      )
+    );
+
+    await expect(stopServerRecording(fakeApi, "rec-1")).resolves.toMatchObject({
+      durationMs: 967,
+      wallClockMs: null,
+      trimmedMs: 9_059,
     });
   });
 
@@ -2528,7 +2603,7 @@ describe("server recording wire protocol", () => {
     );
 
     await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toMatchObject({
-      message: expect.stringContaining("no video path"),
+      message: expect.stringContaining("video path or duration"),
     });
   });
 });

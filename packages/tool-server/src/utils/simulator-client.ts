@@ -324,8 +324,8 @@ export interface ServerRecordingResult {
   sizeBytes: number;
   /** Length of the video, i.e. what static trimming left. */
   durationMs: number;
-  /** Real elapsed recording time. */
-  wallClockMs: number;
+  /** Real elapsed recording time; null when the stop reply omitted it. */
+  wallClockMs: number | null;
   /** Wall-clock time trimming removed; null when trimming was off or never applied. */
   trimmedMs: number | null;
   warning: string | null;
@@ -425,8 +425,8 @@ export async function stopServerRecording(
   }
   if (typeof body.path !== "string" || typeof body.duration_ms !== "number") {
     throw new FailureError(
-      `screen-recording-stop failed: simulator-server returned a recording result with no video ` +
-        `path (${JSON.stringify(body).slice(0, 200)}).`,
+      `screen-recording-stop failed: simulator-server returned a recording result missing its video ` +
+        `path or duration (${JSON.stringify(body).slice(0, 200)}).`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
         failure_stage: "screen_recording_server_stop",
@@ -440,7 +440,7 @@ export async function stopServerRecording(
     path: body.path,
     sizeBytes: body.size_bytes ?? 0,
     durationMs: body.duration_ms,
-    wallClockMs: body.wall_clock_ms ?? body.duration_ms,
+    wallClockMs: typeof body.wall_clock_ms === "number" ? body.wall_clock_ms : null,
     trimmedMs: body.trimmed_ms ?? null,
     warning: body.warning ?? null,
   };

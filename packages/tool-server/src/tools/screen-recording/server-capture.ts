@@ -1,6 +1,9 @@
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
+import {
+  DISPOSE_SERVER_STOP_MS,
+  type ScreenRecordingSessionApi,
+} from "../../blueprints/screen-recording-session";
 import type { ServerRecordingResult } from "../../utils/simulator-client";
 import {
   clearActiveScreenRecording,
@@ -80,9 +83,15 @@ export async function startServerCapture(
   // The recording now exists inside simulator-server, which outlives this
   // process. If shutdown ran while that request was in flight, dispose's
   // teardown has already been and gone and will never see it — so end it here,
-  // the way the fallback path reaps a child spawned in the same window.
+  // the way the fallback path reaps a child spawned in the same window. Bound
+  // the wait exactly as dispose bounds its own salvage stop: the result feeds
+  // nothing, so a wedged or slow-to-mux simulator-server must not hold this
+  // already-doomed start to the finalizer's full stop timeout.
   if (api.disposed) {
-    await stop().catch(() => {});
+    await Promise.race([
+      stop().catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, DISPOSE_SERVER_STOP_MS)),
+    ]);
     assertNotDisposed(api, "screen_recording_start");
   }
 
@@ -260,11 +269,14 @@ export async function stopServerCapture(
       outputFile,
       sizeBytes: size,
       durationMs: result.durationMs,
-      // Only report the trim fields when trimming actually collapsed something,
-      // matching the fallback path's `trimmedAnyFrames` contract. `trimmed_ms`
-      // is null when trimming was off, but 0 when it was on and removed nothing
-      // — both mean "no dead air was cut", so neither may surface the fields.
-      ...(result.trimmedMs !== null && result.trimmedMs > 0
+      // Report the trim fields only when trimming actually collapsed something
+      // AND the reply carried the wall clock that measures it — matching the
+      // fallback path's `trimmedAnyFrames` contract. `trimmed_ms` is null when
+      // trimming was off and 0 when it was on but removed nothing (both mean no
+      // dead air was cut); `wallClockMs` is null when the reply omitted it, and
+      // surfacing a removed span without the real elapsed time it was cut from
+      // states a pair the numbers contradict.
+      ...(result.trimmedMs !== null && result.trimmedMs > 0 && result.wallClockMs !== null
         ? { wallClockMs: result.wallClockMs, trimmedMs: result.trimmedMs }
         : {}),
       ...(warning ? { warning } : {}),
