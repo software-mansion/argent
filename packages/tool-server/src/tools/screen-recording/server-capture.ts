@@ -106,7 +106,7 @@ export async function startServerCapture(
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
-  registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
+  registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds, true);
   // As on the fallback path: a live capture makes an earlier teardown
   // breadcrumb unreportable, since this recording's own stop will succeed and
   // nothing would ever consume it — left behind, it would blame a much later,
