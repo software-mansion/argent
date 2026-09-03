@@ -362,8 +362,9 @@ const UNREADABLE_WAIT_WARNING =
   "so nothing judged the condition AT the deadline — `await-ui-element` returns success:false " +
   "for that too, and the step was written to the flow anyway. No read in the window could be " +
   "trusted, or the reads went dark before the end, or the last good read sits further behind the " +
-  "deadline than a poll excuses — which a `pollIntervalMs` above 2000ms produces on a source " +
-  "that never failed at all, its reads every one of them fine and every one of them too early. " +
+  "deadline than a poll excuses — which a wide `pollIntervalMs` produces on a source that never " +
+  "failed, when its last read still lands more than ~2s before the deadline, its reads every one " +
+  "of them fine and that last one too early. " +
   "Whether the condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source " +
   "error where a fetch threw, describes what was seen where the tree was merely empty or " +
   "degraded, and says how far behind the deadline the last read sits where the polling was too " +

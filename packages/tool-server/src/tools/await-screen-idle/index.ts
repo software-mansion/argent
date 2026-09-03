@@ -172,36 +172,65 @@ function unsettledReason(
   }
 
   // Settling takes two samples that agree across minStableMs, so one sample is
-  // a screen the reader never got to compare with itself. Three things starve
-  // it and only one is fixed by the sleep, so name the knob that applies.
+  // a screen the reader never got to compare with itself. Several things starve
+  // it, taking different remedies, so name the one that applies. The sibling
+  // tool draws the same lines.
   if (poll.samples < 2) {
-    // Only where NOTHING came back does an abandoned fetch mean the tree outran
-    // the budget. Once a read has landed, the clamped poll sleep can hand the
-    // next one a sliver of budget it cannot possibly return in — that fetch
-    // times out on the schedule, not on the tree, and the arms below name the
-    // knob that actually ran out. The sibling tool draws the same line.
-    if (!poll.lastAttemptSettled && poll.samples === 0) {
+    // Nothing ever came back: the tree outran the budget, or a stalled source
+    // never answered. (A last fetch that settled with an error is the failed-read
+    // arm above; an earlier error is appended by unsettledNote.)
+    if (poll.samples === 0) {
       return (
         `reading the tree did not finish within the ${wait.timeoutMs}ms budget, so the screen was never ` +
         `read — this is a read that outran the budget, not an observed change. Raise timeoutMs if the ` +
         `tree is merely large, or repair the source if it has stopped answering altogether.`
       );
     }
-    // Every fetch came back, so what ran out was the schedule. A second read
-    // needs the first one's length again plus the shortest sleep the schema
-    // takes; past that no pollIntervalMs buys one and only timeoutMs will.
-    if (2 * poll.slowestFetchMs + MIN_POLL_INTERVAL_MS > wait.timeoutMs) {
+    // One read came back and earlier fetches failed, so the window was mostly
+    // blind. The single sample is not the sleep's fault; the failures took the
+    // others. unsettledNote appends the error text.
+    if (poll.failedFetches > 0) {
       return (
-        `one tree fetch took ${poll.slowestFetchMs}ms of the ${wait.timeoutMs}ms budget, so two reads that ` +
-        `size do not fit in it and the screen was never sampled twice — this is not an observed change. ` +
-        `Raise timeoutMs; lowering pollIntervalMs helps only if the next read is faster than that one.`
+        `only one tree read returned a tree and ${poll.failedFetches} earlier ` +
+        `${poll.failedFetches === 1 ? "read" : "reads"} failed, so the screen was never sampled twice — ` +
+        `this is not an observed change. Restore the tree source and re-run.`
       );
     }
+    // Only a fetch that SETTLED and was over half the budget rules pollIntervalMs
+    // out: a second read of that size cannot fit at any interval. A fetch the
+    // deadline abandoned is not that evidence — its `slowestFetchMs` is the
+    // cut-off, not a read — and blaming the schedule for it withholds the remedy
+    // a slow or stalled source needs, so it falls to the neutral arm below. The
+    // sibling await-ui-element draws the same line on lastAttemptSettled.
+    if (
+      poll.lastAttemptSettled &&
+      2 * poll.slowestFetchMs + MIN_POLL_INTERVAL_MS > wait.timeoutMs
+    ) {
+      return (
+        `one tree fetch took ${poll.slowestFetchMs}ms of the ${wait.timeoutMs}ms budget, so a second read ` +
+        `plus the shortest poll interval the schema allows (${MIN_POLL_INTERVAL_MS}ms) does not fit and the ` +
+        `screen was never sampled twice — this is not an observed change. Raise timeoutMs; lowering ` +
+        `pollIntervalMs helps only if the next read is faster than that one.`
+      );
+    }
+    if (poll.lastAttemptSettled) {
+      // Every fetch came back and a second read would have fit at some interval,
+      // so what ran out was the schedule.
+      return (
+        `the ${wait.timeoutMs}ms budget left room for only ${poll.samples} tree read, so the screen was ` +
+        `never sampled twice — this is not an observed change. The slowest fetch took ${poll.slowestFetchMs}ms; ` +
+        `it is pollIntervalMs (${wait.pollIntervalMs}ms) that leaves no room for a second one, so lower it or ` +
+        `raise timeoutMs.`
+      );
+    }
+    // The final fetch was abandoned at the deadline after one read landed. Do
+    // not name a knob with confidence: a second read WAS attempted, so the sleep
+    // was not the constraint, and the abandoned fetch is no evidence the tree is
+    // too slow either.
     return (
-      `the ${wait.timeoutMs}ms budget left room for only ${poll.samples} tree read, so the screen was never ` +
-      `sampled twice — this is not an observed change. The slowest fetch took ${poll.slowestFetchMs}ms; it ` +
-      `is pollIntervalMs (${wait.pollIntervalMs}ms) that leaves no room for a second one, so lower it or ` +
-      `raise timeoutMs.`
+      `only one tree read completed within the ${wait.timeoutMs}ms budget, so the screen was never sampled ` +
+      `twice — this is not an observed change. Raise timeoutMs, or lower pollIntervalMs if reads that slow ` +
+      `are the exception.`
     );
   }
 
@@ -262,6 +291,20 @@ function unsettledReason(
       `the screen was seen changing, but ${tail}, so nothing watched it up to the deadline — the ` +
         `change is real, the stillness is untested.`,
       poll
+    );
+  }
+
+  // Content changed, then a read FAILED and the final fetch never came back — a
+  // sticky `lastError` with the final attempt abandoned (a last fetch that
+  // settled with an error is the failed-read arm at the top). The reads went dark
+  // by failing, not by emptying (that is the arm above) and not by the routine
+  // deadline straddle of a healthy poll (no error, so this does not fire). The
+  // motion is real but nothing watched the screen to the end, so this must not
+  // read as a bare `settled: false`. unsettledNote appends the error.
+  if (poll.lastError !== undefined) {
+    return (
+      `the screen was seen changing, but the reads then went dark before the deadline, so nothing watched ` +
+      `it up to the end — the change is real, the stillness is untested.`
     );
   }
 

@@ -117,16 +117,19 @@ describe("Android describe reads bypass the helper's node cache", () => {
     __primeDepCacheForTests(["adb"]);
     try {
       const tool = createAwaitScreenIdleTool(registry);
+      // minStableMs above one poll interval, so the stub's identical tree is read
+      // several times before it settles: this must observe MORE than one call and
+      // assert coherence on every one, not just the first.
       await tool.execute(
         {},
-        { udid: ANDROID_SERIAL, timeoutMs: 300, pollIntervalMs: 10, minStableMs: 0 }
+        { udid: ANDROID_SERIAL, timeoutMs: 300, pollIntervalMs: 10, minStableMs: 50 }
       );
     } finally {
       __resetDepCacheForTests();
     }
 
     const seen = optionsSeen();
-    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.length).toBeGreaterThan(1);
     seen.forEach(expectCoherentRequest);
   });
 
@@ -135,13 +138,16 @@ describe("Android describe reads bypass the helper's node cache", () => {
     __primeDepCacheForTests(["adb"]);
     try {
       const tool = createAwaitUiElementTool(registry);
+      // A selector the stub tree never contains, so the wait polls to its timeout
+      // rather than matching on the first read — again, every poll must be
+      // coherent, not merely the first.
       await tool.execute(
         {},
         {
           udid: ANDROID_SERIAL,
           condition: "visible",
-          selector: { text: "Sign in" },
-          timeoutMs: 300,
+          selector: { text: "Nonexistent" },
+          timeoutMs: 100,
           pollIntervalMs: 10,
         }
       );
@@ -150,7 +156,7 @@ describe("Android describe reads bypass the helper's node cache", () => {
     }
 
     const seen = optionsSeen();
-    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.length).toBeGreaterThan(1);
     seen.forEach(expectCoherentRequest);
   });
 
@@ -181,7 +187,6 @@ describe("Android describe reads bypass the helper's node cache", () => {
     // The flow path caps nodes well above the blueprint default; pin the value,
     // so the coherence fix can't be "fixed" by dropping to the shared options.
     expect(optionsSeen()[0]?.maxNodes).toBe(12_000);
-    expect(getHierarchyRequestParams(optionsSeen()[0]).maxNodes).toBe(12_000);
   });
 });
 

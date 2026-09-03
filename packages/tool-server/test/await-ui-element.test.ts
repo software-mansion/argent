@@ -191,7 +191,11 @@ describe("await-ui-element tool", () => {
         condition: "visible",
         selector: { text: "Nope" },
         timeoutMs: 300,
-        pollIntervalMs: 10,
+        // Wider than the budget's remainder after one 200ms read, so no second
+        // fetch is issued: the single read settles and its verdict is not also
+        // stale (that case is exercised separately), isolating the one-sample
+        // caveat this test is about.
+        pollIntervalMs: 300,
       }
     );
 
@@ -274,7 +278,9 @@ describe("await-ui-element tool", () => {
           selector: { text: condition === "hidden" ? "Settings" : "Nope" },
           ...(condition === "text" ? { expectedText: "Nope" } : {}),
           timeoutMs: 300,
-          pollIntervalMs: 10,
+          // See the visible-condition case above: wide enough that the single
+          // 200ms read is not also stale, so this stays a one-sample test.
+          pollIntervalMs: 300,
         }
       );
 
@@ -946,14 +952,20 @@ describe("await-ui-element tool", () => {
     ]);
     const tool = createAwaitUiElementTool(iosRegistry(api));
 
+    // Schema-valid `pollIntervalMs` (>= the 50ms minimum), so the dark-tail
+    // tolerance is 2 x 50ms and the final clamped sleep sits well inside it: a
+    // fully-readable genuine miss must not flip to `unreadable` on a loaded
+    // runner's late timeout. The value 10ms exercised a gap the tool would
+    // reject at its entry point and left a 20ms tolerance one jittered sleep
+    // could cross.
     const result = await tool.execute(
       {},
       {
         udid: IOS_UDID,
         condition: "visible",
         selector: { text: "Nope" },
-        timeoutMs: 40,
-        pollIntervalMs: 10,
+        timeoutMs: 200,
+        pollIntervalMs: 50,
       }
     );
 
@@ -1275,6 +1287,83 @@ describe("await-ui-element tool", () => {
     expect(result.note).not.toMatch(/only one tree read/);
     expect(unmetUiWaitCause(result)).toBe("unmet");
   });
+
+  // Most fetches threw and the last returned a tree, which clears `lastError`.
+  // The single-sample caveat must not blame `pollIntervalMs` for a shortage the
+  // failures caused, nor quote an errored attempt's duration as "the slowest
+  // fetch"; the window was mostly blind and the note has to say so.
+  it("names the failures behind a single sample rather than the interval", async () => {
+    let call = 0;
+    const chromium = {
+      refreshViewport: async () => ({ width: 1024, height: 768 }),
+      cdp: {
+        send: async (method: string) => {
+          if (method !== "Runtime.evaluate") return {};
+          call += 1;
+          if (call <= 4) throw new Error("renderer detached");
+          return {
+            result: {
+              value: JSON.stringify({
+                tree: {
+                  role: "html",
+                  frame: { x: 0, y: 0, width: 1, height: 1 },
+                  children: [
+                    {
+                      role: "button",
+                      label: "Continue",
+                      frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
+                      children: [],
+                    },
+                  ],
+                },
+                truncated: false,
+              }),
+            },
+          };
+        },
+      },
+    } as unknown as ChromiumCdpApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const result = await tool.execute(
+      { chromium },
+      {
+        udid: CHROMIUM_ID,
+        condition: "visible",
+        selector: { text: "ABSENT" },
+        timeoutMs: 1000,
+        pollIntervalMs: 200,
+      }
+    );
+
+    expect(result.note).toMatch(/reads? failed/);
+    expect(result.note).toMatch(/mostly-blind/);
+    expect(result.note ?? "").not.toMatch(/pollIntervalMs \(200ms\) leaves no room/);
+  });
+
+  // A single read whose verdict is `unreadable` BECAUSE it is stale (one read,
+  // then a poll interval as wide as the budget). The note must say how far behind
+  // the deadline that read sits — `UNREADABLE_WAIT_WARNING` promises the recorder
+  // exactly that — not the plain single-sample text, which names the wrong knob.
+  it("says how stale a single unreadable read is, not merely that it was one", async () => {
+    const tool = createAwaitUiElementTool(iosRegistry(steadyAx(15)));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 2500,
+        pollIntervalMs: 2500,
+      }
+    );
+
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+    expect(result.note).toMatch(/landed \d+ms before the deadline/);
+    expect(result.note).toMatch(/single, stale sample/);
+    expect(result.note).toMatch(/lower pollIntervalMs \(2500ms\)/);
+  }, 20_000);
 
   // A timed-out wait returns success:false rather than throwing, so this line —
   // not `failedMsg` — is what the user reads for it. Reporting the condition met

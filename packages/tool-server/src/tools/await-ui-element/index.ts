@@ -64,9 +64,10 @@ const HIDDEN_UNREADABLE_NOTE =
  * - `unmet` — the tree was read and the condition was false there.
  * - `unreadable` — no read that speaks for the screen at the deadline. The
  *   source never answered, or it went dark at the end, or the last good read
- *   lies further behind the deadline than a poll excuses (a `pollIntervalMs`
- *   past 2000ms does that on a source that never failed at all). Anything
- *   judged was judged too early to stand for the deadline.
+ *   lies further behind the deadline than a poll excuses (a wide `pollIntervalMs`
+ *   does that on a source that never failed, when its last read still lands more
+ *   than ~2s before the deadline). Anything judged was judged too early to stand
+ *   for the deadline.
  * - `cancelled` — the caller gave up before the deadline. Also no verdict.
  */
 export type UnmetUiWaitCause = "unmet" | "unreadable" | "cancelled";
@@ -323,6 +324,10 @@ function timeoutNote(
     pollIntervalMs: number;
     lastAttemptSettled: boolean;
     slowestFetchMs: number;
+    /** Fetches that errored across the wait, monotonic (a later success does not
+     * clear it). A single sample with this above zero is a mostly-blind window,
+     * not a schedule too tight for a second read. */
+    failedFetches: number;
     /** Gap from the last trusted read to the exit, when it is what made the
      * verdict `unreadable`. */
     staleReadMs?: number;
@@ -349,7 +354,10 @@ function timeoutNote(
   // most blind first:
   //
   // - one sample, which can be the read taken before the element appeared. Name
-  //   the knob that applies: lowering the sleep helps only when the sleep is
+  //   the knob that applies: a single sample that is also STALE is `unreadable`
+  //   for that reason, so say how far back it sits (or the caveat contradicts
+  //   the cause); a window where earlier fetches FAILED was mostly blind, not
+  //   starved by the schedule; lowering the sleep helps only when the sleep is
   //   what ran out, not when the deadline cut a fetch off, and not when the
   //   fetches ate over half the budget between them (a second sample needs the
   //   slowest one's length again plus the shortest sleep the schema takes —
@@ -360,14 +368,31 @@ function timeoutNote(
   //   determinate miss, while `cause` says `unreadable`.
   let readCaveat = "";
   if (samples < 2) {
-    readCaveat =
+    if (budget.staleReadMs !== undefined) {
+      // The single read is what made the verdict `unreadable`: it is old. Say so,
+      // rather than blaming a schedule that had nothing to do with it.
+      readCaveat =
+        ` (the one tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
+        `screen after it, so this rests on a single, stale sample; lower pollIntervalMs ` +
+        `(${budget.pollIntervalMs}ms))`;
+    } else if (budget.failedFetches > 0) {
+      readCaveat =
+        ` (only one tree read returned a tree — ${budget.failedFetches} earlier ` +
+        `${budget.failedFetches === 1 ? "read" : "reads"} failed — so this rests on that single sample from ` +
+        `a mostly-blind window; restore the tree source and re-run)`;
+    } else if (
       budget.lastAttemptSettled &&
       2 * budget.slowestFetchMs + MIN_POLL_INTERVAL_MS <= budget.timeoutMs
-        ? ` (the ${budget.timeoutMs}ms budget left room for only one tree read — the slowest fetch took ` +
-          `${budget.slowestFetchMs}ms, and pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a ` +
-          `second — so this rests on that single sample; lower pollIntervalMs or raise timeoutMs)`
-        : ` (only one tree read completed within the ${budget.timeoutMs}ms budget, so this rests on that ` +
-          `single sample — raise timeoutMs, or lower pollIntervalMs if reads that slow are the exception)`;
+    ) {
+      readCaveat =
+        ` (the ${budget.timeoutMs}ms budget left room for only one tree read — the slowest fetch took ` +
+        `${budget.slowestFetchMs}ms, and pollIntervalMs (${budget.pollIntervalMs}ms) leaves no room for a ` +
+        `second — so this rests on that single sample; lower pollIntervalMs or raise timeoutMs)`;
+    } else {
+      readCaveat =
+        ` (only one tree read completed within the ${budget.timeoutMs}ms budget, so this rests on that ` +
+        `single sample — raise timeoutMs, or lower pollIntervalMs if reads that slow are the exception)`;
+    }
   } else if (budget.staleReadMs !== undefined) {
     readCaveat =
       ` (the last tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
@@ -581,6 +606,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             pollIntervalMs,
             lastAttemptSettled: poll.lastAttemptSettled,
             slowestFetchMs: poll.slowestFetchMs,
+            failedFetches: poll.failedFetches,
             staleReadMs:
               darkTailMs !== undefined && darkTailMs > darkTailToleranceMs(pollIntervalMs)
                 ? darkTailMs

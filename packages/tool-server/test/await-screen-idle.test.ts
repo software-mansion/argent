@@ -313,7 +313,7 @@ describe("await-screen-idle tool", () => {
 
     expect(result.settled).toBe(false);
     expect(result.polls).toBe(1);
-    expect(result.note).toContain("two reads that size do not fit");
+    expect(result.note).toContain("a second read plus the shortest poll interval");
     expect(result.note).toContain("Raise timeoutMs");
     // The interval is not the knob here, so it must not be named as one — but
     // the note may not rule it out either: a faster next read could still fit.
@@ -327,10 +327,11 @@ describe("await-screen-idle tool", () => {
   // and appends the hint that decides. Apple TV is the standing case: this
   // tool's iOS reader has no focus tree to return there at all.
   // A read that used half the budget, and a poll sleep that then handed the next
-  // one less than it needs. That fetch times out on the schedule, not on the
-  // tree — calling it a tree too slow to read points at `timeoutMs` for the
-  // wrong reason and, worse, contradicts the read that plainly did land. Only a
-  // window where NOTHING came back is the tree outrunning the budget.
+  // one less than it needs, so the deadline abandoned it. That fetch timed out on
+  // the schedule, not on the tree, so this must not read as the tree outrunning
+  // the budget — and because the final attempt did not settle, its cut-off
+  // duration is no evidence a read that size cannot fit, so the note names no
+  // knob with confidence (the sibling await-ui-element draws the same line).
   it("does not call a read that took half the budget one that outran it", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(fastAx(200)));
 
@@ -341,7 +342,7 @@ describe("await-screen-idle tool", () => {
 
     expect(result.polls).toBe(2);
     expect(result.note).not.toContain("outran the budget");
-    expect(result.note).toContain("one tree fetch took");
+    expect(result.note).toContain("only one tree read completed");
     expect(result.note).toContain("Raise timeoutMs");
   });
 
@@ -628,5 +629,108 @@ describe("await-screen-idle tool", () => {
 
     expect(result.settled).toBe(true);
     expect(result.polls).toBe(1);
+  });
+
+  // A DOM tree carrying one labelled node, so successive labels read as content
+  // that changed.
+  const domTree = (label: string) => ({
+    role: "html",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      { role: "button", label, frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 }, children: [] },
+    ],
+  });
+
+  // One read landed and the deadline then abandoned a second one. The abandoned
+  // fetch's cut-off duration is no evidence a read that size cannot fit, so the
+  // note must not quote it as "one tree fetch took Xms" nor blame pollIntervalMs
+  // with confidence — the sibling await-ui-element draws the same line.
+  it("does not blame a knob when one read landed and the next was abandoned", async () => {
+    let call = 0;
+    const chromium = {
+      refreshViewport: async () => ({ width: 1024, height: 768 }),
+      cdp: {
+        send: async (method: string) => {
+          if (method !== "Runtime.evaluate") return {};
+          call += 1;
+          if (call === 1) {
+            await new Promise((r) => setTimeout(r, 5));
+            return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
+          }
+          return new Promise(() => {});
+        },
+      },
+    } as unknown as ChromiumCdpApi;
+    const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
+
+    const result = await tool.execute(
+      { chromium },
+      { udid: CHROMIUM_ID, timeoutMs: 80, pollIntervalMs: 10, minStableMs: 250 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toContain("only one tree read completed");
+    expect(result.note).not.toContain("one tree fetch took");
+    expect(result.note).not.toContain("pollIntervalMs (10ms)");
+  });
+
+  // The screen was seen CHANGING, then a read failed and the last fetch was
+  // abandoned. A bare `settled: false` would assert the motion was watched to the
+  // deadline; it was not, and the failure must not be dropped.
+  it("does not call a change watched to the end when the reads then failed", async () => {
+    let call = 0;
+    const chromium = {
+      refreshViewport: async () => ({ width: 1024, height: 768 }),
+      cdp: {
+        send: async (method: string) => {
+          if (method !== "Runtime.evaluate") return {};
+          call += 1;
+          if (call === 1) return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
+          if (call === 2) return { result: { value: JSON.stringify({ tree: domTree("B") }) } };
+          if (call === 3) throw new Error("renderer detached");
+          return new Promise(() => {});
+        },
+      },
+    } as unknown as ChromiumCdpApi;
+    const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
+
+    const result = await tool.execute(
+      { chromium },
+      { udid: CHROMIUM_ID, timeoutMs: 200, pollIntervalMs: 10, minStableMs: 250 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toBeDefined();
+    expect(result.note).toContain("seen changing");
+    expect(result.note).toContain("stillness is untested");
+    expect(result.note).toContain("a tree read also failed: renderer detached");
+  });
+
+  // One read came back and earlier fetches failed: the window was mostly blind,
+  // so the single sample is the failures' doing, not the schedule's.
+  it("names earlier failures behind a single-sample verdict", async () => {
+    let call = 0;
+    const chromium = {
+      refreshViewport: async () => ({ width: 1024, height: 768 }),
+      cdp: {
+        send: async (method: string) => {
+          if (method !== "Runtime.evaluate") return {};
+          call += 1;
+          if (call <= 3) throw new Error("renderer detached");
+          return { result: { value: JSON.stringify({ tree: domTree("A") }) } };
+        },
+      },
+    } as unknown as ChromiumCdpApi;
+    const tool = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi));
+
+    const result = await tool.execute(
+      { chromium },
+      { udid: CHROMIUM_ID, timeoutMs: 100, pollIntervalMs: 25, minStableMs: 250 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toContain("earlier");
+    expect(result.note).toMatch(/reads? failed/);
+    expect(result.note).not.toContain("pollIntervalMs (25ms) that leaves no room");
   });
 });

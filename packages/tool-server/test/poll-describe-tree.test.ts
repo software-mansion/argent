@@ -48,8 +48,10 @@ describe("pollDescribeTree", () => {
     );
 
     // Exact counts would ride on how many cycles the runner fits in the budget;
-    // what the field promises is the relation.
-    expect(poll.polls).toBeGreaterThan(3);
+    // what the field promises is the relation. `>= 2` rather than a higher bound
+    // because a loaded runner has been seen fitting only three cycles in this
+    // budget, and the point is that some fetches came back and some did not.
+    expect(poll.polls).toBeGreaterThanOrEqual(2);
     expect(poll.samples).toBeGreaterThan(0);
     expect(poll.samples).toBeLessThan(poll.polls);
   });
@@ -193,29 +195,46 @@ describe("pollDescribeTree", () => {
     expect(poll.elapsedMs).toBeLessThan(1000);
   });
 
-  // What separates "the sleep starved the second read" from "the read was too big
-  // for a second one at any sleep". Measured over every attempt, so a fetch the
-  // deadline cut off counts for the time it did consume.
-  it("reports the longest single fetch, cut-off attempts included", async () => {
+  // `slowestFetchMs` is a MAXIMUM over attempts, which is what separates "the
+  // sleep starved the second read" from "the read was too big for a second one at
+  // any sleep". A later, shorter read must not lower it — the discriminator
+  // between `Math.max(...)` and a plain assignment, which the last read's ~20ms
+  // would otherwise satisfy.
+  it("reports the longest fetch attempt, not the most recent", async () => {
+    let n = 0;
+    const poll = await neverDone(
+      () => {
+        n += 1;
+        if (n === 1) return after(120, tree("slow"));
+        return after(20, tree("quick"));
+      },
+      160,
+      10
+    );
+
+    expect(poll.samples).toBeGreaterThanOrEqual(2);
+    expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(120);
+    expect(poll.slowestFetchMs).toBeLessThan(400);
+  });
+
+  // The other half of the field's contract: a fetch the deadline cut off counts
+  // for the time it did run, so it can be the maximum. Here the abandoned second
+  // fetch ran far longer than the one settled read.
+  it("counts a fetch the deadline cut off for the time it ran", async () => {
     let n = 0;
     const poll = await neverDone(
       () => {
         n += 1;
         if (n === 1) return after(20, tree("quick"));
-        if (n === 2) return after(90, tree("slow"));
         return never<DescribeTreeData>();
       },
-      400,
+      200,
       10
     );
 
-    expect(poll.samples).toBe(2);
+    expect(poll.samples).toBe(1);
     expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(90);
-    // The trailing fetch is abandoned at the deadline, so it can only have run
-    // for what was left. Bounded by the budget, but measured in wall clock, so
-    // the margin is for a loaded runner delivering the timeout callback late —
-    // the point is that an abandoned fetch stops counting, not the exact figure.
-    expect(poll.slowestFetchMs).toBeLessThan(1500);
+    expect(poll.slowestFetchMs).toBeLessThan(600);
   });
 
   it("reports zero slowestFetchMs when no fetch was ever issued", async () => {
@@ -225,6 +244,28 @@ describe("pollDescribeTree", () => {
 
     expect(poll.polls).toBe(0);
     expect(poll.slowestFetchMs).toBe(0);
+  });
+
+  // `failedFetches` is monotonic: a later success does not clear it, so a caller
+  // with one sample can still tell a mostly-blind window from a schedule too
+  // tight for a second read.
+  it("counts every fetch that errored, and a success does not reset it", async () => {
+    let n = 0;
+    const poll = await pollDescribeTree<true>({
+      fetchTree: async () => {
+        n += 1;
+        if (n <= 3) throw new Error(`boom ${n}`);
+        return tree("a");
+      },
+      timeoutMs: 200,
+      pollIntervalMs: 25,
+      onSample: () => ({ done: true, result: true }),
+    });
+
+    expect(poll.failedFetches).toBe(3);
+    expect(poll.samples).toBe(1);
+    // The success that ended the wait cleared `lastError`, but the count stands.
+    expect(poll.lastError).toBeUndefined();
   });
 
   it("stops early and carries the predicate's result", async () => {

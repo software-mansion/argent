@@ -88,6 +88,14 @@ export interface PollDescribeTreeResult<R> {
    * no `pollIntervalMs` buys a second one and only a larger `timeoutMs` will.
    */
   slowestFetchMs: number;
+  /**
+   * How many fetches ERRORED, across the whole wait. Unlike {@link lastError},
+   * which a later success clears, this is monotonic: it survives a success, so a
+   * window that failed repeatedly and then read one good tree can still say the
+   * window was mostly blind. A caller with a single sample and this above zero
+   * must not blame the schedule for a shortage the failures caused.
+   */
+  failedFetches: number;
 }
 
 export async function pollDescribeTree<R>(
@@ -103,6 +111,7 @@ export async function pollDescribeTree<R>(
   let samples = 0;
   let lastAttemptSettled = false;
   let slowestFetchMs = 0;
+  let failedFetches = 0;
 
   const outcome = (result: R | undefined, aborted: boolean): PollDescribeTreeResult<R> => ({
     result,
@@ -114,6 +123,7 @@ export async function pollDescribeTree<R>(
     samples,
     lastAttemptSettled,
     slowestFetchMs,
+    failedFetches,
   });
 
   for (;;) {
@@ -145,6 +155,7 @@ export async function pollDescribeTree<R>(
     }
     if (settled.type === "error") {
       lastError = settled.error;
+      failedFetches += 1;
     } else {
       samples += 1;
       lastData = settled.value;
