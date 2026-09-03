@@ -70,18 +70,15 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     // Drop any teardown breadcrumb for this device, the way the screen-recording
-    // and native-profiler starts drop theirs. `debugger-log-registry` reads one
-    // only when it has no entries of its own to explain, so a breadcrumb left
-    // here outlives every read that finds some — and then attaches "a teardown
-    // ate your logs" to a later, unrelated empty read. An explicit connect makes
-    // it wrong anyway: from here the capture is this session's, so an empty
-    // registry honestly means this app has logged nothing since.
+    // and native-profiler starts drop theirs. An explicit connect is what makes
+    // one wrong: from here the capture is this session's, so an empty registry
+    // honestly means this app has logged nothing since, and someone else's
+    // stop-all is not this session's business. A read claims none of that, which
+    // is why `debugger-log-registry` keeps reporting a teardown that this drops.
     //
-    // Report it first when the app went away: it carries the path of a log file
-    // still on disk, and by the time the crash-recovery route — restart-app,
-    // then here — arrives, `debugger-log-registry` has nothing left to report.
-    // It reads a breadcrumb only from an empty registry, and the relaunched
-    // app's first line makes that registry its own.
+    // Report it when the app went away: it carries the path of a log file still
+    // on disk, and this is the tool the crash-recovery route — restart-app, then
+    // here — arrives through. Whichever of the two runs first spends it.
     //
     // Not in the blueprint's factory: that runs for an IMPLICIT resolve too —
     // `debugger-log-registry` reconnects through it — and clearing there would

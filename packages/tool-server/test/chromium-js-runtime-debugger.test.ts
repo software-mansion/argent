@@ -11,7 +11,11 @@ import {
 import { resolveDevice } from "../src/utils/device-info";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
-import { takeReapedSession, __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
+import {
+  takeReapedSession,
+  describeReapedSession,
+  __resetReapedSessionsForTesting,
+} from "../src/utils/reaped-sessions";
 import { debuggerReapedScope } from "../src/tools/debugger/debugger-service-ref";
 import { scopeTempHome } from "./helpers/temp-home";
 import { modeBites } from "./helpers/mode-bites";
@@ -275,6 +279,56 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     expect(reaped?.keptAt).toBe(logPath);
 
     fs.rmSync(logPath, { force: true });
+  });
+
+  it("reclaims the first renderer crash's log when the page dies again unread", async () => {
+    // The Chromium half of the crash-loop bound, and the only thing that pins
+    // the `logicalId` this blueprint files. The store takes a replaced record's
+    // file only when both events carry the same runtime-assigned id; on
+    // Chromium that id IS the device id, so passing none leaves an unread
+    // renderer crash loop keeping a file per round rather than one per device.
+    __resetReapedSessionsForTesting();
+
+    const crash = async (message: string) => {
+      const fake = makeFakeChromiumCdpApi();
+      let socketOpen = true;
+      (fake.api.cdp as unknown as { isConnected: () => boolean }).isConnected = () => socketOpen;
+      const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+        { chromium: fake.api },
+        DEVICE_ID,
+        { device: chromiumDevice }
+      );
+      instance.api.logWriter.write({
+        id: 1,
+        timestamp: new Date(1710000000000).toISOString(),
+        level: "error",
+        message,
+      });
+      const logPath = instance.api.logWriter.getFilePath();
+      socketOpen = false;
+      fake.events.emit("disconnected", new Error("renderer gone"));
+      await instance.dispose();
+      return logPath;
+    };
+
+    const first = await crash("CRITICAL first-crash error");
+    expect(fs.existsSync(first)).toBe(true);
+
+    // Nothing reads the first breadcrumb, so the second death is what has to
+    // recognise it.
+    const second = await crash("CRITICAL second-crash error");
+    expect(second).not.toBe(first);
+
+    expect(fs.existsSync(first)).toBe(false);
+    expect(fs.existsSync(second)).toBe(true);
+
+    const reaped = takeChromiumReaped();
+    expect(reaped?.supersededFilesTaken).toBe(1);
+    const message = describeReapedSession(reaped!, "JS-runtime debugger session");
+    expect(message).toContain("The log file it kept went with it");
+    expect(message).not.toContain(first);
+
+    fs.rmSync(second, { force: true });
   });
 
   it("names no file when the renderer dies and the writer never got one", async (ctx) => {

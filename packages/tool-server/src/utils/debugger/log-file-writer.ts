@@ -263,10 +263,13 @@ export class LogFileWriter {
    * nowhere to go. `keepFile` leaves the log on disk: the caller is shutting
    * the writer down because the JS runtime died, and the entries captured
    * before it died are the reason a developer would look. Two things reclaim
-   * it: the breadcrumb store, when a later crash under the same ids files a kept
-   * file of its own, and `pruneStaleLogs` from this class's constructor, on the
-   * next debugger connect that finds it a day untouched. On a host that stops
-   * debugging entirely it stays until one of those runs.
+   * it: the breadcrumb store, when a later crash under the same ids AND the same
+   * runtime-assigned id files a kept file of its own while this one's record
+   * still sits unread, and `pruneStaleLogs` from this class's constructor, on
+   * the next debugger connect that finds it a day untouched. A record that has
+   * been read is spent, so a file whose path an agent was handed waits for the
+   * sweep alone. On a host that stops debugging entirely it stays until one of
+   * those runs.
    */
   close(opts: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
@@ -305,8 +308,10 @@ const KEEPALIVE_MS = 60 * 60 * 1000;
 // written — so a live session capturing nothing, or one past MAX_ENTRIES, is
 // indistinguishable from an orphan there, and that writer has no `hasFile()` to
 // report the unlink either. Installs of different versions share this directory
-// and run their servers side by side, so the older shape is swept by nobody
-// rather than by everybody; nothing mints it any more, so the set is bounded.
+// and run their servers side by side, so the choice is between an older install's
+// live files being swept by a newer one and the older shape being swept by
+// nobody. This takes the second: it leaves files behind, where the first would
+// delete a log a running session is still writing to.
 const LOG_NAME_RE = /^argent-logs-\d+-\d+-\d+-\d+\.log$/;
 
 /**

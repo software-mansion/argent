@@ -2,7 +2,11 @@ import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerReapedScope } from "./debugger-service-ref";
-import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
+import {
+  describeReapedSession,
+  peekReapedSession,
+  takeReapedSession,
+} from "../../utils/reaped-sessions";
 import {
   buildNotConnected,
   classifyNotConnected,
@@ -79,7 +83,7 @@ export function createDebuggerLogRegistryTool(
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. ALWAYS check { note } before acting on the rest: it appears only when something would otherwise mislead you, and it says which of two things it is — or both, when both hold. Either the previous debugger session for this device was torn down while holding captured logs — by a stop-all-simulator-servers, or by the app's JS runtime going away — so the counts here are a new session's own and a zero says nothing about what the old one captured, and when that teardown left the old log file on disk (a crash or force-quit does, unless the writer never opened one) the note names its path to read instead, plus where the logs stand for any earlier record it replaced unread. Or nothing is at { file } — the writer could not create it, or something has removed it since — so it is not there to grep, and what is left is the counts plus clusters that are a capped and truncated view rather than the lines themselves. Only a new debugger session gets a file: the writer opens one once, and debugger-connect hands back the live session. Absent a note, empty means nothing has been captured since this session began, and { file } is readable.
+Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. ALWAYS check { note } before acting on the rest: it appears only when something would otherwise mislead you, and it says which of two things it is — or both, when both hold. Either the previous debugger session for this device was torn down while holding captured logs — by a stop-all-simulator-servers, or by the app's JS runtime going away — so the counts here are a new session's own and cover nothing that session captured, whatever they say, and when that teardown left the old log file on disk (a crash or force-quit does, unless the writer never opened one) the note names its path to read instead, plus where the logs stand for any earlier record it replaced unread. Or nothing is at { file } — the writer could not create it, or something has removed it since — so it is not there to grep, and what is left is the counts plus clusters that are a capped and truncated view rather than the lines themselves. Only a new debugger session gets a file: the writer opens one once, and debugger-connect hands back the live session. Absent a note, empty means nothing has been captured since this session began, and { file } is readable.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } and no log file of its own — follow the guidance (do not retry in a loop). A crashed app reaches that state too, so check { note } there as well: when the dead session left its log file behind the note names it, and that file is readable even though the debugger is not. The one exception is reason "reconnecting", which holds the record back for the retry its guidance asks for, so no note there says nothing about what the previous session left. A "connected" result's stats may come from a session whose socket has since died — use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
@@ -111,28 +115,45 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         // session had been reaped, so an empty registry here is ambiguous: the
         // app has logged nothing, or a teardown took the old log file with it,
         // or the runtime died and left that file on disk. The breadcrumb is what
-        // separates the three. Only the empty case is ambiguous — a registry
-        // with entries in it is reporting this session's own capture, and
-        // consuming a breadcrumb there would attach a stale explanation to a
-        // healthy result.
+        // separates the three.
+        //
+        // Only the empty case is ambiguous — a registry with entries in it is
+        // reporting this session's own capture, and a plain teardown there would
+        // attach a stale explanation to a healthy result.
+        //
+        // A record that KEPT A FILE is the exception, and gating it on the zero
+        // was a hole: the file's path lives nowhere else, so a record left
+        // unspent because this session had since logged could never be reached
+        // again, and the next death on these ids unlinked the file as the log of
+        // a session nobody read. Anything that re-mints the session and logs one
+        // line before the agent asks gets there — a registry self-heal does it
+        // inside a call that returns ordinary success, so nothing even tells the
+        // agent a death happened. Looked at before it is spent, so only the
+        // records this answer reports are the ones it destroys.
+        const scope = debuggerReapedScope(params);
+        const pending = peekReapedSession("js-runtime-debugger", params.device_id, scope);
+        const empty = stats.totalEntries === 0;
         const reaped =
-          stats.totalEntries === 0
-            ? takeReapedNote(params.device_id, debuggerReapedScope(params))
+          pending && (empty || pending.keptAt !== undefined || pending.superseded)
+            ? takeReapedNote(params.device_id, scope)
             : undefined;
         // Both can be true at once — an unwritable directory outlives the
         // session that died in it — and they are about different files, the old
         // session's and this one's, so neither may swallow the other.
         const notes: string[] = [];
         if (reaped) {
-          // The one answer that HAS a registry to account for, so the one that
-          // says what this zero covers. `debugger-connect` and the
-          // `not_connected` branch below report the same teardown without one.
-          // It does not go on to say the app HAS logged: the relaunched session
-          // may well have captured nothing yet, and both are true at once —
-          // what the reader must not do is read this zero as the old session's.
+          // The counts beside it are the new session's, and the reader must not
+          // read them as the old one's. On the empty answer that means saying
+          // what this zero does not cover; on a non-empty one, that these
+          // entries are not the ones the record is about. Neither goes on to say
+          // the app HAS logged: a relaunched session may have captured nothing
+          // yet, and both are true at once.
           notes.push(
-            `${reaped} The counts here are the new session's own, so this zero ` +
-              `says nothing about what the old one captured.`
+            empty
+              ? `${reaped} The counts here are the new session's own, so this zero ` +
+                  `says nothing about what the old one captured.`
+              : `${reaped} The counts here are the new session's own and do not ` +
+                  `include anything that record is about.`
           );
         }
         if (!api.logWriter.hasFile()) {
@@ -152,8 +173,9 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
               `does not try again, and debugger-connect hands back this same session, so end it ` +
               `with stop-all-simulator-servers, passing in devices the id you called ` +
               `debugger-connect WITH — a session opened under a logicalDeviceId answers to no ` +
-              `other, and { left_running } names it when the scope missed — then connect. That ` +
-              `scope reaps every service this device owns, another agent's included.`
+              `other, and { left_running } names it when the scope missed — then connect. A ` +
+              `list-devices id reaps every service that device owns, another agent's ` +
+              `included; a logicalDeviceId reaps the debugger session and what rides on it.`
           );
         }
         if (notes.length > 0) response.note = notes.join(" ");

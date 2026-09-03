@@ -75,7 +75,8 @@ const CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER =
  *
  * Three reasons carry no note pointer, and neither of the transient two strands
  * the record. `runtime_unresponsive` describes a session that is still alive, so
- * none has been filed. `metro_not_running` and `reconnecting` are read from two
+ * the event files none of its own; an earlier session's is reported inline by
+ * `debugger-log-registry`, which spends it on every reason but `reconnecting`. `metro_not_running` and `reconnecting` are read from two
  * tools that treat them differently: `debugger-status` spends nothing, so its
  * retry once Metro is up answers `no_app_connected` or connects and reaches a
  * tool that does report the note; `debugger-log-registry` attaches the record to

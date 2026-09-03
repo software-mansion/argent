@@ -1154,27 +1154,33 @@ describe("the reaped-session key", () => {
     });
 
     it("keeps the file of a record filed under as many ids as this one, but not the same ones", () => {
-      // Cardinality is not identity. Two bundles on one device share the udid
-      // and differ by logicalDeviceId, so a two-id write lands on a two-id
-      // record whose second id it never named - the stranger-session shape the
-      // exact-match rule exists to refuse, arriving at the same size.
+      // Cardinality is not identity, and it is the only thing left once the
+      // count and the runtime-assigned id both match. `selectTarget`'s
+      // one-device fallback files a stale connect id beside the logicalDeviceId;
+      // a later write takes that stale id off the record, and the real device
+      // then crashes under its udid and the SAME logicalDeviceId - two ids
+      // again, one of them never named by the record it is about to cover.
       const kept = path.join(dir, "argent-logs-16-1.log");
       const other = path.join(dir, "argent-logs-16-2.log");
       const own = path.join(dir, "argent-logs-16-3.log");
       for (const file of [kept, other, own]) fs.writeFileSync(file, "x");
-      recordReapedSession("js-runtime-debugger", [UDID, "logical-abc"], "first bundle", {
+      recordReapedSession("js-runtime-debugger", ["stale-connect-id", LOGICAL], "fallback", {
         cause: "runtime-death",
         keptAt: kept,
+        logicalId: LOGICAL,
       });
-      // Takes logical-abc off the first record, leaving it answering under the
-      // udid alone - so the write below covers it and reaches the file rule.
-      recordReapedSession("js-runtime-debugger", ["logical-abc"], "re-targeted", {
+      // Takes the stale id off the first record, leaving it answering under the
+      // logicalDeviceId alone - so the write below covers it and reaches the
+      // file rule with the count and the logicalDeviceId both matching.
+      recordReapedSession("js-runtime-debugger", ["stale-connect-id"], "re-targeted", {
         cause: "runtime-death",
         keptAt: other,
+        logicalId: LOGICAL,
       });
-      recordReapedSession("js-runtime-debugger", [UDID, "logical-xyz"], "second bundle", {
+      recordReapedSession("js-runtime-debugger", [UDID, LOGICAL], "the real device", {
         cause: "runtime-death",
         keptAt: own,
+        logicalId: LOGICAL,
       });
 
       expect(fs.existsSync(kept)).toBe(true);
@@ -1184,6 +1190,34 @@ describe("the reaped-session key", () => {
       );
       expect(message).toContain("An earlier session that answered here");
       expect(message).toContain(`Any log file it left is still on disk, at ${kept}.`);
+    });
+
+    it("keeps a named device's file from a later session the runtime never named", () => {
+      // The count and the id set both match here, so the runtime-assigned id is
+      // the only thing separating the owner from a stranger: `selectTarget`'s
+      // one-device fallback can land the crashed device's id on a LEGACY target,
+      // which reports none at all. Taking the file there would spend the log of
+      // the device that actually crashed.
+      const owner = path.join(dir, "argent-logs-19-1.log");
+      const stranger = path.join(dir, "argent-logs-19-2.log");
+      for (const file of [owner, stranger]) fs.writeFileSync(file, "x");
+      recordReapedSession("js-runtime-debugger", [LOGICAL], "the device Metro named", {
+        cause: "runtime-death",
+        keptAt: owner,
+        logicalId: LOGICAL,
+      });
+      recordReapedSession("js-runtime-debugger", [LOGICAL], "a legacy target on that id", {
+        cause: "runtime-death",
+        keptAt: stranger,
+      });
+
+      expect(fs.existsSync(owner)).toBe(true);
+      const message = describeReapedSession(
+        takeReapedSession("js-runtime-debugger", LOGICAL)!,
+        "JS-runtime debugger session"
+      );
+      expect(message).toContain(`Any log file it left is still on disk, at ${owner}.`);
+      expect(message).not.toContain("went with it");
     });
 
     it("leaves an event reachable under the id filed SECOND out of the count", () => {

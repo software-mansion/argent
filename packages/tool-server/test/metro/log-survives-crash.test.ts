@@ -399,6 +399,91 @@ describe("console logs across an app crash", () => {
     expect(replaced.note).toContain("An earlier session that answered here");
   });
 
+  it("reports a kept crash log to a reader whose own session has already logged", async () => {
+    // The registry read is one of the two tools that report the kept file, and
+    // the only one an agent reaches without reconnecting. Gating the read on an
+    // empty registry stranded the record whenever the relaunched app logged
+    // first: nothing else names that path, so the next death on these ids
+    // reclaimed it as the log of a session nobody read. Nothing about that
+    // sequence tells the agent a death happened - a registry self-heal mints
+    // the new session inside a call that returns an ordinary success.
+    __resetReapedSessionsForTesting();
+    logicalDeviceId = "logical-latecrash";
+    try {
+      await registry.invokeTool("debugger-connect", {
+        port: mockPort,
+        device_id: "latecrash-device",
+      });
+      const first = await resolveDebuggerService(registry, {
+        port: mockPort,
+        device_id: "latecrash-device",
+      });
+      const firstLog = first.logWriter.getFilePath();
+      cdpConn!.send(
+        JSON.stringify({
+          method: "Runtime.consoleAPICalled",
+          params: {
+            type: "error",
+            args: [{ type: "string", value: "CRITICAL pre-crash error" }],
+            executionContextId: 1,
+            timestamp: Date.now(),
+          },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 200));
+
+      cdpConn!.terminate();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(fs.existsSync(firstLog)).toBe(true);
+
+      // The relaunched session logs before the agent asks anything, which is
+      // what used to hide the record.
+      const second = await resolveDebuggerService(registry, {
+        port: mockPort,
+        device_id: "latecrash-device",
+      });
+      cdpConn!.send(
+        JSON.stringify({
+          method: "Runtime.consoleAPICalled",
+          params: {
+            type: "error",
+            args: [{ type: "string", value: "post-relaunch line" }],
+            executionContextId: 1,
+            timestamp: Date.now(),
+          },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 200));
+
+      const read = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "latecrash-device",
+      })) as { totalEntries: number; note?: string };
+
+      // The premise: a non-empty registry, which is the whole gate.
+      expect(read.totalEntries).toBeGreaterThan(0);
+      expect(read.note).toContain(firstLog);
+      expect(read.note).toContain("grep that file");
+      // And it must not read this session's own counts as the dead one's.
+      expect(read.note).toContain("do not include anything that record is about");
+      expect(read.note).not.toContain("this zero");
+
+      // Spending it is what spares the file: the next death has nothing to
+      // supersede, so the log the agent was just handed stays where it was told
+      // to look.
+      const secondLog = second.logWriter.getFilePath();
+      cdpConn!.terminate();
+      await new Promise((r) => setTimeout(r, 500));
+      expect(fs.existsSync(firstLog)).toBe(true);
+      expect(fs.readFileSync(firstLog, "utf-8")).toContain("CRITICAL pre-crash error");
+
+      fs.rmSync(firstLog, { force: true });
+      fs.rmSync(secondLog, { force: true });
+    } finally {
+      logicalDeviceId = undefined;
+    }
+  }, 20_000);
+
   it("reclaims the first crash's log when the app dies again before anything read it", async () => {
     // The crash loop the disposer's two-id filing and the store's supersede
     // rule are both written for, driven end to end. Every other case here
@@ -409,9 +494,11 @@ describe("console logs across an app crash", () => {
     // `keptAt` of its own. Otherwise a crash loop leaves one orphaned log per
     // round in ~/.argent/tmp with nothing naming any of them.
     //
-    // No `debugger-connect` between the two deaths: connect spends the
-    // breadcrumb, which would leave the second death nothing to supersede. The
-    // relaunched session is minted the way every other debugger tool mints one.
+    // Neither `debugger-connect` nor `debugger-log-registry` between the two
+    // deaths: both spend the breadcrumb, which would leave the second death
+    // nothing to supersede. Each round's path is read off its own writer for
+    // that reason. The relaunched session is minted the way every other
+    // debugger tool mints one.
     __resetReapedSessionsForTesting();
     logicalDeviceId = "logical-crashloop";
     try {
@@ -440,17 +527,17 @@ describe("console logs across an app crash", () => {
         })
       );
       await new Promise((r) => setTimeout(r, 200));
-      const { file: firstLog } = (await registry.invokeTool("debugger-log-registry", {
-        port: mockPort,
-        device_id: "crashloop-device",
-      })) as { file: string };
+      const firstLog = first.logWriter.getFilePath();
 
       cdpConn!.terminate();
       await new Promise((r) => setTimeout(r, 500));
       expect(fs.existsSync(firstLog)).toBe(true);
 
       // Round two, on the relaunched app, with the first round still unread.
-      await resolveDebuggerService(registry, { port: mockPort, device_id: "crashloop-device" });
+      const second = await resolveDebuggerService(registry, {
+        port: mockPort,
+        device_id: "crashloop-device",
+      });
       cdpConn!.send(
         JSON.stringify({
           method: "Runtime.consoleAPICalled",
@@ -463,10 +550,7 @@ describe("console logs across an app crash", () => {
         })
       );
       await new Promise((r) => setTimeout(r, 200));
-      const { file: secondLog } = (await registry.invokeTool("debugger-log-registry", {
-        port: mockPort,
-        device_id: "crashloop-device",
-      })) as { file: string };
+      const secondLog = second.logWriter.getFilePath();
       expect(secondLog).not.toBe(firstLog);
 
       cdpConn!.terminate();

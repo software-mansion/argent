@@ -302,6 +302,21 @@ export function recordReapedSession(
  * a twin behind to explain a later, unrelated read — and to reclaim, on the
  * next crash under the same ids, the very file this answer just named.
  */
+/**
+ * Look at the record without spending it, so a reader can decide whether it is
+ * one it should report before it destroys the only copy. `debugger-log-registry`
+ * needs this: a record naming a kept log file has to be reported whatever its
+ * own counts say, while a plain teardown must not explain a registry that has
+ * entries of its own.
+ */
+export function peekReapedSession(
+  kind: ReapedSessionKind,
+  deviceId: string,
+  scope?: string
+): ReapedSession | undefined {
+  return reaped.get(key(kind, deviceId, scope));
+}
+
 export function takeReapedSession(
   kind: ReapedSessionKind,
   deviceId: string,
@@ -401,6 +416,9 @@ function describeReplacedRecords(entry: ReapedSession): string {
 export function describeReapedSession(entry: ReapedSession, what: string): string {
   const secondsAgo = Math.max(0, Math.round((Date.now() - entry.atMs) / 1000));
   const isChromium = classifyDevice(entry.deviceId) === "chromium";
+  // Worded for a debugger session, the only kind that files a `runtime-death`:
+  // a recording and a trace report their own end. A kind that starts filing one
+  // needs wording of its own, the way the file clause above does.
   const runtimeDeath = isChromium
     ? `its debugger connection dropped instead of being closed — the page went away (a crash, ` +
       `a tab or window closing, the browser quitting), its CDP endpoint stopped being ` +
