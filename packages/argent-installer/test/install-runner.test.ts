@@ -66,6 +66,10 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
 
+// The messages are styled with picocolors, which stays on under CI.
+// eslint-disable-next-line no-control-regex
+const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
     super(`process.exit(${code})`);
@@ -361,7 +365,7 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands).toEqual([
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
-    const [message] = vi.mocked(log.error).mock.calls[0] as [string];
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
     expect(message).toContain("npx @swmansion/argent init --local");
     expect(message).not.toContain("npm config set prefix");
     expect(tel.trackPackageAction).toHaveBeenCalledWith(
@@ -387,7 +391,7 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands).toEqual([
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
-    const [message] = vi.mocked(log.error).mock.calls[0] as [string];
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
     expect(message).toContain("EACCES ~/.npmrc");
     expect(message).toContain("npx @swmansion/argent init --local");
   });
@@ -442,7 +446,7 @@ describe("a global install whose target directory cannot be written", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(select).not.toHaveBeenCalled();
     expect(runShellCommand).not.toHaveBeenCalled();
-    const [message] = vi.mocked(log.error).mock.calls[0] as [string];
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
     expect(message).toContain("read-only Nix store");
     // `argent` is not on PATH here by construction: this run came in through
     // `npx @swmansion/argent init`, so a bare `argent` would not resolve.
@@ -611,7 +615,7 @@ describe("a global install whose target directory cannot be written", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(select).not.toHaveBeenCalled();
       expect(runShellCommand).not.toHaveBeenCalled();
-      const [message] = vi.mocked(log.error).mock.calls[0] as [string];
+      const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
       // The per-project install is not a way out with no package.json to hold
       // the devDependency: printing it would send the reader into
       // installLocally's precondition error, which points back at --global.
