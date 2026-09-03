@@ -203,10 +203,11 @@ export function announceDetectedSigningTeam(teams: readonly DetectedSigningTeam[
 }
 
 /**
- * Drained by http.ts into the note of the first tool call completed after
- * detection resolved (the same module-global channel the screen-recording
- * reminder uses), so the agent driving that call sees which team signs the
- * runner without any new plumbing.
+ * Drained by http.ts into the note of the first tool call that targets a
+ * physical iPhone and completes after detection resolved (the same
+ * module-global channel the screen-recording reminder uses), so the agent
+ * driving the hardware sees which team signs the runner without any new
+ * plumbing, and a call on another platform never carries it.
  */
 export function consumePendingSigningDetectionNote(): string | null {
   const note = pendingNote;

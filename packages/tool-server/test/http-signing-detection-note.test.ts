@@ -31,7 +31,7 @@ function stubRegistry(): Registry {
         return {
           id: "test-tool",
           description: "A stub tool for testing",
-          inputSchema: { type: "object", properties: {} },
+          inputSchema: { type: "object", properties: { udid: { type: "string" } } },
           services: () => ({}),
           execute: async () => ({ ok: true }),
         };
@@ -64,21 +64,56 @@ describe("HTTP signing-detection note", () => {
     vi.clearAllMocks();
   });
 
-  it("attaches the staged detection note to the first tool result only", async () => {
+  const PHONE = "00008120-000E6D0C0ABBA01E";
+
+  function stageNote(): void {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       announceDetectedSigningTeam(DETECTED_TEAM);
     } finally {
       write.mockRestore();
     }
+  }
+
+  it("attaches the staged detection note to the first physical-iPhone call only", async () => {
+    stageNote();
     handle = createHttpApp(stubRegistry());
 
-    const first = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+    const first = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ udid: PHONE })
+      .expect(200);
     expect(first.body.note).toContain("Signing the on-device runner with team ABCDE12345");
     expect(first.body.note).toContain("Set ARGENT_IOS_TEAM_ID");
 
-    // Drained: the very next call is note-free again.
-    const second = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+    // Drained: the very next call on the phone is note-free again.
+    const second = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ udid: PHONE })
+      .expect(200);
     expect(second.body).not.toHaveProperty("note");
+  });
+
+  it("holds the note past calls on other platforms and device-free calls", async () => {
+    // One tool-server serves every agent on the machine; a simulator, Android
+    // or device-free call must not carry a note about signing an iPhone runner.
+    stageNote();
+    handle = createHttpApp(stubRegistry());
+
+    for (const body of [
+      {},
+      { udid: "emulator-5554" },
+      { udid: "7AFBC98C-76B5-4BD4-8B7F-24AE3E30BA37" },
+      { udid: "chromium-cdp-9222" },
+    ]) {
+      const res = await request(handle.app).post("/tools/test-tool").send(body).expect(200);
+      expect(res.body).not.toHaveProperty("note");
+    }
+
+    const phone = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ udid: PHONE })
+      .expect(200);
+    expect(phone.body.note).toContain("Signing the on-device runner with team ABCDE12345");
   });
 });

@@ -40,7 +40,7 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
-import { resolveDevice } from "./utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "./utils/device-info";
 import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
@@ -157,6 +157,12 @@ function extractDeviceArg(data: unknown): string | null {
     return record.devices[0];
   }
   return null;
+}
+
+/** Whether the call names a physical iPhone as the device it acts on. */
+function targetsIosPhysicalDevice(data: unknown): boolean {
+  const deviceArg = extractDeviceArg(data);
+  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
 }
 
 type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
@@ -878,9 +884,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
         // Staged once when keychain team detection first signs the on-device
-        // runner (utils/ios-device/team-detect); drained here so the first
-        // completed tool call carries which team was picked and how to override.
-        const signingNote = consumePendingSigningDetectionNote();
+        // runner (utils/ios-device/team-detect); drained here into the first
+        // completed call that targets a physical iPhone, so the agent driving
+        // the hardware learns which team was picked and how to override, and a
+        // caller on another platform sharing this tool-server never does.
+        const signingNote = targetsIosPhysicalDevice(parsedData)
+          ? consumePendingSigningDetectionNote()
+          : null;
         if (signingNote) {
           notes.push(signingNote);
         }
