@@ -83,7 +83,7 @@ Decision order:
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
   machine-wide cleanup.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
+- If no argent MCP tool covers what you need and the action is possible with `xcrun`, `adb`, or another CLI, use that command — but check the tool list first. Device-wide settings (`system-settings`), shaking (`shake`), rotation (`rotate`) and hardware keys including power/lock (`button`) all have tools.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 
