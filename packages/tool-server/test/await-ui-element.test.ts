@@ -1373,6 +1373,41 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/lower pollIntervalMs \(2500ms\)/);
   }, 20_000);
 
+  // A trusted read, then the source goes dark: it keeps returning empty trees
+  // (a degraded iOS AX read once the element has matched) rather than throwing.
+  // The last usable read falls behind the deadline, but the reads DID look — so
+  // the remedy is "restore the source", not "poll more often". Without the
+  // trailing-blind-reads split this took the sparse-polling arm and said the
+  // opposite, the way the sibling await-screen-idle already avoids.
+  it("calls a dark tree source dark, not a wide poll interval", async () => {
+    const { api } = makeSequencedAXService([
+      // A real, visible element that matches the selector but whose text is not
+      // the one awaited: a trusted, non-blind read that keeps the condition false.
+      axResponse([{ label: "Continue", frame: FRAME, traits: ["button"] }]),
+      // Then empty forever — blind, because the selector has already matched.
+      axResponse([]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "Continue" },
+        expectedText: "Loading",
+        textMatch: "equals",
+        timeoutMs: 400,
+        pollIntervalMs: 20,
+      }
+    );
+
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+    expect(result.note).toMatch(/came back empty/);
+    expect(result.note).toMatch(/restore the tree source/);
+    expect(result.note ?? "").not.toMatch(/lower pollIntervalMs/);
+  }, 20_000);
+
   // A timed-out wait returns success:false rather than throwing, so this line —
   // not `failedMsg` — is what the user reads for it. Reporting the condition met
   // there renders every shape `cause` distinguishes as "it happened".

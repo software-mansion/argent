@@ -328,6 +328,10 @@ function timeoutNote(
      * clear it). A single sample with this above zero is a mostly-blind window,
      * not a schedule too tight for a second read. */
     failedFetches: number;
+    /** Empty/degraded reads since the last one that could judge the condition. A
+     * stale verdict with this above zero is a source that went dark, not a poll
+     * interval too wide: the reads looked and saw nothing. */
+    trailingBlindReads: number;
     /** Gap from the last trusted read to the exit, when it is what made the
      * verdict `unreadable`. */
     staleReadMs?: number;
@@ -400,9 +404,16 @@ function timeoutNote(
     }
   } else if (budget.staleReadMs !== undefined) {
     readCaveat =
-      ` (the last tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
-      `screen after it, so this describes the screen then, not at the deadline; lower pollIntervalMs ` +
-      `(${budget.pollIntervalMs}ms))`;
+      budget.trailingBlindReads > 0
+        ? // The tail WAS read; the source went dark. So the stale verdict is for
+          // want of a source, not of polling — the line await-screen-idle draws
+          // with its trailing-blank-reads arm.
+          ` (the last ${budget.trailingBlindReads} tree ${budget.trailingBlindReads === 1 ? "read" : "reads"} ` +
+          `came back empty, so the source went dark and the newest read that could judge the selector is ` +
+          `${budget.staleReadMs}ms behind the deadline; restore the tree source and re-run)`
+        : ` (the last tree read landed ${budget.staleReadMs}ms before the deadline and nothing looked at the ` +
+          `screen after it, so this describes the screen then, not at the deadline; lower pollIntervalMs ` +
+          `(${budget.pollIntervalMs}ms))`;
   }
   // A fetch that failed before the deadline abandoned the final one: the window
   // was part blind, which is half of why it looks the way it does below.
@@ -550,6 +561,10 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       // When the last read that could EVALUATE the condition landed. Still
       // undefined at the deadline means no read ever did.
       let lastTrustedReadAt: number | undefined;
+      // Blind reads (empty tree / degraded AX) since the last trusted one. A
+      // stale verdict with these above zero is a source that went dark, not a
+      // poll interval too wide — the reads DID look, they just saw nothing.
+      let trailingBlindReads = 0;
 
       const poll = await pollDescribeTree<WaitResult>({
         fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
@@ -560,7 +575,12 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
           const blind = isBlindRead(data, everMatched);
-          if (!blind) lastTrustedReadAt = nowMs;
+          if (blind) {
+            trailingBlindReads += 1;
+          } else {
+            lastTrustedReadAt = nowMs;
+            trailingBlindReads = 0;
+          }
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
             if (params.condition === "hidden" && !everMatched) {
@@ -612,6 +632,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             lastAttemptSettled: poll.lastAttemptSettled,
             slowestFetchMs: poll.slowestFetchMs,
             failedFetches: poll.failedFetches,
+            trailingBlindReads,
             staleReadMs:
               darkTailMs !== undefined && darkTailMs > darkTailToleranceMs(pollIntervalMs)
                 ? darkTailMs
