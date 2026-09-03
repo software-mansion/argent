@@ -46,12 +46,14 @@ interface AndroidChange {
   shellCommand: string;
   // Human-readable description of the concrete platform-level change.
   applied: string;
-  // True for the `svc`-backed settings: svc is an app_process main() that
-  // reports every failure ("Wi-Fi/Mobile data operation failed: …", or its
-  // usage) via System.err and returns normally, so the exit code stays 0 and
-  // only stderr distinguishes a refused change from an applied one.
-  reportsFailureOnStderr?: boolean;
+  // Lowest API level on which the command actually changes the device. Only for
+  // a command that stays silent below its floor — one that refuses out loud is
+  // caught by the exit-code/stderr check instead and needs no probe.
+  minSdk?: number;
 }
+
+/** Android 10 — the first release where `location_mode` is the master switch. */
+const LOCATION_MODE_MIN_SDK = 29;
 
 // Translate an abstract (setting, value) into the concrete `adb` change. Central
 // validation already guaranteed `value` is legal for `setting`, so every branch
@@ -100,13 +102,11 @@ function androidChange(setting: SystemSetting, value: string): AndroidChange {
       return {
         shellCommand: `svc wifi ${on ? "enable" : "disable"}`,
         applied: `wifi=${on ? "enabled" : "disabled"}`,
-        reportsFailureOnStderr: true,
       };
     case "cellular":
       return {
         shellCommand: `svc data ${on ? "enable" : "disable"}`,
         applied: `mobile_data=${on ? "enabled" : "disabled"}`,
-        reportsFailureOnStderr: true,
       };
     case "airplane-mode":
       return {
@@ -114,12 +114,15 @@ function androidChange(setting: SystemSetting, value: string): AndroidChange {
         applied: `airplane_mode=${on ? "enabled" : "disabled"}`,
       };
     case "location": {
-      // location_mode 3 = high accuracy (on), 0 = off. `cmd location
-      // is-location-enabled` tracks this value, so it's the authoritative toggle.
+      // location_mode 3 = high accuracy (on), 0 = off. The write is accepted at
+      // every API level but only drives the master switch from Q on: on API 24
+      // `location_mode` flips while `location_providers_allowed` stays `gps` and
+      // location keeps working, so the floor is checked before running it.
       const mode = on ? "3" : "0";
       return {
         shellCommand: `settings put secure location_mode ${mode}`,
         applied: `location_mode=${mode}`,
+        minSdk: LOCATION_MODE_MIN_SDK,
       };
     }
     case "auto-rotate": {
@@ -149,7 +152,7 @@ function isTransportFailure(err: unknown): boolean {
 // and a server-version mismatch ("adb server version (…) doesn't match this
 // client (…); killing…", which carries no `*`). parseAdbDevices skips the `*`
 // banner lines for the same reason; only what survives these known chatter
-// forms can be svc's failure report.
+// forms can be the device's own report.
 function stripAdbBanner(stderr: string): string {
   return stderr
     .split("\n")
@@ -162,6 +165,36 @@ function stripAdbBanner(stderr: string): string {
     .trim();
 }
 
+function settingFailure(
+  setting: SystemSetting,
+  value: string,
+  udid: string,
+  detail: string,
+  failureStage: string,
+  cause?: unknown
+): never {
+  throw new FailureError(
+    `Failed to set '${setting}' to '${value}' on ${udid}: ${detail.trim()}`,
+    {
+      error_code: FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED,
+      failure_stage: failureStage,
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      // Only a thrown adb error carries the syscall/exit metadata; a refusal the
+      // device printed while adb itself exited 0 has none to contribute.
+      ...(cause ? subprocessFailureMetadata(cause, "adb") : {}),
+    },
+    cause instanceof Error ? { cause } : undefined
+  );
+}
+
+/** The device's API level, or null when the property is missing/unparseable. */
+async function sdkLevel(udid: string): Promise<number | null> {
+  const raw = await adbShell(udid, "getprop ro.build.version.sdk", { timeoutMs: 15_000 });
+  const level = parseInt(raw.trim(), 10);
+  return Number.isFinite(level) ? level : null;
+}
+
 export const androidImpl: PlatformImpl<
   SystemSettingsServices,
   SystemSettingsParams,
@@ -170,39 +203,42 @@ export const androidImpl: PlatformImpl<
   requires: ["adb"],
   handler: async (_services, params) => {
     const { udid, setting, value } = params;
-    const { shellCommand, applied, reportsFailureOnStderr } = androidChange(setting, value);
+    const { shellCommand, applied, minSdk } = androidChange(setting, value);
 
-    try {
-      // `settings put` / `cmd` are silent on success and exit non-zero
-      // (→ adbShell throws) on a real failure, so the exit code is the success
-      // signal. The `svc` settings can't use it: svc exits 0 even when the
-      // radio operation failed and prints the reason on stderr instead — read
-      // stderr there, or the tool would report `applied` for a change the
-      // runtime never made.
-      if (reportsFailureOnStderr) {
-        const { stderr } = await runAdb(["-s", udid, "shell", shellCommand], {
-          timeoutMs: 15_000,
-        });
-        const detail = stripAdbBanner(stderr);
-        if (detail) throw new Error(detail);
-      } else {
-        await adbShell(udid, shellCommand, { timeoutMs: 15_000 });
+    if (minSdk !== undefined) {
+      // adb's own failures propagate with adb's classification — a probe that
+      // cannot answer means the shell command could not have run either.
+      const level = await sdkLevel(udid);
+      if (level !== null && level < minSdk) {
+        settingFailure(
+          setting,
+          value,
+          udid,
+          `'${setting}' needs Android API ${minSdk}+; this device reports API ${level}. ` +
+            `The write is accepted there but leaves the device unchanged.`,
+          "android_system_setting_api_floor"
+        );
       }
+    }
+
+    let stderr: string;
+    try {
+      // Neither channel alone is a success signal. `settings put` / `cmd` / `svc`
+      // exit non-zero (→ runAdb throws) when the shell command itself refuses,
+      // but a binder service that exists with no shell-command handler — what
+      // `cmd uimode` / `cmd connectivity` are below their API floor — takes
+      // Android's default `Binder.handleShellCommand`, which prints
+      // "No shell command implementation." on stderr and returns 0. Reading only
+      // the exit code answers `applied` for a change the device refused.
+      ({ stderr } = await runAdb(["-s", udid, "shell", shellCommand], { timeoutMs: 15_000 }));
     } catch (err) {
       if (isTransportFailure(err)) throw err;
       const detail = err instanceof Error ? err.message : String(err);
-      throw new FailureError(
-        `Failed to set '${setting}' to '${value}' on ${udid}: ${detail.trim()}`,
-        {
-          error_code: FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED,
-          failure_stage: "android_system_setting_adb",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-          ...subprocessFailureMetadata(err, "adb"),
-        },
-        { cause: err instanceof Error ? err : new Error(String(err)) }
-      );
+      settingFailure(setting, value, udid, detail, "android_system_setting_adb", err);
     }
+
+    const refusal = stripAdbBanner(stderr);
+    if (refusal) settingFailure(setting, value, udid, refusal, "android_system_setting_refused");
 
     return { setting, value, applied };
   },

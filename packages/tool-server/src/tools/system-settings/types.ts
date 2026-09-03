@@ -62,6 +62,17 @@ export const SETTING_VALUES: Record<SystemSetting, readonly string[]> = {
   "auto-rotate": ON_OFF_VALUES,
 };
 
+// Every value any setting accepts, flattened. `value` is one schema field
+// shared by ten settings, so the schema can only advertise the union; the
+// per-setting narrowing is `SETTING_VALUES` in `assertValidValue`. Declaring the
+// union still buys the client the vocabulary — the same split `setting` already
+// uses, where the enum lists all ten and the iOS handler narrows to five.
+export const SETTING_VALUE_VOCABULARY = [
+  ...APPEARANCE_VALUES,
+  ...ON_OFF_VALUES,
+  ...TEXT_SIZE_VALUES,
+] as const;
+
 // The settings the iOS simulator can change: the three `simctl ui` options plus
 // the two accessibility toggles reachable through the `com.apple.Accessibility`
 // defaults domain. The rest are radios / location / rotation, which the iOS

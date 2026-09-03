@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { InvalidToolInputError } from "../../../utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../../../utils/capability";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { isTvOsSimulator } from "../../../utils/ios-devices";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "../../../utils/simctl-config";
 import { IOS_SUPPORTED_SETTINGS } from "../types";
 import type {
   SystemSetting,
@@ -14,18 +16,23 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
+/** Ceiling for `xcrun simctl ui`, which drives CoreSimulatorService rather than
+ * spawning inside the guest. Same wedged-service hazard as
+ * `SIMCTL_SPAWN_TIMEOUT_MS`, so it carries `SIMCTL_KILL_SIGNAL` too. */
+const SIMCTL_UI_TIMEOUT_MS = 30_000;
+
 // How the iOS simulator applies each setting it supports. Two mechanisms:
 //  - `simctl ui`: the three options a runtime models natively. The value is the
 //    exact `simctl ui` argument (light/dark and the content-size categories are
 //    simctl's own vocabulary; `increase_contrast` takes enabled/disabled, so the
 //    tool's on/off maps to those).
 //  - `defaults`: accessibility toggles that live in the `com.apple.Accessibility`
-//    preferences domain. Writing the key persists the setting; posting the
-//    matching change notification makes running apps re-read it without a full
-//    respring.
+//    preferences domain. Writing the key is the whole change — the runtime posts
+//    the matching `com.apple.accessibility.*` status and cache notifications
+//    itself once the preference lands, so running apps re-read it live.
 type IosMechanism =
   | { via: "simctl-ui"; option: string; arg: string }
-  | { via: "defaults"; key: string; notify: string; enabled: boolean };
+  | { via: "defaults"; key: string; enabled: boolean };
 
 const ACCESSIBILITY_DOMAIN = "com.apple.Accessibility";
 
@@ -42,19 +49,13 @@ function iosMechanism(setting: SystemSetting, value: string): IosMechanism {
         arg: value === "on" ? "enabled" : "disabled",
       };
     case "reduce-motion":
-      return {
-        via: "defaults",
-        key: "ReduceMotionEnabled",
-        notify: `${ACCESSIBILITY_DOMAIN}.ReduceMotionStatusDidChange`,
-        enabled: value === "on",
-      };
+      return { via: "defaults", key: "ReduceMotionEnabled", enabled: value === "on" };
     case "invert-colors":
-      return {
-        via: "defaults",
-        key: "ClassicInvertColorsEnabled",
-        notify: `${ACCESSIBILITY_DOMAIN}.InvertColorsStatusDidChange`,
-        enabled: value === "on",
-      };
+      // `InvertColorsEnabled` is the key libAccessibility reads; it drives Smart
+      // Invert, the only inversion control iOS still exposes. The Classic Invert
+      // key it replaced appears nowhere in the runtime any more, so writing that
+      // one persists a preference nothing observes.
+      return { via: "defaults", key: "InvertColorsEnabled", enabled: value === "on" };
     default:
       // Unreachable: the handler rejects non-iOS settings before this is called.
       throw new Error(`No iOS mechanism for setting '${setting}'`);
@@ -77,10 +78,11 @@ function throwIosSettingError(
     : "";
   // A `simctl ui` option the runtime doesn't model refuses the argument rather
   // than naming the option: `content_size` and `increase_contrast` answer
-  // "Invalid argument". Central validation already pinned `value` to the
-  // setting's own enum, so a refusal that reaches here is about the runtime.
+  // "Invalid argument", `appearance` "Operation not supported". Central
+  // validation already pinned `value` to the setting's own enum, so a refusal
+  // that reaches here is about the runtime.
   const unsupportedHint =
-    !shutdownHint && /unsupported|invalid argument/i.test(detail)
+    !shutdownHint && /unsupported|not support|invalid argument/i.test(detail)
       ? ` The '${setting}' setting isn't supported by this simulator's iOS runtime; try a newer runtime.`
       : "";
   throw new FailureError(
@@ -102,8 +104,21 @@ export const iosImpl: PlatformImpl<
   SystemSettingsResult
 > = {
   requires: ["xcrun"],
-  handler: async (_services, params) => {
+  handler: async (_services, params, device) => {
     const { udid, setting, value } = params;
+
+    // An Apple TV simulator is an apple/simulator by UDID shape, so the
+    // capability matrix cannot exclude it — and half this surface would answer
+    // `applied` on one: tvOS refuses every `simctl ui` option ("Operation not
+    // supported") but accepts the two `defaults` writes against a runtime with
+    // no Settings pane to honour them.
+    if (await isTvOsSimulator(udid)) {
+      throw new UnsupportedOperationError(
+        "system-settings",
+        device,
+        "tvOS models none of these system settings — appearance, text size and increase contrast are unsupported there and the accessibility preferences have no effect"
+      );
+    }
 
     if (!IOS_SUPPORTED_SETTINGS.includes(setting)) {
       // Radios / location / rotation have no `simctl` equivalent — the iOS
@@ -129,7 +144,7 @@ export const iosImpl: PlatformImpl<
         ({ stderr } = await execFileAsync(
           "xcrun",
           await simctlArgsForUdid(udid, ["ui", udid, mechanism.option, mechanism.arg]),
-          { timeout: 30_000 }
+          { timeout: SIMCTL_UI_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
         ));
       } catch (err) {
         throwIosSettingError(setting, value, udid, err);
@@ -145,8 +160,6 @@ export const iosImpl: PlatformImpl<
       return { setting, value, applied: `${mechanism.option}=${mechanism.arg}` };
     }
 
-    // defaults: persist the accessibility flag, then post its change
-    // notification so a running app re-reads it live.
     const boolArg = mechanism.enabled ? "YES" : "NO";
     try {
       await execFileAsync(
@@ -161,25 +174,10 @@ export const iosImpl: PlatformImpl<
           "-bool",
           boolArg,
         ]),
-        { timeout: 30_000 }
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
       );
     } catch (err) {
       throwIosSettingError(setting, value, udid, err);
-    }
-    // Best-effort live-apply: posting the notification is not the source of
-    // truth (the `defaults write` above is), and a runtime that doesn't observe
-    // it still picks the change up on the app's next launch — so a failure here
-    // must not fail the tool.
-    try {
-      await execFileAsync(
-        "xcrun",
-        await simctlArgsForUdid(udid, ["spawn", udid, "notifyutil", "-p", mechanism.notify]),
-        {
-          timeout: 10_000,
-        }
-      );
-    } catch {
-      // ignore — the setting is already persisted; see comment above.
     }
     return { setting, value, applied: `${mechanism.key}=${boolArg}` };
   },

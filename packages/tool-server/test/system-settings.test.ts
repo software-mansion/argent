@@ -9,11 +9,18 @@ vi.mock("node:child_process", async () => {
 vi.mock("../src/utils/adb", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/adb")>();
   return {
+    ...actual,
     adbShell: vi.fn(async () => ""),
     runAdb: vi.fn(async () => ({ stdout: "", stderr: "" })),
-    isTerminalAdbError: actual.isTerminalAdbError,
-    shellQuote: actual.shellQuote,
   };
+});
+
+// `resolveDevice` classifies an Apple TV simulator as an iOS simulator (both are
+// bare UUIDs), so the iOS handler probes the runtime kind. Stub it false by
+// default and flip it per-test — the real probe would shell out to `simctl list`.
+vi.mock("../src/utils/ios-devices", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
+  return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
 });
 
 // Device-set resolution reads `ios.additionalDeviceSets` off disk; pin it so
@@ -37,18 +44,21 @@ import { iosImpl } from "../src/tools/system-settings/platforms/ios";
 import { androidImpl } from "../src/tools/system-settings/platforms/android";
 import {
   IOS_SUPPORTED_SETTINGS,
+  SETTING_VALUE_VOCABULARY,
   SETTING_VALUES,
   SYSTEM_SETTINGS,
   TEXT_SIZE_VALUES,
 } from "../src/tools/system-settings/types";
 import type { SystemSettingsParams } from "../src/tools/system-settings/types";
 import { adbShell, runAdb } from "../src/utils/adb";
-import { InvalidToolInputError } from "../src/utils/capability";
+import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { rememberDeviceSet, __resetDeviceSetCacheForTesting } from "../src/utils/ios-device-sets";
 
 const mockAdbShell = vi.mocked(adbShell);
 const mockRunAdb = vi.mocked(runAdb);
+const mockIsTvOs = vi.mocked(isTvOsSimulator);
 
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
 const ANDROID_SERIAL = "emulator-5554";
@@ -99,6 +109,8 @@ beforeEach(() => {
   mockAdbShell.mockImplementation(async () => "");
   mockRunAdb.mockReset();
   mockRunAdb.mockImplementation(async () => ({ stdout: "", stderr: "" }));
+  mockIsTvOs.mockReset();
+  mockIsTvOs.mockImplementation(async () => false);
 });
 
 describe("system-settings failure codes are defined", () => {
@@ -180,53 +192,83 @@ describe("system-settings schema", () => {
     );
   });
 
-  it("rejects an empty udid or empty value", () => {
+  it("rejects an empty udid, and any value outside the whole vocabulary", () => {
     expect(schema.safeParse({ udid: "", setting: "appearance", value: "dark" }).success).toBe(
       false
     );
     expect(schema.safeParse({ udid: IOS_UDID, setting: "appearance", value: "" }).success).toBe(
       false
     );
-  });
-
-  it("bounds `value` so an oversized caller string can't be echoed into error output", () => {
-    // The 400 message and event log interpolate the raw value; the longest
-    // legal value is 37 chars.
+    // The schema knows the union, not the per-setting split: an oversized or
+    // free-form string dies here, a legal-but-wrong-setting one survives to
+    // `assertValidValue`.
     expect(
-      schema.safeParse({
-        udid: IOS_UDID,
-        setting: "appearance",
-        value: "d".repeat(65),
-      }).success
+      schema.safeParse({ udid: IOS_UDID, setting: "appearance", value: "d".repeat(65) }).success
     ).toBe(false);
-    expect(
-      schema.safeParse({
-        udid: IOS_UDID,
-        setting: "text-size",
-        value: "accessibility-extra-extra-extra-large",
-      }).success
-    ).toBe(true);
+    expect(schema.safeParse({ udid: IOS_UDID, setting: "appearance", value: "on" }).success).toBe(
+      true
+    );
   });
 
-  it("derives a JSON schema with the full setting enum and all three fields required", () => {
+  it("derives a JSON schema advertising both vocabularies, with all three fields required", () => {
     const json = zodObjectToJsonSchema(schema) as {
       required?: string[];
       properties?: Record<string, { enum?: string[]; type?: string }>;
     };
     expect(json.required).toEqual(["udid", "setting", "value"]);
-    // The enum mirrors SYSTEM_SETTINGS exactly (order and membership), so a
-    // dropped/renamed setting is caught here rather than at runtime.
-    expect(json.properties?.setting?.enum).toEqual([...SYSTEM_SETTINGS]);
-    // `value` is validated per-setting in the handler, not the schema, so it is a
-    // plain string here — pin that so a later refactor doesn't over-constrain it.
-    expect(json.properties?.value?.type).toBe("string");
+    // Compared against literals, not against the source constants: deriving the
+    // expectation from SYSTEM_SETTINGS would make the assertion tautological and
+    // let a rename of a member — a change to the tool's public vocabulary —
+    // through unnoticed.
+    expect(json.properties?.setting?.enum).toEqual([
+      "appearance",
+      "text-size",
+      "increase-contrast",
+      "reduce-motion",
+      "invert-colors",
+      "wifi",
+      "cellular",
+      "airplane-mode",
+      "location",
+      "auto-rotate",
+    ]);
+    expect(json.properties?.value?.enum).toEqual([
+      "light",
+      "dark",
+      "on",
+      "off",
+      "extra-small",
+      "small",
+      "medium",
+      "large",
+      "extra-large",
+      "extra-extra-large",
+      "extra-extra-extra-large",
+      "accessibility-medium",
+      "accessibility-large",
+      "accessibility-extra-large",
+      "accessibility-extra-extra-large",
+      "accessibility-extra-extra-extra-large",
+    ]);
+  });
+
+  it("advertises every value any setting accepts and nothing else", () => {
+    // The union has to stay a superset of every per-setting set, or a legal call
+    // is rejected by the schema before `assertValidValue` can narrow it.
+    for (const setting of SYSTEM_SETTINGS) {
+      for (const value of SETTING_VALUES[setting]) {
+        expect(SETTING_VALUE_VOCABULARY, `${setting}=${value}`).toContain(value);
+      }
+    }
+    const fromSettings = new Set(SYSTEM_SETTINGS.flatMap((s) => [...SETTING_VALUES[s]]));
+    expect([...SETTING_VALUE_VOCABULARY].sort()).toEqual([...fromSettings].sort());
   });
 });
 
 describe("system-settings value validation (platform-agnostic, runs before dispatch)", () => {
   it("rejects a value not legal for the setting and lists the valid ones", async () => {
     const rejection = expect(
-      systemSettingsTool.execute!({}, { udid: IOS_UDID, setting: "appearance", value: "sepia" })
+      systemSettingsTool.execute!({}, { udid: IOS_UDID, setting: "appearance", value: "on" })
     ).rejects;
     await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
     await rejection.toSatisfy((err) => getFailureSignal(err)?.error_kind === "unsupported");
@@ -237,17 +279,18 @@ describe("system-settings value validation (platform-agnostic, runs before dispa
     // Short-circuits before any platform command runs.
     expect(execFileMock).not.toHaveBeenCalled();
     expect(mockAdbShell).not.toHaveBeenCalled();
+    expect(mockRunAdb).not.toHaveBeenCalled();
   });
 
   it("lists on | off for a boolean setting given a bad value", async () => {
     await expect(
-      systemSettingsTool.execute!({}, { udid: ANDROID_SERIAL, setting: "wifi", value: "yes" })
+      systemSettingsTool.execute!({}, { udid: ANDROID_SERIAL, setting: "wifi", value: "light" })
     ).rejects.toThrow(/Valid values: on, off/);
   });
 
   it("lists the Dynamic Type categories when a text-size value is invalid", async () => {
     await expect(
-      systemSettingsTool.execute!({}, { udid: IOS_UDID, setting: "text-size", value: "huge" })
+      systemSettingsTool.execute!({}, { udid: IOS_UDID, setting: "text-size", value: "on" })
     ).rejects.toThrow(/accessibility-extra-extra-extra-large/);
   });
 });
@@ -322,15 +365,24 @@ describe("system-settings iOS branch", () => {
     expect(result.applied).toBe("content_size=accessibility-large");
   });
 
-  it("reduce-motion `on` writes the accessibility default and posts its change notification", async () => {
+  // The two `defaults`-backed settings must write the keys the runtime reads.
+  // `strings` over libAccessibility.dylib on iOS 18.6 exports `ReduceMotionEnabled`
+  // and `InvertColorsEnabled`; the `ClassicInvertColorsEnabled` key that predates
+  // Smart Invert appears nowhere, and writing it leaves the screen untouched
+  // while the tool answers `applied`.
+  it.each([
+    ["reduce-motion", "on", "ReduceMotionEnabled", "YES"],
+    ["reduce-motion", "off", "ReduceMotionEnabled", "NO"],
+    ["invert-colors", "on", "InvertColorsEnabled", "YES"],
+    ["invert-colors", "off", "InvertColorsEnabled", "NO"],
+  ] as const)("%s %s writes %s -bool %s", async (setting, value, key, boolArg) => {
     execFileSucceeds();
-    const result = await iosImpl.handler(
-      {},
-      params({ setting: "reduce-motion", value: "on" }),
-      IOS_DEVICE
-    );
-    expect(execFileMock).toHaveBeenCalledTimes(2);
-    // First: persist the flag in the accessibility defaults domain.
+    const result = await iosImpl.handler({}, params({ setting, value }), IOS_DEVICE);
+    // One command, not two: the runtime posts the `com.apple.accessibility.*`
+    // status and cache notifications itself when the preference lands (observed
+    // with `notifyutil -w` on iOS 18.6 while only writing the default), so there
+    // is nothing for the tool to post.
+    expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(execFileMock.mock.calls[0]![1]).toEqual([
       "simctl",
       "spawn",
@@ -338,60 +390,55 @@ describe("system-settings iOS branch", () => {
       "defaults",
       "write",
       "com.apple.Accessibility",
-      "ReduceMotionEnabled",
+      key,
       "-bool",
-      "YES",
+      boolArg,
     ]);
-    // Second: post the matching change notification so running apps re-read it.
-    expect(execFileMock.mock.calls[1]![1]).toEqual([
-      "simctl",
-      "spawn",
-      IOS_UDID,
-      "notifyutil",
-      "-p",
-      "com.apple.Accessibility.ReduceMotionStatusDidChange",
-    ]);
-    expect(result.applied).toBe("ReduceMotionEnabled=YES");
+    expect(result.applied).toBe(`${key}=${boolArg}`);
   });
 
-  it("invert-colors `off` writes ClassicInvertColorsEnabled NO", async () => {
+  it("never posts a change notification", async () => {
     execFileSucceeds();
-    const result = await iosImpl.handler(
-      {},
-      params({ setting: "invert-colors", value: "off" }),
-      IOS_DEVICE
-    );
-    expect(execFileMock.mock.calls[0]![1]).toEqual([
-      "simctl",
-      "spawn",
-      IOS_UDID,
-      "defaults",
-      "write",
-      "com.apple.Accessibility",
-      "ClassicInvertColorsEnabled",
-      "-bool",
-      "NO",
-    ]);
-    expect(result.applied).toBe("ClassicInvertColorsEnabled=NO");
-  });
-
-  it("a failed change-notification post does not fail the tool (the default write is the source of truth)", async () => {
-    // defaults write succeeds; only the notifyutil post fails.
-    execFileMock.mockImplementation(
-      (_cmd: string, args: string[], _opts: unknown, cb: (err: unknown, out?: unknown) => void) => {
-        if (args.includes("notifyutil")) {
-          cb(Object.assign(new Error("notify boom"), { code: 1 }));
-          return;
-        }
-        cb(null, { stdout: "", stderr: "" });
+    for (const setting of ["reduce-motion", "invert-colors"] as const) {
+      execFileMock.mockClear();
+      await iosImpl.handler({}, params({ setting, value: "on" }), IOS_DEVICE);
+      for (const call of execFileMock.mock.calls) {
+        expect(call[1] as string[], setting).not.toContain("notifyutil");
       }
-    );
-    const result = await iosImpl.handler(
-      {},
-      params({ setting: "reduce-motion", value: "on" }),
-      IOS_DEVICE
-    );
-    expect(result.applied).toBe("ReduceMotionEnabled=YES");
+    }
+  });
+
+  it("caps and hard-kills every simctl call it makes", async () => {
+    // `execFile`'s bare `timeout` sends SIGTERM once and never escalates, so a
+    // simctl wedged on CoreSimulatorService ignores it and the promise never
+    // settles — see SIMCTL_KILL_SIGNAL. Both mechanisms must pass the signal.
+    execFileSucceeds();
+    for (const setting of ["appearance", "reduce-motion"] as const) {
+      execFileMock.mockClear();
+      await iosImpl.handler(
+        {},
+        params({ setting, value: setting === "appearance" ? "dark" : "on" }),
+        IOS_DEVICE
+      );
+      for (const call of execFileMock.mock.calls) {
+        const opts = call[2] as { timeout?: number; killSignal?: string };
+        expect(opts.killSignal, setting).toBe("SIGKILL");
+        expect(opts.timeout, setting).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("rejects an Apple TV simulator before running any command", async () => {
+    // An Apple TV sim is an 8-4-4-4-12 UUID like an iPhone's, so `resolveDevice`
+    // routes it here. tvOS refuses every `simctl ui` option ("Operation not
+    // supported") but accepts the `defaults` writes, which would report
+    // `applied` for a setting tvOS has no pane for.
+    mockIsTvOs.mockResolvedValueOnce(true);
+    execFileSucceeds();
+    await expect(
+      iosImpl.handler({}, params({ setting: "reduce-motion", value: "on" }), IOS_DEVICE)
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("rejects an Android-only setting with SYSTEM_SETTING_UNSUPPORTED and runs no command", async () => {
@@ -420,6 +467,19 @@ describe("system-settings iOS branch", () => {
     await expect(
       iosImpl.handler({}, params({ setting: "increase-contrast", value: "on" }), IOS_DEVICE)
     ).rejects.toThrow(/isn't supported by this simulator's iOS runtime/);
+  });
+
+  it("simctl's own `Operation not supported` wording earns the same hint", async () => {
+    // What `simctl ui <udid> appearance dark` answers on a runtime that models
+    // no appearance style (exit 45, verified on tvOS 18.5). "not supported" does
+    // not contain "unsupported", so it needs its own alternative in the match.
+    execFileFails(
+      "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=45):\n" +
+        "Simulator device failed to complete the requested operation.\nOperation not supported"
+    );
+    await expect(iosImpl.handler({}, params({}), IOS_DEVICE)).rejects.toThrow(
+      /isn't supported by this simulator's iOS runtime/
+    );
   });
 
   it("a `simctl ui` option refused on stderr fails, even though simctl exits 0", async () => {
@@ -469,7 +529,7 @@ describe("system-settings iOS branch", () => {
   // device set. A simulator in an additional set (`ios.additionalDeviceSets`,
   // e.g. Radon IDE) is only addressable with the flag — without it simctl
   // searches the default set and answers `Invalid device: <udid>`. Both
-  // mechanisms must route through `simctlArgsForUdid`, so pin all three calls.
+  // mechanisms must route through `simctlArgsForUdid`, so pin both calls.
   describe("a simulator in an additional device set", () => {
     const RADON_UDID = "11111111-2222-3333-4444-555555555555";
     const RADON_SET = "/tmp/radon-ide/Devices/iOS";
@@ -496,14 +556,14 @@ describe("system-settings iOS branch", () => {
       ]);
     });
 
-    it("prefixes both the `defaults write` and its notifyutil post with --set", async () => {
+    it("prefixes the `defaults write` with --set", async () => {
       execFileSucceeds();
       await iosImpl.handler(
         {},
         { udid: RADON_UDID, setting: "reduce-motion", value: "on" },
         radonDevice
       );
-      expect(execFileMock).toHaveBeenCalledTimes(2);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
       expect(execFileMock.mock.calls[0]![1]).toEqual([
         "simctl",
         "--set",
@@ -517,16 +577,6 @@ describe("system-settings iOS branch", () => {
         "-bool",
         "YES",
       ]);
-      expect(execFileMock.mock.calls[1]![1]).toEqual([
-        "simctl",
-        "--set",
-        RADON_SET,
-        "spawn",
-        RADON_UDID,
-        "notifyutil",
-        "-p",
-        "com.apple.Accessibility.ReduceMotionStatusDidChange",
-      ]);
     });
   });
 });
@@ -538,16 +588,25 @@ describe("system-settings Android branch", () => {
     return { udid: ANDROID_SERIAL, setting: "appearance", value: "dark", ...overrides };
   }
 
+  /** The `adb shell` command string the handler sent for its Nth adb call. */
+  function shellCommandAt(index = 0): string {
+    return (mockRunAdb.mock.calls[index]![0] as string[])[3]!;
+  }
+
   async function run(overrides: Partial<SystemSettingsParams>) {
     const result = await androidImpl.handler({}, params(overrides), androidDevice);
-    const shellCmd = mockAdbShell.mock.calls[0]![1] as string;
-    return { result, shellCmd };
+    return { result, shellCmd: shellCommandAt() };
   }
 
   it("appearance dark runs `cmd uimode night yes`", async () => {
     const { result, shellCmd } = await run({ value: "dark" });
-    expect(mockAdbShell).toHaveBeenCalledTimes(1);
-    expect(mockAdbShell.mock.calls[0]![0]).toBe(ANDROID_SERIAL);
+    expect(mockRunAdb).toHaveBeenCalledTimes(1);
+    expect(mockRunAdb.mock.calls[0]![0]).toEqual([
+      "-s",
+      ANDROID_SERIAL,
+      "shell",
+      "cmd uimode night yes",
+    ]);
     expect(shellCmd).toBe("cmd uimode night yes");
     expect(result).toEqual({ setting: "appearance", value: "dark", applied: "night_mode=yes" });
   });
@@ -557,10 +616,14 @@ describe("system-settings Android branch", () => {
     expect(shellCmd).toBe("cmd uimode night no");
   });
 
-  it("increase-contrast off clears the high_text_contrast_enabled flag", async () => {
-    const { result, shellCmd } = await run({ setting: "increase-contrast", value: "off" });
-    expect(shellCmd).toBe("settings put secure high_text_contrast_enabled 0");
-    expect(result.applied).toBe("high_text_contrast_enabled=0");
+  it("increase-contrast maps on/off to high_text_contrast_enabled 1/0", async () => {
+    const on = await run({ setting: "increase-contrast", value: "on" });
+    expect(on.shellCmd).toBe("settings put secure high_text_contrast_enabled 1");
+    expect(on.result.applied).toBe("high_text_contrast_enabled=1");
+    mockRunAdb.mockClear();
+    const off = await run({ setting: "increase-contrast", value: "off" });
+    expect(off.shellCmd).toBe("settings put secure high_text_contrast_enabled 0");
+    expect(off.result.applied).toBe("high_text_contrast_enabled=0");
   });
 
   it("text-size sets a font_scale float for the mapped category", async () => {
@@ -571,15 +634,14 @@ describe("system-settings Android branch", () => {
 
   it("every text-size category maps to a defined font_scale (no `undefined` reaches adb)", async () => {
     for (const size of TEXT_SIZE_VALUES) {
-      mockAdbShell.mockClear();
+      mockRunAdb.mockClear();
       const result = await androidImpl.handler(
         {},
         params({ setting: "text-size", value: size }),
         androidDevice
       );
-      const shellCmd = mockAdbShell.mock.calls[0]![1] as string;
-      expect(shellCmd, size).toMatch(/^settings put system font_scale \d/);
-      expect(shellCmd, size).not.toContain("undefined");
+      expect(shellCommandAt(), size).toMatch(/^settings put system font_scale \d/);
+      expect(shellCommandAt(), size).not.toContain("undefined");
       expect(result.applied, size).toMatch(/^font_scale=\d/);
     }
   });
@@ -603,9 +665,9 @@ describe("system-settings Android branch", () => {
       "accessibility-extra-extra-extra-large": "3.12",
     };
     for (const [size, scale] of Object.entries(expected)) {
-      mockAdbShell.mockClear();
+      mockRunAdb.mockClear();
       await androidImpl.handler({}, params({ setting: "text-size", value: size }), androidDevice);
-      expect(mockAdbShell.mock.calls[0]![1], size).toBe(`settings put system font_scale ${scale}`);
+      expect(shellCommandAt(), size).toBe(`settings put system font_scale ${scale}`);
     }
   });
 
@@ -628,107 +690,65 @@ describe("system-settings Android branch", () => {
     );
   });
 
-  it("invert-colors on sets the inversion accessibility flag", async () => {
-    const { result, shellCmd } = await run({ setting: "invert-colors", value: "on" });
-    expect(shellCmd).toBe("settings put secure accessibility_display_inversion_enabled 1");
-    expect(result.applied).toBe("accessibility_display_inversion_enabled=1");
+  it("invert-colors maps on/off to the inversion flag 1/0", async () => {
+    const on = await run({ setting: "invert-colors", value: "on" });
+    expect(on.shellCmd).toBe("settings put secure accessibility_display_inversion_enabled 1");
+    expect(on.result.applied).toBe("accessibility_display_inversion_enabled=1");
+    mockRunAdb.mockClear();
+    const off = await run({ setting: "invert-colors", value: "off" });
+    expect(off.shellCmd).toBe("settings put secure accessibility_display_inversion_enabled 0");
+    expect(off.result.applied).toBe("accessibility_display_inversion_enabled=0");
   });
 
-  // wifi/cellular run through runAdb (svc reports failure on stderr), so their
-  // argv is read off mockRunAdb — see the svc-backed describe below.
   it("wifi maps on/off to `svc wifi enable/disable`", async () => {
-    await androidImpl.handler({}, params({ setting: "wifi", value: "on" }), androidDevice);
-    expect(mockRunAdb.mock.calls[0]![0]).toEqual([
-      "-s",
-      ANDROID_SERIAL,
-      "shell",
-      "svc wifi enable",
-    ]);
+    const on = await run({ setting: "wifi", value: "on" });
+    expect(on.shellCmd).toBe("svc wifi enable");
+    expect(on.result.applied).toBe("wifi=enabled");
     mockRunAdb.mockClear();
-    const result = await androidImpl.handler(
-      {},
-      params({ setting: "wifi", value: "off" }),
-      androidDevice
-    );
-    expect(mockRunAdb.mock.calls[0]![0]).toEqual([
-      "-s",
-      ANDROID_SERIAL,
-      "shell",
-      "svc wifi disable",
-    ]);
-    expect(result.applied).toBe("wifi=disabled");
+    const off = await run({ setting: "wifi", value: "off" });
+    expect(off.shellCmd).toBe("svc wifi disable");
+    expect(off.result.applied).toBe("wifi=disabled");
   });
 
   it("cellular maps to `svc data enable/disable` (mobile_data)", async () => {
-    const result = await androidImpl.handler(
-      {},
-      params({ setting: "cellular", value: "on" }),
-      androidDevice
-    );
-    expect(mockRunAdb.mock.calls[0]![0]).toEqual([
-      "-s",
-      ANDROID_SERIAL,
-      "shell",
-      "svc data enable",
-    ]);
-    expect(result.applied).toBe("mobile_data=enabled");
+    const on = await run({ setting: "cellular", value: "on" });
+    expect(on.shellCmd).toBe("svc data enable");
+    expect(on.result.applied).toBe("mobile_data=enabled");
     mockRunAdb.mockClear();
-    const off = await androidImpl.handler(
-      {},
-      params({ setting: "cellular", value: "off" }),
-      androidDevice
-    );
-    expect(mockRunAdb.mock.calls[0]![0]).toEqual([
-      "-s",
-      ANDROID_SERIAL,
-      "shell",
-      "svc data disable",
-    ]);
-    expect(off.applied).toBe("mobile_data=disabled");
+    const off = await run({ setting: "cellular", value: "off" });
+    expect(off.shellCmd).toBe("svc data disable");
+    expect(off.result.applied).toBe("mobile_data=disabled");
   });
 
   it("airplane-mode maps to `cmd connectivity airplane-mode enable/disable`", async () => {
     const { result, shellCmd } = await run({ setting: "airplane-mode", value: "on" });
     expect(shellCmd).toBe("cmd connectivity airplane-mode enable");
     expect(result.applied).toBe("airplane_mode=enabled");
-    mockAdbShell.mockClear();
-    const { result: off, shellCmd: offCmd } = await run({
-      setting: "airplane-mode",
-      value: "off",
-    });
-    expect(offCmd).toBe("cmd connectivity airplane-mode disable");
-    expect(off.applied).toBe("airplane_mode=disabled");
-  });
-
-  it("location on sets location_mode 3 (high accuracy), off sets 0", async () => {
-    expect((await run({ setting: "location", value: "on" })).shellCmd).toBe(
-      "settings put secure location_mode 3"
-    );
-    mockAdbShell.mockClear();
-    const { result, shellCmd } = await run({ setting: "location", value: "off" });
-    expect(shellCmd).toBe("settings put secure location_mode 0");
-    expect(result.applied).toBe("location_mode=0");
+    mockRunAdb.mockClear();
+    const off = await run({ setting: "airplane-mode", value: "off" });
+    expect(off.shellCmd).toBe("cmd connectivity airplane-mode disable");
+    expect(off.result.applied).toBe("airplane_mode=disabled");
   });
 
   it("auto-rotate maps on/off to accelerometer_rotation 1/0", async () => {
     const { result, shellCmd } = await run({ setting: "auto-rotate", value: "on" });
     expect(shellCmd).toBe("settings put system accelerometer_rotation 1");
     expect(result.applied).toBe("accelerometer_rotation=1");
-    mockAdbShell.mockClear();
-    const { result: off, shellCmd: offCmd } = await run({ setting: "auto-rotate", value: "off" });
-    expect(offCmd).toBe("settings put system accelerometer_rotation 0");
-    expect(off.applied).toBe("accelerometer_rotation=0");
+    mockRunAdb.mockClear();
+    const off = await run({ setting: "auto-rotate", value: "off" });
+    expect(off.shellCmd).toBe("settings put system accelerometer_rotation 0");
+    expect(off.result.applied).toBe("accelerometer_rotation=0");
   });
 
   it("a command-level adb refusal surfaces as ANDROID_SYSTEM_SETTING_FAILED", async () => {
-    mockAdbShell.mockRejectedValueOnce(new Error("Failed to write font_scale: Invalid argument"));
+    mockRunAdb.mockRejectedValueOnce(new Error("Failed to write font_scale: Invalid argument"));
     await expect(androidImpl.handler({}, params({}), androidDevice)).rejects.toSatisfy(
       failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED)
     );
   });
 
   it("a terminal adb state propagates adb's own failure instead of being relabelled", async () => {
-    mockAdbShell.mockRejectedValueOnce(new Error("error: device 'emulator-5554' offline"));
+    mockRunAdb.mockRejectedValueOnce(new Error("error: device 'emulator-5554' offline"));
     const rejection = expect(androidImpl.handler({}, params({}), androidDevice)).rejects;
     await rejection.toThrow(/device 'emulator-5554' offline/);
     await rejection.not.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
@@ -751,38 +771,46 @@ describe("system-settings Android branch", () => {
     await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED));
     await rejection.toSatisfy((err) => getFailureSignal(err)?.error_kind === "timeout");
     await rejection.not.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
-    // Same discipline for the exit-code-backed path.
-    mockAdbShell.mockRejectedValueOnce(transport);
-    await expect(
-      androidImpl.handler({}, params({ setting: "appearance", value: "dark" }), androidDevice)
-    ).rejects.toSatisfy(failsWith(FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED));
   });
 
-  // `svc` is the one Android mechanism here that exits 0 when the operation
-  // failed and puts its reason ("Mobile data operation failed: …") on
-  // stderr — so wifi/cellular must be read off stderr, not the exit code.
-  describe("the svc-backed settings (wifi, cellular)", () => {
-    it("run over runAdb so stderr is observable", async () => {
-      await androidImpl.handler({}, params({ setting: "wifi", value: "on" }), androidDevice);
-      expect(mockRunAdb).toHaveBeenCalledWith(["-s", ANDROID_SERIAL, "shell", "svc wifi enable"], {
-        timeoutMs: 15_000,
-      });
-      expect(mockAdbShell).not.toHaveBeenCalled();
-    });
-
-    it("fail with the stderr detail even though svc exits 0", async () => {
-      mockRunAdb.mockResolvedValueOnce({
-        stdout: "",
-        stderr: "Mobile data operation failed: android.os.RemoteException",
-      });
+  // Neither channel alone is a success signal, and the gap is not hypothetical:
+  // on an API 24 emulator `cmd uimode night yes` and `cmd connectivity
+  // airplane-mode enable` both exit 0 with "No shell command implementation."
+  // on stderr while the device stays in light mode with the radios on. adbShell
+  // returns stdout only, so an exit-code-only check answers `applied` there.
+  describe("a refusal the device prints on stderr while adb exits 0", () => {
+    it.each(SYSTEM_SETTINGS)("fails %s instead of reporting it applied", async (setting) => {
+      mockRunAdb.mockResolvedValue({ stdout: "", stderr: "No shell command implementation." });
       const rejection = expect(
-        androidImpl.handler({}, params({ setting: "cellular", value: "on" }), androidDevice)
+        androidImpl.handler(
+          {},
+          params({ setting, value: SETTING_VALUES[setting][0] }),
+          androidDevice
+        )
       ).rejects;
       await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
-      await rejection.toThrow(/Mobile data operation failed/);
+      await rejection.toThrow(/No shell command implementation/);
     });
 
-    it("keep applying when stderr is only whitespace", async () => {
+    it("reads every setting off runAdb, never off the stderr-dropping adbShell", async () => {
+      for (const setting of SYSTEM_SETTINGS) {
+        mockRunAdb.mockClear();
+        mockAdbShell.mockClear();
+        await androidImpl.handler(
+          {},
+          params({ setting, value: SETTING_VALUES[setting][0] }),
+          androidDevice
+        );
+        // `location` also probes the API level, which is the one legitimate
+        // adbShell call; the change itself never goes through it.
+        for (const call of mockAdbShell.mock.calls) {
+          expect(call[1], setting).toBe("getprop ro.build.version.sdk");
+        }
+        expect(mockRunAdb, setting).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("keeps applying when stderr is only whitespace", async () => {
       mockRunAdb.mockResolvedValueOnce({ stdout: "", stderr: "\n" });
       const result = await androidImpl.handler(
         {},
@@ -792,10 +820,10 @@ describe("system-settings Android branch", () => {
       expect(result.applied).toBe("wifi=disabled");
     });
 
-    it("ignore adb's own daemon-startup banner on stderr when the command succeeded", async () => {
+    it("ignores adb's own daemon-startup banner on stderr when the command succeeded", async () => {
       // First adb call after the shared server died: the client prints its
       // startup banner on stderr and then runs the command normally. The
-      // banner is client chatter, not svc's verdict.
+      // banner is client chatter, not the device's verdict.
       mockRunAdb.mockResolvedValueOnce({
         stdout: "",
         stderr: "* daemon not running; starting now at tcp:5037\n* daemon started successfully\n",
@@ -808,11 +836,11 @@ describe("system-settings Android branch", () => {
       expect(result.applied).toBe("wifi=enabled");
     });
 
-    it("ignore adb's server-version-mismatch banner when the command succeeded", async () => {
+    it("ignores adb's server-version-mismatch banner when the command succeeded", async () => {
       // A shared server started by a differently-versioned adb build makes the
       // client print "adb server version (…) doesn't match this client (…);
       // killing…" — no `*` prefix — then restart the server and run the
-      // command normally. Still client chatter, not svc's verdict.
+      // command normally. Still client chatter, not the device's verdict.
       mockRunAdb.mockResolvedValueOnce({
         stdout: "",
         stderr:
@@ -826,14 +854,84 @@ describe("system-settings Android branch", () => {
       expect(result.applied).toBe("wifi=enabled");
     });
 
-    it("still fail when a real refusal follows the banner lines", async () => {
+    it("still fails when a real refusal follows the banner lines", async () => {
+      // `svc`'s own usage text, as an API 24 device writes it to stderr while
+      // exiting 0. (From API 30 `/system/bin/svc` is a shell script that puts
+      // usage on stdout and exits 1, which the exit-code path catches instead.)
       mockRunAdb.mockResolvedValueOnce({
         stdout: "",
-        stderr: "* daemon not running; starting now at tcp:5037\nWi-Fi operation failed\n",
+        stderr:
+          "* daemon not running; starting now at tcp:5037\n" +
+          "Control the Wi-Fi manager\n\nusage: svc wifi [enable|disable]\n",
       });
       await expect(
         androidImpl.handler({}, params({ setting: "wifi", value: "on" }), androidDevice)
-      ).rejects.toThrow(/Wi-Fi operation failed/);
+      ).rejects.toThrow(/Control the Wi-Fi manager/);
+    });
+
+    it("classifies the stderr refusal without inventing subprocess metadata", async () => {
+      // adb exited 0, so the refusal is device output with no exit code or
+      // signal behind it — and it must not be re-read as a transport fault just
+      // because the device's own words happen to contain transport wording.
+      mockRunAdb.mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Wi-Fi operation failed: java.io.IOException: connection reset by peer",
+      });
+      const rejection = expect(
+        androidImpl.handler({}, params({ setting: "wifi", value: "on" }), androidDevice)
+      ).rejects;
+      await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
+      await rejection.toSatisfy(
+        (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_refused"
+      );
+    });
+  });
+
+  // `settings put secure location_mode` is accepted at every API level but only
+  // drives the master switch from Q on: on an API 24 emulator the value flips
+  // while `location_providers_allowed` stays `gps` and location keeps working.
+  describe("the location API floor", () => {
+    it("refuses to report a location change on a device below API 29", async () => {
+      mockAdbShell.mockResolvedValueOnce("24");
+      const rejection = expect(
+        androidImpl.handler({}, params({ setting: "location", value: "off" }), androidDevice)
+      ).rejects;
+      await rejection.toSatisfy(failsWith(FAILURE_CODES.ANDROID_SYSTEM_SETTING_FAILED));
+      await rejection.toThrow(/needs Android API 29\+; this device reports API 24/);
+      expect(mockRunAdb).not.toHaveBeenCalled();
+    });
+
+    it("applies it on a device at or above the floor", async () => {
+      mockAdbShell.mockResolvedValueOnce("29");
+      const result = await androidImpl.handler(
+        {},
+        params({ setting: "location", value: "on" }),
+        androidDevice
+      );
+      expect(shellCommandAt()).toBe("settings put secure location_mode 3");
+      expect(result.applied).toBe("location_mode=3");
+    });
+
+    it("applies it when the device does not report a parseable API level", async () => {
+      mockAdbShell.mockResolvedValueOnce("");
+      const result = await androidImpl.handler(
+        {},
+        params({ setting: "location", value: "off" }),
+        androidDevice
+      );
+      expect(result.applied).toBe("location_mode=0");
+    });
+
+    it("is the only setting that probes the API level", async () => {
+      for (const setting of SYSTEM_SETTINGS) {
+        mockAdbShell.mockClear();
+        await androidImpl.handler(
+          {},
+          params({ setting, value: SETTING_VALUES[setting][0] }),
+          androidDevice
+        );
+        expect(mockAdbShell.mock.calls.length, setting).toBe(setting === "location" ? 1 : 0);
+      }
     });
   });
 });
@@ -858,6 +956,10 @@ describe("system-settings dispatch wiring (through tool.execute)", () => {
     __primeDepCacheForTests(["xcrun", "adb"]);
   });
 
+  // The priming is module-level state in check-deps, so drop it again rather
+  // than leaking it into whatever describe is added after this one.
+  afterEach(() => __resetDepCacheForTests());
+
   it("an iOS udid runs `xcrun simctl ui`, never adb", async () => {
     execFileSucceeds();
     const result = await systemSettingsTool.execute!(
@@ -878,9 +980,10 @@ describe("system-settings dispatch wiring (through tool.execute)", () => {
       { udid: ANDROID_SERIAL, setting: "appearance", value: "light" }
     );
     expect(result.applied).toBe("night_mode=no");
-    expect(mockAdbShell).toHaveBeenCalledWith(ANDROID_SERIAL, "cmd uimode night no", {
-      timeoutMs: 15_000,
-    });
+    expect(mockRunAdb).toHaveBeenCalledWith(
+      ["-s", ANDROID_SERIAL, "shell", "cmd uimode night no"],
+      { timeoutMs: 15_000 }
+    );
     expect(execFileMock).not.toHaveBeenCalled();
   });
 });
