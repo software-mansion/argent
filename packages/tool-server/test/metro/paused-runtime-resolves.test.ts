@@ -29,6 +29,7 @@ let wss: WebSocketServer;
 let mockPort: number;
 let registry: Registry;
 const seen: string[] = [];
+const awaited: string[] = [];
 const withheld: string[] = [];
 
 function handle(ws: WebSocket, raw: string) {
@@ -39,6 +40,7 @@ function handle(ws: WebSocket, raw: string) {
   };
   seen.push(method);
   if (method === "Runtime.evaluate" && params?.awaitPromise) {
+    awaited.push(method);
     withheld.push(method); // paused: never answers
     return;
   }
@@ -111,9 +113,14 @@ describe("a JS runtime that never answers an awaited evaluate", () => {
     expect(seen.filter((m) => m === "Runtime.evaluate").length).toBeGreaterThanOrEqual(2);
     // And that the mock WITHHELD them. Reaching the sends is not the input under
     // test: a mock that answers everything reaches them identically, so without
-    // this the paused model can be softened away and the test still passes.
+    // this the paused model can be softened away and the test still passes. The
+    // count is the awaited evaluates, not every Runtime.evaluate: readViewport's
+    // un-awaited probe (answered above) is not part of the paused model.
+    expect(awaited.length, "the pipeline must send at least one awaited evaluate").toBeGreaterThan(
+      0
+    );
     expect(withheld.length, "the mock must leave every awaited evaluate unanswered").toBe(
-      seen.filter((m) => m === "Runtime.evaluate").length
+      awaited.length
     );
   }, 40_000);
 });
