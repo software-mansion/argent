@@ -8,9 +8,9 @@ import * as path from "node:path";
  * `EACCES` proves nothing there — and worse, the ones asserting the throw fail
  * for a reason that has nothing to do with the code. Probe, then `ctx.skip()`.
  *
- * Probed with a create rather than a stat: a container's overlayfs and a
- * `nosuid` mount both answer the mode question differently from the kernel that
- * will run the write.
+ * Probed with a create rather than a stat: deciding it from the bits means
+ * reimplementing the kernel's uid, gid and ACL check, and the one caller only
+ * ever wants the answer the write itself would give.
  */
 export function modeBites(dir: string): boolean {
   const probe = path.join(dir, `.mode-probe-${process.pid}`);

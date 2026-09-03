@@ -601,10 +601,9 @@ describe("console logs across an app crash", () => {
     // stale_connection guidance, and the "Was connected, then tool fails"
     // row of the skill's failure-scenarios reference, both say restart-app
     // then debugger-connect). Consuming it silently makes
-    // the kept file unreachable: nothing else records the path, and the
-    // reconnected session stops being empty — the one state
-    // `debugger-log-registry` reports a breadcrumb in — as soon as the
-    // relaunched app logs a line.
+    // the kept file unreachable: nothing else records the path, and this is the
+    // step the guidance names, so an agent that follows it and gets nothing has
+    // no other route left to try.
     __resetReapedSessionsForTesting();
     await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "reconnect-note" });
     cdpConn!.send(
