@@ -128,12 +128,12 @@ describe("guidance content", () => {
     }
   );
 
-  // Both tools, not only the conditional one. `debugger-log-registry` reads a
-  // record only from an EMPTY registry, so on the prescribed route — relaunch,
-  // then read — the relaunched app's first line makes it withhold and hand the
-  // record to `debugger-connect` instead. A pointer naming the registry alone
-  // is right up to the relaunch and wrong after it, and these strings are the
-  // whole of what `debugger-status` and a flow-run step line hand over.
+  // Both tools, not only one. Either reports the record and either spends it,
+  // so on the prescribed route — relaunch, then read — the agent reaches it
+  // through whichever it calls first. A pointer naming one alone sends readers
+  // to a tool a concurrent agent may already have spent it through, and these
+  // strings are the whole of what `debugger-status` and a flow-run step line
+  // hand over.
   it.each([
     ["no_app_connected", "emulator-5554"],
     ["no_app_connected", "chromium-cdp-9222"],

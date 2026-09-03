@@ -19,7 +19,8 @@
  * it describes, which is exactly what teardown destroys.
  *
  * Entries are CONSUMED by the read ({@link takeReapedSession}) — the breadcrumb
- * explains one confusing answer, once. Leaving it would make a genuine later
+ * explains one confusing answer, once. A reader that must weigh a record before
+ * destroying it looks first with {@link peekReapedSession}. Leaving it would make a genuine later
  * "you never started a recording" blame a teardown from an hour ago.
  *
  * One entry can also own a file: this store unlinks the log a {@link
@@ -295,19 +296,11 @@ export function recordReapedSession(
 }
 
 /**
- * Read and consume the breadcrumb for `kind`/`deviceId`, if there is one.
- *
- * Consumes every copy of the same teardown, not just the one that matched. A
- * reader knows only the id it was called with, so a per-key delete would leave
- * a twin behind to explain a later, unrelated read — and to reclaim, on the
- * next crash under the same ids, the very file this answer just named.
- */
-/**
  * Look at the record without spending it, so a reader can decide whether it is
  * one it should report before it destroys the only copy. `debugger-log-registry`
- * needs this: a record naming a kept log file has to be reported whatever its
- * own counts say, while a plain teardown must not explain a registry that has
- * entries of its own.
+ * needs this: a record whose account of a lost session lives nowhere else has to
+ * be reported whatever its own counts say, while a plain teardown must not
+ * explain a registry that has entries of its own.
  */
 export function peekReapedSession(
   kind: ReapedSessionKind,
@@ -317,6 +310,14 @@ export function peekReapedSession(
   return reaped.get(key(kind, deviceId, scope));
 }
 
+/**
+ * Read and consume the breadcrumb for `kind`/`deviceId`, if there is one.
+ *
+ * Consumes every copy of the same teardown, not just the one that matched. A
+ * reader knows only the id it was called with, so a per-key delete would leave
+ * a twin behind to explain a later, unrelated read — and to reclaim, on the
+ * next crash under the same ids, the very file this answer just named.
+ */
 export function takeReapedSession(
   kind: ReapedSessionKind,
   deviceId: string,

@@ -31,9 +31,10 @@ interface LogRegistryResponse extends LogStats {
    *
    * - This registry is a new session's, minted after the previous one for this
    *   device was torn down holding console history — by a
-   *   `stop-all-simulator-servers`, or by its runtime going away. Without it a
-   *   zero here reads as "nothing was ever logged on this device", which is
-   *   wrong about the session that just died. Names the old log file when that
+   *   `stop-all-simulator-servers`, or by its runtime going away. Without it
+   *   the counts here read as the dead session's own, which they never are — a
+   *   zero as "nothing was ever logged on this device", anything else as that
+   *   session's output. Names the old log file when that
    *   teardown left it on disk, which a runtime death does unless its writer
    *   never opened one, or something removed it since.
    * - {@link LogStats.file} names a path that is not there: `open()` failed and
@@ -117,19 +118,20 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         // or the runtime died and left that file on disk. The breadcrumb is what
         // separates the three.
         //
-        // Only the empty case is ambiguous — a registry with entries in it is
-        // reporting this session's own capture, and a plain teardown there would
-        // attach a stale explanation to a healthy result.
+        // A plain teardown explains an empty registry and nothing else: one
+        // attached to an answer with entries of its own is a stale explanation
+        // of a healthy result.
         //
-        // A record that KEPT A FILE is the exception, and gating it on the zero
-        // was a hole: the file's path lives nowhere else, so a record left
-        // unspent because this session had since logged could never be reached
-        // again, and the next death on these ids unlinked the file as the log of
-        // a session nobody read. Anything that re-mints the session and logs one
-        // line before the agent asks gets there — a registry self-heal does it
-        // inside a call that returns ordinary success, so nothing even tells the
-        // agent a death happened. Looked at before it is spent, so only the
-        // records this answer reports are the ones it destroys.
+        // The two arms beside it are read whatever the counts say, because for
+        // both this read is the last chance. A kept file's path lives in its
+        // record alone, and a record that replaced an unread session is the only
+        // account of what that session lost. Either one left unspent because
+        // this session had since logged is unreachable for good — no later read
+        // can ask for it, and the next death on these ids unlinks the file it
+        // named. Anything that re-mints the session and logs one line before the
+        // agent asks lands there, a registry self-heal inside a call that
+        // returns ordinary success included. Looked at before it is spent, so
+        // the only records this answer destroys are the ones it reports.
         const scope = debuggerReapedScope(params);
         const pending = peekReapedSession("js-runtime-debugger", params.device_id, scope);
         const empty = stats.totalEntries === 0;

@@ -25,7 +25,10 @@ import {
 } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
-import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
+import {
+  recordReapedSession,
+  __resetReapedSessionsForTesting,
+} from "../../src/utils/reaped-sessions";
 import {
   canonicalDeviceId,
   isLogicalKeyedDevice,
@@ -225,6 +228,56 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(result.note).toBeUndefined();
   });
 
+  it("stays silent about a runtime death that left no file, once this session has logged", async () => {
+    // The counterpart to the two arms that ARE read here: a crash whose writer
+    // never opened a file leaves nothing this read is the last chance at, so on
+    // an answer with its own capture it is the same stale explanation a plain
+    // teardown would be. Left in the store rather than spent, so the empty read
+    // and `debugger-connect` - which reports a runtime death whether or not it
+    // kept a file - can still reach it.
+    recordReapedSession("js-runtime-debugger", [LOGICAL_ID], "captured output", {
+      cause: "runtime-death",
+      scope: String(mockPort),
+    });
+    await capture(LOGICAL_ID, 4);
+
+    const read = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { totalEntries: number; note?: string };
+    expect(read.totalEntries).toBe(4);
+    expect(read.note).toBeUndefined();
+
+    // Not spent by that read: the connect that comes after still reports it.
+    const connected = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
+    expect(connected.note).toContain("its debugger connection dropped instead of being closed");
+  });
+
+  it("reports a record that replaced an unread one to a registry with entries", async () => {
+    // The kept file is not the only thing a read is the last chance at. A record
+    // that replaced an unread session carries the only account of what that
+    // session lost — and the paths of any log files it left — so holding it back
+    // because this session has since logged strands that account for good.
+    const first = await connectAndCapture(LOGICAL_ID, 5);
+    await registry.disposeService(first);
+    // Implicit, so the first record is still unread when this one replaces it.
+    const second = await capture(LOGICAL_ID, 7);
+    await registry.disposeService(second);
+    await capture(LOGICAL_ID, 3);
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { totalEntries: number; note?: string };
+
+    expect(result.totalEntries).toBe(3);
+    expect(result.note).toContain("An earlier session that answered here");
+    expect(result.note).toContain("do not include anything that record is about");
+  });
+
   it("reports the loss once, not on every later empty read", async () => {
     const urn = await connectAndCapture(LOGICAL_ID, 12);
     await registry.disposeService(urn);
@@ -243,8 +296,8 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
   });
 
   it("is dropped by an explicit debugger-connect, which starts a capture of its own", async () => {
-    // The consumer is gated on an EMPTY registry, so a breadcrumb survives every
-    // read that finds entries — and would then attach "a teardown ate your logs"
+    // A plain teardown survives a read that finds entries — that answer has its
+    // own capture to explain — and would then attach "a teardown ate your logs"
     // to some later, unrelated empty read. An explicit connect makes it wrong
     // anyway: from there the capture is this session's own, so empty honestly
     // means nothing has been logged since. Same discipline as the
