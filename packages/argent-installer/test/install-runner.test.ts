@@ -381,6 +381,11 @@ describe("a global install whose target directory cannot be written", () => {
     // just ran, so taking ownership is the way out this path can still offer.
     expect(message).toContain(`sudo chown -R $(whoami) ${binDir}`);
     expect(message).toContain("npx @swmansion/argent init --local");
+    // Refused before advertised: telling the user to put a directory on their
+    // PATH and then refusing it in the next line reads as two verdicts.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
+    expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
+    expect(process.env.PATH?.split(path.delimiter)).not.toContain(binDir);
   });
 
   it("stops on a bin directory left unwritable by a prefix an earlier run set", async () => {

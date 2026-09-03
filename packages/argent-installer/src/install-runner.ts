@@ -269,14 +269,13 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   await tel.trackPackageAction("fresh_install", startedAt, true, undefined, attemptTelemetry());
 }
 
-type BlockedGlobalRecovery = { local: true } | { local: false; pathHint: string | null };
+type BlockedGlobalRecovery = { local: true } | { local: false; binDir: string };
 
 /**
  * Offer the two ways out of a global directory that cannot be written, and
  * carry out the chosen one: install into the project instead, or move npm's
- * prefix somewhere writable and carry on with the global install (reporting
- * the bin directory that has to reach the user's PATH). Cancelling throws
- * InitCancelled.
+ * prefix somewhere writable and carry on with the global install, naming the
+ * bin directory the commands will land in. Cancelling throws InitCancelled.
  *
  * Runs with nobody to ask never reach the prompt: rewriting the user's npm
  * prefix and changing where argent gets installed are both decisions to make
@@ -394,7 +393,7 @@ async function recoverBlockedGlobalInstall(opts: {
       ])
     );
   }
-  return { local: false, pathHint: adoptGlobalBinDir(path.join(prefix, "bin")) };
+  return { local: false, binDir: path.join(prefix, "bin") };
 }
 
 /**
@@ -481,6 +480,7 @@ async function runGlobal(opts: {
   const { fromTar, nonInteractive, globalTarget, globalBlockAcknowledged, tel } = opts;
   let version = opts.version;
   let pathHint: string | null = null;
+  let recoveredBinDir: string | null = null;
   const globallyInstalled = isGloballyInstalled();
   // Without a global install there is no `argent` on PATH: that run came in
   // through `npx @swmansion/argent init`, so a remedy naming a bare `argent`
@@ -511,12 +511,14 @@ async function runGlobal(opts: {
         return { version: localVersion(version), installMode: "local", pathHint: null };
       }
       // The prefix now points somewhere writable — fall through and install.
-      pathHint = recovery.pathHint;
+      recoveredBinDir = recovery.binDir;
     }
     // Outside the recovery too: its `npm config set prefix` outlives the run
     // that wrote it, so a later init installs into that prefix with nothing but
-    // the package directory preflighted.
+    // the package directory preflighted. Ahead of adopting the directory, so a
+    // run that is about to be refused never advertises it.
     await confirmGlobalBinWritable({ pm, remedies, startedAt: preflightStartedAt, tel });
+    if (recoveredBinDir !== null) pathHint = adoptGlobalBinDir(recoveredBinDir);
 
     // No consent prompt here: choosing "Globally" (or --global) in the
     // install-mode step directly above IS the consent to install it.
