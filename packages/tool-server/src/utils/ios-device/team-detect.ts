@@ -21,8 +21,7 @@ export interface DetectedSigningTeam {
   /**
    * Certificate kind and key id, e.g. "Apple Development (ABCD123456)". The
    * subject CN also carries the account identity (an Apple ID, often an
-   * e-mail), which is dropped: the note that prints this label travels into
-   * agent context and transcripts.
+   * e-mail), which is dropped here.
    */
   label: string;
   /** The newest certificate's notBefore, epoch ms. Orders the auto-pick. */
