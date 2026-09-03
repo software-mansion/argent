@@ -21,7 +21,7 @@ Use `screenshot-diff` when pixel comparison can answer the verification question
 
 ## 3. Capture Rules
 
-Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block on those baseline captures, whatever scale they end up at, so the PNG is saved without being loaded into context:
+Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block on those captures, baseline and current alike, whatever scale they end up at, so the PNG is saved without being loaded into context:
 
 ```json
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
