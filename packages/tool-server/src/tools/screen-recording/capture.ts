@@ -245,7 +245,7 @@ function finalizeCapture(api: ScreenRecordingSessionApi): void {
   if (stdin?.writable) stdin.end();
 }
 
-export interface StartCaptureParams {
+interface StartCaptureParams {
   streamUrl: string;
   timeLimitSeconds: number;
   watermark: boolean;
