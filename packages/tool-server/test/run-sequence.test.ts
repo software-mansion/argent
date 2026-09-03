@@ -218,6 +218,84 @@ describe("run-sequence", () => {
     expect(result.completed).toBe(2);
   });
 
+  it("stops the sequence when a keyboard step reports the typed text did not land", async () => {
+    // `verified: false` is an Android read-back verdict reported in the result
+    // rather than thrown; continuing would run the next step (typically the
+    // submit tap) against a field holding the wrong value.
+    const registry = mockRegistry((id: string) => {
+      if (id === "keyboard") {
+        return {
+          typed: "abcdefghijkl",
+          keys: 12,
+          verified: false,
+          note:
+            "The typed text did NOT land in the focused field: 12 characters were typed and " +
+            "the field now holds 0 in total.",
+        };
+      }
+      return { tapped: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          { tool: "keyboard", args: { text: "abcdefghijkl" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      }
+    );
+
+    // The trailing Enter must NOT run against the wrong field contents.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    const last = result.steps[1] as { tool: string; error?: string };
+    expect(last.tool).toBe("keyboard");
+    // The verdict leads: `flow-add-step`'s recorder gate matches this prefix to
+    // find a failed keyboard step inside a recorded sequence.
+    expect(last.error).toMatch(/^typed text did not land: /);
+    expect(last.error).toMatch(/the field now holds 0 in total/);
+    expect(result.completed).toBe(1);
+  });
+
+  it("continues past a keyboard step whose verification is absent or true", async () => {
+    // Absent means "not checked" (every platform without a read-back), never
+    // failed — halting on it would break sequences everywhere else. `verified:
+    // true` must pass too, and BOTH arms have to be reachable: every step here is
+    // `tool: "keyboard"`, so keying the stub on the tool id alone would leave the
+    // `true` arm dead and the test would still pass with the gate widened to
+    // `verified !== undefined`. Keyed on the ARGS instead.
+    const registry = mockRegistry((id: string, args: unknown) => {
+      if (id !== "keyboard") return { tapped: true };
+      const { text } = args as { text?: string };
+      if (text === "verified") return { typed: text, keys: 8, verified: true };
+      return { typed: text ?? "enter", keys: 2 };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { text: "hi" } },
+          { tool: "keyboard", args: { text: "verified" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(3);
+    expect(result.completed).toBe(3);
+    // Both arms really ran: an absent verdict and an explicit `true` one.
+    const verdicts = result.steps.map(
+      (s) => (s as { result?: { verified?: boolean } }).result?.verified
+    );
+    expect(verdicts).toEqual([undefined, true, undefined]);
+  });
+
   it("forwards the request abort signal into each sub-tool invocation", async () => {
     const registry = mockRegistry(() => ({ tapped: true }));
     const tool = createRunSequenceTool(registry);
@@ -356,6 +434,38 @@ describe("run-sequence", () => {
 
     expect(result.completed).toBe(1);
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("records no failure when the step it is running is cancelled", async () => {
+    const controller = new AbortController();
+    // What a cancelled `keyboard` read-back or gesture does: the caller goes away
+    // mid-call and the tool rejects. An `error` entry here would reach the flow
+    // report as "run-sequence stopped at keyboard: This operation was aborted",
+    // a step failure blaming the app for the cancellation.
+    const registry = mockRegistry(() => {
+      controller.abort();
+      throw new Error("This operation was aborted");
+    });
+    const tool = createRunSequenceTool(registry);
+    const ctx = { artifacts: {}, signal: controller.signal } as unknown as ToolContext;
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { text: "hello" }, delayMs: 0 },
+          { tool: "keyboard", args: { key: "enter" }, delayMs: 0 },
+        ],
+      },
+      ctx
+    );
+
+    // Stopped short with nothing recorded — the shape `flow-nested-outcome.ts`
+    // maps to a skip.
+    expect(result.steps).toEqual([]);
+    expect(result.completed).toBe(0);
+    expect(result.total).toBe(2);
   });
 
   describe("a step whose args the sub-tool rejects", () => {

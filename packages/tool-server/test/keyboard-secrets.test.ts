@@ -11,6 +11,7 @@ import {
   type SecretSourceOptions,
 } from "../src/utils/secrets";
 import { InvalidToolInputError } from "../src/utils/capability";
+import { formatErrorForAgent } from "../src/utils/format-error";
 
 vi.mock("../src/utils/simulator-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/simulator-client")>();
@@ -24,6 +25,29 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => {
 });
 vi.mock("../src/utils/check-deps", () => ({ ensureDeps: vi.fn(async () => {}) }));
 
+// Stand in for the Android backend so a chosen `note` can be put on the result
+// and followed out through `execute`'s secret path. The real Android notes are
+// written value-free (pinned on the real path in keyboard-android-verify.test.ts);
+// what these pin is that `execute` hands whatever it is given straight through,
+// because substituting over a note damages correct prose without being able to
+// catch the partial secret a dropped-character read-back actually holds.
+const { androidNote } = vi.hoisted(() => ({
+  androidNote: { value: undefined as string | undefined },
+}));
+vi.mock("../src/tools/keyboard/platforms/android", () => ({
+  makeAndroidImpl: () => ({
+    // No declared deps: the stub shells out to nothing, so `dispatchByPlatform`
+    // must not preflight `adb` on a host that may not have it.
+    requires: [],
+    handler: async (_services: unknown, params: { text?: string }) => ({
+      typed: params.text ?? "",
+      keys: params.text?.length ?? 0,
+      verified: false,
+      ...(androidNote.value === undefined ? {} : { note: androidNote.value }),
+    }),
+  }),
+}));
+
 import { sendCommand, setSimulatorClipboardText } from "../src/utils/simulator-client";
 
 // The chromium branch resolves its CDP api via registry.resolveService, so a
@@ -31,6 +55,9 @@ import { sendCommand, setSimulatorClipboardText } from "../src/utils/simulator-c
 // (resolveDevice → capability gate → dispatch) without any device.
 const CHROMIUM_UDID = "chromium-cdp-9222";
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000";
+// `resolveDevice` classifies an `emulator-NNNN` serial as android from its shape
+// alone, so the android branch is reachable with no device present.
+const ANDROID_SERIAL = "emulator-5554";
 
 function registryWith(api: unknown) {
   return { resolveService: vi.fn(async () => api) } as any;
@@ -94,6 +121,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.mocked(sendCommand).mockReset();
+  // Reset here rather than at the end of each test body: a failing assertion
+  // aborts the body, and the leftover note then fails the NEXT test too, so one
+  // real defect reports as two.
+  androidNote.value = undefined;
   fs.rmSync(path.dirname(sandbox.project), { recursive: true, force: true });
 });
 
@@ -265,10 +296,78 @@ describe("redactSecretsFromError", () => {
     expect(err.stack ?? "").not.toContain("hunter2");
   });
 
+  it("scrubs a stack that was already built with the value in it", () => {
+    // V8 formats `stack` lazily, so a stack first read AFTER the message scrub is
+    // clean whether or not this function touches it. Anything that read it
+    // earlier — a log line, a wrapper that inspected the error — has frozen the
+    // plaintext into the string, and only the stack scrub removes it then.
+    const err = new Error("adb input text hunter2 failed");
+    void err.stack;
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+    expect(err.stack ?? "").not.toContain("hunter2");
+    expect(err.stack ?? "").toContain("{{secret:APP_PASSWORD}}");
+  });
+
+  it("scrubs a thrown string, which carries no message to scrub", () => {
+    expect(
+      redactSecretsFromError("adb input text hunter2", [{ name: "APP_PASSWORD", value: "hunter2" }])
+    ).toBe("adb input text {{secret:APP_PASSWORD}}");
+  });
+
   it("skips empty values instead of corrupting the message", () => {
     const err = new Error("boom");
     redactSecretsFromError(err, [{ name: "EMPTY", value: "" }]);
     expect(err.message).toBe("boom");
+  });
+
+  it("scrubs an error whose message is a getter-only accessor", () => {
+    // The abort a cancelled `keyboard` call raises is a DOMException, whose
+    // `message` is a prototype getter with no setter: assigning to it throws a
+    // TypeError out of this function, losing both the redaction and the abort.
+    const controller = new AbortController();
+    controller.abort(new DOMException("adb input text hunter2 was aborted", "AbortError"));
+    let err: unknown;
+    try {
+      controller.signal.throwIfAborted();
+    } catch (thrown) {
+      err = thrown;
+    }
+
+    const out = redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+
+    expect(out).toBe(err);
+    expect((out as Error).name).toBe("AbortError");
+    expect((out as Error).message).toBe("adb input text {{secret:APP_PASSWORD}} was aborted");
+  });
+
+  it("scrubs the cause chain, which is what the agent is shown", () => {
+    // The repair raises its cancellation with the failed adb call as the cause,
+    // and `formatErrorForAgent` flattens every cause into the one message that
+    // reaches the agent - so the head alone is not the whole exposure.
+    // As deep as the renderer reads, not just the head's own cause: a wrapper
+    // between the two is one `new Error(msg, { cause })` away, and every level
+    // the renderer flattens is a level the scrub has to reach.
+    const chain = [
+      new Error("adb -s emulator-5554 shell input text 'hunter2' failed: device offline"),
+    ];
+    for (let depth = 1; depth <= 7; depth++) {
+      chain.push(new Error(`wrapper ${depth}`, { cause: chain[depth - 1] }));
+    }
+    const err = new Error("keyboard repair aborted - the device call failed", {
+      cause: chain[chain.length - 1],
+    });
+
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+
+    expect(chain[0]!.message).toContain("{{secret:APP_PASSWORD}}");
+    expect(formatErrorForAgent(err)).not.toContain("hunter2");
+  });
+
+  it("terminates on a cause chain that points back at itself", () => {
+    const err = new Error("adb input text hunter2 failed");
+    (err as { cause?: unknown }).cause = err;
+    redactSecretsFromError(err, [{ name: "APP_PASSWORD", value: "hunter2" }]);
+    expect(err.message).toBe("adb input text {{secret:APP_PASSWORD}} failed");
   });
 });
 
@@ -306,6 +405,100 @@ describe("keyboard tool with secret placeholders", () => {
       tool.execute({}, { udid: CHROMIUM_UDID, text: "{{secret:MISSING}}", delayMs: 0 })
     ).rejects.toThrow(/Unknown secret "MISSING"/);
     expect(dispatchKeyEvent).not.toHaveBeenCalled();
+  });
+
+  it("hands a backend's advisory note through unsubstituted, behind a read-back warning", async () => {
+    // The note is deliberately not substituted over. Every note the Android
+    // read-back writes is value-free by construction — counts and structural
+    // facts, pinned on the real path in keyboard-android-verify.test.ts — so a
+    // substitution here could only rewrite prose that never held the value. It
+    // could not close the gap either: a dropped-character read-back holds a
+    // PARTIAL secret, and whole-value replacement never matches one.
+    //
+    // What IS added is a prefix, because the notes close by telling the agent to
+    // read the field with `describe`, and `describe` redacts only a node the app
+    // marks `password` — so following that advice hands back a secret typed into
+    // an ordinary field.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    androidNote.value = "the field holds 4 characters where 7 were typed";
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, text: "{{secret:APP_PASSWORD}}" }
+    );
+
+    expect(result.note).toBe(
+      "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` " +
+        "this field to inspect it: unless the app marks the field as a password field, both hand " +
+        "the plaintext back. Submit or navigate away first, then verify the resulting screen. " +
+        "Disregard the rest of this note where it says to read this field back. " +
+        "the field holds 4 characters where 7 were typed"
+    );
+    // The warning comes FIRST, so it is read before the advice it overrides.
+    expect(result.note?.indexOf("do NOT `describe`")).toBeLessThan(
+      result.note!.indexOf("the field holds 4")
+    );
+    // The verdict itself still reaches the caller.
+    expect(result.verified).toBe(false);
+    // And the placeholder, never the value, is what the result echoes.
+    expect(JSON.stringify(result)).not.toContain("hunter2");
+  });
+
+  it("adds no read-back warning when the call carried no placeholder", async () => {
+    // The warning is about a resolved secret, not about typing: a plain call must
+    // keep the backend's note byte for byte.
+    androidNote.value = "the field holds 4 characters where 7 were typed";
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "plain text" });
+
+    expect(result.note).toBe("the field holds 4 characters where 7 were typed");
+  });
+
+  it("does not let a short secret rewrite the words of a note", async () => {
+    // The regression this guards: substituting the value everywhere it appears
+    // mangles ordinary prose when the value is short, and it fires on notes a
+    // perfectly successful call returns. "or" turns `uiautomator` into
+    // `uiautomat{{secret:W}}`; a numeric PIN swallows the character count the
+    // note exists to report, leaving it reading as though the field holds the
+    // credential.
+    vi.stubEnv("ARGENT_SECRET_W", "or");
+    androidNote.value = "read the field back with a full `uiautomator dump` before relying on it";
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "{{secret:W}}" });
+
+    expect(result.note).toContain(
+      "read the field back with a full `uiautomator dump` before relying on it"
+    );
+    expect(result.note).not.toContain("{{secret:W}}");
+  });
+
+  it("does not let a numeric secret swallow a note's character counts", async () => {
+    vi.stubEnv("ARGENT_SECRET_PIN", "12");
+    androidNote.value = "12 characters were typed and the field now holds 4 in total";
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute({}, { udid: ANDROID_SERIAL, text: "{{secret:PIN}}" });
+
+    expect(result.note).toContain("12 characters were typed and the field now holds 4 in total");
+    // ...and the prefix carries no substituted value either.
+    expect(result.note).not.toContain("{{secret:PIN}}");
+  });
+
+  it("leaves a note-less android result without a `note` key", async () => {
+    // The scrub must not materialise `note: undefined` on a result that had none,
+    // which would show up as a null in the JSON the agent reads.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const tool = createKeyboardTool(registryWith({}));
+
+    const result = await tool.execute(
+      {},
+      { udid: ANDROID_SERIAL, text: "{{secret:APP_PASSWORD}}" }
+    );
+
+    expect("note" in result).toBe(false);
   });
 
   it("scrubs the resolved value from backend errors", async () => {

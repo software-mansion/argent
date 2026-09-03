@@ -48,6 +48,7 @@ import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke"
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
+import { isUnlandedKeyboardTextResult, keyboardResultNote } from "../keyboard";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
@@ -193,13 +194,23 @@ export interface StepReport {
    */
   reason?: string;
   /**
-   * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
-   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * A caveat on the step's evidence, rendered as a "⚠" suffix by the MCP client
+   * and under the step line by the CLI. Usually the step passed but the WAY it
+   * passed weakens it as proof — the CLI then shows "⚠" in place of the pass
+   * glyph. A `run-sequence` step can also carry one on a `fail` or `skip`, where
+   * its own status glyph stands: a keyboard sub-step that ran before the sequence
+   * stopped still typed, and its unverified-typing note rides here while the
+   * `reason` names what failed. A nested `flow-execute`'s keyboard notes stay on
+   * the sub-flow's own step reports, not the outer step.
+   * Raised by `await: { idle: true }` whenever the screen could not be proved
+   * settled, by
+   * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited — and by any step whose `keyboard` result carries a
+   * note: the read-back could not conclude, or it repaired the field to get
+   * there. A directive step has no `result` to carry that in, and the CLI does
+   * not render a raw `tool:` step's `result` either.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1258,6 +1269,14 @@ an instance the run already owns for that same app is killed first (its exit awa
 replacement can't lose the race against its single-instance lock. Instances the runner still owns at
 run end are torn down then. A launch declaring no id for the run's platform is an error, not a cue to
 switch platforms. Every step hard-stops the flow on failure; later steps are reported as skipped.
+A \`type\` step presses Enter after the text unless \`submit: false\`; on an Android phone or tablet the
+\`keyboard\` tool reads the field back, and a step whose read-back proved the text did not land
+(\`verified: false\`) fails with that tool's note as its reason and does NOT press the Enter. A raw
+\`tool: keyboard\` step fails the same way. An absent verdict — every other platform, or a read-back
+that could not conclude, before or after the repair — passes. Any passing keyboard result that
+carries a note — the read-back could not conclude, or a repair got the text in — carries it as that
+step's warning, in all three spellings (\`type\`, \`tool: keyboard\`, and a \`tool: run-sequence\` holding
+one), so none of them is read as a plain verified pass.
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
@@ -2583,6 +2602,10 @@ async function execLeafStep(
         // composition that failed everything counted as a passing step (#606).
         const nested = nestedOrchestratorOutcome(step.name, result);
         if (nested) {
+          // A sequence stopped by a LATER step still ran the typing before it.
+          // The reason belongs to what failed, so the note travels as the
+          // warning — the CLI renders no `result`.
+          const nestedNote = rawStepKeyboardNote(step.name, result);
           return {
             ...base,
             status: nested.status,
@@ -2591,6 +2614,7 @@ async function execLeafStep(
             result,
             outputHint,
             args,
+            ...(nestedNote ? { warning: nestedNote } : {}),
           };
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {
@@ -2625,6 +2649,21 @@ async function execLeafStep(
             args,
           };
         }
+        // Same hazard as the ones above: `keyboard` reports a typed-text
+        // read-back failure in its result instead of throwing, so a raw
+        // `tool: keyboard` step whose text demonstrably did not land would read
+        // green and let the run submit a field holding the wrong value.
+        if (isUnlandedKeyboardTextResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
+            result,
+            outputHint,
+            args,
+          };
+        }
         // The target the clear above dropped, restored for the two tools whose
         // args name the app they just started: they change WHICH app is in
         // front, not whether the run has one, so discarding the id sends the
@@ -2638,7 +2677,16 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        const note = rawStepKeyboardNote(step.name, result);
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(note ? { warning: note } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
@@ -2654,6 +2702,48 @@ async function execLeafStep(
     default:
       return { ...base, status: "error", reason: `unsupported step kind` };
   }
+}
+
+/**
+ * The read-back note a passing raw `tool:` step is handing back, in either
+ * spelling the recorder writes: the `keyboard` call itself, or a `run-sequence`
+ * holding one. The CLI renders only the step line and the warning under it, so
+ * without this a repair that ran — or a read-back that could not conclude —
+ * shows there as an unqualified green. (`runType` does the same for `type:`.)
+ */
+function rawStepKeyboardNote(toolId: string, result: unknown): string | undefined {
+  if (toolId === "keyboard") return keyboardResultNote(result);
+  if (toolId !== "run-sequence" || typeof result !== "object" || result === null) return undefined;
+  const steps = (result as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return undefined;
+  const notes = steps
+    .map((entry, index) => {
+      // Only `keyboard`'s note means what a reader of this takes it to mean:
+      // `await-ui-element` returns one too, about a wait it decided itself.
+      if (typeof entry !== "object" || entry === null) return undefined;
+      const step = entry as Record<string, unknown>;
+      if (step.tool !== "keyboard") return undefined;
+      const note = keyboardResultNote(step.result);
+      return note === undefined ? undefined : { index, note };
+    })
+    .filter((found): found is { index: number; note: string } => found !== undefined);
+  if (notes.length === 0) return undefined;
+  // A keyboard step that FAILED its read-back carries its "did not land" verdict
+  // as an `error` (surfaced in the step's `reason`), not a result-note, so it is
+  // absent from `notes` above — yet it is a second field in play. Count those too,
+  // so a lone surviving note is still prefixed with its step when another keyboard
+  // step spoke: a secret's note says NOT to read ITS field back, and unprefixed it
+  // could be read against the failed one, whose diagnosis sits in `reason`.
+  const keyboardFieldsInPlay = steps.filter((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const step = entry as Record<string, unknown>;
+    if (step.tool !== "keyboard") return false;
+    return keyboardResultNote(step.result) !== undefined || typeof step.error === "string";
+  }).length;
+  if (keyboardFieldsInPlay <= 1) return notes[0]!.note;
+  // Each note's advice is about its own field, and a secret's says NOT to read
+  // that one back, so two run together would govern the wrong field.
+  return notes.map(({ index, note }) => `step ${index + 1}: ${note}`).join(" ");
 }
 
 function errMsg(err: unknown): string {

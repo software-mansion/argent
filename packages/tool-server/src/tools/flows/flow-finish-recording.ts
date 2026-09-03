@@ -101,17 +101,20 @@ function attachStepWarnings(
  * What `message` says about the warnings the summary carries, by KIND — and
  * about the ones it does NOT carry.
  *
- * The two kinds are different news, and only one is about conversion. A wait
- * that came back `success: false` was never probed: it failed live, and at
- * replay it stops the run. Counting it as a conversion warning states the
- * opposite of the actionable fact.
+ * The kinds are different news, and only one is about conversion. A wait that
+ * came back `success: false` was never probed: it failed live, and at replay it
+ * stops the run. Counting it as a conversion warning states the opposite of the
+ * actionable fact, and so does calling a typing verdict a wait.
  *
  * `discarded` is what the anchor checks threw away. Dropping is the right
  * answer, but reporting it as a pass is not: a recording where every wait
  * diverged would otherwise return the same payload as a clean one.
  */
-function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: number): string {
-  const counts = { conversion: 0, wait: 0 };
+export function warningHeadline(
+  warnings: Map<number, RecordedStepWarning>,
+  discarded: number
+): string {
+  const counts = { conversion: 0, wait: 0, typed: 0 };
   for (const { kind } of warnings.values()) counts[kind] += 1;
   const clauses: string[] = [];
   if (counts.conversion > 0) {
@@ -125,17 +128,27 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
       `${counts.wait} ${counts.wait === 1 ? "step" : "steps"} recorded a wait that did not pass`
     );
   }
+  if (counts.typed > 0) {
+    clauses.push(
+      `${counts.typed} ${counts.typed === 1 ? "step" : "steps"} recorded text that did not ` +
+        `land in the field`
+    );
+  }
+  // Two clauses read "A, and B"; three take one conjunction, not two — "A, B, and
+  // C" — since the `typed` kind can now co-occur with the other two.
+  const conjoined =
+    clauses.length <= 2
+      ? clauses.join(", and ")
+      : `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]!}`;
   const carried =
-    clauses.length === 0
-      ? ""
-      : ` — ${clauses.join(", and ")}; read \`summary\` before converting or replaying`;
+    clauses.length === 0 ? "" : ` — ${conjoined}; read \`summary\` before converting or replaying`;
   if (discarded === 0) return carried;
   const one = discarded === 1;
   const drop =
     `${discarded} ${one ? "warning" : "warnings"} raised during this recording ${one ? "is" : "are"} ` +
     `NOT in \`summary\`: a hand edit to the .yaml moved the ${one ? "step it judged" : "steps they judged"}, ` +
     `so which step ${one ? "it belongs" : "they belong"} to is no longer knowable — re-record ` +
-    `${one ? "that wait" : "those waits"} to see ${one ? "it" : "them"} again`;
+    `${one ? "that step" : "those steps"} to see ${one ? "it" : "them"} again`;
   return carried === "" ? ` — ${drop}` : `${carried}. ${drop}`;
 }
 
@@ -203,7 +216,7 @@ export const flowFinishRecordingTool: ToolDefinition<
       `Failed to finish recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
   description: `Finish recording the flow named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the flow file. Fails if that flow has no recording in progress.
-A warning flow-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A step that recorded a wait which did not pass was never probed at all, and its own warning names the CAUSE, because only one of them judges the condition: an unmet wait was read and found false, and it stops the run at replay; a wait whose tree source could not be read, or one that was cancelled, observed nothing and leaves the condition UNKNOWN rather than known-bad. Read those before replaying.
+A warning flow-add-step raised on a recorded step is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A step that recorded a wait which did not pass was never probed at all, and its own warning names the CAUSE, because only one of them judges the condition: an unmet wait was read and found false, and it stops the run at replay; a wait whose tree source could not be read, or one that was cancelled, observed nothing and leaves the condition UNKNOWN rather than known-bad. Read those before replaying. A recorded \`keyboard\` step, or a \`run-sequence\` holding one, carries the third kind: on an Android phone or tablet the read-back proved the text did not reach the field, and that verdict FAILS the step at replay, so the recording is not the passing flow it looks like. That step's \`summary\` \`warning:\` line reports what the read-back measured and whether anything was retyped - structural facts and character counts only, never the field's contents. A read-back that concluded nothing, and one whose repair got the text in, are both quiet here - they surface as the step's warning when the flow runs.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),

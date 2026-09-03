@@ -6,6 +6,7 @@ import { assertSupported, UnsupportedOperationError } from "../../utils/capabili
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
 // sequence to the single capture the MCP layer appends after the last step.
@@ -84,6 +85,14 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
+/**
+ * How a `keyboard` read-back verdict reads once this tool has converted it into a
+ * step error. `flows/flow-add-step.ts` matches on it: its own gate keys on the
+ * recorded command being `keyboard`, which the sequence spelling — the one the
+ * keyboard description prescribes for typing a secret and submitting it — hides.
+ */
+export const UNLANDED_KEYBOARD_STEP_ERROR = "typed text did not land";
+
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
@@ -153,7 +162,15 @@ Example — tap, wait for the next screen's element, then tap it:
 If the await-ui-element condition is not met before its timeout, the sequence stops there and the
 following steps do NOT run — so the tap above only fires once "Continue" is actually on screen.
 
-Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
+A \`keyboard\` text step on an Android phone or tablet stops the sequence the same way when its
+read-back proves the text did not reach the field (\`verified: false\`), so the type-then-Enter
+shape above halts at its first step — \`completed: 0\`, the Enter never sent and the field left
+un-submitted — with that step's \`error\` carrying the tool's note. A halted step is never counted
+in \`completed\`. An absent \`verified\` never stops it.
+
+Stops on the first error, an unmet await-ui-element condition, a keyboard read-back that
+proved the typed text did not land, or the caller cancelling — which stops it with no error
+entry for the step it was in — and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -214,8 +231,26 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             });
             break;
           }
+          // Same shape gap: a `keyboard` text step reports an Android read-back
+          // failure in its result instead of throwing, so continuing would run
+          // the next step (typically the submit) against the wrong field
+          // contents.
+          if (isUnlandedKeyboardTextResult(step.tool, result)) {
+            results.push({
+              tool: step.tool,
+              error: `${UNLANDED_KEYBOARD_STEP_ERROR}${result.note ? `: ${result.note}` : ""}`,
+            });
+            break;
+          }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          // A tool that watches the signal rejects when the caller gives up
+          // mid-call — the keyboard read-back can hold one for tens of seconds
+          // while it repairs. Recording that as a step error would report a
+          // cancelled run as a failed one: `flow-nested-outcome.ts` reads an
+          // error entry as a step failure, and a sequence that merely stopped
+          // short as the aborted skip.
+          if (signal?.aborted) break;
           const reframed = describeNestedParamError(
             registry,
             err,

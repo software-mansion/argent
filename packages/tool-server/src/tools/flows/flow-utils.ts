@@ -238,7 +238,7 @@ export interface RecordedStepWarning {
   /** The warning text `flow-add-step` raised on that step's `message`. */
   warning: string;
   /**
-   * WHICH question the warning answers, because the two are not the same news.
+   * WHICH question the warning answers, because they are not the same news.
    *
    * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
    *   verdict on converting the step to `await:`/`assert:`. A polish-time
@@ -246,8 +246,13 @@ export interface RecordedStepWarning {
    * - `wait` — the live wait itself came back `success: false`, so the probe
    *   was skipped. Nothing here is about conversion: a genuine miss is a step
    *   FAILURE at replay, and the other causes leave the step unjudged.
+   * - `typed` — a recorded call whose Android read-back came back
+   *   `verified: false`: a `keyboard` step, or a `run-sequence` stopped by one of
+   *   its own keyboard steps. `wait`'s shape gap for a different tool — the
+   *   recorder wrote the step because the tool returned, and the runner FAILS it
+   *   at replay.
    */
-  kind: "conversion" | "wait";
+  kind: "conversion" | "wait" | "typed";
   /**
    * The judged step as `stepAnchor` renders it: its identity, independent of
    * where it now sits.

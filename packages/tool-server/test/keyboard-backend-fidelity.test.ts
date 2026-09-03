@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
+import { makeIosImpl, makeIosRemoteImpl } from "../src/tools/keyboard/platforms/ios";
+import { cacheSimulatorRuntimeKind } from "../src/utils/ios-devices";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({
@@ -137,6 +139,93 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
     });
 
+    it("stops between keys once the caller cancels", async () => {
+      // 400 characters is ~40 s of presses here, and `longRunning` leaves the
+      // signal as the only thing that can end them: without this check they keep
+      // landing in whatever the app focuses after the client is gone.
+      const { events, api } = hidRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          controller.abort();
+        },
+      };
+
+      await expect(
+        typeSimulatorServer(
+          registryWith(aborting),
+          IOS_SIM,
+          { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+          controller.signal
+        )
+      ).rejects.toThrow(/abort/i);
+
+      // "h" was on its way when the cancel landed; "i" never went out.
+      expect(events).toEqual([
+        ["Down", HID_H],
+        ["Up", HID_H],
+      ]);
+    });
+
+    it("does not wait out the pacing delay once the caller cancels", async () => {
+      // `delayMs` has no ceiling and `longRunning` removed the adapter's bound,
+      // so every sleep in this loop is time a cancelled caller waits for: with
+      // plain sleeps a cancel on the first press was seen 2 x delayMs later.
+      const { api } = hidRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          api.pressKey(direction, keyCode);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await expect(
+        typeSimulatorServer(
+          registryWith(aborting),
+          IOS_SIM,
+          { udid: IOS_SIM.id, text: "hi", delayMs: 3_000 },
+          controller.signal
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
+
+    it("stops between keys through both iOS platform handlers too", async () => {
+      // The loop check above is half the wiring: `makeIosImpl` and
+      // `makeIosRemoteImpl` have to hand the backend `options.signal`. Calling
+      // `typeSimulatorServer` directly leaves that argument unpinned, and
+      // without it every press of the ~40 s run goes out after the caller left
+      // — the chromium twin below is driven through its handler for this reason.
+      cacheSimulatorRuntimeKind(IOS_SIM.id, "mobile"); // else the impl probes `simctl`
+      for (const make of [makeIosImpl, makeIosRemoteImpl]) {
+        const { events, api } = hidRecorder();
+        const controller = new AbortController();
+        const aborting = {
+          pressKey: (direction: "Down" | "Up", keyCode: number) => {
+            api.pressKey(direction, keyCode);
+            controller.abort();
+          },
+        };
+
+        await expect(
+          make(registryWith(aborting)).handler(
+            {},
+            { udid: IOS_SIM.id, text: "hi", delayMs: 0 },
+            IOS_SIM,
+            { signal: controller.signal }
+          )
+        ).rejects.toThrow(/abort/i);
+
+        expect(events).toEqual([
+          ["Down", HID_H],
+          ["Up", HID_H],
+        ]);
+      }
+    });
+
     it("shifts only the character that needs it", async () => {
       const { events, api } = hidRecorder();
 
@@ -203,6 +292,77 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   });
 
   describe("chromium", () => {
+    it("stops between keys once the caller cancels", async () => {
+      // Three CDP events and a pause per character, with `longRunning` leaving
+      // nothing else to end them once the client is gone.
+      const { events, api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      await expect(
+        makeChromiumImpl(registryWith(aborting)).handler(
+          {},
+          { udid: CHROMIUM.id, text: "hi", delayMs: 0 },
+          CHROMIUM,
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/abort/i);
+
+      // The triple for "h" completes; nothing of "i" is dispatched.
+      expect(events.map((e) => e.type)).toEqual(["keyDown", "char", "keyUp"]);
+    });
+
+    it("does not wait out the pacing delay once the caller cancels", async () => {
+      // The iOS twin's reason, on the backend that paces the same way.
+      const { api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await expect(
+        makeChromiumImpl(registryWith(aborting)).handler(
+          {},
+          { udid: CHROMIUM.id, text: "hi", delayMs: 3_000 },
+          CHROMIUM,
+          { signal: controller.signal }
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
+
+    it("does not wait out the named-key hold either", async () => {
+      // The `key:` branch has its own hold, and the iOS twin's is inside
+      // `pressKeyCode`, which serves both branches - so only this one could be
+      // left behind.
+      const { api } = cdpRecorder();
+      const controller = new AbortController();
+      const aborting = {
+        dispatchKeyEvent: async (e: Record<string, unknown>) => {
+          await api.dispatchKeyEvent(e);
+          controller.abort();
+        },
+      };
+
+      const started = Date.now();
+      await makeChromiumImpl(registryWith(aborting)).handler(
+        {},
+        { udid: CHROMIUM.id, key: "enter", delayMs: 3_000 },
+        CHROMIUM,
+        { signal: controller.signal }
+      );
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
+
     it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {
       const { events, api } = cdpRecorder();
 

@@ -58,6 +58,66 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+### Typed text on Android
+
+On an Android phone or tablet, `keyboard` reads the field back after it types. Android
+injects the text as one key-event burst. A field that redraws on each keystroke drops part
+of that burst, and `adb` reports success. The read-back finds this.
+
+The result carries `verified`:
+
+| Value   | Meaning                                                           |
+| ------- | ----------------------------------------------------------------- |
+| `true`  | Argent read the field back and found the text in it               |
+| `false` | Argent read the field back, and the last measurement is a failure |
+| absent  | Argent did not check. This is not evidence either way             |
+
+Argent makes one repair when the read-back proves the text did not land. The repair covers only
+the characters that Argent can prove are its own. It deletes those characters. It then
+types the text again in small pieces. A call that repairs can thus change the field by
+more than the text that it adds, and the app sees both rounds of key events. A `true`
+verdict can follow a repair. The `note` field then gives the count of characters Argent
+deleted and retyped, never the field's text. A long text spends tens of seconds in the
+repair. When Argent cannot prove which characters are its own it leaves the field alone
+and reports `false`, with a `note` that gives the character counts of the mismatch.
+
+Argent also reports `false` when it repaired the field but could not read it again to
+confirm the result. The last measurement is a failure, so `note` says what the repair
+changed and why the confirmation is missing.
+
+Argent reports `false` for a repair that failed partway too. The field can then hold less
+than it held before the call, because the repair deletes before it types. The `note` field
+says so.
+
+The repair is not atomic on the device: Argent reads the field, then deletes and retypes in
+separate calls, with nothing locking the device between them. A second `keyboard` call on
+the same field in that window can skew the counts the deletion is based on, so drive one
+controller per device. An interleaved write usually leaves the read ambiguous, which
+cancels the repair rather than deleting the wrong characters.
+
+Argent does not read back a password field. Argent also skips the read-back when the
+android-devtools helper is not available. `verified` is absent in both cases.
+
+`verified` is absent on every other platform, on Android TV — which shares the phone
+transport but is never read back — and on an Android phone or tablet when the check cannot
+conclude. In that last case the `note` field gives the reason. The other platforms and
+Android TV send no note, because they run no read-back. The repair can run before an inconclusive
+read, so an absent `verified` does not mean that the field is untouched.
+
+A `false` verdict stops a `run-sequence` at that step. It also fails a flow `type` step,
+a flow `tool: keyboard` step, and a flow `tool: run-sequence` step that holds one. An absent `verified` stops nothing. A flow step that
+passes with a `note` carries that note as the step warning. This covers a `type` step, a
+raw `tool: keyboard` step, and a `run-sequence` that holds one.
+
+A cancelled call stops the typing. Argent types nothing when it sees the cancel before the
+first keystroke. The iOS and Chromium backends stop between keys. An Android call
+stops when the burst it is in has gone out. On the path that verifies, Argent sees a mid-typing
+cancel after the read-back that follows the burst, and a cancel inside a repair at the next chunk
+or batch of backspaces. A call that skips the read-back sees it right after the burst. A TV target and
+Vega type the whole string regardless. A cancel inside an Android repair can leave the
+field with fewer characters than it held before the call, because the repair deletes before
+it types.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

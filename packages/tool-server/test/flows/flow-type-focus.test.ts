@@ -42,11 +42,16 @@ const emailXml = (focused: boolean) => `<?xml version='1.0' encoding='UTF-8' sta
   </node>
 </hierarchy>`;
 
-function mockRegistry(calls: Call[], getHierarchy: () => { xml: string }): Registry {
+function mockRegistry(
+  calls: Call[],
+  getHierarchy: () => { xml: string },
+  keyboardResult?: (args: Record<string, unknown>) => Record<string, unknown>
+): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       calls.push({ id, args, t: Date.now() });
       if (id === "list-devices") return { devices: [] };
+      if (id === "keyboard" && keyboardResult) return keyboardResult(args);
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -78,6 +83,19 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+/**
+ * Slack for the two clocks these timing assertions straddle. The waits are
+ * `setTimeout`, scheduled on libuv's monotonic clock and rounded to whole
+ * milliseconds; the stamps above are `Date.now()`, off the wall clock. The two
+ * drift, so a 500ms sleep is routinely observed as a 499ms gap — which failed
+ * this suite on CI (2026-07-31) against a lower bound that assumed a timer
+ * never fires early.
+ *
+ * Small on purpose: what these assertions pin is that the settle happened at
+ * all, and skipping it leaves a gap near zero.
+ */
+const CLOCK_SKEW_MS = 10;
 
 describe("type directive focus wait", () => {
   it("waits for the tapped field to report focus before typing (android)", async () => {
@@ -113,9 +131,9 @@ describe("type directive focus wait", () => {
     // Text first, then the submitting Enter as a separate call.
     expect(keys.map((c) => c.args.text ?? c.args.key)).toEqual(["a@b.com", "enter"]);
     // The gap covers the fixed settle (500ms) plus at least one poll interval
-    // (300ms) before read 4 confirmed focus. setTimeout never fires early, so
-    // the lower bound is safe to assert; no upper bound (CI jitter).
-    expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(800);
+    // (300ms) before read 4 confirmed focus. No upper bound (CI jitter), and
+    // the lower one allows for CLOCK_SKEW_MS.
+    expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(800 - CLOCK_SKEW_MS);
   });
 
   it("skips the focus poll on a source that can't report focus", async () => {
@@ -162,6 +180,187 @@ describe("type directive focus wait", () => {
     // submit: false — no trailing Enter.
     expect(keys.map((c) => c.args.text)).toEqual(["a@b.com"]);
     // The fixed settle still applies even without a focus-reporting source.
-    expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(500);
+    expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(500 - CLOCK_SKEW_MS);
+  });
+});
+
+describe("type directive — the keyboard tool's read-back verdict", () => {
+  // `keyboard` on an Android phone reads the field back and reports
+  // `verified: false` when the text demonstrably did not land. A flow step that
+  // ignored that would green a `type` for text that typed something else — the
+  // same silent success the read-back exists to end, one layer up.
+  const focusedEmail = () => ({ xml: emailXml(true) });
+
+  it("fails the step when the keyboard reports the text did not land", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) =>
+      args.text === undefined
+        ? { typed: "enter", keys: 1 }
+        : {
+            typed: String(args.text),
+            keys: 7,
+            verified: false,
+            note:
+              "The typed text did NOT land in the focused field: 7 characters were typed and " +
+              "the field now holds 3 in total.",
+          }
+    );
+
+    await writeFlow("bad-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "bad-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:fail"]);
+    // The verdict leads and the tool's own note follows it, as the raw `tool:`
+    // and `run-sequence` gates write it: the CLI prints the reason inline on the
+    // step line, where a note that opens with the secret warning would bury it.
+    expect(result.steps[0]!.reason).toMatch(/^typed text did not land: /);
+    expect(result.steps[0]!.reason).toContain("7 characters were typed and the field now holds 3");
+    // And the submitting Enter must NOT fire: submitting a field holding the
+    // wrong value is worse than not submitting at all.
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
+      "a@b.com",
+    ]);
+  });
+
+  it("passes the step when `verified` is absent — not checked is not failed", async () => {
+    // Every non-Android backend, and an Android call whose reading concludes
+    // nothing, return no `verified`. Treating that as failure would break iOS,
+    // Chromium, Vega and every device without the android-devtools helper.
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) => ({
+      typed: String(args.text ?? args.key),
+      keys: 7,
+      note: "The typed text was not verified against the screen: ...",
+    }));
+
+    await writeFlow("unverified-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "unverified-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    // Passing is not the whole verdict: the note says the read-back could not
+    // conclude, and a directive step carries no `result` for the reader to find
+    // it in — so it rides on `warning`, as `waitForIdle`'s weak passes do. Without it
+    // an unverified type step and a verified one are the same row.
+    expect(result.steps[0].warning).toContain("was not verified against the screen");
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
+      "a@b.com",
+      "enter",
+    ]);
+  });
+
+  it("passes the step when the keyboard verifies the text", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) => ({
+      typed: String(args.text ?? args.key),
+      keys: 7,
+      verified: true,
+    }));
+
+    await writeFlow("good-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com", submit: false }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "good-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    // A verdict with nothing to caveat carries no warning, so the one above is a
+    // real observation rather than a field every type step has.
+    expect(result.steps[0].warning).toBeUndefined();
+  });
+});
+
+describe("type directive — a run cancelled inside the keyboard call", () => {
+  // The Android read-back consults the signal and REJECTS when the run was
+  // cancelled mid-call. `runSwipe` and `runLongPress` already turn that
+  // rejection into the uniform aborted skip; without the same catch here the
+  // DOMException reaches `execLeafStep`, whose catch has no abort check, and the
+  // cancellation is reported as a step error against the app.
+  it("reports the step as the aborted skip, not an error", async () => {
+    const controller = new AbortController();
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: emailXml(true) }),
+      (args) => {
+        if (args.text === undefined) return { typed: "enter", keys: 1 };
+        controller.abort();
+        throw new DOMException("This operation was aborted", "AbortError");
+      }
+    );
+
+    await writeFlow("cancelled-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "cancelled-type", project_root: tmpDir, device: ANDROID_DEVICE },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+  });
+
+  it("still reports a keyboard error on a run nobody cancelled", async () => {
+    // The other arm of that catch: with no abort in flight the error belongs to
+    // the app and must reach the step, or every `adb` failure on a healthy run
+    // would be filed as a cancellation and the run would read as skipped.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: emailXml(true) }),
+      (args) => {
+        if (args.text === undefined) return { typed: "enter", keys: 1 };
+        throw new Error("adb: device offline");
+      }
+    );
+
+    await writeFlow("broken-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "broken-type", project_root: tmpDir, device: ANDROID_DEVICE },
+        { signal: new AbortController().signal } as never
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:error"]);
+    expect(result.steps[0].reason).toContain("device offline");
   });
 });

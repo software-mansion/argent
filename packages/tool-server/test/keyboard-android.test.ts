@@ -155,7 +155,7 @@ describe("android-input — injection", () => {
     // `toUpperCase()` is the only direction that was red.
     //
     // `typed` echoes `params.text` rather than reading the device
-    // (platforms/android.ts:46), so a case regression answers
+    // (`typeAndroidPhone`'s return), so a case regression answers
     // `{ typed: "Passw0rd!", keys: 9 }` while the field holds `passw0rd!` —
     // success to every consumer, android-only, and exactly where case-sensitive
     // login fields and `{{secret:…}}` injection land.
@@ -335,7 +335,8 @@ describe("android-input — rejects text `adb input text` can't type", () => {
 
 // Exercises `makeAndroidImpl().handler` end-to-end (the piece the low-level
 // helper tests above never invoke): the isAndroidTv phone-vs-TV branch, the
-// `keys` count, and the `{ typed, keys }` result shape.
+// `keys` count, and the result's key set, which carries the read-back's `note`
+// alongside `typed` and `keys`.
 describe("android keyboard impl — routing, keys count, result shape", () => {
   const impl = makeAndroidImpl(new Registry());
   const phone = { id: SERIAL, platform: "android", kind: "handset" } as unknown as DeviceInfo;
@@ -359,7 +360,14 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   it("routes a non-TV android target to the adb phone path (not typeTv)", async () => {
     const res = await impl.handler({}, { udid: SERIAL, text: "hi there" } as KeyboardParams, phone);
     // `keys` = 8 codepoints; `typed` echoes the text; text goes over `input text`.
-    expect(res).toEqual({ typed: "hi there", keys: 8 });
+    // This bare `Registry` has no android-devtools blueprint, so the read-back
+    // cannot run and the result says so instead of implying the text landed —
+    // `verified` stays absent and a note carries the reason (see
+    // keyboard-android-verify.test.ts for the verified paths).
+    expect(Object.keys(res).sort()).toEqual(["keys", "note", "typed"]);
+    expect(res).toMatchObject({ typed: "hi there", keys: 8 });
+    expect(res.verified).toBeUndefined();
+    expect(res.note).toMatch(/not verified against the screen/);
     expect(typeTv).not.toHaveBeenCalled();
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi there'", expect.anything());
   });
@@ -403,7 +411,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       "input text '100%'",
       "input text 'safe'",
     ]);
-    expect(res).toEqual({ typed: "100%safe", keys: 8 });
+    // Exact field set, not a subset: this bare `Registry` has no android-devtools
+    // blueprint, so the read-back cannot run and the result must carry the reason
+    // and NOT a `verified` verdict. `toMatchObject` would pass on either.
+    expect(Object.keys(res).sort()).toEqual(["keys", "note", "typed"]);
+    expect(res).toMatchObject({ typed: "100%safe", keys: 8 });
+    expect(res.note).toMatch(/not verified against the screen/);
   });
 
   it("presses the key it was asked for, not a hardcoded Enter", async () => {
@@ -430,6 +443,19 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       impl.handler({}, { udid: SERIAL, text: "café" } as KeyboardParams, phone)
     ).rejects.toBeInstanceOf(InvalidToolInputError);
     expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("rejects un-typeable text without resolving the read-back helper", async () => {
+    // The read-back resolves android-devtools — up to an `adb install -t` of the
+    // helper APK — before it injects, so the check ahead of it is what keeps "no
+    // on-device side effect" true. The test above cannot see that: its bare
+    // `Registry` has no android-devtools blueprint, so nothing resolves either way.
+    const resolveService = vi.fn(async () => ({ getHierarchy: vi.fn() }));
+    const spied = makeAndroidImpl({ resolveService } as unknown as Registry);
+    await expect(
+      spied.handler({}, { udid: SERIAL, text: "café" } as KeyboardParams, phone)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
+    expect(resolveService).not.toHaveBeenCalled();
   });
 
   it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
@@ -477,10 +503,10 @@ describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () 
 
   it("runs the handler over adb once the preflight passes", async () => {
     const tool = createKeyboardTool(new Registry());
-    await expect(tool.execute({}, { udid: SERIAL, text: "hi" })).resolves.toEqual({
-      typed: "hi",
-      keys: 2,
-    });
+    const res = await tool.execute({}, { udid: SERIAL, text: "hi" });
+    // Exact field set (see the note above): no `verified` without a read-back.
+    expect(Object.keys(res).sort()).toEqual(["keys", "note", "typed"]);
+    expect(res).toMatchObject({ typed: "hi", keys: 2 });
     expect(ensureDeps).toHaveBeenCalledWith(["adb"]);
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi'", expect.anything());
   });

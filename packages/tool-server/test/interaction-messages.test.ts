@@ -97,6 +97,23 @@ describe("tool interaction messages", () => {
     ).toBe(`Failed to tap at (50%, 25%): ${failureSignal.error_code}`);
   });
 
+  it("carries the keyboard read-back's negative verdict into the completed line", () => {
+    // This line is where a run is watched. Reporting a bare "Entered text" over
+    // a `verified: false` puts the silent success the read-back exists to catch
+    // straight back into the log. An ABSENT verified means "not checked" and
+    // must stay quiet — the note carries that reason.
+    const definitions = definitionsById(createRegistry());
+    const completed = definitions.get("keyboard")!.interaction!.completedMsg!;
+
+    expect(completed({ params: { udid: "d", text: "hi" }, result: { verified: false } })).toBe(
+      "Entered text (text did not land)"
+    );
+    expect(completed({ params: { udid: "d", text: "hi" }, result: { verified: true } })).toBe(
+      "Entered text"
+    );
+    expect(completed({ params: { udid: "d", text: "hi" }, result: {} })).toBe("Entered text");
+  });
+
   it("names the flow from either source in flow-execute messages", () => {
     const definitions = definitionsById(createRegistry());
     const interaction = definitions.get("flow-execute")!.interaction!;

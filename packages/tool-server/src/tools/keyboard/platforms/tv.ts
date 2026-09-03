@@ -5,10 +5,25 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 // Shared by the ios (Apple TV) and android (Android TV) branches. Named keys are
 // navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
+//
+// No read-back verification here, unlike the Android phone / tablet path (see
+// platforms/android-verify.ts). Android TV shares that path's `adb input text`
+// sink and so shares its exposure: the TV backend splits only on spaces
+// (android-tv-control.ts), so a multi-word string arrives as several short
+// bursts, but a space-free one — an email address, a username, a URL, which is
+// most of what a TV login box takes — is still injected as a single burst that a
+// re-rendering field can drop characters from. It is not verified here because
+// this function is shared with Apple TV, whose `TvControlApi.describe` reports a
+// focused element with no field identity to match it by (no resource-id, no
+// bounds), which is what the comparison and the repair are built on — so covering
+// Android TV means adding a platform branch to a function that deliberately has
+// none — and because the reported defect was on a phone. A TV `keyboard` result therefore carries no `verified` — absent means
+// "not checked", never "checked and fine".
 export async function typeTv(
   registry: Registry,
   device: DeviceInfo,
-  params: KeyboardParams
+  params: KeyboardParams,
+  signal?: AbortSignal
 ): Promise<KeyboardResult> {
   if (params.key) {
     throw new UnsupportedOperationError(
@@ -21,6 +36,12 @@ export async function typeTv(
   const text = params.text ?? "";
   if (text) {
     const api = await resolveTvApi(registry, device.id);
+    // `resolveTvApi` and the runtime-kind probe above it can spend seconds before
+    // anything is typed, so re-check after them: nothing waits for the keystrokes
+    // once the caller is gone. The daemon then types the whole string in one shot
+    // and cannot be interrupted mid-string (as Vega's single shot cannot), which
+    // the tool description states.
+    signal?.throwIfAborted();
     await api.type(text);
   }
   // Codepoints, not UTF-16 units: a non-BMP char reports `keys: 1`, matching the

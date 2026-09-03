@@ -4,10 +4,13 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
+import { sleepOrAbort } from "../../../utils/timing";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise<KeyboardResult> {
+async function runChromium(
+  api: ChromiumCdpApi,
+  params: KeyboardParams,
+  signal?: AbortSignal
+): Promise<KeyboardResult> {
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
@@ -15,6 +18,10 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   // one of the two blocks below runs.
   if (params.text) {
     for (const char of params.text) {
+      // Three CDP events plus a pause per character, with `longRunning` leaving
+      // no other bound: stop between keys once the caller cancels, as the
+      // simulator-server backend and `tv-remote`'s button loop do.
+      signal?.throwIfAborted();
       const desc = charToChromiumKey(char);
       if (!desc) {
         // Caller input error → 400, in the cross-backend
@@ -40,7 +47,10 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
       });
       keysPressed++;
-      await sleep(delay);
+      // Abortable for the same reason as the iOS loop's: `delayMs` has no ceiling
+      // and `longRunning` removed the adapter's, so a plain sleep is what a cancel
+      // would wait out before the check above sees it.
+      await sleepOrAbort(delay, signal);
     }
   }
 
@@ -69,7 +79,9 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
       code: named.code,
       windowsVirtualKeyCode: named.windowsVirtualKeyCode,
     });
-    await sleep(delay);
+    // Abortable like the per-character hold above; the key-up below still goes
+    // out, so a cancel shortens the press rather than leaving the key down.
+    await sleepOrAbort(delay, signal);
     await api.dispatchKeyEvent({
       type: "keyUp",
       key: named.key,
@@ -86,10 +98,10 @@ export function makeChromiumImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       const ref = chromiumCdpRef(device);
       const chromium = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-      return runChromium(chromium, params);
+      return runChromium(chromium, params, options?.signal);
     },
   };
 }

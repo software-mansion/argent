@@ -95,7 +95,10 @@ returns success:false rather than failing), and a check that passes live can
 still fail once polished into an \`await:\`/\`assert:\` directive, which resolves
 against a different tree. flow-add-step warns about both when you record the
 wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
-— that tool reports its own shape — so for those, read \`toolResult\`. For a self-contained
+— that tool reports its own shape — so for those, read \`toolResult\`. Recorded
+typing warns in its own shape, and that one DOES reach inside a run-sequence, but
+only where the Android read-back proved the text did not land - a read that
+concluded nothing records quietly. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use flow-add-echo to add labels. Call

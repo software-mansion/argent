@@ -218,6 +218,42 @@ async function recordWait(
   );
 }
 
+// A phone number typed into a field that dropped part of the key-event burst,
+// which the Android read-back measured, retyped in smaller chunks, and still
+// could not get in. (A field that
+// REFORMATS what it is given reads back as `indeterminate` instead, with no
+// `verified` — see keyboard/platforms/android-verify.ts — so it would not reach
+// this warning at all.)
+const TYPED_TEXT = "5551234567";
+
+/** A registry whose `keyboard` returns exactly the result the caller hands it. */
+function registryWhereKeyboardReturns(result: Record<string, unknown>): Registry {
+  return {
+    invokeTool: vi.fn(async (id: string) => {
+      if (id === "keyboard") return result;
+      throw new ToolNotFoundError(id);
+    }),
+    getTool: vi.fn(() => undefined),
+  } as unknown as Registry;
+}
+
+/**
+ * The Android serial: the read-back that produces `verified` runs on phones and
+ * tablets only, so every other platform reaches the recorder without the field.
+ */
+async function recordTyping(name: string, keyboardResult: Record<string, unknown>) {
+  const tool = createFlowAddStepTool(registryWhereKeyboardReturns(keyboardResult));
+  return tool.execute(
+    {},
+    {
+      name,
+      project_root: tmpDir,
+      command: "keyboard",
+      args: JSON.stringify({ udid: ANDROID, text: TYPED_TEXT }),
+    }
+  );
+}
+
 async function recordedSteps(name: string) {
   const yaml = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
   return parseFlow(yaml).steps;
@@ -1646,10 +1682,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(finished.summary).toHaveLength(2);
     for (const line of finished.summary) expect(line).not.toContain("warning:");
     // …and `message` must not advertise what the summary no longer carries.
+    // Kind-neutral wording: the discard check drops a typing verdict the same
+    // way it drops a wait's, and telling the author to re-record "that wait"
+    // sends them to the wrong step.
     expect(finished.message).toBe(
       'Finished recording "edited" flow (2 steps) — 1 warning raised during this recording is ' +
         "NOT in `summary`: a hand edit to the .yaml moved the step it judged, so which step it " +
-        "belongs to is no longer knowable — re-record that wait to see it again"
+        "belongs to is no longer knowable — re-record that step to see it again"
     );
   });
 
@@ -2320,5 +2359,195 @@ describe("a flow-directive name points at the tool that records it", () => {
       await expect(hint(command), command).rejects.toThrow(/not found/i);
     }
     expect(await recordedSteps("hints")).toEqual([]);
+  });
+});
+
+// `keyboard` reports an Android read-back mismatch the way `await-ui-element`
+// reports an unmet wait — in the result, not by throwing — so the recorder
+// appends the step and `flow-run` fails it at replay. The warning is the only
+// thing standing between "Step added" and a flow whose first step cannot pass.
+describe("a recorded keyboard step whose text did not land", () => {
+  const UNLANDED = {
+    typed: TYPED_TEXT,
+    keys: 10,
+    verified: false,
+    // Shaped like a real note: counts and structural facts, never the field's
+    // contents (a note that quotes them leaks a typed `{{secret:…}}`).
+    note:
+      "The typed text did NOT land in the focused field: 10 characters were typed and the field " +
+      "now holds 4 in total, and retyping it in smaller chunks did not fix it either.",
+  };
+
+  it("warns that the text never reached the field, and records the step anyway", async () => {
+    await startRecording("typed");
+
+    const result = await recordTyping("typed", UNLANDED);
+
+    const warning = warningOf(result, "typed");
+    expect(warning).toContain("the text did not reach the field");
+    // The step IS saved, so a warning that only described the miss would read as
+    // advice; what the author needs is that replay stops here.
+    expect(warning).toContain("FAILS the step");
+    expect(warning).toContain("`toolResult.note`");
+    expect(result.stepCount).toBe(1);
+    expect(result.recorded).toBe(`1. tool: keyboard {"text":"${TYPED_TEXT}"}`);
+    expect(await recordedSteps("typed")).toEqual([
+      { kind: "tool", name: "keyboard", args: { text: TYPED_TEXT }, delayMs: undefined },
+    ]);
+  });
+
+  it("warns the same way when the typing was recorded inside a run-sequence", async () => {
+    // The spelling the keyboard description prescribes for typing a secret and
+    // submitting it. `run-sequence` converts the verdict into a step error of its
+    // own and returns normally, so a gate keyed on the recorded command being
+    // `keyboard` sees a plain result — and `flow-run` still fails it at replay.
+    await startRecording("typed-in-sequence");
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "run-sequence") {
+          return {
+            completed: 0,
+            total: 2,
+            steps: [{ tool: "keyboard", error: `typed text did not land: ${UNLANDED.note}` }],
+          };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "typed-in-sequence",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: ANDROID,
+          steps: [
+            { tool: "keyboard", args: { text: TYPED_TEXT } },
+            { tool: "keyboard", args: { key: "enter" } },
+          ],
+        }),
+      }
+    );
+
+    expect(warningOf(result, "typed-in-sequence")).toContain("the text did not reach the field");
+    expect(result.stepCount).toBe(1);
+  });
+
+  it("stays quiet when the run-sequence step failed for some other reason", async () => {
+    // The arm keys on the read-back's own error prefix, not on there being an
+    // error: `run-sequence` also records a disallowed tool, an unsupported
+    // operation, an unmet `await-ui-element` condition and any transport
+    // failure, and "the text did not reach the field" is false for every one.
+    await startRecording("other-sequence-error");
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "run-sequence") {
+          return {
+            completed: 1,
+            total: 2,
+            steps: [{ tool: "await-ui-element", error: "condition not met after 5000ms" }],
+          };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "other-sequence-error",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: ANDROID,
+          steps: [
+            { tool: "await-ui-element", args: { text: "NoSuchThing" } },
+            { tool: "keyboard", args: { text: TYPED_TEXT } },
+          ],
+        }),
+      }
+    );
+
+    expect(warningOf(result, "other-sequence-error")).toBeUndefined();
+    expect(result.stepCount).toBe(1);
+  });
+
+  // Only a read-back that RAN and disagreed may warn.
+  const QUIET: Array<{ name: string; result: Record<string, unknown> }> = [
+    {
+      name: "the read-back confirmed the text",
+      result: { typed: TYPED_TEXT, keys: 10, verified: true },
+    },
+    {
+      // The shape iOS, Chromium, Vega and a helper-less Android all return.
+      // Absent means "not checked", never "checked and failed", so warning on it
+      // would convict every platform that has no read-back.
+      name: "the platform ran no read-back at all",
+      result: { typed: TYPED_TEXT, keys: 10 },
+    },
+  ];
+
+  for (const { name, result } of QUIET) {
+    it(`stays quiet when ${name}`, async () => {
+      await startRecording("quiet");
+
+      const added = await recordTyping("quiet", result);
+
+      expect(warningOf(added, "quiet")).toBeUndefined();
+      expect(await recordedSteps("quiet")).toHaveLength(1);
+
+      // …and the finish must not headline what the step never carried.
+      const finished = await flowFinishRecordingTool.execute(
+        {},
+        { name: "quiet", project_root: tmpDir }
+      );
+      expect(finished.message).toBe('Finished recording "quiet" flow (1 steps)');
+    });
+  }
+
+  it("headlines it at the finish, and repeats it under the step it judged", async () => {
+    await startRecording("finishtyped");
+    await recordTyping("finishtyped", UNLANDED);
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "finishtyped", project_root: tmpDir }
+    );
+
+    expect(finished.message).toBe(
+      'Finished recording "finishtyped" flow (1 steps) — 1 step recorded text that did not land ' +
+        "in the field; read `summary` before converting or replaying"
+    );
+    expect(verdictsIn(finished.summary).get(1)).toContain("the text did not reach the field");
+  });
+
+  // The reason this warning is its own `kind` rather than a second `wait`: the
+  // two send the author to different steps, and a merged count names neither.
+  it("counts an unlanded typing step apart from a wait that did not pass", async () => {
+    await startRecording("both");
+    await recordWait(
+      "both",
+      { condition: "visible", selector: { text: "NoSuchThing" } },
+      { registry: registryWhereWaitTimesOut() }
+    );
+    await recordTyping("both", UNLANDED);
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "both", project_root: tmpDir }
+    );
+
+    expect(finished.message).toBe(
+      'Finished recording "both" flow (2 steps) — 1 step recorded a wait that did not pass, and ' +
+        "1 step recorded text that did not land in the field; read `summary` before converting " +
+        "or replaying"
+    );
+    const verdicts = verdictsIn(finished.summary);
+    expect(verdicts.get(1)).toContain("the wait itself never held");
+    expect(verdicts.get(2)).toContain("the text did not reach the field");
   });
 });

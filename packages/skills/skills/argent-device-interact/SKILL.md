@@ -178,6 +178,8 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
+On an Android phone or tablet the typed text is read back off the screen, because `adb input text` injects it as one key-event burst that a field re-rendering per keystroke silently drops part of. The result then carries `verified` and, when there is anything to caveat, a `note`: `true` means the field really holds the text; `false` means the read-back did not confirm it — the field was read and does not hold the text, the repair itself failed partway, or the repair ran and the read that would have confirmed it could not be taken. That repair backspaces what the call can prove is its own and retypes it in smaller chunks, so a `keyboard` call may modify the field beyond appending, and a long text spends tens of seconds there. `verified` is **absent** whenever the check could not conclude, and on every other platform; absent means "not checked", never "checked and fine" — and never that the field is untouched, because the repair can run and the read that follows it can still conclude nothing. A `false` verdict STOPS the surrounding `run-sequence` (so the Enter step above does not fire), FAILS a flow `type` step, a flow `tool: keyboard` step and a flow `tool: run-sequence` step that holds one, and makes the flow recorder warn about the step it just recorded, including when the recorded call is the `run-sequence` that holds the typing. A flow step that passes with a `note` carries it as the step's warning — a `type` step, a raw `tool: keyboard` step, or a `run-sequence` holding one — so an unverified pass is visible in the report. Read `note` before retrying: it names the cause, and where a repair ran it says what was retyped.
+
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
@@ -198,7 +200,7 @@ The placeholder is resolved on the machine running the tool-server, from the fir
 Rules:
 
 - The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths — read that list before asking the user anything.
-- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen. To submit, put the text step and the Enter step in **one `run-sequence`**. The skip covers a whole batch that contains the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field.
+- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen. To submit, put the text step and the Enter step in **one `run-sequence`**. The skip covers a whole batch that contains the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field. That rule outranks the Android read-back's own advice: a `note` on a call that typed a placeholder usually ends "read the field with `describe`", and the call prefixes it with a correction saying not to — `describe` redacts only fields the app marks `password`, so a secret in an ordinary field comes back in plaintext. On Android a `run-sequence` that types a secret can also stop before its Enter when the read-back returns `verified: false`; the field is then left filled and un-submitted, so clear it or navigate away rather than screenshotting it.
 - Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
 - The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
 
@@ -212,7 +214,7 @@ Puts `text` on the **device** clipboard (the host clipboard is untouched) and tr
 
 `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
 
-Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
+Tap the field first so it has focus; pasting with no focused field is a silent no-op, as a `keyboard` call is everywhere except an Android phone or tablet, whose read-back reports that nothing editable held focus. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
 
 ### rotate — Change orientation
 
@@ -381,7 +383,7 @@ Tap, wait for the next screen, then act on it — the `await-ui-element` step **
 
 Prefer this over a fixed `delayMs` when a step depends on a screen transition: it adapts to real load time, and if the condition is not met before the timeout the sequence **stops there** so the next tap can't fire against a screen that never settled.
 
-Stops on the first error (or unmet `await-ui-element` condition) and returns partial results.
+Stops on the first error, an unmet `await-ui-element` condition, or an Android `keyboard` read-back that proved the typed text did not land — and returns partial results.
 
 ---
 

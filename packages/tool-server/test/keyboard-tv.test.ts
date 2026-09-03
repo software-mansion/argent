@@ -106,4 +106,29 @@ describe("typeTv — the TV keyboard backend", () => {
     expect(result).toEqual({ typed: "", keys: 0 });
     expect(resolveTvApi).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["Apple TV", APPLE_TV],
+    ["Android TV", ANDROID_TV],
+  ])(
+    "does not type on %s once the caller cancels while the service resolves",
+    async (_label, device) => {
+      // `longRunning` dropped the adapter timeout, so the signal is the only thing
+      // left to stop a call nobody is waiting for. The runtime-kind probe and
+      // `resolveTvApi` can spend seconds before anything is typed, so the abort is
+      // driven to land inside the resolve — the check after it must catch it. The
+      // daemon types the whole string in one shot once reached, so this is the last
+      // point where nothing has been sent.
+      const type = vi.fn(async () => {});
+      const controller = new AbortController();
+      resolveTvApi.mockImplementation(async () => {
+        controller.abort();
+        return { type };
+      });
+      await expect(
+        typeTv(registry, device, { udid: device.id, text: "Hi there" }, controller.signal)
+      ).rejects.toThrow(/abort/i);
+      expect(type).not.toHaveBeenCalled();
+    }
+  );
 });

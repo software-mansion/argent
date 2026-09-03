@@ -60,6 +60,45 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+// True when an Android phone/tablet read-back proved the typed text did not
+// land (`verified: false`, see platforms/android-verify.ts), returned rather
+// than thrown — the same shape gap `isUnmetUiWaitResult` closes for
+// `await-ui-element`. An ABSENT `verified` means "not checked", never "checked
+// and failed", so it is deliberately not matched. `unknown` because the result
+// crosses the registry boundary untyped.
+export function isUnlandedKeyboardTextResult(
+  toolId: string,
+  result: unknown
+): result is { verified: false; note?: string } {
+  if (toolId !== "keyboard") return false;
+  if (typeof result !== "object" || result === null) return false;
+  return (result as { verified?: unknown }).verified === false;
+}
+
+// The read-back's advisory `note`; `unknown` for the same reason as above.
+export function keyboardResultNote(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const note = (result as { note?: unknown }).note;
+  return typeof note === "string" && note !== "" ? note : undefined;
+}
+
+/**
+ * Prefixed onto a read-back note when the call typed a resolved `{{secret:…}}`.
+ *
+ * Most of the notes `platforms/android-verify.ts` returns close by telling the
+ * agent to read the field back with `describe`. For a credential that is a
+ * plaintext leak: `describe`'s Android parser redacts a node only where the app
+ * sets `password="true"`, so a secret in an ordinary field comes back as that
+ * element's label. This layer is the only one that knows a placeholder was
+ * resolved, and the warning goes first so it is read before the advice it
+ * overrides.
+ */
+const SECRET_READ_BACK_WARNING =
+  "This call typed a resolved `{{secret:...}}` value, so do NOT `describe` or `screenshot` this " +
+  "field to inspect it: unless the app marks the field as a password field, both hand the " +
+  "plaintext back. Submit or navigate away first, then verify the resulting screen. Disregard " +
+  "the rest of this note where it says to read this field back. ";
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -109,19 +148,34 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      // Not `!result.verified`: an absent `verified` means not checked, and
+      // reporting a plain "Entered text" over a `false` reproduces, on the line
+      // a user watches the run by, the silent success the read-back exists to
+      // catch.
+      completedMsg: ({ params, result }) =>
+        params.text === undefined
+          ? "Pressed a key"
+          : `Entered text${result.verified === false ? " (text did not land)" : ""}`,
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
-A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
+Returns { typed: string, keys: number, verified?: boolean, note?: string, reactivated?: true }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an Android phone or tablet the typed text is read back off the screen, because \`adb input text\` injects it as one key-event burst that a field re-rendering per keystroke silently drops part of. verified=true means the focused field really holds the text. verified=false means the read-back did not confirm it: either the field was read and does not hold the text — note then reports how many characters were typed and how many the field now holds in total (that total includes anything the field already showed, so it is not a loss count) — or the text was already measured not to have landed and the repair either failed outright or could not be confirmed by a further read, which note says instead. Before reporting a failure the tool repairs the field ONCE where it can prove which characters are its own: it backspaces that many and retypes them in smaller chunks, so a \`keyboard\` call may modify the field beyond appending, and a long string spends tens of seconds there (this tool is long-running and has no deadline of its own). It leaves the field untouched where it cannot prove which characters are its own — a hint that overlaps the typed text, or a reading a replaced selection explains just as well. verified is absent whenever the check could not conclude — no editable field held focus, focus moved to another field mid-typing, more than one window reported an editable field with focus (what a dialog over the app looks like, where nothing says which one takes typing), the focused field is a password field (deliberately not read back), the read failed, came back empty or was truncated, the reading is equally consistent with success and failure, or the android-devtools helper is unavailable — with note giving the reason. A reading that concludes nothing can also follow the repair, so an absent verified is no promise the field is untouched; note says what was retyped. After a repair the other reasons report false rather than absent, because the last measurement is then a failure. It is also absent on every other platform, including Android TV, which shares this transport but is not checked: absent always means "not checked", never "checked and fine". note is absent when there is nothing to caveat.
+Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, if the device's input backend is not reachable, or if the caller cancels — a cancellation seen before the first keystroke types nothing, the iOS simulator and Chromium backends stop between keys once one arrives mid-call, and an Android call stops once the burst it is in has gone out — mid-typing that is right after the burst, or after the read-back that follows it on the path that verifies, and inside a repair at the next chunk or backspace batch (a TV target's daemon and physical iOS's XCTest runner type the whole string regardless, as Vega does in its single shot). A read-back that cannot run never fails the call: the text is typed either way.
+A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. A cancellation during the Android repair can leave the field holding LESS than before the call, since the repair backspaces before it retypes and stops at its next device call once the caller is gone. Before typing again after any failure, read the field's actual contents — do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. Physical iOS: only \`enter\` and \`backspace\`.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    // A long string's chunked repair (one `adb shell input` per 8 characters,
+    // each paying its own `app_process` spawn) outruns the MCP adapter's 30 s
+    // fetch timeout, which cancels nothing: it replays the IDENTICAL POST up to
+    // five times against the same still-running server, and this tool is not
+    // idempotent, so each replay types the whole string again on top of what the
+    // abandoned call left.
+    longRunning: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
     services: () => ({}),
@@ -192,6 +246,10 @@ One call does one action: pass text OR key, never both. To type and then press a
           }
         );
       }
+      // Checked here as well as in the backends: the last point where nothing
+      // has been sent to the device — and on a TV target the only one, since the
+      // per-word loop lives behind the control blueprint's own API.
+      options?.signal?.throwIfAborted();
       // Resolve inside `execute`: after every logging boundary (agent
       // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
       // see only the placeholder) and before the dispatch, so run-sequence and
@@ -201,8 +259,20 @@ One call does one action: pass text OR key, never both. To type and then press a
       if (secrets.length === 0) return dispatch(services, params, options);
       try {
         const result = await dispatch(services, { ...params, text }, options);
-        // Echo the placeholder form, never the resolved value.
-        return { ...result, typed: params.text };
+        return {
+          ...result,
+          // Echo the placeholder form, never the resolved value.
+          typed: params.text,
+          // The note's own closing advice is unsafe for a secret; correct it
+          // rather than emit it. See SECRET_READ_BACK_WARNING.
+          ...(result.note === undefined ? {} : { note: SECRET_READ_BACK_WARNING + result.note }),
+          // The note is deliberately NOT scrubbed: it is value-free by
+          // construction (`keyboard-secrets.test.ts` pins that), and the
+          // substitution is destructive on curated prose — see `redactSecrets`.
+          // It could not save a leak either: it matches whole values only, and a
+          // dropped-character read-back holds a PARTIAL secret. Errors, which
+          // quote the `input text` argv verbatim, are still scrubbed below.
+        };
       } catch (err) {
         // A backend error can quote its input (e.g. the Android `input text`
         // command line) — scrub the resolved values before it propagates.

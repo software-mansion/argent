@@ -199,6 +199,44 @@ describe("a nested run-sequence reports its own verdict", () => {
   });
 });
 
+describe("a run-sequence's surviving keyboard note names its step", () => {
+  // `notes` is built only from sub-steps carrying a `result`. A keyboard step
+  // that FAILED its read-back reports the verdict as an `error`, so its note
+  // rides the outer `reason`, not `notes` — leaving one surviving note that,
+  // unprefixed, could be read against the failed field. The failed field has to
+  // count toward the `step N:` prefix even though it carries no result-note.
+  it("prefixes the surviving note when a later keyboard step failed", async () => {
+    const { result } = await run("run-sequence", {
+      completed: 1,
+      total: 2,
+      steps: [
+        { tool: "keyboard", result: { verified: true, note: "SECRET_FIELD_NOTE" } },
+        { tool: "keyboard", error: "keyboard failed: typed text did not land" },
+      ],
+    });
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/run-sequence stopped at keyboard/);
+    // Attributed to its step, not left to be read against the failed field whose
+    // own diagnosis sits in `reason`.
+    expect(result.steps[0].warning).toBe("step 1: SECRET_FIELD_NOTE");
+  });
+
+  it("leaves a lone keyboard note unprefixed when no other keyboard field spoke", async () => {
+    const { result } = await run("run-sequence", {
+      completed: 2,
+      total: 2,
+      steps: [
+        { tool: "gesture-tap", result: { tapped: true } },
+        { tool: "keyboard", result: { verified: true, note: "ONLY_NOTE" } },
+      ],
+    });
+
+    expect(result.steps[0].status).toBe("pass");
+    expect(result.steps[0].warning).toBe("ONLY_NOTE");
+  });
+});
+
 describe("the check is deliberately scoped to the two orchestrator tools", () => {
   // There is no `ok` contract in this codebase to generalise: await-ui-element
   // spells it `success`, run-sequence spells it neither way, and the generic
