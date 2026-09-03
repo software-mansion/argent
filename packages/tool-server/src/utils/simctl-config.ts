@@ -4,6 +4,11 @@
  * simctl forever is the case this exists to catch. */
 export const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
 
+/** Ceiling for one `xcrun simctl list devices --json`, wherever it runs — the
+ * simulator listing and the device-set probe both pay it. Exported so a tool
+ * whose end-to-end budget is pinned by a test can sum the listings in. */
+export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
 /** Kill signal for timed-out `xcrun simctl` invocations.
  *
  * `execFile`'s `timeout` sends its `killSignal` (default `SIGTERM`) once and

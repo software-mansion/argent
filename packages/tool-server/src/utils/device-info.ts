@@ -53,10 +53,12 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
   return serial.startsWith("emulator-");
 }
 
-/** The mDNS service Android advertises for wireless debugging. adb names a
- * device discovered that way by its service instance, so the serial carries no
- * address at all. */
-const ADB_WIRELESS_MDNS_SERVICE = "_adb-tls-connect._tcp";
+/** The mDNS services adb tracks for wireless debugging. adb names a device it
+ * discovered that way by its service instance, so the serial carries no address
+ * at all. Only `adb-tls-connect` is auto-connected by default, but
+ * `$ADB_MDNS_AUTO_CONNECT` takes any of them and a serial from any is a device
+ * reached over the network. */
+const ADB_WIRELESS_MDNS_SERVICES = ["_adb._tcp", "_adb-tls-connect._tcp", "_adb-tls-pairing._tcp"];
 
 /** A serial on one of these hosts is a forwarded port — docker-android, a
  * tunnelled CI emulator — not a radio link. */
@@ -66,18 +68,18 @@ const LOOPBACK_ADB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
  * True when adb reaches this device over the device's own Wi-Fi, so switching
  * that Wi-Fi off severs the transport carrying the command.
  *
- * Two serial forms say so, and adb produces both: `adb connect <host>:<port>`
- * gives `host:port` — USB hardware serials and `emulator-<port>` carry no port,
- * so the same test excludes them — and a device found over mDNS is listed under
- * its service instance, `adb-<serial>-<suffix>._adb-tls-connect._tcp`, with no
- * address at all (both verified against adb 37.0.0).
+ * Two serial forms say so. `adb connect <host>:<port>` gives `host:port` — USB
+ * hardware serials and `emulator-<port>` carry no port, so the same test
+ * excludes them. A device adb found over mDNS is listed under its service
+ * instance instead, `adb-<serial>-<suffix>._adb-tls-connect._tcp`, with no
+ * address at all.
  *
  * A host-only VM network (Genymotion, Waydroid) is indistinguishable from a LAN
  * address, so those are treated as wireless too — the conservative direction,
  * since the caller is told to use a different connection rather than losing one.
  */
 export function isWirelessAdbSerial(serial: string): boolean {
-  if (serial.includes(ADB_WIRELESS_MDNS_SERVICE)) return true;
+  if (ADB_WIRELESS_MDNS_SERVICES.some((service) => serial.includes(service))) return true;
   const host = /^(.+):\d+$/.exec(serial)?.[1];
   return host !== undefined && !LOOPBACK_ADB_HOSTS.has(host.toLowerCase());
 }

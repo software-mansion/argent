@@ -83,7 +83,7 @@ Decision order:
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
   machine-wide cleanup.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- Device interaction has no exception to the rule above: if you are reaching for `xcrun simctl` or `adb` to drive a device, check the tool list first. Device-wide settings (`system-settings`), shaking (`shake`), rotation (`rotate`) and hardware keys including power/lock (`button`) all have tools. A CLI is the fallback only for something outside the device — reading a project file, a build, a git operation.
+- Reaching for `xcrun simctl` or `adb` to drive a device — simulator, emulator or physical — means checking the tool list first. Device-wide settings (`system-settings`), shaking (`shake`), rotation (`rotate`) and hardware keys including power/lock (`button`) all have tools. A CLI is the fallback only for something outside the device — reading a project file, a build, a git operation.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 

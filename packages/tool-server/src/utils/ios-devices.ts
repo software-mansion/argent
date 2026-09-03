@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_LIST_TIMEOUT_MS } from "./simctl-config";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -10,10 +10,6 @@ import {
 } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
-
-/** Ceiling for one `xcrun simctl list devices --json`. Exported so a tool whose
- * end-to-end budget is pinned by a test can sum in the runtime-kind probe. */
-export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
 
 export interface IosSimulator {
   udid: string;

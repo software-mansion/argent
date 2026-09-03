@@ -18,11 +18,11 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
 });
 
 // `resolveDevice` classifies an Apple TV simulator as an iOS simulator (both are
-// bare UUIDs), so the iOS handler probes the runtime kind. Stub it false by
+// bare UUIDs), so the iOS handler probes the runtime kind. Stub it `mobile` by
 // default and flip it per-test — the real probe would shell out to `simctl list`.
 vi.mock("../src/utils/ios-devices", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
-  return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
+  return { ...actual, getSimulatorRuntimeKind: vi.fn(async () => "mobile" as const) };
 });
 
 // Device-set resolution reads `ios.additionalDeviceSets` off disk; pin it so
@@ -53,10 +53,10 @@ import {
 } from "../src/tools/system-settings/types";
 import type { SystemSettingsParams } from "../src/tools/system-settings/types";
 import { adbShell, runAdb, ENRICH_TIMEOUT_MS } from "../src/utils/adb";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../src/utils/simctl-config";
+import { SIMCTL_LIST_TIMEOUT_MS, SIMCTL_SPAWN_TIMEOUT_MS } from "../src/utils/simctl-config";
 import { ADB_SETTING_TIMEOUT_MS } from "../src/tools/system-settings/platforms/android";
 import { SIMCTL_UI_TIMEOUT_MS } from "../src/tools/system-settings/platforms/ios";
-import { isTvOsSimulator, SIMCTL_LIST_TIMEOUT_MS } from "../src/utils/ios-devices";
+import { getSimulatorRuntimeKind } from "../src/utils/ios-devices";
 import { PATH_LOOKUP_TIMEOUT_MS } from "../src/utils/command-on-path";
 import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -64,7 +64,7 @@ import { rememberDeviceSet, __resetDeviceSetCacheForTesting } from "../src/utils
 
 const mockAdbShell = vi.mocked(adbShell);
 const mockRunAdb = vi.mocked(runAdb);
-const mockIsTvOs = vi.mocked(isTvOsSimulator);
+const mockRuntimeKind = vi.mocked(getSimulatorRuntimeKind);
 
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
 const ANDROID_SERIAL = "emulator-5554";
@@ -115,8 +115,8 @@ beforeEach(() => {
   mockAdbShell.mockImplementation(async () => "");
   mockRunAdb.mockReset();
   mockRunAdb.mockImplementation(async () => ({ stdout: "", stderr: "" }));
-  mockIsTvOs.mockReset();
-  mockIsTvOs.mockImplementation(async () => false);
+  mockRuntimeKind.mockReset();
+  mockRuntimeKind.mockImplementation(async () => "mobile");
 });
 
 describe("system-settings failure codes are defined", () => {
@@ -438,13 +438,40 @@ describe("system-settings iOS branch", () => {
     // An Apple TV sim is an 8-4-4-4-12 UUID like an iPhone's, so `resolveDevice`
     // routes it here. tvOS refuses every `simctl ui` option ("Operation not
     // supported") but accepts the `defaults` writes, which would report
-    // `applied` for a setting tvOS has no pane for.
-    mockIsTvOs.mockResolvedValueOnce(true);
+    // `applied` for a setting tvOS's own pane never reflects.
+    mockRuntimeKind.mockResolvedValueOnce("tv");
     execFileSucceeds();
-    await expect(
+    const rejection = expect(
       iosImpl.handler({}, params({ setting: "reduce-motion", value: "on" }), IOS_DEVICE)
-    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    ).rejects;
+    await rejection.toBeInstanceOf(UnsupportedOperationError);
+    await rejection.toThrow(/tvOS/);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a simulator the runtime probe cannot vouch for, rather than assuming iOS", async () => {
+    // The listing behind the probe answers `undefined` for a `simctl list` that
+    // failed or came back unparseable, and for every Apple runtime that is
+    // neither iOS nor tvOS. Reading that as "iOS" is how a `defaults` write
+    // lands on an Apple TV and reports `applied` — measured on a tvOS 18.5
+    // simulator with only `simctl list` failing.
+    mockRuntimeKind.mockResolvedValueOnce(undefined);
+    execFileSucceeds();
+    const rejection = expect(
+      iosImpl.handler({}, params({ setting: "reduce-motion", value: "on" }), IOS_DEVICE)
+    ).rejects;
+    await rejection.toBeInstanceOf(UnsupportedOperationError);
+    await rejection.toThrow(/does not report .* as an available iOS simulator/);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("answers an Android-only setting without paying for the runtime probe", async () => {
+    // Decidable from the setting name alone. Probing first would spend up to
+    // SIMCTL_LIST_TIMEOUT_MS on a `simctl list` to reach the same 400.
+    await expect(
+      iosImpl.handler({}, params({ setting: "wifi", value: "on" }), IOS_DEVICE)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
+    expect(mockRuntimeKind).not.toHaveBeenCalled();
   });
 
   // Every one of them, not a representative: a setting that slipped out of
@@ -935,6 +962,17 @@ describe("system-settings Android branch", () => {
       await rejection.toSatisfy(
         (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_refused"
       );
+      // "without inventing": adb exited 0, so there is no exit code, signal or
+      // spawn code to report, and reporting one would put a device refusal in
+      // the same telemetry bucket as an adb that actually crashed.
+      await rejection.toSatisfy((err) => {
+        const signal = getFailureSignal(err);
+        return (
+          signal?.failure_exit_code === undefined &&
+          signal?.failure_signal === undefined &&
+          signal?.failure_spawn_code === undefined
+        );
+      });
     });
   });
 
@@ -1080,11 +1118,12 @@ describe("worst-case time budget vs the MCP client's per-attempt cap", () => {
   });
 
   it("the iOS `simctl ui` path fits, dependency check and tvOS probe included", () => {
-    // `ensureDeps(["xcrun"])` → one PATH lookup, then `isTvOsSimulator` → one
+    // `ensureDeps(["xcrun"])` → one PATH lookup, then the runtime probe → one
     // `simctl list devices --json`, then the `simctl ui` call itself. That is
-    // the whole serial path in the shipped configuration: `deviceSetForUdid`
-    // returns without a probe when no `ios.additionalDeviceSets` are set, and
-    // with the UDID already memoized by the tvOS probe's own listing otherwise.
+    // the whole serial path at any `ios.additionalDeviceSets` count:
+    // `deviceSetForUdid` probes only a UDID it has no entry for, and the one
+    // listing that can answer "mobile" is the one that records the entry — so
+    // the call below is reached only with the map already warm.
     const worstCase = PATH_LOOKUP_TIMEOUT_MS + SIMCTL_LIST_TIMEOUT_MS + SIMCTL_UI_TIMEOUT_MS;
     expect(worstCase).toBeLessThan(MCP_CLIENT_ATTEMPT_BUDGET_MS);
     expect(MCP_CLIENT_ATTEMPT_BUDGET_MS - worstCase).toBeGreaterThanOrEqual(MIN_BUDGET_MARGIN_MS);
@@ -1225,6 +1264,104 @@ describe("what a failure carries", () => {
     expect(signal?.failure_exit_code).toBe(7);
     // Named so an agent can tell which of several devices refused.
     expect((err as Error).message).toContain(ANDROID_SERIAL);
+  });
+
+  it("inherits adb's signal and spawn code, not just its exit code", async () => {
+    // `subprocessFailureMetadata` reads all four off a raw `execFile` rejection;
+    // `runAdb` has already done that, so this leg has to take what adb captured
+    // rather than re-derive it from adb's own wrapper, which carries none. The
+    // exit code alone is not enough: a killed adb reports a signal and no code,
+    // and one that never launched reports a spawn code and neither.
+    mockRunAdb.mockRejectedValueOnce(
+      new FailureError("adb -s emulator-5554 shell svc wifi enable failed: timed out", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "adb",
+        failure_signal: "SIGKILL",
+        failure_spawn_code: "ENOENT",
+      })
+    );
+    const signal = getFailureSignal(
+      await androidImpl.handler({}, androidParams(), androidDevice).catch((e: unknown) => e)
+    );
+    expect(signal?.failure_signal).toBe("SIGKILL");
+    expect(signal?.failure_spawn_code).toBe("ENOENT");
+    expect(signal?.failure_exit_code).toBeUndefined();
+  });
+
+  it("falls back to naming adb when the thrown error carries no signal at all", async () => {
+    // `runAdb` can reject with a plain Error; the failure still has to say which
+    // command produced it or it lands in the unattributed bucket.
+    mockRunAdb.mockRejectedValueOnce(new Error("something adb-shaped went wrong"));
+    const signal = getFailureSignal(
+      await androidImpl.handler({}, androidParams(), androidDevice).catch((e: unknown) => e)
+    );
+    expect(signal?.failure_command).toBe("adb");
+  });
+
+  it("buckets an Android-only setting on iOS as an unsupported input, not an apply failure", async () => {
+    const signal = getFailureSignal(
+      await iosImpl
+        .handler({}, { udid: IOS_UDID, setting: "wifi", value: "on" }, IOS_DEVICE)
+        .catch((e: unknown) => e)
+    );
+    expect(signal?.failure_stage).toBe("ios_system_setting_unsupported");
+    expect(signal?.error_kind).toBe("unsupported");
+  });
+
+  it("buckets a bad value under the validation stage, apart from every apply failure", async () => {
+    const signal = getFailureSignal(
+      await systemSettingsTool
+        .execute({}, { udid: IOS_UDID, setting: "appearance", value: "on" }, undefined)
+        .catch((e: unknown) => e)
+    );
+    expect(signal?.failure_stage).toBe("system_setting_validate_value");
+  });
+
+  it("buckets simctl's exit-0 refusal apart from a simctl that actually failed", async () => {
+    // Same split the Android arm makes: the simulator's own words are not a
+    // subprocess fault, and merging them hides how often each really happens.
+    execFileSucceedsWithStderr("Invalid argument");
+    const refused = getFailureSignal(
+      await iosImpl
+        .handler({}, { udid: IOS_UDID, setting: "text-size", value: "large" }, IOS_DEVICE)
+        .catch((e: unknown) => e)
+    );
+    expect(refused?.failure_stage).toBe("ios_system_setting_refused");
+    execFileFails("kaboom");
+    const crashed = getFailureSignal(
+      await iosImpl
+        .handler({}, { udid: IOS_UDID, setting: "text-size", value: "large" }, IOS_DEVICE)
+        .catch((e: unknown) => e)
+    );
+    expect(crashed?.failure_stage).toBe("ios_system_setting_apply");
+  });
+
+  it("reports a killed simctl as a timeout, the way the Android leg does", async () => {
+    // `execFile`'s timeout kills the child and reports an ordinary failure, so
+    // the wedged CoreSimulatorService these ceilings exist for arrives looking
+    // like any other simctl error. `error_kind` is one of the two signal fields
+    // that reach the agent, and the Android leg calls this shape a timeout.
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: unknown) => void) => {
+        // What `execFile` hands back when its own `timeout` fires: the child is
+        // killed with `killSignal`, and neither stream carries anything.
+        cb(
+          Object.assign(new Error("Command failed: xcrun simctl ui …"), {
+            killed: true,
+            signal: "SIGKILL",
+          })
+        );
+      }
+    );
+    const err = await iosImpl
+      .handler({}, { udid: IOS_UDID, setting: "appearance", value: "dark" }, IOS_DEVICE)
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_kind).toBe("timeout");
+    // Nothing else in the failure says the deadline is what it hit.
+    expect((err as Error).message).toContain("killed after its timeout");
   });
 
   it("tags a simctl throw with xcrun's subprocess metadata", async () => {

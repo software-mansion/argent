@@ -532,26 +532,30 @@ function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-// `isTerminalAdbError` covers the device-state shapes; these cover the
-// client<->daemon leg (`protocol fault ... Connection reset by peer` from the
-// shared adb server restarting mid-command, `cannot connect to daemon` from it
-// being down). They are matched separately because `isTerminalAdbError` also
-// gates `waitForBootCompleted`, where a reconnecting daemon mid-boot is a
-// transient it deliberately swallows and retries.
+// `isTerminalAdbError` covers the device states no retry can fix; these cover
+// the rest of the transport — the client<->daemon leg (`protocol fault ...
+// Connection reset by peer` from the shared adb server restarting mid-command,
+// `cannot connect to daemon` from it being down) and the two handshake states
+// adb reports in the seconds after a device appears, before it will carry a
+// command. They are matched separately because `isTerminalAdbError` also gates
+// `waitForBootCompleted`, where every one of these is a transient it
+// deliberately swallows and retries.
 const ADB_DAEMON_TRANSPORT_PATTERNS: RegExp[] = [
   /connection reset by peer/i,
   /cannot connect to daemon/i,
   /protocol fault/i,
+  /device still connecting/i,
+  /device still authorizing/i,
 ];
 
 /**
- * True when an adb failure means the command never reached the device — a dead
- * or wedged transport, not the device's own answer.
+ * True when an adb failure is the transport's, not the device's answer: a dead
+ * or wedged link the command never crossed, or a timeout that left no answer at
+ * all — the command may or may not have run.
  *
  * Callers that reinterpret a non-zero exit as "the target refused" need this to
- * tell the two apart: a transport failure has to propagate with adb's own
- * classification, or a dead device is reported as a refusal the device never
- * made.
+ * tell the two apart, or a device adb could not reach is reported as a refusal
+ * the device never made.
  */
 export function isAdbTransportFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);

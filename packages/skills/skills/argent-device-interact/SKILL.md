@@ -227,14 +227,14 @@ Puts the **device** into a state during setup, without walking the system Settin
 { "udid": "<UDID>", "setting": "appearance", "value": "dark" }
 ```
 
-- Both platforms: `appearance` (`light`/`dark`), `text-size` (the 12 Dynamic Type categories, `extra-small` … `accessibility-extra-extra-extra-large`, default `large`), `increase-contrast`, `reduce-motion`, `invert-colors`. iOS support is simulator-only (Apple TV simulators are rejected); Android covers emulators and real devices; a setting the device's Android version doesn't implement fails rather than reporting a change it never made.
-- Android only: `wifi`, `cellular`, `airplane-mode`, `location` (needs Android 10+), `auto-rotate`. Asking for one of these on an iOS simulator is rejected with the list of what iOS supports. On a wirelessly debugged device (a `host:port` serial), `wifi` off and `airplane-mode` on are refused — they would switch off the link adb reaches it over, leaving no way to undo them.
+- Both platforms: `appearance` (`light`/`dark`), `text-size` (the 12 Dynamic Type categories, `extra-small` … `accessibility-extra-extra-extra-large`, default `large`), `increase-contrast`, `reduce-motion`, `invert-colors`. iOS support is simulator-only (Apple TV simulators are rejected); Android covers emulators and real devices; a setting whose `cmd`/`svc` service the device's Android version doesn't implement fails rather than reporting a change it never made.
+- Android only: `wifi`, `cellular`, `airplane-mode`, `location` (needs Android 10+), `auto-rotate`. Asking for one of these on an iOS simulator is rejected with the list of what iOS supports. Over a network transport (an mDNS serial, or `host:port` for anything but loopback), `wifi` off and `airplane-mode` on are refused — they would switch off the link adb reaches the device over, leaving no way to undo them.
 - Every setting except `appearance` and `text-size` takes `on` | `off`, where `on` turns the named setting on (`reduce-motion` on reduces motion).
 - Returns `{ setting, value, applied }` — `applied` names the concrete platform change (`night_mode=yes`, `font_scale=1.94`, `ReduceMotionEnabled=YES`).
 
 Inside a flow the status bar is pinned to a fixed demo state (full signal, 100% battery, 9:37), so a flow screenshot keeps showing full bars after `wifi`, `cellular` or `airplane-mode` changes — read the tool result instead.
 
-On **Android**, a `screenshot` is the wrong way to confirm `invert-colors`: the capture path skips the display-level color transform, so the image comes back in the original colors while the device is genuinely inverted. iOS applies Smart Invert in UIKit, so there a `screenshot` does show it. Some apps only re-read a display/accessibility setting on launch, so `restart-app` if the change doesn't appear live.
+A `screenshot` is the wrong way to confirm `invert-colors` on either platform: Android's capture path skips the display-level color transform entirely, and on iOS the inversion reaches the captured frame in `dark` appearance but not in `light`. Read the tool result. Some apps only re-read a display/accessibility setting on launch, so `restart-app` if the change doesn't appear live.
 
 For an app **permission** (camera, location, notifications, …) this is the wrong tool — use the `argent-settings-permissions` skill.
 
