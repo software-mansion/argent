@@ -96,14 +96,15 @@ A selector can scope its matches by the frames of other elements:
 
 The runner resolves a selector against a different tree than the `describe` tool:
 
-| Platform | Runner tree                                   | `describe` tree            |
-| -------- | --------------------------------------------- | -------------------------- |
-| iOS      | Native UIView hierarchy                       | Accessibility tree         |
-| Android  | Full accessibility hierarchy                  | Trimmed interactable nodes |
-| Chromium | DOM nodes with an id, label, value or handler | Full DOM                   |
-| Vega     | Toolkit page source                           | Same source                |
+| Platform        | Runner tree                                   | `describe` tree            |
+| --------------- | --------------------------------------------- | -------------------------- |
+| iOS simulator   | Native UIView hierarchy                       | Accessibility tree         |
+| Physical iPhone | Accessibility snapshot of `describe`          | Same snapshot              |
+| Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
+| Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
+| Vega            | Toolkit page source                           | Same source                |
 
-On iOS and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On iOS, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
 ## Directives
 
