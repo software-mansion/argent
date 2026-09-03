@@ -97,7 +97,7 @@ function isNewerVersion(latest: string, current: string): boolean {
   return semver.gt(latest, current);
 }
 
-export interface UpdateCheckerOptions {
+interface UpdateCheckerOptions {
   /** Called when an eligible update is found and autoUpdate.enabled is true. */
   onAutoUpdate?: (version: string) => void;
 }
