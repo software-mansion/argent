@@ -84,6 +84,8 @@ jobs:
         run: |
           export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
           bash scripts/ci/nix-install/run-e2e.sh preinstall
+        env:
+          ARGENT_E2E_WORK: ${{ runner.temp }}/nix-e2e-logs
 
       # The state the bug report came from: a global argent inside the store,
       # which only root can put there.
@@ -96,3 +98,15 @@ jobs:
         run: |
           export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
           bash scripts/ci/nix-install/run-e2e.sh update
+        env:
+          ARGENT_E2E_WORK: ${{ runner.temp }}/nix-e2e-logs
+
+      # A failure here names the assertion but not the CLI output behind it,
+      # and this job is the only place the Nix toolchain exists.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nix-install-e2e-logs
+          path: ${{ runner.temp }}/nix-e2e-logs
+          if-no-files-found: warn
+          retention-days: 7

@@ -69,8 +69,9 @@ export interface InstallOutcome {
 }
 
 // Step 0 — ensure argent is installed and report the version and mode the rest
-// of init should work against. Exits the process on a fatal install failure or
-// a cancelled prompt (each emitting its own terminal telemetry first).
+// of init should work against. Exits the process on a fatal install failure,
+// emitting its terminal telemetry first; a cancelled prompt throws
+// InitCancelled instead, for init to unwind like any other cancelled step.
 export async function runInstall(args: {
   installMode: InstallMode;
   fromTar: string | null;
@@ -265,6 +266,8 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   await tel.trackPackageAction("fresh_install", startedAt, true, undefined, attemptTelemetry());
 }
 
+type BlockedGlobalRecovery = { local: true } | { local: false; pathHint: string | null };
+
 /**
  * Offer the two ways out of a global directory that cannot be written, and
  * carry out the chosen one: install into the project instead, or move npm's
@@ -276,8 +279,6 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
  * prefix and changing where argent gets installed are both decisions to make
  * with them, not while nobody is watching.
  */
-type BlockedGlobalRecovery = { local: true } | { local: false; pathHint: string | null };
-
 async function recoverBlockedGlobalInstall(opts: {
   target: GlobalInstallTarget;
   pm: PackageManager;

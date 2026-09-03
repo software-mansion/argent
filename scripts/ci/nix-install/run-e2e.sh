@@ -35,6 +35,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TGZ="${ARGENT_TGZ:?ARGENT_TGZ must point at a packed @swmansion/argent tarball}"
 PHASE="${1:?usage: run-e2e.sh <preinstall|update>}"
 WORK="${ARGENT_E2E_WORK:-$(mktemp -d)}"
+# Only mktemp -d makes its own; CI passes a path so the captured output can be
+# uploaded after a failure.
+mkdir -p "$WORK"
 
 failures=0
 

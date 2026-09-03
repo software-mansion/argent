@@ -24,11 +24,12 @@ import type { PackageManager } from "./package-manager.js";
 // ancestor of the real module directory, so one made root-owned by an earlier
 // `sudo yarn global add`, `sudo pnpm add -g` or `sudo bun add -g` is missed.
 //
-// npm is also the only one that answers at all before a global directory has
-// been set up: `pnpm root -g` exits 1 until its bin directory is on PATH, and
-// `bun pm bin -g` exits 1 on a global directory with no package.json — after
-// creating it. Both leave the probe with null and the preflight inapplicable,
-// so in practice the guarantee is npm's.
+// Two of the four also refuse to answer before a global directory has been set
+// up: `pnpm root -g` exits 1 until its bin directory is on PATH, and `bun pm
+// bin -g` exits 1 on a global directory with no package.json — after creating
+// it. Both leave the probe with null and the preflight inapplicable. npm and
+// yarn name their directory whether or not it exists yet, which is what
+// nearestExistingDir walks up from.
 const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
   npm: ["root", "-g"],
   pnpm: ["root", "-g"],

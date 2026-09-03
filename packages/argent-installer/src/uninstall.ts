@@ -32,7 +32,7 @@ import {
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-import { PACKAGE_NAME } from "./constants.js";
+import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 
@@ -699,17 +699,15 @@ export async function uninstall(args: string[]): Promise<void> {
         // npm_config_prefix outranks the config file `argent init`'s prefix
         // recovery writes, so the two can disagree. Believing the exit code
         // there announces a removal that did not happen, leaves the package on
-        // PATH, and still clears the machine-wide state below. Global only:
-        // a local install has no prefix to diverge from, and under Yarn PnP
-        // there is no directory to look for.
-        if (
-          removable.kind === "global" &&
-          removable.installDir !== null &&
-          fs.existsSync(removable.installDir)
-        ) {
+        // PATH, and still clears the machine-wide state below. Re-runs the PATH
+        // probe that found the install rather than looking for its directory:
+        // `npm install -g <folder>` links the global entry at the source, which
+        // outlives the removal by design. Local installs have no prefix to
+        // diverge from.
+        if (removable.kind === "global" && isGloballyInstalled()) {
           throw new Error(
-            `${removable.cmd.bin} reported success but ${removable.installDir} is still there — ` +
-              `it resolved a different global prefix than the one this install lives under.`
+            `${removable.cmd.bin} reported success but ${MCP_BINARY_NAME} is still on your PATH. ` +
+              `Check that its global prefix is the one this install lives under.`
           );
         }
         p.log.success(`Removed ${removable.kind} package.`);
