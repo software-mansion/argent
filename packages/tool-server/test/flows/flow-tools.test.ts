@@ -10,6 +10,7 @@ import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
   flowFinishRecordingTool,
   summarizeStep,
+  warningHeadline,
 } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
@@ -26,6 +27,7 @@ import {
   parseFlow,
   serializeFlow,
   type FlowStep,
+  type RecordedStepWarning,
 } from "../../src/tools/flows/flow-utils";
 
 /**
@@ -3000,5 +3002,47 @@ describe("summarizeStep rendering", () => {
     expect(summarizeStep(toolStepWithDelay('"2000"'), 4)).toBe(
       "4. tool: screenshot {} (after 2000ms)"
     );
+  });
+});
+
+// ── warningHeadline conjunction ──────────────────────────────────────
+//
+// `message` joins the warning-kind clauses. The `typed` kind can now co-occur
+// with `conversion` and `wait`, so three clauses have to read "A, B, and C" —
+// a single Oxford conjunction. A plain `.join(", and ")` doubles it into
+// "A, and B, and C".
+describe("warningHeadline conjunction", () => {
+  const w = (kind: RecordedStepWarning["kind"]): RecordedStepWarning => ({
+    warning: "",
+    kind,
+    step: "1. tap: (0.5, 0.5)",
+  });
+  const headline = (kinds: RecordedStepWarning["kind"][], discarded = 0) =>
+    warningHeadline(new Map(kinds.map((k, i) => [i + 1, w(k)])), discarded);
+
+  it("joins two kinds with a single 'and'", () => {
+    const h = headline(["conversion", "wait"]);
+    expect(h).toContain(
+      "1 step carries a cross-tree warning about converting a recorded wait, and " +
+        "1 step recorded a wait that did not pass"
+    );
+    expect(h.match(/, and /g)).toHaveLength(1);
+  });
+
+  it("joins three kinds with one Oxford 'and', not two", () => {
+    const h = headline(["conversion", "wait", "typed"]);
+    expect(h).toContain(
+      "1 step carries a cross-tree warning about converting a recorded wait, " +
+        "1 step recorded a wait that did not pass, and " +
+        "1 step recorded text that did not land in the field"
+    );
+    // The doubled-conjunction bug produced two ", and " separators here.
+    expect(h.match(/, and /g)).toHaveLength(1);
+  });
+
+  it("uses no conjunction for a single kind", () => {
+    const h = headline(["typed"]);
+    expect(h).toContain("1 step recorded text that did not land in the field");
+    expect(h).not.toContain(", and ");
   });
 });

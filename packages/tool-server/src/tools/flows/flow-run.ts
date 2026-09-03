@@ -193,9 +193,15 @@ export interface StepReport {
    */
   reason?: string;
   /**
-   * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, by
+   * A caveat on the step's evidence, rendered as a "⚠" suffix by the MCP client
+   * and under the step line by the CLI. Usually the step passed but the WAY it
+   * passed weakens it as proof — the CLI then shows "⚠" in place of the pass
+   * glyph. A nested composition (`run-sequence`, `flow-execute`) can also carry
+   * one on a `fail` or `skip`, where its own status glyph stands: a keyboard
+   * sub-step that ran before the sequence stopped still typed, and its
+   * unverified-typing note rides here while the `reason` names what failed.
+   * Raised by `await: { idle: true }` whenever the screen could not be proved
+   * settled, by
    * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
@@ -2706,7 +2712,19 @@ function rawStepKeyboardNote(toolId: string, result: unknown): string | undefine
     })
     .filter((found): found is { index: number; note: string } => found !== undefined);
   if (notes.length === 0) return undefined;
-  if (notes.length === 1) return notes[0]!.note;
+  // A keyboard step that FAILED its read-back carries its "did not land" verdict
+  // as an `error` (surfaced in the step's `reason`), not a result-note, so it is
+  // absent from `notes` above — yet it is a second field in play. Count those too,
+  // so a lone surviving note is still prefixed with its step when another keyboard
+  // step spoke: a secret's note says NOT to read ITS field back, and unprefixed it
+  // could be read against the failed one, whose diagnosis sits in `reason`.
+  const keyboardFieldsInPlay = steps.filter((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const step = entry as Record<string, unknown>;
+    if (step.tool !== "keyboard") return false;
+    return keyboardResultNote(step.result) !== undefined || typeof step.error === "string";
+  }).length;
+  if (keyboardFieldsInPlay <= 1) return notes[0]!.note;
   // Each note's advice is about its own field, and a secret's says NOT to read
   // that one back, so two run together would govern the wrong field.
   return notes.map(({ index, note }) => `step ${index + 1}: ${note}`).join(" ");
