@@ -74,9 +74,10 @@ Argent makes one repair when the read-back proves the text did not land. The rep
 the characters that Argent can prove are its own. It deletes those characters. It then
 types the text again in small pieces. A call that repairs can thus change the field by
 more than the text that it adds, and the app sees both rounds of key events. A `true`
-verdict can follow a repair. The `note` field then says what Argent deleted and typed
-again. A long text spends tens of seconds in the repair. Argent leaves the field alone
-when it cannot prove which characters are its own.
+verdict can follow a repair. The `note` field then gives the count of characters Argent
+deleted and retyped, never the field's text. A long text spends tens of seconds in the
+repair. When Argent cannot prove which characters are its own it leaves the field alone
+and reports `false`, with a `note` that gives the character counts of the mismatch.
 
 Argent also reports `false` when it repaired the field but could not read it again to
 confirm the result. The last measurement is a failure, so `note` says what the repair
@@ -86,12 +87,19 @@ Argent reports `false` for a repair that failed partway too. The field can then 
 than it held before the call, because the repair deletes before it types. The `note` field
 says so.
 
+The repair is not atomic on the device: Argent reads the field, then deletes and retypes in
+separate calls, with nothing locking the device between them. A second `keyboard` call on
+the same field in that window can skew the counts the deletion is based on, so drive one
+controller per device. An interleaved write usually leaves the read ambiguous, which
+cancels the repair rather than deleting the wrong characters.
+
 Argent does not read back a password field. Argent also skips the read-back when the
 android-devtools helper is not available. `verified` is absent in both cases.
 
-`verified` is absent on every other platform, and on Android when the check cannot
-conclude. On Android the `note` field gives the reason. The other platforms send no note,
-because they run no read-back. The repair can run before an inconclusive
+`verified` is absent on every other platform, on Android TV — which shares the phone
+transport but is never read back — and on an Android phone or tablet when the check cannot
+conclude. In that last case the `note` field gives the reason. The other platforms and
+Android TV send no note, because they run no read-back. The repair can run before an inconclusive
 read, so an absent `verified` does not mean that the field is untouched.
 
 A `false` verdict stops a `run-sequence` at that step. It also fails a flow `type` step,
