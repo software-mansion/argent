@@ -107,6 +107,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nix-install-e2e-logs
-          path: ${{ runner.temp }}/nix-e2e-logs
+          # The logs only — the same directory holds each scenario's scratch
+          # HOME and project, node_modules and all.
+          path: ${{ runner.temp }}/nix-e2e-logs/*.log
           if-no-files-found: warn
           retention-days: 7
