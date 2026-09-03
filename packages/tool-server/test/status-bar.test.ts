@@ -22,6 +22,20 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+/**
+ * iOS argv goes through `simctlArgsForUdid`, which resolves the device set the
+ * UDID lives in and probes with `simctl list` when extra sets are configured.
+ * That would make the spawn counts below depend on the developer's own
+ * `ios.additionalDeviceSets`, so pin the config: no extra sets, no probe. The
+ * `--set`-scoped spelling is covered in ios-device-sets' own tests.
+ */
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, getAdditionalIosDeviceSets: () => [] };
+});
+
 vi.mock("../src/utils/android-binary", () => ({
   resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
   __resetAndroidBinaryCacheForTesting: () => {},
@@ -40,6 +54,18 @@ const ANDROID_DEVICE: DeviceInfo = {
   kind: "emulator",
 };
 
+const IOS_SIMULATOR: DeviceInfo = {
+  id: "1B48C3B4-8E17-4E92-A4A4-4B1AC3F0BD7B",
+  platform: "ios",
+  kind: "simulator",
+};
+
+const IOS_PHYSICAL_DEVICE: DeviceInfo = {
+  id: "00008110-000978540290401E",
+  platform: "ios",
+  kind: "device",
+};
+
 /** Shell payloads of every `adb -s <serial> shell <cmd>` call, in order. */
 function shellCalls(): string[] {
   return execFileMock.mock.calls
@@ -49,6 +75,43 @@ function shellCalls(): string[] {
 
 beforeEach(() => {
   execFileMock.mockReset();
+});
+
+describe("pinStatusBar (ios)", () => {
+  it("pins a simulator via `simctl status_bar override` and returns true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await pinStatusBar(IOS_SIMULATOR)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "xcrun",
+      [
+        "simctl",
+        "status_bar",
+        IOS_SIMULATOR.id,
+        "override",
+        "--time",
+        "9:37",
+        "--batteryState",
+        "charged",
+        "--batteryLevel",
+        "100",
+        "--wifiBars",
+        "3",
+        "--cellularBars",
+        "4",
+      ],
+      undefined
+    );
+  });
+
+  it("skips a physical device without spawning anything and returns false", async () => {
+    // `simctl` cannot address a hardware UDID: the override would fail, and the
+    // catch's restore would fail the same way, two wasted subprocesses per
+    // flow run. `false` also means the caller schedules no run-end restore.
+    expect(await pinStatusBar(IOS_PHYSICAL_DEVICE)).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("pinStatusBar (android)", () => {

@@ -84,12 +84,26 @@ vi.mock("../src/utils/chromium-discovery", async () => {
 // is deterministic. Defaults to none; the dedicated test overrides per-call.
 vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }));
 
+// Physical-device discovery shells out to `xcrun devicectl` with a JSON output
+// file; mock the module seam and feed rows directly. Defaults to none; the
+// physical-device test overrides per-call.
+vi.mock("../src/utils/ios-device/devicectl", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-device/devicectl")>(
+    "../src/utils/ios-device/devicectl"
+  );
+  return {
+    ...actual,
+    listIosPhysicalDevices: vi.fn(async () => []),
+  };
+});
+
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -513,6 +527,78 @@ describe("list-devices", () => {
       serial: null,
       vvdImage: "tv",
     });
+  });
+
+  it("derives physical iOS state from transportType alone and sorts connected first", async () => {
+    // Live-captured shapes: a cabled phone is "wired", a Wi-Fi-paired phone
+    // last seen days ago lists as "disconnected"/"localNetwork", and a freshly
+    // unplugged phone keeps tunnelState "connected" while the tunnel migrates
+    // to Wi-Fi (hardware-verified, devicectl 518.x). Only the wired one is reachable
+    // over usbmux, so only it may present as "connected".
+    vi.mocked(listIosPhysicalDevices).mockResolvedValueOnce([
+      {
+        udid: "00008120-000A44443333801E",
+        name: "Office iPhone",
+        model: "iPhone 14",
+        osVersion: "18.5",
+        developerModeEnabled: true,
+        pairingState: "paired",
+        transportType: "localNetwork",
+        tunnelState: "disconnected",
+      },
+      {
+        udid: "00008110-000978540290401E",
+        name: "Desk iPhone",
+        model: "iPhone 13",
+        osVersion: "26.0",
+        developerModeEnabled: true,
+        pairingState: "paired",
+        transportType: "wired",
+        tunnelState: "connected",
+      },
+      {
+        udid: "00008120-000B55554444901E",
+        name: "Unplugged iPhone",
+        model: "iPhone 15",
+        osVersion: "27.0",
+        developerModeEnabled: true,
+        pairingState: "paired",
+        transportType: "localNetwork",
+        tunnelState: "connected",
+      },
+    ]);
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {
+        return { stdout: simctlJson(), stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const byName = (name: string) =>
+      result.devices.findIndex((d) => "name" in d && d.name === name);
+
+    // Devices order doubles as the sort pin: the connected phone (rank 0)
+    // precedes the paired one (rank 1) in this filtered projection.
+    const physical = result.devices.filter((d) => "kind" in d && d.kind === "device") as Array<{
+      name: string;
+      state: string;
+      pairingState: string | null;
+      tunnelState: string | null;
+    }>;
+    expect(physical.map((d) => [d.name, d.state])).toEqual([
+      ["Desk iPhone", "connected"],
+      ["Office iPhone", "paired"],
+      ["Unplugged iPhone", "paired"],
+    ]);
+    // pairingState/tunnelState ride along so callers can see WHY a row is paired.
+    expect(physical[1]).toMatchObject({ pairingState: "paired", tunnelState: "disconnected" });
+    // The Wi-Fi-migrated tunnel reads "connected" yet usbmux cannot reach it.
+    expect(physical[2]).toMatchObject({ state: "paired", tunnelState: "connected" });
+    // The paired phone sinks below every usable device, booted simulators
+    // included; flow auto-bind keys on state "connected" and skips it.
+    expect(byName("Desk iPhone")).toBeLessThan(byName("Office iPhone"));
+    expect(byName("iPhone 16")).toBeLessThan(byName("Office iPhone"));
   });
 });
 

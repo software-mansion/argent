@@ -10,6 +10,7 @@ import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos, withBootCaveatOncePerDevice } from "./platforms/ios";
+import { describeIosDevice } from "./platforms/ios-device";
 import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
@@ -44,7 +45,8 @@ const zodSchema = z.object({
     .describe(
       "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
         "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium, " +
+        "and on a physical iOS device."
     ),
 });
 
@@ -102,6 +104,11 @@ function makeDescribeExecute(
               )
             ),
     },
+    iosDevice: {
+      requires: iosRequires,
+      handler: async (_services, _params, device) =>
+        withDescription(await describeIosDevice(registry, device)),
+    },
     iosRemote: {
       // Both the ax-service and native-devtools blueprints route through
       // sim-remote for an ios-remote device, so only the preflight dep differs
@@ -144,7 +151,8 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     },
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
-system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
+system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
+covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
@@ -154,6 +162,7 @@ app (the toolkit attaches at launch) and try again.
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
+On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
 
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
@@ -163,9 +172,11 @@ gesture-tap / gesture-swipe / gesture-pinch.
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
+The tree carries no z-order or occlusion information: an element listed at a point may be covered
+by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
-use native-describe-screen with an explicit bundleId instead (iOS only).
+use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 
 On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns

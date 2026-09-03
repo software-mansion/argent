@@ -61,7 +61,7 @@ export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to check native inspection for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   // The "injectable is false" recovery sentence inlines NON_INJECTABLE_RECOVERY
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.

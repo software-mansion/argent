@@ -71,6 +71,30 @@ const IOS_UDID_SHAPE =
   /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
 /**
+ * Physical iOS device UDID shape (A12/2018 hardware and newer): 8 hex digits, a
+ * dash, then 16 hex digits (e.g. `00008110-000978540290401E`).
+ *
+ * Legacy 40-hex UDIDs (A11 hardware and older) are deliberately unsupported: 40
+ * bare hex characters are ambiguous with an Android serial, so no classifier
+ * deciding by shape can route one. See `isIosPhysicalUdid`'s callers in the
+ * tool-server for the rest of that reasoning.
+ */
+const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
+
+/**
+ * True when `udid` has the modern physical-iPhone UDID shape.
+ *
+ * It lives beside {@linkcode nativeIdPlatform} because that function has to
+ * know the shape anyway, a provider may offer a physical iPhone and a
+ * descriptor pairing `platform: "ios"` with its UDID has to pass
+ * `argent providers check`. The tool-server re-exports this rather than
+ * carrying a second copy of the regex.
+ */
+export function isIosPhysicalUdid(udid: string): boolean {
+  return IOS_PHYSICAL_UDID_SHAPE.test(udid);
+}
+
+/**
  * Which of the two platforms a descriptor may declare a native id belongs to,
  * decided by shape alone.
  *
@@ -88,7 +112,7 @@ const IOS_UDID_SHAPE =
  * make impossible.
  */
 export function nativeIdPlatform(nativeId: string): "android" | "ios" {
-  return IOS_UDID_SHAPE.test(nativeId) ? "ios" : "android";
+  return IOS_UDID_SHAPE.test(nativeId) || isIosPhysicalUdid(nativeId) ? "ios" : "android";
 }
 
 /**

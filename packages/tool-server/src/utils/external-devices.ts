@@ -61,6 +61,7 @@ export {
   externalProviderLabel,
   isExternalDeviceUrn,
   isExternalId,
+  isIosPhysicalUdid,
   makeExternalId,
   nativeIdPlatform,
   PROVIDER_ID_SHAPE,

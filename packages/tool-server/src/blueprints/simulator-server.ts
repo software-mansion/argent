@@ -193,7 +193,19 @@ const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
  * agent over adb) is picked by `kind`, not by platform alone.
  */
 function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_device" {
-  if (device.platform === "ios") return "ios";
+  if (device.platform === "ios") {
+    // Defense-in-depth: physical iPhones are driven by the XCUITest
+    // runner blueprint, never by simulator-server. A services() mistake that
+    // routes one here must fail loudly instead of spawning a simulator-server
+    // process against a hardware UDID.
+    if (device.kind === "device") {
+      throw new Error(
+        `simulator-server cannot drive a physical iOS device (${device.id}); ` +
+          `physical devices use the ios-device-runner service.`
+      );
+    }
+    return "ios";
+  }
   return device.kind === "device" ? "android_device" : "android";
 }
 

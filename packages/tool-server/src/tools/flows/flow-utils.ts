@@ -24,6 +24,7 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
@@ -337,18 +338,7 @@ const recordings = new Map<string, RecordingSession>();
 const flowFileLocks = new Map<string, Promise<unknown>>();
 
 async function withFlowLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = flowFileLocks.get(key) ?? Promise.resolve();
-  // `previous` is always an already-swallowed promise, so a failed holder can
-  // never wedge or reject the chain.
-  const run = previous.then(() => fn());
-  const held = run.catch(() => {});
-  flowFileLocks.set(key, held);
-  // Drop the entry once this holder is the last one, so the map does not grow
-  // by one permanent entry per flow ever recorded.
-  void held.then(() => {
-    if (flowFileLocks.get(key) === held) flowFileLocks.delete(key);
-  });
-  return run;
+  return withKeyedLock(flowFileLocks, key, fn);
 }
 
 /**

@@ -1,7 +1,10 @@
 import { z } from "zod";
-import type { ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { dragBetween, getViewport, toPoints } from "../../utils/ios-device/runner-commands";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -79,6 +82,12 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   swiped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this swipe, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 // Touch platforms only: on a desktop renderer a mouse drag selects text instead
@@ -100,22 +109,56 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   },
   // The bounds are spelled out rather than interpolated: extract-tools scans this
   // description statically, so a `${}` in it drops the tool out of the scan.
-  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
+  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.
+Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+
+    if (isIosPhysicalDevice(device)) {
+      return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+    }
+
+    return { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params, ctx?: ToolContext) {
     const duration = params.durationMs ?? DEFAULT_DURATION_MS;
     const momentumFree = params.momentum === false;
     const timestampMs = Date.now();
+    const device = resolveDevice(params.udid);
+
+    if (isIosPhysicalDevice(device)) {
+      // XCTest is one planned drag. momentum: false holds at the destination,
+      // so the release velocity is then zero.
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+
+      const drag = await dragBetween(
+        runner,
+        bundleId,
+        toPoints(viewport, params.fromX, params.fromY),
+        toPoints(viewport, params.toX, params.toY),
+        { durationMs: duration, settle: momentumFree }
+      );
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the drag then finds it foreground.
+      const reactivated = viewport.reactivated === true || drag.reactivated;
+
+      return {
+        swiped: true,
+        timestampMs,
+        ...(reactivated ? { reactivated: true as const } : {}),
+      };
+    }
+
     const api = services.simulatorServer as SimulatorServerApi;
     // No sample floor on this ramp, unlike `momentum: false` above: a fast swipe
     // is delivered as fast as it was authored. At durationMs 16 the whole travel
