@@ -248,7 +248,9 @@ if [[ "$PHASE" == "preinstall" ]]; then
   (
     cd "$project" || exit 1
     HOME="$home" npm config set prefix "$prefix"
-    HOME="$home" node "$CLI" init --global --yes --no-telemetry --from "$TGZ"
+    # Same reason as B: should this check ever regress, the run would download
+    # argent's optional dependencies before dying on the bin link.
+    HOME="$home" npm_config_omit=optional node "$CLI" init --global --yes --no-telemetry --from "$TGZ"
   ) >"$out" 2>&1
   exit_is "$?" 1
   contains "$out" "it cannot write to $prefix/bin"
@@ -256,14 +258,11 @@ if [[ "$PHASE" == "preinstall" ]]; then
   # of the directory that is blocking it is.
   contains "$out" "Take ownership of the directory"
   absent "$out" "npm config set prefix"
+  # No "nothing installed" check: npm rolls the staged package back when the bin
+  # link fails, so it holds whether or not the refusal happened.
   absent "$out" "npm error"
   absent "$out" "EACCES"
   chmod 0755 "$prefix/bin"
-  if [[ -d "$prefix/lib/node_modules/@swmansion/argent" ]]; then
-    fail "the install ran despite the refusal"
-  else
-    pass "nothing installed"
-  fi
 
   begin "C. argent init --local in the Nix-managed project"
   home="$(new_home c)"

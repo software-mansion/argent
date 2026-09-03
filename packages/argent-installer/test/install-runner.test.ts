@@ -340,6 +340,7 @@ describe("a global install whose target directory cannot be written", () => {
   it("moves the npm prefix, then installs globally, when that recovery is chosen", async () => {
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
 
     const outcome = await globalInstall(makeTel());
 
@@ -356,6 +357,9 @@ describe("a global install whose target directory cannot be written", () => {
     // and reported, because the configs init writes run a bare `argent` that
     // the user's own shells cannot find until they add it too.
     expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+    // The post-install repair must not run on top of this: adoptGlobalBinDir
+    // answers null for a directory already on PATH, which would drop the hint
+    // the Summary prints.
     expect(outcome.pathHint).toBe(binDir);
     expect(decisions()).toEqual(["set_prefix", "install"]);
   });
@@ -389,6 +393,44 @@ describe("a global install whose target directory cannot be written", () => {
     const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
     expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
     expect(process.env.PATH?.split(path.delimiter)).not.toContain(binDir);
+  });
+
+  it("does not prescribe the prefix move it just carried out", async () => {
+    // The blocked directory is the nearest EXISTING ancestor, so a prefix whose
+    // bin directory does not exist yet reports one above it — which the
+    // already-pointed-there bail does not cover.
+    const aboveTheMove = os.homedir();
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(aboveTheMove);
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain(`it cannot write to ${aboveTheMove}`);
+    expect(failure).not.toContain("npm config set prefix");
+  });
+
+  it("prescribes the prefix move on a run that never made one", async () => {
+    // The same directory, reached without the recovery: moving the prefix is
+    // untried here, and it is the remedy that works.
+    const blockedBin = "/opt/shared/bin";
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(blockedBin);
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain("npm config set prefix");
   });
 
   it("stops on a bin directory left unwritable by a prefix an earlier run set", async () => {
@@ -442,6 +484,37 @@ describe("a global install whose target directory cannot be written", () => {
     const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
     expect(warning).toContain(`Add ${binDir} to your PATH`);
     expect(warning).toContain(`export PATH="${binDir}:$PATH"`);
+  });
+
+  it("says nothing about PATH for an install the shells can already find", async () => {
+    // The repair exists for a version read that would have missed the install
+    // it just made; where the read finds it, there is nothing to add and
+    // nothing to spend a query on.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(isGloballyInstalled).mockImplementation(
+      () => vi.mocked(runShellCommand).mock.calls.length > 0
+    );
+    // A delta, not toHaveBeenCalled: this mock keeps its history across the
+    // tests above.
+    const queriesBefore = vi.mocked(npmGlobalBinDir).mock.calls.length;
+    try {
+      const outcome = await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+
+      expect(outcome.pathHint).toBeNull();
+      expect(vi.mocked(npmGlobalBinDir).mock.calls.length).toBe(queriesBefore);
+      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
+      expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
+    } finally {
+      vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    }
   });
 
   it("spells out no shell command on Windows, where there is no one shell", async () => {

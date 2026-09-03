@@ -19,6 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
+  blockedGlobalInstallMessage,
   blockedGlobalTargetCause,
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
@@ -555,6 +556,20 @@ describe("npmGlobalBinDir", () => {
   });
 });
 
+describe("a package manager's answer argent cannot use", () => {
+  it("ignores a path npm redacted a segment of", () => {
+    // npm masks UUID-shaped segments in everything it prints, so a prefix under
+    // /tmp/<uuid>/… comes back with *** where the segment was. Measured on npm
+    // 11.19.0. Acting on it names a directory that does not exist, which reads
+    // as "npm holds nothing here" — a removal that worked reported as failed.
+    mockExecFileSync.mockReturnValue("/private/tmp/scratch/***/prefix\n");
+
+    expect(npmGlobalBinDir()).toBeNull();
+    expect(npmGlobalPackagePath()).toBeNull();
+    expect(probeGlobalInstallTarget("npm")).toBeNull();
+  });
+});
+
 describe("blockedGlobalBinDir", () => {
   it("names npm's bin directory when it is proven unwritable", () => {
     if (!canTestUnwritable) return;
@@ -605,6 +620,127 @@ describe("unwritableGlobalBinMessage", () => {
 
     expect(message).not.toContain("chown");
     expect(message).toContain("npx @swmansion/argent init --local");
+  });
+});
+
+const ctxWithProject = { localViable: true, argentOnPath: false };
+
+describe("unwritableGlobalBinMessage — nothing left to advise", () => {
+  it("prints the cause alone rather than a cause and a blank line", () => {
+    // Every remedy drops out together: the prefix move is the step that just
+    // ran, the store rules out chown, and there is no package.json.
+    const stored = "/nix/store/aaaa-nodejs/lib/node_modules";
+    const message = plain(
+      unwritableGlobalBinMessage(
+        stored,
+        "install",
+        { localViable: false, argentOnPath: true },
+        true
+      )
+    );
+
+    expect(message).toContain("it cannot write to");
+    expect(message.trimEnd()).toBe(message);
+  });
+
+  it("says why sudo is not the way out of a store path", () => {
+    // Its sibling carries this note for the package directory; without it the
+    // chown remedy is simply missing, with nothing saying why.
+    const stored = "/nix/store/aaaa-nodejs/lib/node_modules";
+
+    expect(plain(unwritableGlobalBinMessage(stored, "install", ctxWithProject, false))).toContain(
+      "Nix owns that directory"
+    );
+    expect(
+      plain(unwritableGlobalBinMessage("/opt/lib/node_modules", "install", ctxWithProject, false))
+    ).not.toContain("Nix owns that directory");
+  });
+
+  it("keeps the prefix move for a directory that merely starts like the suggested one", () => {
+    // ~/.npm-global-old is a different prefix, and moving to the suggested one
+    // is exactly what would fix it.
+    const sibling = path.join(os.homedir(), ".npm-global-old", "bin");
+
+    expect(plain(unwritableGlobalBinMessage(sibling, "install", ctxWithProject, false))).toContain(
+      "npm config set prefix"
+    );
+    expect(
+      plain(
+        unwritableGlobalBinMessage(
+          path.join(os.homedir(), ".npm-global", "bin"),
+          "install",
+          ctxWithProject,
+          false
+        )
+      )
+    ).not.toContain("npm config set prefix");
+  });
+});
+
+describe("unwritableGlobalTargetMessage — nothing left to advise", () => {
+  it("prints the cause alone rather than a cause and a blank line", () => {
+    const message = plain(
+      unwritableGlobalTargetMessage(
+        {
+          dir: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+          blocked: true,
+          nixStore: true,
+        },
+        "npm",
+        "update",
+        { localViable: false, argentOnPath: true }
+      )
+    );
+
+    expect(message).toContain("read-only Nix store");
+    expect(message.trimEnd()).toBe(message);
+  });
+});
+
+describe("blockedGlobalInstallMessage", () => {
+  const ctx = { localViable: true, argentOnPath: false };
+
+  it("reports the package directory when that is the one that is blocked", () => {
+    if (!canTestUnwritable) return;
+    const root = path.join(tmpRoot, "lib", "node_modules");
+    fs.mkdirSync(root, { recursive: true });
+    fs.chmodSync(root, 0o555);
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${root}\n` : `${tmpRoot}\n`) as never);
+
+    const message = plain(blockedGlobalInstallMessage("npm", null, "install", ctx) ?? "");
+
+    expect(message).toContain("global package directory is not writable");
+    fs.chmodSync(root, 0o755);
+  });
+
+  it("reports the bin directory when only that one is blocked", () => {
+    if (!canTestUnwritable) return;
+    const root = path.join(tmpRoot, "lib", "node_modules");
+    const bin = path.join(tmpRoot, "bin");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(bin, { recursive: true });
+    fs.chmodSync(bin, 0o555);
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${root}\n` : `${tmpRoot}\n`) as never);
+
+    const message = plain(blockedGlobalInstallMessage("npm", null, "install", ctx) ?? "");
+
+    expect(message).toContain(`it cannot write to ${bin}`);
+    // No prefix move has happened on this path, so the remedy that would fix it
+    // is the first thing to say.
+    expect(message).toContain("npm config set prefix");
+    fs.chmodSync(bin, 0o755);
+  });
+
+  it("answers null when neither directory is blocked", () => {
+    const root = path.join(tmpRoot, "lib", "node_modules");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, "bin"), { recursive: true });
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${root}\n` : `${tmpRoot}\n`) as never);
+
+    expect(blockedGlobalInstallMessage("npm", null, "install", ctx)).toBeNull();
   });
 });
 
