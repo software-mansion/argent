@@ -130,13 +130,14 @@ export async function pollDescribeTree<R>(
     if (signal?.aborted) return outcome(undefined, true);
 
     const remaining = Math.max(0, deadline - Date.now());
-    // The poll sleep below is clamped to land exactly on the deadline, so the
-    // ordinary end of a wait arrives here with nothing left. A fetch handed no
-    // budget cannot come back: it would burn a device round-trip to learn
-    // nothing, count as a poll, and — because the only way it can end is
-    // `timeout` — brand every wait that merely ran out of time as one whose
-    // tree was too slow to read. The first fetch is exempt, because a budget
-    // too small to read anything IS the tree outrunning it.
+    // A fetch handed no budget cannot come back: it would burn a device
+    // round-trip to learn nothing, count as a poll, and — because the only way it
+    // can end is `timeout` — brand every wait that merely ran out of time as one
+    // whose tree was too slow to read. The clamped sleep below ends the wait at
+    // its own break; this guards the leftover case, where an interval a hair
+    // under the remaining budget lands the next loop here with nothing left. The
+    // first fetch is exempt, because a budget too small to read anything IS the
+    // tree outrunning it.
     if (polls > 0 && remaining === 0) break;
     const issuedAt = Date.now();
     const settled = await settleWithin(fetchTree(), remaining, signal);
@@ -164,9 +165,16 @@ export async function pollDescribeTree<R>(
       if (verdict.done) return outcome(verdict.result, false);
     }
 
-    if (Date.now() >= deadline) break;
-    const sleepMs = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
+    const remainingForSleep = Math.max(0, deadline - Date.now());
+    if (remainingForSleep === 0) break;
+    const sleepMs = Math.min(pollIntervalMs, remainingForSleep);
     if (!(await sleepOrAbort(sleepMs, signal))) return outcome(undefined, true);
+    // A sleep clamped to the whole remaining budget was the wait's last one: end
+    // here rather than let a timer that fires a hair early (setTimeout can, by
+    // ~1ms) reopen the loop for a fetch that can only be handed the sliver it
+    // leaves — a doomed read that flips `lastAttemptSettled` and the note built
+    // from it. Only a wider interval leaves a real budget for another read.
+    if (sleepMs === remainingForSleep) break;
   }
 
   return outcome(undefined, false);

@@ -274,15 +274,13 @@ describe("await-screen-idle tool", () => {
     );
 
     // The read used a sixtieth of the budget, so what starved the second sample
-    // was the interval, not a slow tree. Whether the clamped final sleep lands
-    // exactly on the deadline (schedule arm, "pollIntervalMs (2000ms)") or a hair
-    // short of it (a sliver fetch is abandoned, neutral arm) is sub-ms timer
-    // luck; both name the interval and neither blames the tree, which is the
-    // property under test.
+    // was the interval, not a slow tree — the schedule arm, which the clamped
+    // final sleep reaches deterministically (it ends the wait rather than issue a
+    // doomed sliver fetch that would divert to the neutral arm).
     expect(result.settled).toBe(false);
+    expect(result.note).toContain("only 1 tree read");
+    expect(result.note).toContain("pollIntervalMs (2000ms)");
     expect(result.note).toContain("never sampled twice");
-    expect(result.note).toContain("pollIntervalMs");
-    expect(result.note).not.toContain("one tree fetch took");
     expect(result.note).not.toContain("outran the budget");
   });
 
@@ -293,13 +291,13 @@ describe("await-screen-idle tool", () => {
 
     const result = await tool.execute({}, { udid: IOS_UDID, timeoutMs: 100 });
 
-    // Same starve on the default interval. Whether it reads as the schedule arm
-    // or the neutral one turns on where the final clamped sleep lands (sub-ms
-    // timer luck a loaded runner decides); what must never come back is the tree
-    // being blamed — a slow-read note or the claim it never finished in the
-    // budget — for a read that used a twentieth of it.
+    // Same starve on the default interval, reached deterministically: the read
+    // used a twentieth of the budget, so the schedule arm names pollIntervalMs
+    // and the tree is never blamed — no slow-read note, no claim it never
+    // finished in the budget.
+    expect(result.note).toContain("only 1 tree read");
+    expect(result.note).toContain("pollIntervalMs (200ms)");
     expect(result.note).toContain("never sampled twice");
-    expect(result.note).toContain("pollIntervalMs");
     expect(result.note).not.toContain("one tree fetch took");
     expect(result.note).not.toContain("outran the budget");
   });
@@ -320,15 +318,15 @@ describe("await-screen-idle tool", () => {
       { udid: IOS_UDID, timeoutMs: 600, pollIntervalMs: 400, minStableMs: 100 }
     );
 
-    // The read took most of the budget, so the remedy is timeoutMs and the
-    // interval must not be blamed as the knob. Whether this reads as the
-    // slow-read arm (the clamped final sleep lands on the deadline, no fetch cut
-    // off) or the neutral one (the sleep fires a hair early and a sliver fetch is
-    // abandoned) is sub-ms timer luck; both raise timeoutMs and neither names a
-    // specific pollIntervalMs value or claims the tree never read.
+    // The read took most of the budget, so the slow-read arm names timeoutMs as
+    // the remedy and points out that no interval buys a second read of that size.
+    // The clamped final sleep reaches the deadline without a sliver fetch, so no
+    // fetch is cut off and this arm is deterministic.
     expect(result.settled).toBe(false);
-    expect(result.note).toContain("never sampled twice");
+    expect(result.note).toContain("a second read plus the shortest poll interval");
     expect(result.note).toContain("Raise timeoutMs");
+    expect(result.note).toContain("only if the next read is faster");
+    expect(result.note).toContain("never sampled twice");
     expect(result.note).not.toContain("pollIntervalMs (400ms)");
     expect(result.note).not.toContain("outran the budget");
   });

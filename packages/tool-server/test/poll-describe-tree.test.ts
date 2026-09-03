@@ -93,7 +93,11 @@ describe("pollDescribeTree", () => {
     expect(poll.samples).toBe(1);
     expect(poll.lastAttemptSettled).toBe(true);
     expect(poll.lastError).toBeUndefined();
-    expect(poll.elapsedMs).toBeGreaterThanOrEqual(1000);
+    // The wait ran the whole budget rather than bailing at the 5ms read. 990,
+    // not 1000: the clamped sleep's timer can fire ~1ms early (setTimeout does),
+    // landing elapsed just under the nominal budget — far above the ~5ms an
+    // early break would leave.
+    expect(poll.elapsedMs).toBeGreaterThanOrEqual(990);
   });
 
   // The exemption in that same break: the FIRST fetch is issued whatever the
@@ -213,7 +217,11 @@ describe("pollDescribeTree", () => {
     );
 
     expect(poll.samples).toBeGreaterThanOrEqual(2);
-    expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(120);
+    // The first read is the max; the 20ms reads are the alternative a
+    // most-recent mutation would report. 100 clears the measured duration of a
+    // 120ms read (which a timer firing ~1ms early lands just under) while staying
+    // far above 20.
+    expect(poll.slowestFetchMs).toBeGreaterThanOrEqual(100);
     expect(poll.slowestFetchMs).toBeLessThan(400);
   });
 
