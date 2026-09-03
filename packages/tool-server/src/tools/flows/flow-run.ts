@@ -197,10 +197,11 @@ export interface StepReport {
    * A caveat on the step's evidence, rendered as a "⚠" suffix by the MCP client
    * and under the step line by the CLI. Usually the step passed but the WAY it
    * passed weakens it as proof — the CLI then shows "⚠" in place of the pass
-   * glyph. A nested composition (`run-sequence`, `flow-execute`) can also carry
-   * one on a `fail` or `skip`, where its own status glyph stands: a keyboard
-   * sub-step that ran before the sequence stopped still typed, and its
-   * unverified-typing note rides here while the `reason` names what failed.
+   * glyph. A `run-sequence` step can also carry one on a `fail` or `skip`, where
+   * its own status glyph stands: a keyboard sub-step that ran before the sequence
+   * stopped still typed, and its unverified-typing note rides here while the
+   * `reason` names what failed. A nested `flow-execute`'s keyboard notes stay on
+   * the sub-flow's own step reports, not the outer step.
    * Raised by `await: { idle: true }` whenever the screen could not be proved
    * settled, by
    * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
