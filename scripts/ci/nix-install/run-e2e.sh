@@ -68,17 +68,33 @@ begin() { printf '\n=== %s ===\n' "$1"; }
 # match, and with `pipefail` the SIGPIPE that kills sed makes the pipeline 141
 # once a log outgrows the pipe buffer — which reads as "no match" and passes
 # every `absent` for a string that is there.
+#
+# A log that cannot be read answers 2, not "no match": the command substitution
+# throws sed's status away, so a scenario whose output never landed would
+# otherwise pass every `absent` in it.
 plain() { LC_ALL=C sed $'s/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1"; }
-found() { grep -qF -- "$2" <<<"$(plain "$1")"; }
+found() {
+  local text
+  text="$(plain "$1")" || return 2
+  grep -qF -- "$2" <<<"$text"
+}
 contains() {
-  if found "$1" "$2"; then pass "output contains: $2"; else fail "output MISSING: $2"; fi
+  local rc=0
+  found "$1" "$2" || rc=$?
+  case "$rc" in
+    0) pass "output contains: $2" ;;
+    2) fail "cannot read $1, looking for: $2" ;;
+    *) fail "output MISSING: $2" ;;
+  esac
 }
 absent() {
-  if found "$1" "$2"; then
-    fail "output should NOT contain: $2"
-  else
-    pass "output free of: $2"
-  fi
+  local rc=0
+  found "$1" "$2" || rc=$?
+  case "$rc" in
+    0) fail "output should NOT contain: $2" ;;
+    2) fail "cannot read $1, checking absence of: $2" ;;
+    *) pass "output free of: $2" ;;
+  esac
 }
 exit_is() {
   if [[ "$1" == "$2" ]]; then pass "exit code $2"; else fail "exit code $1, expected $2"; fi
