@@ -31,12 +31,32 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
+import { npmGlobalPackagePath } from "./global-prefix.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+/** True for a path that exists, a symlink whose target no longer does included. */
+function pathPresent(target: string): boolean {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where `cmd`'s package manager would hold argent globally, or null when that
+ * is not a question this command's manager can be asked — only npm's global
+ * directory has a layout {@link npmGlobalPackagePath} can name.
+ */
+function globalPackagePathFor(cmd: ShellCommand): string | null {
+  return cmd.bin === "npm" ? npmGlobalPackagePath() : null;
+}
 
 const UNINSTALL_TOOLSERVER_STOP_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UNINSTALL_TOOLSERVER_STOP_FAILED,
@@ -691,28 +711,33 @@ export async function uninstall(args: string[]): Promise<void> {
         throw err;
       }
 
+      // `npm uninstall -g` prints "up to date" and exits 0 whether or not it had
+      // anything to remove, so its exit code cannot tell a removal from a no-op.
+      // What npm holds in its own global directory can, and has to be read
+      // before the command as well as after: gone from both means npm never
+      // owned the argent that PATH answers with.
+      const npmEntry = removable.kind === "global" ? globalPackagePathFor(removable.cmd) : null;
+      const npmOwnedBefore = npmEntry !== null && pathPresent(npmEntry);
+
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
-        // `npm uninstall -g` prints "up to date" and exits 0 when its resolved
-        // prefix is not the one the install lives under — an inherited
-        // npm_config_prefix outranks the config file `argent init`'s prefix
-        // recovery writes, so the two can disagree. Believing the exit code
-        // there announces a removal that did not happen, leaves the package on
-        // PATH, and still clears the machine-wide state below. Re-runs the
-        // discovery and compares what it finds: looking for the directory alone
-        // would call a `npm install -g <folder>` removal a failure (the entry is
-        // a link to a source that outlives it), and asking only whether some
-        // argent is still on PATH would catch a project's node_modules/.bin.
-        if (
-          removable.kind === "global" &&
-          removable.installDir !== null &&
-          getGloballyInstalledPackageRoot() === removable.installDir
-        ) {
+        if (npmEntry !== null && !npmOwnedBefore) {
           throw new Error(
-            `${removable.cmd.bin} reported success but ${MCP_BINARY_NAME} still resolves to ` +
-              `${removable.installDir}. Check that its global prefix is the one this install ` +
-              `lives under.`
+            `npm has no global ${PACKAGE_NAME} to remove, so nothing was removed. The ` +
+              `${MCP_BINARY_NAME} on your PATH came from something else — another package ` +
+              `manager, a Nix or Homebrew wrapper, or a project's node_modules — and has to ` +
+              `be removed with whatever installed it.`
+          );
+        }
+        if (npmEntry !== null && pathPresent(npmEntry)) {
+          // The prefix npm resolves is not the one the install lives under: an
+          // inherited npm_config_prefix outranks the config file `argent init`'s
+          // prefix recovery writes, so the two can disagree.
+          throw new Error(
+            `npm reported success but ${PACKAGE_NAME} is still in its global directory at ` +
+              `${npmEntry}. Check that the global prefix npm resolves is the one this ` +
+              `install lives under.`
           );
         }
         p.log.success(`Removed ${removable.kind} package.`);

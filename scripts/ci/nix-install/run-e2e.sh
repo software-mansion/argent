@@ -35,9 +35,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TGZ="${ARGENT_TGZ:?ARGENT_TGZ must point at a packed @swmansion/argent tarball}"
 PHASE="${1:?usage: run-e2e.sh <preinstall|update>}"
 WORK="${ARGENT_E2E_WORK:-$(mktemp -d)}"
-# Only mktemp -d makes its own; CI passes a path so the captured output can be
-# uploaded after a failure.
-mkdir -p "$WORK"
 
 failures=0
 
@@ -64,12 +61,18 @@ begin() { printf '\n=== %s ===\n' "$1"; }
 # like `Running: <dim>npm install -g …`, and a raw grep for a fragment that
 # straddles one can never match. An `absent` that can never match passes for
 # the wrong reason, which is the failure mode this whole file exists to catch.
+#
+# Stripped into a here-string rather than piped: `grep -q` exits at the first
+# match, and with `pipefail` the SIGPIPE that kills sed makes the pipeline 141
+# once a log outgrows the pipe buffer — which reads as "no match" and passes
+# every `absent` for a string that is there.
 plain() { LC_ALL=C sed $'s/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1"; }
+found() { grep -qF -- "$2" <<<"$(plain "$1")"; }
 contains() {
-  if plain "$1" | grep -qF -- "$2"; then pass "output contains: $2"; else fail "output MISSING: $2"; fi
+  if found "$1" "$2"; then pass "output contains: $2"; else fail "output MISSING: $2"; fi
 }
 absent() {
-  if plain "$1" | grep -qF -- "$2"; then
+  if found "$1" "$2"; then
     fail "output should NOT contain: $2"
   else
     pass "output free of: $2"
@@ -112,6 +115,9 @@ printf '  npm root -g = %s\n' "$GLOBAL_ROOT"
 [[ "$GLOBAL_ROOT" == "$STORE_DIR"/* ]] || require "npm global root is not under $STORE_DIR — node did not come from Nix"
 pass "npm global root is inside the Nix store"
 
+# -d as well as -w: `test -w` is false for a path that does not exist, which
+# would let a mistyped root pass this guard without proving anything.
+[[ -d "$GLOBAL_ROOT" ]] || require "$GLOBAL_ROOT does not exist — nothing to prove unwritable"
 [[ ! -w "$GLOBAL_ROOT" ]] || require "$GLOBAL_ROOT is writable — this is not the failure mode under test"
 pass "npm global root is not writable"
 

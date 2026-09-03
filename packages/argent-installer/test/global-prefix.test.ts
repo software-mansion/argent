@@ -24,6 +24,7 @@ import {
   forgetInheritedNpmPrefix,
   isNixStorePath,
   npmGlobalBinDir,
+  npmGlobalPackagePath,
   provenUnwritableDir,
   npmUserConfigPath,
   probeGlobalInstallTarget,
@@ -315,7 +316,7 @@ describe("unwritableGlobalTargetMessage", () => {
     );
   });
 
-  it("never offers to chown its way out of a directory above node_modules", () => {
+  it("never offers to chown its way out of a shared directory above the tree", () => {
     // The probe reports the nearest EXISTING ancestor, so a prefix whose
     // lib/node_modules has not been created yet lands on the prefix itself.
     const aboveTree = { dir: "/usr/local", blocked: true, nixStore: false };
@@ -323,6 +324,28 @@ describe("unwritableGlobalTargetMessage", () => {
     expect(
       plain(unwritableGlobalTargetMessage(aboveTree, "npm", "install", installed))
     ).not.toContain("chown");
+  });
+
+  it("never offers to chown the whole home directory", () => {
+    const home = { dir: os.homedir(), blocked: true, nixStore: false };
+
+    expect(plain(unwritableGlobalTargetMessage(home, "yarn", "install", installed))).not.toContain(
+      "chown"
+    );
+  });
+
+  it("offers it for a global directory that is not a node_modules tree", () => {
+    // yarn and bun answer with a directory outside any node_modules — the one
+    // `sudo yarn global add` leaves root-owned.
+    const yarnGlobal = {
+      dir: path.join(os.homedir(), ".config", "yarn", "global"),
+      blocked: true,
+      nixStore: false,
+    };
+
+    expect(
+      plain(unwritableGlobalTargetMessage(yarnGlobal, "yarn", "install", installed))
+    ).toContain(`sudo chown -R $(whoami) ${yarnGlobal.dir}`);
   });
 
   it("never offers to chown a store path", () => {
@@ -455,6 +478,28 @@ describe("provenUnwritableDir", () => {
   it("stays quiet where nothing was proven", () => {
     expect(provenUnwritableDir(path.join(tmpRoot, "bin"))).toBeNull();
   });
+
+  it("declines to answer on Windows", () => {
+    // Same reason as the probe: access(W_OK) there reflects only the read-only
+    // attribute, so a reading would refuse installs that work.
+    if (!canTestUnwritable) return;
+    fs.chmodSync(tmpRoot, 0o555);
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      expect(provenUnwritableDir(path.join(tmpRoot, "bin"))).toBeNull();
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+  });
+
+  it("stays silent when the directory cannot be read for some other reason", () => {
+    mockAccessSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error("EIO"), { code: "EIO" });
+    });
+
+    expect(provenUnwritableDir(path.join(tmpRoot, "bin"))).toBeNull();
+  });
 });
 
 describe("npmGlobalBinDir", () => {
@@ -471,6 +516,34 @@ describe("npmGlobalBinDir", () => {
     });
 
     expect(npmGlobalBinDir()).toBeNull();
+  });
+
+  it("names the prefix itself on Windows, where npm puts the shims", () => {
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      expect(npmGlobalBinDir()).toBe(tmpRoot);
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+  });
+});
+
+describe("npmGlobalPackagePath", () => {
+  it("names the package inside npm's own global directory", () => {
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+
+    expect(npmGlobalPackagePath()).toBe(path.join(tmpRoot, "@swmansion/argent"));
+    expect(mockExecFileSync).toHaveBeenCalledWith("npm", ["root", "-g"], expect.anything());
+  });
+
+  it("is null when npm cannot be asked", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    expect(npmGlobalPackagePath()).toBeNull();
   });
 });
 

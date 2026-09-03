@@ -24,6 +24,11 @@ on:
       - "packages/argent-installer/src/**"
       - "packages/argent/src/**"
       - "packages/argent/scripts/**"
+      # The manifest names the bin the scenarios invoke and the version they
+      # assert on; the lockfile pins picocolors and @clack/prompts, whose
+      # colouring and wrapping every string assertion is written against.
+      - "packages/argent/package.json"
+      - "package-lock.json"
       - "scripts/ci/nix-install/**"
       - ".github/workflows/nix-install-e2e.yml"
 
@@ -73,7 +78,8 @@ jobs:
           echo "ARGENT_TGZ=$(ls "$RUNNER_TEMP"/pkg/*.tgz)" >> "$GITHUB_ENV"
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        # Pinned: this runs the Nix installer under sudo on untrusted `pull_request`.
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
 
       # Node for the scenarios comes from the fixture project's own toolchain
       # pin, so the prefix under test is a genuine store path.

@@ -5,6 +5,7 @@ import { runInstall, type InstallOutcome } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
 import {
   detectPackageManager,
+  getGloballyInstalledVersion,
   getLatestVersion,
   hasProjectPackageJson,
   isGloballyInstalled,
@@ -284,6 +285,9 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
     vi.mocked(provenUnwritableDir).mockReturnValue(null);
     vi.mocked(npmGlobalBinDir).mockReturnValue(null);
+    // Implementations outlive vi.clearAllMocks, so every mock a test in here
+    // reshapes has to be put back — the version read is PATH-sensitive in one.
+    vi.mocked(getGloballyInstalledVersion).mockReturnValue("2.0.0");
     savedPath = process.env.PATH;
     // The prompts below only exist for a user who can answer them.
     savedIsTty = process.stdin.isTTY;
@@ -356,6 +360,7 @@ describe("a global install whose target directory cannot be written", () => {
     // package-directory probe never walks.
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
     vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
 
     await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
@@ -367,9 +372,38 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands).toEqual([
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
+    expect(vi.mocked(provenUnwritableDir).mock.lastCall).toEqual([binDir]);
     const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
-    expect(message).toContain(binDir);
+    expect(message).toContain(`npm cannot write to ${binDir}`);
+    // A directory the user already chose: pointing npm at another one is what
+    // just ran, so taking ownership is the way out this path can still offer.
+    expect(message).toContain(`sudo chown -R $(whoami) ${binDir}`);
     expect(message).toContain("npx @swmansion/argent init --local");
+  });
+
+  it("stops on a bin directory left unwritable by a prefix an earlier run set", async () => {
+    // Nothing preflights that prefix: the package directory under it is
+    // writable, so the recovery never opens and only this check is left.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    expect(select).not.toHaveBeenCalled();
+    expect(vi.mocked(runShellCommand).mock.calls).toEqual([]);
+    expect(plain(vi.mocked(log.error).mock.calls[0][0] as string)).toContain(
+      `npm cannot write to ${binDir}`
+    );
   });
 
   it("reports a bin directory the shells cannot see, with no recovery involved", async () => {
@@ -390,6 +424,29 @@ describe("a global install whose target directory cannot be written", () => {
     expect(select).not.toHaveBeenCalled();
     expect(outcome.pathHint).toBe(binDir);
     expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+  });
+
+  it("reads the installed version through the PATH it just repaired", async () => {
+    // getGloballyInstalledVersion resolves through PATH, and this branch fires
+    // only when that resolution has already failed — so reading before the
+    // repair reports the running copy's version for the one just installed, and
+    // pins the skills tag to it.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(getGloballyInstalledVersion).mockImplementation(() =>
+      (process.env.PATH ?? "").split(path.delimiter).includes(binDir) ? "9.9.9" : null
+    );
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(outcome.version).toBe("9.9.9");
   });
 
   it("reports no PATH step when the new bin directory is already on it", async () => {

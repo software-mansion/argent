@@ -15,21 +15,13 @@ import { formatShellCommand, type PackageManager } from "./package-manager.js";
 // run the install and hand the user npm's stack trace.
 
 // Argument vector that makes each manager print a directory its global installs
-// live under. Only npm's names the node_modules itself: yarn classic prints its
-// parent, bun the bin directory it links shims into, and pnpm 10 answers
-// `<PNPM_HOME>/global/5/node_modules` before its first global install and
-// `<PNPM_HOME>/global/v11` after, with the package a level deeper still. Near
-// enough to answer "can this user write there", which is all the probe asks —
-// at the cost that walking up from <queried>/@swmansion/argent probes an
-// ancestor of the real module directory, so one made root-owned by an earlier
-// `sudo yarn global add`, `sudo pnpm add -g` or `sudo bun add -g` is missed.
-//
-// Two of the four also refuse to answer before a global directory has been set
-// up: `pnpm root -g` exits 1 until its bin directory is on PATH, and `bun pm
-// bin -g` exits 1 on a global directory with no package.json — after creating
-// it. Both leave the probe with null and the preflight inapplicable. npm and
-// yarn name their directory whether or not it exists yet, which is what
-// nearestExistingDir walks up from.
+// live under. Only npm's is reliably the module directory itself: yarn names its
+// parent, bun the bin directory it links shims into, and pnpm a versioned root
+// whose shape moved between 10 and 11. So the probe answers "can this user write
+// in here", not "is the exact module directory writable" — one made root-owned
+// by an earlier `sudo yarn global add`, `sudo pnpm add -g` or `sudo bun add -g`
+// is missed. pnpm and bun also refuse to name a directory until one has been set
+// up, leaving the probe null and the preflight inapplicable.
 const GLOBAL_DIR_QUERY: Record<PackageManager, readonly string[]> = {
   npm: ["root", "-g"],
   pnpm: ["root", "-g"],
@@ -47,6 +39,9 @@ function queryAbsolutePath(bin: string, args: readonly string[]): string | null 
       encoding: "utf8",
       timeout: QUERY_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
+      // Node refuses to spawn the .cmd shim a Windows package manager installs
+      // as unless it goes through a shell — the same reason shell.ts does this.
+      shell: process.platform === "win32",
     });
   } catch {
     return null;
@@ -232,9 +227,8 @@ export function blockedGlobalTargetCause(
   );
 }
 
-/** What a printed remedy may assume about the machine it is printed on. */
 /**
- * The existing directory `dir` would be created under, when it is proven
+ * `dir`, or the nearest existing directory above it, when that one is proven
  * unwritable on the same evidence {@link probeGlobalInstallTarget} uses; null
  * where nothing was proven. `npm install -g` links its shims into
  * `<prefix>/bin`, which is nowhere under the package directory that probe walks.
@@ -252,12 +246,29 @@ export function provenUnwritableDir(dir: string): string | null {
   return null;
 }
 
-/** Directory npm links global commands into, or null when npm cannot be asked. */
+/**
+ * Directory npm links global commands into, or null when npm cannot be asked.
+ * Windows gets the prefix itself, which is where npm puts the shims there.
+ */
 export function npmGlobalBinDir(): string | null {
   const prefix = queryAbsolutePath("npm", ["prefix", "-g"]);
-  return prefix === null ? null : path.join(prefix, "bin");
+  if (prefix === null) return null;
+  return process.platform === "win32" ? prefix : path.join(prefix, "bin");
 }
 
+/**
+ * Path npm holds {@link PACKAGE_NAME} at inside its own global directory, or
+ * null when npm cannot be asked. Whether something is there is npm's answer to
+ * "is this installed globally" — PATH is not, because `which argent` reports
+ * whichever copy comes first, and a project's node_modules/.bin, a pnpm shim or
+ * a Nix profile wrapper is not one npm installed or can remove.
+ */
+export function npmGlobalPackagePath(): string | null {
+  const root = queryAbsolutePath("npm", GLOBAL_DIR_QUERY.npm);
+  return root === null ? null : path.join(root, PACKAGE_NAME);
+}
+
+/** What a printed remedy may assume about the machine it is printed on. */
 export interface RemedyContext {
   /** There is a package.json to hold the devDependency a local install adds. */
   localViable: boolean;
@@ -303,19 +314,22 @@ function writablePrefixRemedy(pm: PackageManager): string {
   );
 }
 
-// The prefix remedy is a no-op where the blocked directory sits under a prefix
-// the user already chose and an earlier `sudo npm i -g` left root-owned; this
-// is the way out for exactly that case. Never for a store path (Nix undoes the
-// chown at the next rebuild, which is the whole reason the Nix cause exists),
-// and never outside a node_modules tree: the probe reports the nearest EXISTING
-// ancestor, which can be /usr/local, and `chown -R` there is not a remedy.
-function ownershipRemedy(target: GlobalInstallTarget): string | null {
-  if (target.nixStore) return null;
-  if (!target.dir.split(path.sep).includes("node_modules")) return null;
-  const chown = formatShellCommand({
-    bin: "sudo",
-    args: ["chown", "-R", "$(whoami)", target.dir],
-  });
+/**
+ * Taking ownership of `dir` — the way out where the blocked directory sits under
+ * a prefix the user already chose and an earlier `sudo npm i -g` left it
+ * root-owned, which the prefix remedy cannot help with. Null for a directory too
+ * broad to hand to `chown -R`: a probe reports the nearest EXISTING ancestor of
+ * the global package directory, which for a prefix never created is somewhere
+ * far above it — /usr/local, or the home directory itself. Inside a node_modules
+ * tree covers npm and pnpm; below the home directory covers yarn and bun.
+ */
+export function ownershipRemedy(dir: string): string | null {
+  const home = os.homedir();
+  const ownable =
+    dir.split(path.sep).includes("node_modules") ||
+    (dir !== home && dir.startsWith(home + path.sep));
+  if (!ownable) return null;
+  const chown = formatShellCommand({ bin: "sudo", args: ["chown", "-R", "$(whoami)", dir] });
   return `  Or take ownership of the directory that is blocking it:\n    ${pc.cyan(chown)}`;
 }
 
@@ -328,7 +342,9 @@ export function unwritableGlobalTargetMessage(
 ): string {
   const remedies = [
     writablePrefixRemedy(pm),
-    ownershipRemedy(target),
+    // Never for a store path: Nix undoes the chown at the next rebuild, which
+    // is the whole reason the Nix cause exists.
+    target.nixStore ? null : ownershipRemedy(target.dir),
     localInstallRemedy(ctx),
   ].filter((remedy): remedy is string => remedy !== null);
 

@@ -28,7 +28,9 @@ import {
   blockedGlobalTargetCause,
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
+  isNixStorePath,
   localInstallRemedy,
+  ownershipRemedy,
   npmGlobalBinDir,
   npmUserConfigPath,
   probeGlobalInstallTarget,
@@ -63,9 +65,8 @@ export interface InstallOutcome {
   installMode: InstallMode;
   /**
    * Directory the argent binary now lives in that the user's shells do not
-   * know about yet. Set only by the prefix recovery, whose global MCP config
-   * names a bare `argent` — so until this is on PATH, the editors init just
-   * configured cannot start it.
+   * know about yet. The MCP entries init writes name a bare `argent`, so until
+   * this is on PATH the editors it just configured cannot start it.
    */
   pathHint: string | null;
 }
@@ -292,17 +293,7 @@ async function recoverBlockedGlobalInstall(opts: {
 }): Promise<BlockedGlobalRecovery> {
   const { target, pm, nonInteractive, acknowledged, remedies, startedAt, tel } = opts;
 
-  const failWith = async (message: string): Promise<never> => {
-    p.log.error(message);
-    await tel.trackPackageAction(
-      "fresh_install",
-      startedAt,
-      false,
-      INSTALL_GLOBAL_PREFIX_UNWRITABLE
-    );
-    await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
-    process.exit(1);
-  };
+  const failWith = (message: string): Promise<never> => failGlobalInstall(message, startedAt, tel);
   const failWithAdvice = (blocked: GlobalInstallTarget): Promise<never> =>
     failWith(unwritableGlobalTargetMessage(blocked, pm, "install", remedies));
 
@@ -374,11 +365,10 @@ async function recoverBlockedGlobalInstall(opts: {
     // config as a read-only store symlink, leaving the project install as the
     // way forward — where there is one.
     spinner.stop(pc.red("Could not set the npm prefix."));
-    const localWayOut = localInstallRemedy(remedies);
     const cause =
       `npm would not record a global prefix at ${npmUserConfigPath()}, so there is ` +
       `nowhere writable to install into:\n${err}`;
-    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
+    await failWith(withRemedies(cause, [localInstallRemedy(remedies)]));
   }
   spinner.stop(`npm prefix set to ${prefix}.`);
   // The write outlives this run whether or not the install ahead succeeds, and
@@ -397,23 +387,68 @@ async function recoverBlockedGlobalInstall(opts: {
   // back through the step that just ran.
   const moved = probeGlobalInstallTarget(pm);
   if (moved?.blocked) {
-    const cause = blockedGlobalTargetCause(moved, pm, "install");
-    const localWayOut = localInstallRemedy(remedies);
-    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
+    await failWith(
+      withRemedies(blockedGlobalTargetCause(moved, pm, "install"), [
+        ownableRemedy(moved.dir),
+        localInstallRemedy(remedies),
+      ])
+    );
   }
-  // probeGlobalInstallTarget walks the package directory; npm also links its
-  // commands into <prefix>/bin, which an earlier `sudo npm i -g --prefix` here
-  // can have left root-owned.
-  const blockedBin = provenUnwritableDir(path.join(prefix, "bin"));
-  if (blockedBin !== null) {
-    const localWayOut = localInstallRemedy(remedies);
-    const cause =
-      `npm can write to ${prefix} but not to ${blockedBin}, where it links the ` +
-      `${MCP_BINARY_NAME} command — the install would fail there.`;
-    await failWith(localWayOut === null ? cause : `${cause}\n\n${localWayOut}`);
-  }
-
   return { local: false, pathHint: adoptGlobalBinDir(path.join(prefix, "bin")) };
+}
+
+/**
+ * The cause, then whichever remedies still apply. Everything here runs after the
+ * user committed to the prefix move, so the remedy that prescribes it is left
+ * out — it would only send them back through the step that just ran.
+ */
+function withRemedies(cause: string, remedies: (string | null)[]): string {
+  const usable = remedies.filter((remedy): remedy is string => remedy !== null);
+  return usable.length === 0 ? cause : `${cause}\n\n${usable.join("\n\n")}`;
+}
+
+/** Ownership, unless Nix would undo the chown at the next rebuild. */
+function ownableRemedy(dir: string): string | null {
+  return isNixStorePath(dir) ? null : ownershipRemedy(dir);
+}
+
+async function failGlobalInstall(
+  message: string,
+  startedAt: number,
+  tel: InitTelemetry
+): Promise<never> {
+  p.log.error(message);
+  await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+  await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+  process.exit(1);
+}
+
+/**
+ * Stop before an install npm would fail on a directory nothing else looks at:
+ * it links its commands into `<prefix>/bin`, which is nowhere under the package
+ * directory {@link probeGlobalInstallTarget} walks, and an earlier
+ * `sudo npm i -g` can have left it root-owned. Returns where nothing was proven
+ * — including for every other manager, none of whose bin directories argent
+ * knows how to name.
+ */
+async function confirmGlobalBinWritable(ctx: {
+  pm: PackageManager;
+  remedies: RemedyContext;
+  startedAt: number;
+  tel: InitTelemetry;
+}): Promise<void> {
+  if (ctx.pm !== "npm") return;
+  const binDir = npmGlobalBinDir();
+  const blocked = binDir === null ? null : provenUnwritableDir(binDir);
+  if (blocked === null) return;
+  const cause =
+    `npm cannot write to ${blocked}, where it links the ${MCP_BINARY_NAME} command — ` +
+    `the install would fail there.`;
+  await failGlobalInstall(
+    withRemedies(cause, [ownableRemedy(blocked), localInstallRemedy(ctx.remedies)]),
+    ctx.startedAt,
+    ctx.tel
+  );
 }
 
 /**
@@ -427,10 +462,11 @@ async function recoverBlockedGlobalInstall(opts: {
 function adoptGlobalBinDir(binDir: string): string | null {
   if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir)) return null;
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
-  p.log.warn(
-    `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:\n` +
-      `    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
-  );
+  const line =
+    process.platform === "win32"
+      ? "" // No one shell to write it for, and `setx` truncates a long PATH.
+      : `\n    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`;
+  p.log.warn(`Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:${line}`);
   return binDir;
 }
 
@@ -477,6 +513,10 @@ async function runGlobal(opts: {
       // The prefix now points somewhere writable — fall through and install.
       pathHint = recovery.pathHint;
     }
+    // Outside the recovery too: its `npm config set prefix` outlives the run
+    // that wrote it, so a later init installs into that prefix with nothing but
+    // the package directory preflighted.
+    await confirmGlobalBinWritable({ pm, remedies, startedAt: preflightStartedAt, tel });
 
     // No consent prompt here: choosing "Globally" (or --global) in the
     // install-mode step directly above IS the consent to install it.
@@ -492,14 +532,16 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
-      version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       // The recovery's `npm config set prefix` outlives its run, so a later
       // init installs into that prefix without ever entering the recovery —
-      // and the MCP entries written below name a bare `argent`.
+      // and the MCP entries written below name a bare `argent`. Ahead of the
+      // version read, which resolves through PATH: this branch fires only when
+      // that read would have missed the install it just made.
       if (pathHint === null && pm === "npm" && !isGloballyInstalled()) {
         const binDir = npmGlobalBinDir();
         if (binDir !== null) pathHint = adoptGlobalBinDir(binDir);
       }
+      version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
