@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
@@ -51,6 +53,7 @@ import {
 } from "../src/tools/system-settings/types";
 import type { SystemSettingsParams } from "../src/tools/system-settings/types";
 import { adbShell, runAdb, ENRICH_TIMEOUT_MS } from "../src/utils/adb";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../src/utils/simctl-config";
 import { ADB_SETTING_TIMEOUT_MS } from "../src/tools/system-settings/platforms/android";
 import { SIMCTL_UI_TIMEOUT_MS } from "../src/tools/system-settings/platforms/ios";
 import { isTvOsSimulator, SIMCTL_LIST_TIMEOUT_MS } from "../src/utils/ios-devices";
@@ -492,15 +495,18 @@ describe("system-settings iOS branch", () => {
   });
 
   it("a `simctl ui` option refused on stderr fails, even though simctl exits 0", async () => {
-    // The whole point of reading stderr: `content_size` and `increase_contrast`
-    // report a refused argument and still exit 0, so an exit-code-only check
-    // answers `applied` for a setting the runtime never changed.
+    // The whole point of reading stderr: this is simctl's one refusal that
+    // leaves the exit code at 0, so an exit-code-only check answers `applied`
+    // for a setting the simulator never changed.
     execFileSucceedsWithStderr("Invalid argument");
     const rejection = expect(
       iosImpl.handler({}, params({ setting: "text-size", value: "large" }), IOS_DEVICE)
     ).rejects;
     await rejection.toSatisfy(failsWith(FAILURE_CODES.IOS_SYSTEM_SETTING_FAILED));
-    await rejection.toThrow(/isn't supported by this simulator's iOS runtime/);
+    // "Invalid argument" is simctl rejecting the argument, not the runtime
+    // lacking the option — a newer runtime would not fix it, so the hint that
+    // says so must stay off this one.
+    await rejection.not.toThrow(/try a newer runtime/);
   });
 
   it("keeps applying an option whose stderr is only whitespace", async () => {
@@ -1017,21 +1023,50 @@ describe("system-settings dispatch wiring (through tool.execute)", () => {
 // its own diagnostic — the client aborts first and re-POSTs while the abandoned
 // `simctl`/`adb` child keeps running against the same wedged service.
 const MCP_CLIENT_ATTEMPT_BUDGET_MS = 30_000;
+// tool-server does not depend on argent-mcp, so the number above is a copy.
+// Read the real one out of the client's source and fail here if they drift —
+// a lowered cap would otherwise leave both sums quietly over budget.
+function mcpClientFetchTimeoutMs(): number {
+  const source = readFileSync(
+    path.join(__dirname, "..", "..", "argent-mcp", "src", "mcp-server.ts"),
+    "utf8"
+  );
+  const match = /const FETCH_TIMEOUT_MS = ([\d_]+);/.exec(source);
+  if (!match) throw new Error("FETCH_TIMEOUT_MS not found in argent-mcp/src/mcp-server.ts");
+  return Number(match[1]!.replace(/_/g, ""));
+}
 // A real margin, not just "<": a slow-but-completing call on a loaded machine
 // must still land inside the client's attempt.
 const MIN_BUDGET_MARGIN_MS = 5_000;
 
 describe("worst-case time budget vs the MCP client's per-attempt cap", () => {
+  it("budgets against the cap the MCP client actually arms", () => {
+    expect(mcpClientFetchTimeoutMs()).toBe(MCP_CLIENT_ATTEMPT_BUDGET_MS);
+  });
+
   it("the iOS `simctl ui` path fits, dependency check and tvOS probe included", () => {
     // `ensureDeps(["xcrun"])` → one PATH lookup, then `isTvOsSimulator` → one
-    // `simctl list devices --json`, then the `simctl ui` call itself.
+    // `simctl list devices --json`, then the `simctl ui` call itself. That is
+    // the whole serial path in the shipped configuration: `deviceSetForUdid`
+    // returns without a probe when no `ios.additionalDeviceSets` are set, and
+    // with the UDID already memoized by the tvOS probe's own listing otherwise.
     const worstCase = PATH_LOOKUP_TIMEOUT_MS + SIMCTL_LIST_TIMEOUT_MS + SIMCTL_UI_TIMEOUT_MS;
     expect(worstCase).toBeLessThan(MCP_CLIENT_ATTEMPT_BUDGET_MS);
     expect(MCP_CLIENT_ATTEMPT_BUDGET_MS - worstCase).toBeGreaterThanOrEqual(MIN_BUDGET_MARGIN_MS);
   });
 
+  it("the iOS `defaults` path fits too, on its own simctl ceiling", () => {
+    // `reduce-motion` and `invert-colors` reach the device through
+    // `simctl spawn`, which carries a different constant from the three
+    // `simctl ui` settings — the budget has to hold for both mechanisms.
+    const worstCase = PATH_LOOKUP_TIMEOUT_MS + SIMCTL_LIST_TIMEOUT_MS + SIMCTL_SPAWN_TIMEOUT_MS;
+    expect(worstCase).toBeLessThan(MCP_CLIENT_ATTEMPT_BUDGET_MS);
+    expect(MCP_CLIENT_ATTEMPT_BUDGET_MS - worstCase).toBeGreaterThanOrEqual(MIN_BUDGET_MARGIN_MS);
+  });
+
   it("the Android path fits, dependency check and API-level probe included", () => {
-    // `ensureDeps(["adb"])` → one PATH lookup, then `location`'s `getprop`
+    // `ensureDeps(["adb"])` → one PATH lookup (the resolver's SDK-root fallback
+    // is filesystem `access`, not a subprocess), then `location`'s `getprop`
     // probe (the only setting that runs one), then the `adb shell` that applies
     // the change.
     const worstCase = PATH_LOOKUP_TIMEOUT_MS + ENRICH_TIMEOUT_MS + ADB_SETTING_TIMEOUT_MS;
@@ -1055,10 +1090,30 @@ describe("a change that would cut the adb link it travels over", () => {
   // Wireless debugging carries adb over the device's own Wi-Fi. Switching that
   // off applies the change and then strands the device: no response, and no
   // later call — including the one that would undo it — can reach it.
+  // adb names a device it found over mDNS by the service instance, so this
+  // serial carries no address at all — the shape Android 11+ wireless debugging
+  // produces, and the one a `host:port` test alone would miss.
+  const MDNS_SERIAL = "adb-39121FDJG0026R-tGGCXo._adb-tls-connect._tcp";
+
+  it.each([
+    [WIRELESS_SERIAL, "wifi", "off"],
+    [WIRELESS_SERIAL, "airplane-mode", "on"],
+    [MDNS_SERIAL, "wifi", "off"],
+    [MDNS_SERIAL, "airplane-mode", "on"],
+  ])("refuses %s %s=%s", async (udid, setting, value) => {
+    const rejection = expect(run(udid, setting, value)).rejects;
+    await rejection.toThrow(InvalidToolInputError);
+    await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
+    await rejection.toSatisfy(
+      (err) => getFailureSignal(err)?.failure_stage === "android_system_setting_self_disconnect"
+    );
+    expect(mockRunAdb).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["wifi", "off"],
     ["airplane-mode", "on"],
-  ])("refuses %s=%s on a wirelessly debugged device", async (setting, value) => {
+  ])("names the recovery when it refuses %s=%s", async (setting, value) => {
     const rejection = expect(run(WIRELESS_SERIAL, setting, value)).rejects;
     await rejection.toThrow(InvalidToolInputError);
     await rejection.toSatisfy(failsWith(FAILURE_CODES.SYSTEM_SETTING_UNSUPPORTED));
@@ -1070,8 +1125,11 @@ describe("a change that would cut the adb link it travels over", () => {
     expect(mockRunAdb).not.toHaveBeenCalled();
   });
 
-  // Only the two that take the Wi-Fi link down, and only in the direction that
-  // takes it down — a blanket refusal would block changes that work fine.
+  // Only the two that take the Wi-Fi link down, only in the direction that takes
+  // it down, and only where adb actually rides that link — a blanket refusal
+  // would block changes that work fine. A loopback serial is a forwarded port
+  // (docker-android, a tunnelled emulator), where the remedy the refusal names
+  // — use USB — does not even exist.
   it.each([
     [WIRELESS_SERIAL, "wifi", "on"],
     [WIRELESS_SERIAL, "airplane-mode", "off"],
@@ -1080,6 +1138,9 @@ describe("a change that would cut the adb link it travels over", () => {
     [ANDROID_SERIAL, "airplane-mode", "on"],
     [USB_SERIAL, "wifi", "off"],
     [USB_SERIAL, "airplane-mode", "on"],
+    ["localhost:5555", "wifi", "off"],
+    ["127.0.0.1:5555", "wifi", "off"],
+    ["[::1]:5555", "airplane-mode", "on"],
   ])("still applies %s %s=%s", async (udid, setting, value) => {
     await expect(run(udid, setting, value)).resolves.toMatchObject({ setting, value });
     expect(mockRunAdb).toHaveBeenCalledTimes(1);
@@ -1103,7 +1164,20 @@ describe("what a failure carries", () => {
   // The telemetry fields are what a failure is bucketed by; a wrong or dropped
   // one silently merges this tool's failures into another's bucket.
   it("tags an adb throw with adb's own subprocess metadata", async () => {
-    mockRunAdb.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: 7 }));
+    // The shape `runAdb` really throws: `describeAdbFailure` reads the exit code
+    // off the raw `execFile` rejection and puts it in the signal, and the
+    // FailureError it returns carries no `code` of its own — so re-deriving the
+    // metadata from that wrapper instead of inheriting it finds nothing.
+    mockRunAdb.mockRejectedValueOnce(
+      new FailureError("adb -s emulator-5554 shell svc wifi enable failed: boom", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "adb",
+        failure_exit_code: 7,
+      })
+    );
     const err = await androidImpl
       .handler({}, androidParams(), androidDevice)
       .catch((e: unknown) => e);

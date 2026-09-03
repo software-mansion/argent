@@ -4,8 +4,8 @@ import { win32 as pathWin32 } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
-/** Ceiling for one PATH lookup. Exported so a tool that preflights its binaries
- * can sum this into its own end-to-end budget. */
+/** Ceiling for one PATH lookup. Exported so a tool whose end-to-end budget is
+ * pinned by a test can sum in the `ensureDeps` preflight it pays for. */
 export const PATH_LOOKUP_TIMEOUT_MS = 2_000;
 
 /**

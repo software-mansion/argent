@@ -53,14 +53,33 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
   return serial.startsWith("emulator-");
 }
 
+/** The mDNS service Android advertises for wireless debugging. adb names a
+ * device discovered that way by its service instance, so the serial carries no
+ * address at all. */
+const ADB_WIRELESS_MDNS_SERVICE = "_adb-tls-connect._tcp";
+
+/** A serial on one of these hosts is a forwarded port — docker-android, a
+ * tunnelled CI emulator — not a radio link. */
+const LOOPBACK_ADB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
 /**
- * `adb connect` addresses a wirelessly-debugged device as `<host>:<port>`; USB
- * hardware serials and `emulator-<port>` never carry one. The adb transport to
- * such a device therefore rides the device's own Wi-Fi link, so anything that
- * takes that link down also takes the transport down.
+ * True when adb reaches this device over the device's own Wi-Fi, so switching
+ * that Wi-Fi off severs the transport carrying the command.
+ *
+ * Two serial forms say so, and adb produces both: `adb connect <host>:<port>`
+ * gives `host:port` — USB hardware serials and `emulator-<port>` carry no port,
+ * so the same test excludes them — and a device found over mDNS is listed under
+ * its service instance, `adb-<serial>-<suffix>._adb-tls-connect._tcp`, with no
+ * address at all (both verified against adb 37.0.0).
+ *
+ * A host-only VM network (Genymotion, Waydroid) is indistinguishable from a LAN
+ * address, so those are treated as wireless too — the conservative direction,
+ * since the caller is told to use a different connection rather than losing one.
  */
 export function isWirelessAdbSerial(serial: string): boolean {
-  return !isAndroidEmulatorSerial(serial) && /:\d+$/.test(serial);
+  if (serial.includes(ADB_WIRELESS_MDNS_SERVICE)) return true;
+  const host = /^(.+):\d+$/.exec(serial)?.[1];
+  return host !== undefined && !LOOPBACK_ADB_HOSTS.has(host.toLowerCase());
 }
 
 /**

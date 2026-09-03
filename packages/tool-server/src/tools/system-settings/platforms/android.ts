@@ -1,4 +1,5 @@
-import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import type { FailureSignal } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, isAdbTransportFailure, runAdb, ENRICH_TIMEOUT_MS } from "../../../utils/adb";
 import { InvalidToolInputError } from "../../../utils/capability";
@@ -150,6 +151,25 @@ function stripAdbBanner(stderr: string): string {
     .trim();
 }
 
+/**
+ * adb's own subprocess fields, carried onto this tool's failure.
+ *
+ * `runAdb` throws a `FailureError` whose signal already holds the exit code and
+ * signal it read off the raw `execFile` rejection; that wrapper carries no
+ * `code` of its own, so re-deriving them from it would find none and the bucket
+ * would lose the exit code its iOS twin keeps.
+ */
+function adbSubprocessMetadata(cause: unknown): Partial<FailureSignal> {
+  const { failure_command, failure_exit_code, failure_signal, failure_spawn_code } =
+    getFailureSignal(cause) ?? {};
+  return {
+    failure_command: failure_command ?? "adb",
+    ...(failure_exit_code === undefined ? {} : { failure_exit_code }),
+    ...(failure_signal === undefined ? {} : { failure_signal }),
+    ...(failure_spawn_code === undefined ? {} : { failure_spawn_code }),
+  };
+}
+
 function settingFailure(
   setting: SystemSetting,
   value: string,
@@ -167,7 +187,7 @@ function settingFailure(
       error_kind: "subprocess",
       // Only a thrown adb error carries the syscall/exit metadata; a refusal the
       // device printed while adb itself exited 0 has none to contribute.
-      ...(cause ? subprocessFailureMetadata(cause, "adb") : {}),
+      ...(cause ? adbSubprocessMetadata(cause) : {}),
     },
     cause instanceof Error ? { cause } : undefined
   );
@@ -180,8 +200,8 @@ function settingFailure(
  * `svc wifi disable` and `cmd connectivity airplane-mode enable` take that link
  * down, so the write lands and then nothing can reach the device again — not the
  * response, and not the call that would undo it. Recovery needs a USB cable or
- * physical access, so refuse up front rather than strand the session; over USB
- * (or on an emulator, whose transport is the console socket) both are fine.
+ * physical access, so refuse up front rather than strand the session; over USB,
+ * or over the loopback an emulator is reached on, both are fine.
  */
 function assertKeepsTransport(udid: string, setting: SystemSetting, value: string): void {
   const dropsWifi =

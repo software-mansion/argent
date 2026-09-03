@@ -11,8 +11,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-/** Ceiling for one `xcrun simctl list devices --json`. Exported so callers that
- * run it ahead of their own work can sum it into their end-to-end budget. */
+/** Ceiling for one `xcrun simctl list devices --json`. Exported so a tool whose
+ * end-to-end budget is pinned by a test can sum in the runtime-kind probe. */
 export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
 
 export interface IosSimulator {

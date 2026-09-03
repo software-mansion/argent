@@ -24,8 +24,14 @@ const execFileAsync = promisify(execFile);
  * this call run in series, and that sum has to stay under the MCP client's 30s
  * per-attempt cap. Above it the client aborts and replays the whole call while
  * the abandoned `simctl` keeps running, and the tool's own diagnostic — which
- * says what to do about a shut-down simulator — never reaches the agent. */
-export const SIMCTL_UI_TIMEOUT_MS = 10_000;
+ * says what to do about a shut-down simulator — never reaches the agent.
+ *
+ * With `ios.additionalDeviceSets` configured, `simctlArgsForUdid` adds one
+ * serial `simctl list` per set whenever the tvOS probe's own listing did not
+ * find the UDID — which is exactly the wedged-service case, since that listing
+ * fails closed. The budget cannot absorb those, and they are a property of the
+ * shared device-set resolution rather than of this tool. */
+export const SIMCTL_UI_TIMEOUT_MS = SIMCTL_SPAWN_TIMEOUT_MS;
 
 // How the iOS simulator applies each setting it supports. Two mechanisms:
 //  - `simctl ui`: the three options a runtime models natively. The value is the
@@ -58,9 +64,10 @@ function iosMechanism(setting: SystemSetting, value: string): IosMechanism {
       return { via: "defaults", key: "ReduceMotionEnabled", enabled: value === "on" };
     case "invert-colors":
       // `InvertColorsEnabled` is the key libAccessibility reads for Smart
-      // Invert. The obvious-looking `ClassicInvertColorsEnabled` is not a string
-      // the runtime contains at all, so writing that one persists a preference
-      // nothing observes.
+      // Invert. The obvious-looking `ClassicInvertColorsEnabled` is no key at
+      // all — the runtime carries it only inside symbol names, and spells the
+      // classic-invert preference `AXSClassicInvertColorsPreference` — so
+      // writing it persists something nothing observes.
       return { via: "defaults", key: "InvertColorsEnabled", enabled: value === "on" };
     default:
       // Unreachable: the handler rejects non-iOS settings before this is called.
@@ -82,13 +89,14 @@ function throwIosSettingError(
   const shutdownHint = /current state:\s*shutdown|not booted/i.test(detail)
     ? " The simulator must be booted first — use boot-device."
     : "";
-  // A `simctl ui` option the runtime doesn't model refuses the argument rather
-  // than naming the option: `content_size` and `increase_contrast` answer
-  // "Invalid argument", `appearance` "Operation not supported". Central
-  // validation already pinned `value` to the setting's own enum, so a refusal
-  // that reaches here is about the runtime.
+  // A runtime that doesn't model an option exits 45 with "Operation not
+  // supported" and a line naming what is missing ("Runtime does not support
+  // userInterfaceStyle" / "…dynamic text" / "…increased contrast"). simctl's
+  // other refusal — an argument outside its own vocabulary — words itself
+  // differently ("Invalid argument", "Unknown apperance: …"), so matching only
+  // the support wording keeps this hint off a case a newer runtime wouldn't fix.
   const unsupportedHint =
-    !shutdownHint && /unsupported|not support|invalid argument/i.test(detail)
+    !shutdownHint && /unsupported|not support/i.test(detail)
       ? ` The '${setting}' setting isn't supported by this simulator's iOS runtime; try a newer runtime.`
       : "";
   throw new FailureError(
@@ -115,14 +123,15 @@ export const iosImpl: PlatformImpl<
 
     // An Apple TV simulator is an apple/simulator by UDID shape, so the
     // capability matrix cannot exclude it — and half this surface would answer
-    // `applied` on one: tvOS refuses every `simctl ui` option ("Operation not
-    // supported") but accepts the two `defaults` writes against a runtime with
-    // no Settings pane to honour them.
+    // `applied` on one. tvOS has its own Appearance, Increase Contrast, Invert
+    // Colors and Reduce Motion panes, but neither mechanism reaches them: every
+    // `simctl ui` option is refused, and the two `defaults` writes land in the
+    // domain and read back while the screen never changes.
     if (await isTvOsSimulator(udid)) {
       throw new UnsupportedOperationError(
         "system-settings",
         device,
-        "tvOS models none of these system settings — appearance, text size and increase contrast are unsupported there and the accessibility preferences have no effect"
+        "neither mechanism reaches tvOS — `simctl ui` refuses every option there, and the accessibility preferences are written but never honoured"
       );
     }
 
@@ -155,11 +164,12 @@ export const iosImpl: PlatformImpl<
       } catch (err) {
         throwIosSettingError(setting, value, udid, err);
       }
-      // Applying an option is silent, but only `appearance` also exits non-zero
-      // when it refuses one: `content_size` and `increase_contrast` print
-      // "Invalid argument" on stderr and still exit 0, which is what a runtime
-      // that doesn't model the option produces. Trusting the exit code alone
-      // would report `applied` for a setting that never changed.
+      // `simctl ui` has a refusal that leaves the exit code at 0 and writes to
+      // stderr instead — `content_size gigantic` answers "Invalid argument" that
+      // way. Central validation pins `value` to simctl's own vocabulary, so no
+      // request should reach it, which is exactly why the exit code alone is not
+      // the success signal: the one channel that would report a change the
+      // simulator never made is the one nothing else watches.
       if (stderr.trim()) {
         throwIosSettingError(setting, value, udid, new Error(stderr.trim()));
       }

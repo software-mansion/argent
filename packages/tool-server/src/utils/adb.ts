@@ -526,10 +526,7 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
 
 /**
  * True when an adb error message names a device state no retry can fix
- * (unauthorized / not found / offline / no devices). Lets callers tell a genuine
- * transport/device failure, which should propagate with adb's own cause, apart
- * from a command-level rejection they can classify themselves (e.g. `pm`
- * refusing a permission).
+ * (unauthorized / not found / offline / no devices).
  */
 function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
