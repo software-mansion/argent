@@ -40,10 +40,9 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   // Simulator-only on Apple: `simctl ui` and the accessibility `defaults` writes
-  // edit a simulator, and a physical iPhone has no host-side equivalent. There
-  // is no `device` arm to reach anyway — a physical-iPhone udid doesn't match
-  // the 8-4-4-4-12 simulator shape, so `resolveDevice` never classifies one as
-  // apple (it falls to the Android branch by elimination).
+  // edit a simulator, and a physical iPhone has no host-side equivalent. Its udid
+  // resolves to apple/`device`, so leaving out the `device` arm here is what
+  // rejects it at the capability gate.
   apple: { simulator: true },
   // No `appleRemote`, unlike the sibling settings-permissions: sim-remote
   // forwards a fixed set of simctl verbs and `ui` is not among them, so three
