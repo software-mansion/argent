@@ -17,7 +17,10 @@ const COLLECT_RENDERS_SCRIPT = `
     var renderers = hook._renderers || hook.renderers;
     if (!renderers) return JSON.stringify({ error: 'no renderers attached to hook' });
 
-    var results = {};
+    // Null prototype: a fiber named "__proto__" or "constructor" must become
+    // an own data property, not write through an inherited accessor onto
+    // Object.prototype of the debuggee app.
+    var results = Object.create(null);
 
     function walkFiber(fiber, depth) {
       if (!fiber || depth > 30) return;
@@ -28,9 +31,10 @@ const COLLECT_RENDERS_SCRIPT = `
         else if (fiber.type.name) name = fiber.type.name;
       }
       if (name && fiber.actualDuration !== undefined) {
-        if (!results[name]) results[name] = { renderCount: 0, totalActualDuration: 0, selfBaseDuration: 0 };
-        results[name].renderCount += 1;
-        results[name].totalActualDuration += fiber.actualDuration || 0;
+        if (!results[name]) results[name] = { instanceCount: 0, maxActualDuration: 0, selfBaseDuration: 0 };
+        results[name].instanceCount += 1;
+        var inclusive = fiber.actualDuration || 0;
+        if (inclusive > results[name].maxActualDuration) results[name].maxActualDuration = inclusive;
         results[name].selfBaseDuration += fiber.selfBaseDuration || 0;
       }
       if (fiber.child) walkFiber(fiber.child, depth + 1);
@@ -67,8 +71,8 @@ type ParsedRenders =
   | Record<
       string,
       {
-        renderCount: number;
-        totalActualDuration: number;
+        instanceCount: number;
+        maxActualDuration: number;
         selfBaseDuration: number;
       }
     >
@@ -76,19 +80,19 @@ type ParsedRenders =
 
 interface RenderEntry {
   component: string;
-  renderCount: number;
-  totalActualDuration_ms: number;
+  instanceCount: number;
+  maxActualDuration_ms: number;
   selfBaseDuration_ms: number;
 }
 
 function renderMarkdownTable(entries: RenderEntry[]): string {
   if (entries.length === 0)
     return "_No render data found. Ensure React DevTools global hook is present._";
-  const header = "| Component | Renders | Total (ms) | Self Base (ms) |";
+  const header = "| Component | Instances | Largest subtree (ms) | Self Base (ms) |";
   const sep = "|---|---|---|---|";
   const rows = entries.map(
     (e) =>
-      `| \`${e.component}\` | ${e.renderCount} | ${e.totalActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`
+      `| \`${e.component}\` | ${e.instanceCount} | ${e.maxActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`
   );
   return [header, sep, ...rows].join("\n");
 }
@@ -105,8 +109,11 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(20)
-    .describe("Number of top re-rendering components to return (default 20)"),
+    .describe("Number of top components to return, by self render time (default 20)"),
 });
+
+/** Exposed for tests: the injected script runs on the debuggee, so its object handling is load-bearing. */
+export const __testables = { COLLECT_RENDERS_SCRIPT };
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
@@ -116,9 +123,9 @@ export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>,
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree to collect component render counts and durations.
-Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.
-Use when you want a quick snapshot of render counts without a full profiling session.
+  description: `Scan the live React fiber tree for the components costing the most render time right now.
+Returns a markdown table sorted by self time: how many instances of each component are mounted, the largest single instance's subtree time, and total self time. It is a snapshot of the tree as it stands, not a recording, so the instance count is how many exist — not how many times they re-rendered.
+Use for a quick read on which components are expensive without starting a profiling session; use react-profiler-start/stop when you need re-render counts and the reasons behind them.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
@@ -180,6 +187,14 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
     if (firstError !== null && HOOK_NOT_PRESENT_ERRORS.has(firstError)) {
       await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(() => {});
       result = await evalRenders();
+      if (result?.exceptionDetails) {
+        throw new FailureError(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`, {
+          error_code: FAILURE_CODES.REACT_PROFILER_RUNTIME_EXCEPTION,
+          failure_stage: "react_profiler_renders_runtime_eval",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        });
+      }
       if (result?.result?.value) {
         parsed = JSON.parse(result.result.value) as ParsedRenders;
       }
@@ -200,11 +215,13 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
     const entries: RenderEntry[] = Object.entries(parsed)
       .map(([component, data]) => ({
         component,
-        renderCount: data.renderCount,
-        totalActualDuration_ms: data.totalActualDuration,
-        selfBaseDuration_ms: data.selfBaseDuration,
+        // These cross the debuggee→host boundary as JSON; a non-finite duration
+        // serializes to null, and null.toFixed throws.
+        instanceCount: data.instanceCount ?? 0,
+        maxActualDuration_ms: data.maxActualDuration ?? 0,
+        selfBaseDuration_ms: data.selfBaseDuration ?? 0,
       }))
-      .sort((a, b) => b.totalActualDuration_ms - a.totalActualDuration_ms)
+      .sort((a, b) => b.selfBaseDuration_ms - a.selfBaseDuration_ms)
       .slice(0, params.top_n);
 
     return `## React Component Renders\n\n${renderMarkdownTable(entries)}`;

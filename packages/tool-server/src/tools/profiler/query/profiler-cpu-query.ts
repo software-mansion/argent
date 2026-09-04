@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import {
   buildCpuSampleIndex,
+  buildChildToParent,
   queryCpuWindow,
   deserializeCpuSampleIndex,
   isArgentProfilerFunction,
@@ -363,10 +364,14 @@ function renderComponentCpu(
   const commitWindows = new Map<number, { start: number; end: number; duration: number }>();
   for (const c of componentCommits) {
     if (!commitWindows.has(c.commitIndex)) {
+      // Dump-read commits can carry nulled timestamps/durations (same source as
+      // profiler-commit-query, which guards every use the same way).
+      const start = c.timestamp ?? 0;
+      const duration = c.commitDuration ?? 0;
       commitWindows.set(c.commitIndex, {
-        start: c.timestamp,
-        end: c.timestamp + c.commitDuration,
-        duration: c.commitDuration,
+        start,
+        end: start + duration,
+        duration,
       });
     }
   }
@@ -376,20 +381,72 @@ function renderComponentCpu(
     { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
   >();
 
+  const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
+
   for (const window of commitWindows.values()) {
     const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Fold each window down to one row per function BEFORE adding it to the
+    // running totals, because the two axes this loop walks need opposite
+    // treatment.
+    //
+    // Within a window, `queryCpuWindow` emits one row per call-tree NODE, so
+    // one function name can arrive several times. Self time is exclusive —
+    // even nested frames own disjoint sample intervals — so it always adds.
+    // Inclusive time belongs to whole subtrees: the row tracks the set of
+    // disjoint subtree roots seen so far, and each newcomer is either already
+    // inside one of them (recursion), contains some of them (an outer frame
+    // arriving after its inner frames), or covers fresh ground (the same
+    // helper called from an unrelated site) and joins the union. Deciding
+    // pairwise against a single representative would not compose over three
+    // or more nodes mixing nesting and disjointness. The window itself is
+    // capped at its 50 costliest nodes by self time; nodes past the cap
+    // contribute to neither column.
+    const perWindow = new Map<
+      string,
+      {
+        selfMs: number;
+        totalMs: number;
+        members: { nodeId: number; totalMs: number }[];
+        url?: string;
+        lineNumber?: number;
+      }
+    >();
     for (const hs of hotspots) {
-      const existing = aggregated.get(hs.name);
-      if (existing) {
-        existing.selfMs += hs.selfMs;
-        existing.totalMs += hs.totalMs;
+      const seen = perWindow.get(hs.name);
+      if (seen) {
+        seen.selfMs += hs.selfMs;
+        if (!seen.members.some((m) => isAncestor(m.nodeId, hs.nodeId, childToParent))) {
+          seen.members = seen.members.filter(
+            (m) => !isAncestor(hs.nodeId, m.nodeId, childToParent)
+          );
+          seen.members.push({ nodeId: hs.nodeId, totalMs: hs.totalMs });
+          seen.totalMs = seen.members.reduce((sum, m) => sum + m.totalMs, 0);
+        }
       } else {
-        aggregated.set(hs.name, {
+        perWindow.set(hs.name, {
           selfMs: hs.selfMs,
           totalMs: hs.totalMs,
+          members: [{ nodeId: hs.nodeId, totalMs: hs.totalMs }],
           url: hs.url,
           lineNumber: hs.lineNumber,
         });
+      }
+    }
+    // Across windows both columns add. Commit windows are disjoint stretches of
+    // wall clock, so a function's inclusive time in one cannot overlap its time
+    // in another — the nesting that makes inclusive times unaddable does not
+    // reach across them. Adding also keeps the two columns on one footing: an
+    // exclusive column summed against an inclusive column maxed produces rows
+    // whose `self` exceeds their own inclusive time, which is impossible for a
+    // single frame and reads as broken output. It stays bounded by the commit
+    // total printed above, since no single frame outlasts the window it is in.
+    for (const [name, win] of perWindow) {
+      const existing = aggregated.get(name);
+      if (existing) {
+        existing.selfMs += win.selfMs;
+        existing.totalMs += win.totalMs;
+      } else {
+        aggregated.set(name, { ...win });
       }
     }
   }
@@ -426,6 +483,32 @@ function shortenUrl(url: string): string {
   const parts = url.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
 }
+
+/**
+ * True when `ancestor` is the given node or one of its call-tree ancestors, so
+ * the ancestor's inclusive time already contains the node's. A cycle guard
+ * bounds the walk.
+ */
+function isAncestor(
+  ancestor: number,
+  nodeId: number,
+  childToParent: Map<number, number> | undefined
+): boolean {
+  if (!childToParent) return false;
+  if (ancestor === nodeId) return true;
+  const seen = new Set<number>([nodeId]);
+  let current = nodeId;
+  while (childToParent.has(current)) {
+    current = childToParent.get(current)!;
+    if (current === ancestor) return true;
+    if (seen.has(current)) return false;
+    seen.add(current);
+  }
+  return false;
+}
+
+/** Exposed for tests: the aggregation whose inclusive-duration handling is load-bearing. */
+export const __testables = { renderComponentCpu };
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
