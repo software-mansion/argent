@@ -317,6 +317,254 @@ async function pointerPost(
   }
 }
 
+/** What simulator-server hands back once it has muxed a finished recording. */
+export interface ServerRecordingResult {
+  /** Path to the mp4 on the simulator-server host (its session media dir). */
+  path: string;
+  sizeBytes: number;
+  /** Length of the video, i.e. what static trimming left. */
+  durationMs: number;
+  /** Real elapsed recording time; null when the stop reply omitted it. */
+  wallClockMs: number | null;
+  /** Wall-clock time trimming removed; null when trimming was off or never applied. */
+  trimmedMs: number | null;
+  warning: string | null;
+}
+
+/**
+ * Start recording the device screen inside simulator-server: it taps the frames
+ * it already encodes for the live stream (touch overlay included), paces them
+ * onto a constant 30fps timeline, trims static stretches and stamps the
+ * watermark, then muxes an h264 mp4 when `stopServerRecording` is called.
+ *
+ * Returns the id simulator-server keys the recording to; `stopServerRecording`
+ * has to present it, so a second client sharing this server cannot collect (and
+ * end) a recording it did not start.
+ *
+ * Returns null when this build exposes no recording route (HTTP 404), so the
+ * caller can fall back to capturing the frame stream itself. The route is
+ * compiled out of the software-encoder builds, and absent from every
+ * simulator-server predating it — including the one argent currently pins — so
+ * the fallback is the common case, not an edge one.
+ */
+export async function startServerRecording(
+  api: SimulatorServerApi,
+  opts: { watermark: boolean; trimStatic: boolean; timeLimitSeconds: number },
+  signal?: AbortSignal
+): Promise<string | null> {
+  const body = await recordingPost<{ status?: string; id?: string; error?: string }>(
+    api,
+    "start",
+    {
+      watermark: opts.watermark,
+      trim_static: opts.trimStatic,
+      time_limit_secs: opts.timeLimitSeconds,
+    },
+    signal
+  );
+  if (body === null) return null;
+  if (body.status !== "ok" || typeof body.id !== "string") {
+    // Neither the success reply nor a recognized rejection, so whether a
+    // recording is now running is unknown — and a success without an id is no
+    // better, since nothing could ever stop it. Fail instead of falling back: a
+    // second capture over one that did start would record the screen twice and
+    // strand the server's copy with nothing left to stop it.
+    throw new FailureError(
+      `screen-recording-start failed: simulator-server answered the recording command with ` +
+        `${JSON.stringify(body).slice(0, 200)} instead of a status. A recording an earlier ` +
+        `start attempt began may still be running inside simulator-server — for example one ` +
+        `whose reply was lost — and ends at its own time limit; retrying after that should succeed.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+        failure_stage: "screen_recording_server_start",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return body.id;
+}
+
+/**
+ * Finalize the recording {@link startServerRecording} began, identified by the
+ * id it returned. simulator-server refuses a stop that names anything else.
+ */
+export async function stopServerRecording(
+  api: SimulatorServerApi,
+  id: string,
+  signal?: AbortSignal
+): Promise<ServerRecordingResult> {
+  const body = await recordingPost<{
+    path?: string;
+    size_bytes?: number;
+    duration_ms?: number;
+    wall_clock_ms?: number;
+    trimmed_ms?: number | null;
+    warning?: string | null;
+    error?: string;
+  }>(api, "stop", { id }, signal);
+  if (body === null) {
+    // `serverStop` is only ever stamped by a start that the route answered, so
+    // the same server answering 404 now means it stopped serving that route
+    // mid-recording. Never observed; handled rather than falling back, because
+    // there is no video to hand over either way. Classified `unsupported` (a
+    // route/capability problem, like the clipboard's missing-endpoint case), not
+    // `not_found` — that kind means "the video file is absent" everywhere else.
+    throw new FailureError(
+      `screen-recording-stop failed: simulator-server no longer exposes a recording endpoint, ` +
+        `so the recording in progress cannot be finalized.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: "screen_recording_server_stop",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  if (typeof body.path !== "string" || typeof body.duration_ms !== "number") {
+    throw new FailureError(
+      `screen-recording-stop failed: simulator-server returned a recording result missing its video ` +
+        `path or duration (${JSON.stringify(body).slice(0, 200)}).`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: "screen_recording_server_stop",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return {
+    path: body.path,
+    sizeBytes: body.size_bytes ?? 0,
+    durationMs: body.duration_ms,
+    wallClockMs: typeof body.wall_clock_ms === "number" ? body.wall_clock_ms : null,
+    trimmedMs: body.trimmed_ms ?? null,
+    warning: body.warning ?? null,
+  };
+}
+
+/**
+ * POST a recording command, returning null when the route does not exist.
+ *
+ * Deliberately not `simulatorPost`: a build without the recording feature has
+ * no route at all, so its answer comes from the router's unmatched-route
+ * fallback — 404 with an empty body, which that helper would surface as
+ * "non-JSON response", indistinguishable from a server in a bad state and the
+ * one answer callers must be able to act on. A present route (per
+ * software-mansion/radon#155) answers HTTP 200 with a JSON body for both
+ * outcomes — success, or an in-band `{error}` — so an empty-bodied 404
+ * identifies the missing route on its own.
+ *
+ * The body has to be part of that test, not just the status. A 404 that
+ * carries one came from a handler, which means the route does exist and the
+ * command was refused — falling back there would start a second capture over a
+ * recording that is already running and strand the server's copy. Verified
+ * against the shipped macOS simulator-server, which has no recording route:
+ * `POST /api/recording/start` answers 404 with `content-length: 0`. The one
+ * ambiguity this cannot resolve — a handler answering an unknown id with a bare
+ * 404 — reads as "no route", which is harmless here: there is no video to hand
+ * over either way, and the fallback it triggers only ever runs at start, where
+ * a "route present" server would have answered 200.
+ */
+async function recordingPost<T extends { error?: string }>(
+  api: SimulatorServerApi,
+  stage: "start" | "stop",
+  reqBody: unknown,
+  signal?: AbortSignal
+): Promise<T | null> {
+  const toolLabel = `screen-recording-${stage}`;
+  // A start whose request may have been received but whose reply was lost (a
+  // timeout, or a generic network error) can leave a recording running inside
+  // simulator-server: same story the ambiguous-reply branch tells, but reached
+  // through the network path. Append it so the caller knows why the device is
+  // unrecordable and that waiting out the server's own cap is the fix, rather
+  // than reading a bare "the simulator may be unresponsive". `toSimulatorNetworkError`
+  // adds it only to the timeout and generic messages, never to connection-
+  // refused/reset — where the request never landed and no recording began.
+  const startHint =
+    stage === "start"
+      ? "A recording an earlier start attempt began may still be running inside " +
+        "simulator-server — for example one whose reply was lost — and ends at its own " +
+        "time limit; retrying after that should succeed."
+      : undefined;
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/recording/${stage}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
+  }
+
+  // Read as text, so a body that never finishes arriving stays a network
+  // failure instead of being flattened into "the server rejected the command".
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch (err) {
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
+  }
+  if (res.status === 404 && raw.trim() === "") return null;
+
+  let body: T | null = null;
+  if (raw.trim() !== "") {
+    try {
+      body = JSON.parse(raw) as T;
+    } catch {
+      throw new FailureError(
+        `${toolLabel} failed: simulator-server returned non-JSON response (HTTP ${res.status}). ` +
+          `The server may be in a bad state. Restart the simulator-server and retry.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE,
+          failure_stage: "simulator_server_parse_response",
+          failure_area: "tool_server",
+          error_kind: "network",
+          network_failure: "invalid_response",
+        }
+      );
+    }
+  }
+  if (res.ok && body === null) {
+    // A 2xx from a present route always carries a JSON body — success or an
+    // in-band `{error}`. An empty one is an unreadable reply, not a rejection,
+    // so it is actionable the same way a non-JSON body is (restart), rather than
+    // blaming the server for refusing a command it never saw. (A non-2xx empty
+    // reply falls through to the rejection below, so an empty 500 still reads as
+    // "HTTP 500", distinct from the empty-404 missing route handled above.)
+    throw new FailureError(
+      `${toolLabel} failed: simulator-server returned an empty response (HTTP ${res.status}). ` +
+        `The server may be in a bad state. Restart the simulator-server and retry.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE,
+        failure_stage: "simulator_server_parse_response",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+  if (!res.ok || !body || body.error) {
+    throw new FailureError(
+      `${toolLabel} failed: simulator-server rejected the recording command ` +
+        `(HTTP ${res.status}${body?.error ? `: ${body.error}` : ""}).`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+        failure_stage: `screen_recording_server_${stage}`,
+        failure_area: "tool_server",
+        error_kind: "unknown",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return body;
+}
+
 /**
  * Put `text` on the DEVICE clipboard through simulator-server's
  * `POST /api/clipboard/text`; the host clipboard is untouched. Resolves once the
