@@ -74,11 +74,11 @@ A normally injectable app that is broken in the environment gets the same coordi
 
 While the required source is down, selector failures and raw-point capture are void. Restore the source and re-record affected taps.
 
-| Platform | Symptom                          | Recovery                                               |
-| -------- | -------------------------------- | ------------------------------------------------------ |
-| Android  | Cannot reach the devtools helper | Unlock the device, allow `adb install -t`, and rerun   |
-| Chromium | No reachable CDP session         | Boot again with `electronAppPath` and remote debugging |
-| Vega     | Toolkit returns no page source   | Relaunch an app built with automation support          |
+| Platform | Symptom                                       | Recovery                                                                                                                                                                                                                                                 |
+| -------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Android  | Cannot reach the devtools helper              | Unlock the device, allow `adb install -t`, and rerun                                                                                                                                                                                                     |
+| Chromium | No page to drive, or no reachable CDP session | Call `debugger-status` and follow the `guidance` on its result — it routes on the `detail`. The relaunch is the user's move: `boot-device` only starts an app and never stops one, and an app that merely lost its window needs a window, not a relaunch |
+| Vega     | Toolkit returns no page source                | Relaunch an app built with automation support                                                                                                                                                                                                            |
 
 On Android, healthy `describe` output does not prove the flow tree is available. It can fall back to legacy `uiautomator`, while the runner refuses that trimmed fallback.
 

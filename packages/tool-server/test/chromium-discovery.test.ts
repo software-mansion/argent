@@ -169,6 +169,33 @@ describe("discoverChromiumDevices", () => {
     expect(devices).toEqual([]);
   });
 
+  it("untracks a LIVE endpoint that has no page target, exactly as it untracks a dead one", async () => {
+    // The fact four recovery surfaces rest on: an app whose last window closed is
+    // dropped like an exited one, and dropped from the probe set too — so its entry
+    // does not come back when the user reopens a window, and a reader polling
+    // list-devices for the exit relaunches into a running app.
+    const server = await startFakeCdpServer({
+      responses: {
+        list: [
+          { id: "x", type: "service_worker", title: "", url: "", webSocketDebuggerUrl: "ws://x" },
+        ],
+      },
+    });
+    serversToCleanup.push(server);
+    trackChromiumPort(server.port);
+    portsToCleanup.push(server.port);
+    expect(getCandidateChromiumPorts()).toContain(server.port);
+
+    const devices = await discoverChromiumDevices({ timeoutMs: 1500 });
+    expect(
+      devices.some((d) => d.port === server.port),
+      "listed while windowless"
+    ).toBe(false);
+    // The endpoint is still answering — only the drivable page is missing.
+    expect((await fetch(`http://127.0.0.1:${server.port}/json/version`)).ok).toBe(true);
+    expect(getCandidateChromiumPorts(), "and no longer probed").not.toContain(server.port);
+  });
+
   it("untracks a port after it stops responding", async () => {
     const server = await startFakeCdpServer();
     trackChromiumPort(server.port);

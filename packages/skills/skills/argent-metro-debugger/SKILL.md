@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android / Vega); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
+description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android / Vega); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry, view-network-logs, view-network-request-details) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
 ---
 
 ## 1. Prerequisites
@@ -11,7 +11,7 @@ For **React Native (iOS / Android)**: requires **Metro dev server running** (def
 
 For **Vega (Fire TV)**: requires a **Debug `.vpkg`** (a Release build never attaches) and **Metro reachable from the device** (`vega device start-port-forwarding --port 8081 --forward false`). Verify via `debugger-status`. `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there — see the `argent-tv-interact` skill.
 
-For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Electron app booted via `boot-device` with `electronAppPath`, or any Chromium browser exposing a CDP port (auto-discovered by `list-devices` on `9222` / `ARGENT_CHROMIUM_PORTS`). The debugger re-uses the page CDP session — `port` is ignored, `device_id` is the `chromium-cdp-<port>` value from `list-devices` / `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs`, and `view-network-request-details` work on Chromium (the latter two read the browser's native CDP Network recording for the active tab instead of the Metro-injected `fetch` interceptor); `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Chromium at the capability gate with `Tool 'X' is not supported on chromium app`.
+For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Electron app booted via `boot-device` with `electronAppPath`, or any Chromium browser exposing a CDP port (auto-discovered by `list-devices` on `9222`, `ARGENT_CHROMIUM_PORTS` and the ports `boot-device` opened). The debugger re-uses the page CDP session — `port` is ignored, `device_id` is the `chromium-cdp-<port>` value from `list-devices` / `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs`, and `view-network-request-details` work on Chromium (the latter two read the browser's native CDP Network recording for the active tab instead of the Metro-injected `fetch` interceptor); `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Chromium at the capability gate with `Tool 'X' is not supported on chromium app`.
 
 ### Android: reverse port for Metro
 
@@ -40,17 +40,17 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
-| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
+| Tool                    | Purpose                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-reload-metro` | Reload all connected apps on iOS / Android (like pressing "r" in Metro terminal). Needs a CDP target.                                                         |
+| `restart-app`           | Terminate and relaunch the app by device id and bundleId (iOS / Android / Vega). Use when app lost Metro connection. On Chromium see the Quick Reference row. |
 
 ### Inspection & console
 
 | Tool                       | Purpose                                                                                                                                                                                                              |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                                                                                                                               |
-| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                                            |
+| `debugger-component-tree`  | Full React fiber tree on iOS / Android (names, depth, bounding rects, tap coordinates).                                                                                                                              |
+| `debugger-inspect-element` | Inspect at (x, y) on iOS / Android using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                           |
 | `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details. If it returns `status: "not_connected"`, there is **no** `file` — follow its `guidance` instead of grepping. |
 | `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                                                              |
 
@@ -124,13 +124,13 @@ When reading from the log file:
 
 ## Quick Reference
 
-| Action                            | Tool                                                                |
-| --------------------------------- | ------------------------------------------------------------------- |
-| Diagnose / check connection       | `debugger-status`                                                   |
-| Connect to CDP (Metro / Chromium) | `debugger-connect`                                                  |
-| Reload JS (already connected)     | `debugger-reload-metro`                                             |
-| Relaunch app on device            | `restart-app`                                                       |
-| Inspect component at point        | `debugger-inspect-element`                                          |
-| Full component tree               | `debugger-component-tree`                                           |
-| Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
-| Evaluate JS                       | `debugger-evaluate`                                                 |
+| Action                            | Tool                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Diagnose / check connection       | `debugger-status`                                                                                                                                                                                                                                                                                                                                                 |
+| Connect to CDP (Metro / Chromium) | `debugger-connect`                                                                                                                                                                                                                                                                                                                                                |
+| Reload JS (already connected)     | `debugger-reload-metro` (iOS / Android)                                                                                                                                                                                                                                                                                                                           |
+| Relaunch app on device            | `restart-app` (iOS / Android / Vega); not supported on Chromium, where `boot-device` only starts an app and never stops one, so the quit is the user's move. Call `debugger-status` and follow the `guidance` on its result: it routes on the `detail`, and one of the states it names is an app that is up and only lost its window, which no relaunch recovers. |
+| Inspect component at point        | `debugger-inspect-element` (iOS / Android)                                                                                                                                                                                                                                                                                                                        |
+| Full component tree               | `debugger-component-tree` (iOS / Android)                                                                                                                                                                                                                                                                                                                         |
+| Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`)                                                                                                                                                                                                                                                                                               |
+| Evaluate JS                       | `debugger-evaluate`                                                                                                                                                                                                                                                                                                                                               |

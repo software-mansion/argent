@@ -76,7 +76,7 @@ export const chromiumTabsTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${tabAction[params.action].failure} browser tabs: ${failureSignal.error_code}`,
   },
-  description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them.
+  description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them. Needs an existing page to resolve: when the app is up with no open tab/window, every action — including \`new\` — fails before it runs; ask the user to reopen a window first.
 - action="list": enumerate page targets with stable ids (\`t1\`, \`t2\`, …), title, url, and which is active.
 - action="select" (tab=<tabId|label>): make that tab the active one. The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so switch before driving a different tab.
 - action="new" (url?, label?): open a new tab/page and activate it.

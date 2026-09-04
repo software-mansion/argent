@@ -106,7 +106,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+      "Device id from list-devices (iOS simulator UDID, Android serial, or chromium-cdp-<port>) — the same id used with debugger-connect."
     ),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])

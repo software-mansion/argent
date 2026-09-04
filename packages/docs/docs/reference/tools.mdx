@@ -17,7 +17,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
 | `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
 | `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                |
+| `restart-app`                | Terminate then relaunch an app (iOS / Android / Vega — not on Chromium)                       |
 | `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
 | `open-url`                   | Open a URL or URL scheme on the device                                                        |
 | `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
@@ -60,17 +60,17 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## JavaScript runtime debugging
 
-| Tool                           | Description                                                               |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `debugger-connect`             | Connect to the JS runtime CDP debugger                                    |
-| `debugger-status`              | Report connection status and diagnostics                                  |
-| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium |
-| `debugger-component-tree`      | Fetch the current screen as a compact React component text tree           |
-| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate              |
-| `debugger-log-registry`        | Summarize console logs captured from the app                              |
-| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process            |
-| `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
-| `view-network-request-details` | Get full details of one request by its `requestId`                        |
+| Tool                           | Description                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| `debugger-connect`             | Connect to the JS runtime CDP debugger                                          |
+| `debugger-status`              | Report connection status and diagnostics                                        |
+| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium       |
+| `debugger-component-tree`      | Fetch the current screen as a compact React component text tree (iOS / Android) |
+| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate (iOS / Android)    |
+| `debugger-log-registry`        | Summarize console logs captured from the app                                    |
+| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process (iOS / Android)  |
+| `view-network-logs`            | Retrieve captured HTTP requests from the running app                            |
+| `view-network-request-details` | Get full details of one request by its `requestId`                              |
 
 ## Native devtools
 
@@ -86,11 +86,11 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## Chromium and Electron
 
-| Tool               | Description                                                           |
-| ------------------ | --------------------------------------------------------------------- |
-| `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s                |
-| `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
-| `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
+| Tool               | Description                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s (needs an existing page — cannot reopen a closed last window) |
+| `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                                                                    |
+| `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page                                                |
 
 ## Profiling
 

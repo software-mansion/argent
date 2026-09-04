@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
+import { createRestartAppTool } from "../../src/tools/restart-app";
+import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
+import { pinsOnce } from "../helpers/pins";
+import { platformTag } from "../helpers/platform-tag";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 
 let wss: WebSocketServer;
@@ -279,6 +283,74 @@ describe("CDPClient", () => {
       // The server never replies — the per-request timer must fire.
       const err = await rejection(client.send("Runtime.enable", {}, 50));
       expect((err as Error).message).toMatch(/CDP request Runtime\.enable \(id=\d+\) timed out/);
+      // This client is shared with the Chromium path, and its own comment says the
+      // message carries the recovery so skills need not re-explain it. It is also
+      // the ONLY text a paused Chromium renderer reaches: the socket stays OPEN, so
+      // debugger-status answers "connected" and the branching guidance is never
+      // emitted. Both branches, through to their remedies - the message names the
+      // paused state, and quitting there throws the user's session away.
+      const message = (err as Error).message;
+      // The third runtime string, held to the same bar as the two CHROMIUM_GUIDANCE
+      // ones. It is the only text a paused Chromium renderer ever reaches, and it
+      // was the one surface the shared list did not cover.
+      expectNoForbiddenAdvice(message, "the CDP request-timeout message");
+      // The diagnosis itself. Both remedies below are chosen off "reachable but not
+      // answering"; a message that instead reports the runtime as gone sends the
+      // reader straight past them to a relaunch.
+      pinsOnce(
+        message,
+        "the runtime accepted the connection but did not answer; it may be frozen, or " +
+          "paused at a breakpoint."
+      );
+      pinsOnce(
+        message,
+        "If it is paused, ask them to resume it — quitting throws the debug session away."
+      );
+      // The two arms are mutually destructive and this message names no way to choose
+      // between them — nothing in the catalogue reports pausedness. Left unlabelled, an
+      // agent guesses, and guessing "hung" throws the session away. The debugger-status
+      // half has to stay scoped to an established session: this same message is the
+      // detail of a not_connected result when the connect pipeline is what timed out.
+      pinsOnce(
+        message,
+        "Nothing here tells the two apart — no tool reports pausedness, and once the " +
+          'session is established debugger-status reports "connected" either way — so have ' +
+          "the user check the app before choosing."
+      );
+      expect(message, "does not promise connected on the connect surface").not.toMatch(
+        /debugger-status says "connected" either way/i
+      );
+      // The claim the two branches above rest on, and the ONLY copy of it: a
+      // post-connect hang leaves the socket OPEN, so debugger-status reports
+      // "connected" and never reaches the branching guidance. On the connect
+      // surface this message IS the detail of a not_connected result, so an
+      // unscoped second copy asserts a state the payload carrying it disproves.
+      expect(message, "states the debugger-status claim once, scoped").not.toMatch(
+        /debugger-status can still report "connected" in this state/
+      );
+      // Both ends of the retry discipline. Each attempt waits out this full timeout,
+      // so a loosened "unless it looks slow" at one end or a "retry until it answers"
+      // at the other undoes the reason the guidance is in the message at all.
+      pinsOnce(message, "Do not retry in a loop. Nothing here tells the two apart");
+      // Where the Chromium recovery lives. This message no longer restates it:
+      // it named a relaunch procedure that had to stay in step with two guidance
+      // strings and four prose surfaces, and the five drifted apart. The one
+      // Chromium fact it must carry itself is that restart-app is refused - it is
+      // the tool an agent reaches for from here - plus where the rest is.
+      const restartApp = createRestartAppTool({} as unknown as Registry).capability;
+      // Derived from restart-app's own capability, not restated: the same tag on the
+      // skill rows is built this way, and a literal here drifts off it silently.
+      pinsOnce(
+        message,
+        `If it is hung, get the app restarted: restart-app on ${platformTag(restartApp)}.`
+      );
+      pinsOnce(
+        message,
+        "On Chromium restart-app is refused and boot-device only starts an app, so the quit " +
+          "is the user's and the relaunch has to wait for the exit — call debugger-status " +
+          "for the recovery."
+      );
+      pinsOnce(message, "Then reconnect and retry once.");
       expect(getFailureSignal(err)).toMatchObject({
         error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
         failure_stage: "debugger_cdp_send",

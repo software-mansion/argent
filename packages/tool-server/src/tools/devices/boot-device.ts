@@ -79,12 +79,14 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Android/Vega: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega. Clamped to [30s, 15min]. Ignored on iOS."
+      "Android/Vega: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega. Rejected outside [30s, 15min]. Ignored on iOS and on Electron, which polls CDP against its own 30s deadline, checked between attempts, so a port that accepts a connection and never answers can overrun it."
     ),
   force: z
     .boolean()
     .optional()
-    .describe("Shut down and re-boot the device even if already running."),
+    .describe(
+      "Shut down and re-boot the device even if already running. Ignored on Chromium: boot-device only ever starts an Electron app, so a running one is left alone and the new one lands beside it, fails on its single-instance lock, or — with electronPort pinned to a port that app already holds — comes up unable to bind it, leaving the id you get back pointed at the old app."
+    ),
   sound: z
     .boolean()
     .optional()
@@ -110,7 +112,7 @@ const zodSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
+      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`. Pin it only against a port nothing already serves CDP on: the new app cannot bind one that is taken and the readiness probe is answered by whatever holds it, so the boot reports success and the id you get back drives that app, not the one just launched."
     ),
   electronArgs: z
     .array(z.string())
