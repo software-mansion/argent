@@ -11,6 +11,8 @@ Load `argent-create-flow` as the authoring engine. Follow its required reference
 
 **Apple TV and Android TV are out of scope.** The runner does not reject touch directives there, so they fail at the gesture layer instead of with authoring guidance. Use `argent-tv-interact` and report the limitation.
 
+**Physical iPhones** run QA flows, with three hardware limits: replay never auto-binds a phone, so pass its udid as `device` (CLI `--device`) and keep it `connected`; `pinch`/`rotate` steps fail there like the live tools, so drive the app's own zoom UI instead; the flow tree is the `describe` tree (same ids and roles), so a selector authored on a simulator can miss there. Read `argent-ios-device-interact` for the app-scoped contract before recording.
+
 ## Definition of done
 
 A QA flow is complete only when:

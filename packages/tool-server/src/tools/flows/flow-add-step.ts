@@ -29,7 +29,7 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
-import { stepAnchor, summarizeStep } from "./flow-finish-recording";
+import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";

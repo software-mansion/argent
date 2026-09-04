@@ -2,8 +2,11 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { getViewport, tapAt, toPoints } from "../../utils/ios-device/runner-commands";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +26,8 @@ const zodSchema = z.object({
     .describe(
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
-        "CDP clickCount so dblclick actually fires. Default 1."
+        "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap and " +
+        "higher counts land as separate taps. Default 1."
     ),
 });
 
@@ -32,6 +36,12 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   tapped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this tap, so the foreground screen changed as a side
+   * effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 function tapDescription(params: Params, tense: "present" | "past"): string {
@@ -46,6 +56,7 @@ function tapDescription(params: Params, tense: "present" | "past"): string {
           ? "Double-tapping"
           : "Double-tapped"
         : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
+
   return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)`;
 }
 
@@ -88,11 +99,12 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to tap at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%): ${failureSignal.error_code}`,
   },
-  description: `Press the device screen (iOS simulator, Android emulator, or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
@@ -103,6 +115,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (isIosPhysicalDevice(device)) {
+      return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+    }
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
@@ -112,9 +127,22 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       // Mouse dispatch stalls at ~5s per event on a hidden window.
-      await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
+      await assertChromiumWindowVisible(chromium, "tap");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };
+    }
+    if (isIosPhysicalDevice(device)) {
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+      const point = toPoints(viewport, params.x, params.y);
+      // The whole count is one runner command: a double-tap must be the native one, and any loop
+      // above 2 stays on-device (separate taps either way, but without wire round trips between them).
+      const tap = await tapAt(runner, bundleId, point, clickCount);
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the tap then finds it foreground.
+      const reactivated = viewport.reactivated === true || tap.reactivated;
+      return { tapped: true, timestampMs, ...(reactivated ? { reactivated: true as const } : {}) };
     }
     const api = services.simulatorServer as SimulatorServerApi;
     for (let i = 1; i <= clickCount; i++) {

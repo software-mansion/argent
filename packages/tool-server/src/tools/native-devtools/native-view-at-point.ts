@@ -66,7 +66,7 @@ export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Inspect the deepest visible UIView at a raw native window point.
 
 Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
