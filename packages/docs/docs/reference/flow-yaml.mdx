@@ -282,7 +282,8 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 | `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                      |
 | `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                             |
 | `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                      |
-| `--json`             | Print the raw JSON report                                                                                                   |
+| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                   |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                 |
 | `--`                 | End of options, for a flow name that starts with `-`                                                                        |
 
 ```bash
@@ -292,7 +293,28 @@ argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
 argent flow run .argent/flows --recursive
 ```
 
-The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`. A directory run prints only the failing steps and a summary. An invalid file fails alone and the batch continues. An infrastructure error stops the batch and counts the remaining flows as skipped.
+The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
+
+A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
+
+A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
+
+The outcome line of a flow that produced a report gives the result and the step counts of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
+
+| Outcome line                     | Meaning                                                         |
+| -------------------------------- | --------------------------------------------------------------- |
+| `not run (invalid flow)`         | The tool-server rejected the flow file or one of its steps      |
+| `not run (no device resolved)`   | Argent did not resolve one device for the flow                  |
+| `not run (rejected)`             | The tool-server rejected the flow for another reason            |
+| `did not finish (run error)`     | The run failed before it produced a report                      |
+| `did not finish (no run report)` | The tool-server answered without a run report                   |
+| `not run (batch stopped)`        | An earlier failure ended the directory run. Directory runs only |
+
+`--json` and `--json-stream` print no header, no outcome line and no summary.
+
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
+
+A single flow run with `--json` writes the report of that flow. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
