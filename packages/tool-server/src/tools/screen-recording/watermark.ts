@@ -33,7 +33,7 @@ const DARK_LOGO_LEVEL = 0.08;
 const MASK_DARK_MAX_LUMA = 90;
 const MASK_LIGHT_MIN_LUMA = 165;
 
-export interface Dimensions {
+interface Dimensions {
   width: number;
   height: number;
 }

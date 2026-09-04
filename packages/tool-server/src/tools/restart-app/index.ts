@@ -5,6 +5,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import type { RestartAppResult, RestartAppVegaServices, RestartAppIosServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
+import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
@@ -84,6 +85,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       toolId: "restart-app",
       capability,
       ios: makeIosImpl(registry),
+      iosDevice: iosDeviceImpl,
       iosRemote: iosRemoteImpl,
       android: androidImpl,
       vega: vegaImpl,

@@ -148,7 +148,7 @@ export async function runSkillsStep(args: {
   return skillsMethod;
 }
 
-export function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
+function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
     const child = spawn(npxCmd, args, {

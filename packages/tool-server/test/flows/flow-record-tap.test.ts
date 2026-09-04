@@ -16,7 +16,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import { summarizeStep } from "../../src/tools/flows/flow-finish-recording";
+import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
@@ -138,7 +138,11 @@ describe("flow-add-step tap capture targets the recorded launch", () => {
       }
     );
 
-    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toBe(BUNDLE);
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({
+      bundleId: BUNDLE,
+      pinned: false,
+      probeAnswered: false,
+    });
   });
 
   it("passes nothing when the recording has captured no launch", async () => {

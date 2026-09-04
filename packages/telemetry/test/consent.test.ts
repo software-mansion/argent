@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { scopeHome, snapshotEnv } from "./helpers.js";
 import {
@@ -128,6 +130,150 @@ describe("consent", () => {
     } finally {
       restore();
     }
+  });
+
+  describe("project scope (restrictive merge with global)", () => {
+    // A throwaway project root: `.git` marks it so resolveProjectRoot stops here
+    // instead of climbing to the repository the tests run in.
+    function makeProject(): string {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "argent-consent-project-"));
+      fs.mkdirSync(path.join(root, ".git"));
+      return root;
+    }
+
+    function readProjectConfig(root: string): Record<string, unknown> {
+      return JSON.parse(fs.readFileSync(path.join(root, ".argent", "config.json"), "utf8"));
+    }
+
+    it("a committed project opt-out disables with no global choice", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(false, "project", { cwd: root });
+        expect(readProjectConfig(root)).toEqual({ telemetry: { enabled: false } });
+        // Only the project document was written.
+        expect(fs.existsSync(configFilePath())).toBe(false);
+
+        const state = getConsentState(emptyEnv(), root);
+        expect(state.enabled).toBe(false);
+        expect(state.source).toEqual({ source: "config_file", detail: "config.json (project)" });
+        // Another cwd (no project opt-out) is still on.
+        expect(getConsentState(emptyEnv(), tmp()).enabled).toBe(true);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("false in either scope wins: a project file cannot re-enable a global opt-out", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(false, "global");
+        writeConsentFlag(true, "project", { cwd: root });
+        const state = getConsentState(emptyEnv(), root);
+        expect(state.enabled).toBe(false);
+        expect(state.source.detail).toBe("config.json (global)");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("false in either scope wins: a global true cannot override a project opt-out", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(true, "global");
+        writeConsentFlag(false, "project", { cwd: root });
+        const state = getConsentState(emptyEnv(), root);
+        expect(state.enabled).toBe(false);
+        expect(state.source.detail).toBe("config.json (project)");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("both scopes opted out reports both", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(false, "global");
+        writeConsentFlag(false, "project", { cwd: root });
+        const state = getConsentState(emptyEnv(), root);
+        expect(state.enabled).toBe(false);
+        expect(state.source.detail).toBe("config.json (project and global)");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("true in both scopes is enabled from config, not the default", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(true, "global");
+        writeConsentFlag(true, "project", { cwd: root });
+        const state = getConsentState(emptyEnv(), root);
+        expect(state.enabled).toBe(true);
+        expect(state.source.source).toBe("config_file");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("env overrides still outrank a project opt-in and a project opt-out", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        writeConsentFlag(true, "project", { cwd: root });
+        expect(getConsentState({ DO_NOT_TRACK: "1" }, root).enabled).toBe(false);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("re-reads the project file when it changes on disk (running tool-server sees a new opt-out)", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        expect(getConsentState(emptyEnv(), root).enabled).toBe(true);
+        fs.mkdirSync(path.join(root, ".argent"), { recursive: true });
+        fs.writeFileSync(
+          path.join(root, ".argent", "config.json"),
+          JSON.stringify({ telemetry: { enabled: false } }, null, 2) + "\n"
+        );
+        expect(getConsentState(emptyEnv(), root).enabled).toBe(false);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
+
+    it("a malformed project file is ignored (no override)", () => {
+      const restore = restoreEnv();
+      const root = makeProject();
+      try {
+        _resetConsentCacheForTest();
+        fs.mkdirSync(path.join(root, ".argent"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".argent", "config.json"), "{ not json");
+        expect(getConsentState(emptyEnv(), root).source.source).toBe("default");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        restore();
+      }
+    });
   });
 
   it("re-reads the config file when mtime changes", () => {

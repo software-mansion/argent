@@ -16,10 +16,11 @@ import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
+import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 
-export const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
+const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
@@ -98,6 +99,10 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     androidIsTv: boolean
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
+      // Physical devices poll the same XCUITest runner snapshot as describe.
+      if (device.kind === "device") {
+        return describeIosDevice(registry, device);
+      }
       return describeIos(registry, device, {}, { isTvOs });
     }
     if (device.platform === "android") {
@@ -139,10 +144,9 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
 
-      // Hoisted out of the poll loop: `isAndroidTv` runs `adb devices` (plus an
-      // avdName getprop) on every call, even on a cache hit, so letting
-      // `describeAndroid` probe would pay that per poll.
-      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
+      const isTvOs =
+        device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
       const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
 

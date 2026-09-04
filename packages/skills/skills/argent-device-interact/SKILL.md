@@ -15,6 +15,8 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 > **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
 
+> **Physical iPhones (an iOS entry with kind `"device"`) follow a different contract:** automation is app-scoped and only a subset of these tools exists there. Use the `argent-ios-device-interact` skill instead.
+
 For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 
 ## 1. Before You Start
@@ -29,10 +31,10 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
-3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
+3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`. Pass `momentum: false` when the swipe should decelerate before ending for a precise movement.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For app navigation, use the element tree returned after each action** (`--- Elements after action (describe) ---`); call `describe` only when no fresh tree is available for the current screen. It works on any screen without app restart. Do not navigate from screenshot pixels on regular in-app screens unless the tree failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -130,6 +132,8 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 ```
 
 Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
+
+`"momentum"` defaults to `true` (a natural flinging swipe). Pass `"momentum": false` for a momentum-free swipe: the finger decelerates into the end point, resulting in little to no fling. It needs `durationMs` of at least 150 and is rejected below it.
 
 ### gesture-pinch — Two-finger pinch
 

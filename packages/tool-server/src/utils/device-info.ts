@@ -1,4 +1,4 @@
-import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
+import { type DeviceInfo, type DeviceKind, type Platform } from "@argent/registry";
 
 /**
  * iOS simulator UDID shape: 8-4-4-4-12 hex. Everything here classifies by shape
@@ -9,11 +9,29 @@ const IOS_UDID_SHAPE =
   /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
 /**
+ * Physical iOS device UDID format (A12/2018 hardware and newer): 8 hex digits,
+ * a dash, then 16 hex digits (e.g. `00008110-000978540290401E`). Distinct from
+ * both the simulator UUID shape and every known Android serial form, so it is
+ * safe to classify by shape on the hot path. Legacy 40-hex UDIDs (A11 hardware
+ * and older) are deliberately unsupported: 40 bare hex characters are
+ * ambiguous with Android serials, so classifying them by shape here would
+ * misroute a device. Age alone would not settle it - the A10 iPad 6th and 7th
+ * generations carry a 40-hex UDID and do run iPadOS 17, the floor for the
+ * CoreDevice (`devicectl`) tooling this backend is built on.
+ */
+const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
+
+/** True when `udid` has the modern physical-iPhone UDID shape (see above). */
+export function isIosPhysicalUdid(udid: string): boolean {
+  return IOS_PHYSICAL_UDID_SHAPE.test(udid);
+}
+
+/**
  * Prefix on device ids that route through `sim-remote` to a remote iOS
  * simulator. The UUID after it has the same shape as a local iOS UDID, so the
  * prefix is the only thing telling the two apart.
  */
-export const REMOTE_PREFIX = "remote:";
+const REMOTE_PREFIX = "remote:";
 
 export function stripRemotePrefix(id: string): string {
   return id.startsWith(REMOTE_PREFIX) ? id.slice(REMOTE_PREFIX.length) : id;
@@ -31,13 +49,13 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  * `ro.serialno` is vendor-defined, so a colliding Android serial would be
  * misrouted to the Vega paths.
  */
-export const VEGA_SERIAL_PREFIX = "amazon-";
+const VEGA_SERIAL_PREFIX = "amazon-";
 
 export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
-  return IOS_UDID_SHAPE.test(udid) ? "ios" : "android";
+  return IOS_UDID_SHAPE.test(udid) || IOS_PHYSICAL_UDID_SHAPE.test(udid) ? "ios" : "android";
 }
 
 /**
@@ -54,8 +72,9 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 }
 
 /**
- * Kind is defaulted by shape; platform impls can enrich the result with
- * name/state/sdkLevel from simctl/adb/sim-remote.
+ * Kind is defaulted by shape (a physical-iOS-shaped UDID gets 'device');
+ * platform impls can enrich the result with name/state/sdkLevel from
+ * simctl/adb/sim-remote.
  *
  * Vega is VVD-only: the tool-server neither connects to nor detects physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` and never
@@ -63,17 +82,33 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
  */
 export function resolveDevice(udid: string): DeviceInfo {
   const platform = classifyDevice(udid);
+
   const kind: DeviceKind =
-    platform === "ios" || platform === "ios-remote"
-      ? "simulator"
-      : platform === "vega"
-        ? "vvd"
-        : platform === "android"
-          ? isAndroidEmulatorSerial(udid)
-            ? "emulator"
-            : "device"
-          : "app";
+    platform === "ios"
+      ? isIosPhysicalUdid(udid)
+        ? "device"
+        : "simulator"
+      : platform === "ios-remote"
+        ? "simulator"
+        : platform === "vega"
+          ? "vvd"
+          : platform === "android"
+            ? isAndroidEmulatorSerial(udid)
+              ? "emulator"
+              : "device"
+            : "app";
+
   return { id: udid, platform, kind };
+}
+
+/**
+ * True for physical iPhone hardware. Always check platform AND kind: a
+ * bare `kind === "device"` also matches physical ANDROID hardware
+ * (resolveDevice above assigns it to non-emulator Android serials), so the
+ * short spelling silently changes meaning outside an ios-platform guard.
+ */
+export function isIosPhysicalDevice(device: Pick<DeviceInfo, "platform" | "kind">): boolean {
+  return device.platform === "ios" && device.kind === "device";
 }
 
 export function parseChromiumCdpPort(udid: string): number | null {

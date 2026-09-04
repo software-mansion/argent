@@ -1,7 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell } from "./adb";
 
-export interface AndroidScreenSize {
+interface AndroidScreenSize {
   width: number;
   height: number;
 }

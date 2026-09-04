@@ -36,14 +36,14 @@ export async function buildTraceConfig(
     .replaceAll("TARGET_PACKAGE_PLACEHOLDER", appPackage);
 }
 
-export interface StartPerfettoOptions {
+interface StartPerfettoOptions {
   serial: string;
   appPackage: string;
   /** Timestamp slug for the on-device filename. */
   timestamp: string;
 }
 
-export interface StartPerfettoResult {
+interface StartPerfettoResult {
   pid: number;
   onDeviceTracePath: string;
   /** The host-side `adb shell`; it exits while the on-device daemon keeps running. */
@@ -258,7 +258,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
   return { pid, onDeviceTracePath, child };
 }
 
-export interface StopPerfettoOptions {
+interface StopPerfettoOptions {
   serial: string;
   pid: number;
   onDeviceTracePath: string;
@@ -267,7 +267,7 @@ export interface StopPerfettoOptions {
   recordingTimedOut?: boolean;
 }
 
-export interface StopPerfettoResult {
+interface StopPerfettoResult {
   hostTracePath: string;
   warning?: string;
 }

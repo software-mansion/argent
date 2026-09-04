@@ -338,6 +338,32 @@ describe("rotate: gating", () => {
     expect(result.steps[0].reason).not.toMatch(/no backend/i);
     expect(result.calls).toHaveLength(0);
   });
+
+  it("rejects rotate on a physical iOS device without paying the settle or the selector auto-wait", async () => {
+    // Selector against an empty tree: without the upfront guard this step
+    // would burn waitForFrame's full auto-wait before failing. Counting tree
+    // reads proves neither that wait, a gesture settle, nor the aspect read
+    // ran.
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      return screen([]);
+    };
+    await writeFlow("rotate-ios-device", {
+      executionPrerequisite: "",
+      steps: [{ kind: "rotate", selector: { text: "Dial", loose: true }, by: 90 }],
+    });
+
+    const result = await run("rotate-ios-device", "00008110-000978540290401E");
+
+    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/rotate is unsupported on a physical iOS device/);
+    expect(result.steps[0].reason).toMatch(/no two-finger coordinate API on hardware/);
+    expect(result.steps[0].reason).toMatch(/run this flow on a simulator/);
+    expect(result.steps[0].reason).not.toMatch(/simulator-server/);
+    expect(result.calls).toHaveLength(0);
+    expect(reads).toBe(0);
+  });
 });
 
 describe("rotate: abort", () => {

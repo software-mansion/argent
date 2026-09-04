@@ -202,6 +202,31 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     expect(adbShell).not.toHaveBeenCalled();
   });
 
+  it("physical iOS device: the empty request is the simulator's no-op, reached device-free", async () => {
+    // The device branch was the one backend that errored on `{}`. Its no-op
+    // must return before the runner is resolved AND before the tracked-app
+    // requirement: no launch-app ran here, so a branch that still called
+    // requireCurrentIosDeviceApp would reject with "No app is under
+    // automation". Resolving at all is what pins the early return.
+    const simResult = await createKeyboardTool(registry()).execute(
+      {},
+      { udid: "809A848B-1671-4A72-B9C9-B1683D95973E" }
+    );
+    const r = registry();
+    const deviceResult = await createKeyboardTool(r).execute(
+      {},
+      // Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the iosDevice
+      // branch (see utils/device-info.ts).
+      { udid: "00008110-000978540290401E" }
+    );
+    expect(deviceResult).toEqual({ typed: "", keys: 0 });
+    expect(deviceResult).toEqual(simResult);
+    // Unlike the simulator branch (which resolves simulator-server before its
+    // no-op return), the device branch resolves nothing.
+    expect(r.resolveService).not.toHaveBeenCalled();
+    expect(pressKey).not.toHaveBeenCalled();
+  });
+
   it("rejects before resolving a secret placeholder", async () => {
     // The guard sits above `resolveSecretPlaceholders`, so a combined request
     // never reads an `ARGENT_SECRET_*` value — and the caller gets the error that
