@@ -20,7 +20,7 @@ You implement several candidate designs and stage each one with `propose_variant
 
 `propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device the variants run on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
 
-**Always pass `udid`** (the same simulator/emulator id you described with). It is the device `propose_variant` captures the preview from, and the preview window then streams _that_ device directly — the human never has to pick a simulator. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins). With no `udid` this round and no `variant.previewImage`, `propose_variant` fails: it has nothing to capture from.
+**Always pass `udid`** (the same simulator/emulator id you described with). It is the device `propose_variant` captures the preview from, and the preview window then streams _that_ device directly — the human never has to pick a simulator. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins, and it carries across rounds). Only when no `udid` was ever set and no `variant.previewImage` is passed does `propose_variant` fail: it has nothing to capture from.
 
 ## 3. Workflow
 

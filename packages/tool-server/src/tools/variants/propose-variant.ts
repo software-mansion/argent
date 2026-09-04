@@ -137,9 +137,9 @@ arrives as a follow-up message (this is the case in an \`argent lens\` CLI sessi
 
 Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
 it does not wait for the user.
-Fails when no device is known for a capture (no udid this round and no variant.previewImage), when
-the screenshot cannot be taken, and when the capture is byte-identical to another variant of the same
-element — that variant is not on screen, so re-apply it before proposing.`,
+Fails when no device is known for a capture (no udid was ever set this session and no
+variant.previewImage), when the screenshot cannot be taken, and when the capture is byte-identical to
+another variant of the same element — that variant is not on screen, so re-apply it before proposing.`,
     searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,
     services: () => ({}),

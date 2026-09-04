@@ -1,12 +1,10 @@
 /**
- * `propose_variant` captures the variant preview itself.
- *
- * The agent used to have to call `screenshot` and hand the path back as
- * `variant.previewImage`, and to `shasum` two captures by hand to notice that a
- * variant never made it onto the screen. Both inputs are already server-side —
- * the tool holds the round's device and is describing it at propose time for the
- * crop frame — so these pin the capture, the device fallback, the missing-device
- * refusal and the duplicate guard.
+ * `propose_variant` captures the variant preview itself: it screenshots the
+ * round's device and hashes the capture, so the agent needs no separate
+ * `screenshot` call and no by-hand `shasum`. Both inputs are server-side — the
+ * tool holds the round's device and describes it at propose time for the crop
+ * frame — so these pin the capture, the device fallback, the missing-device
+ * refusal, the screenshot-failure surface and the duplicate guard.
  *
  * The store is a module singleton whose `device` deliberately outlives `reset()`,
  * so every test takes a fresh module graph (`vi.resetModules()` + dynamic import)
@@ -61,6 +59,34 @@ async function freshLens(shots: string[]): Promise<{
       shotCalls.push({ ...params });
       const hostPath = shots[shotCalls.length - 1] ?? shots[shots.length - 1]!;
       return { image: { hostPath } };
+    },
+  });
+  registry.registerTool(createProposeVariantTool(registry));
+  return { registry, store: variantProposalStore, shotCalls };
+}
+
+/**
+ * Like `freshLens`, but the stub `screenshot` throws — so a test can pin what
+ * `propose_variant` does when the capture cannot be taken.
+ */
+async function freshLensFailingScreenshot(error: Error): Promise<{
+  registry: Registry;
+  store: ProposeStore;
+  shotCalls: Array<Record<string, unknown>>;
+}> {
+  vi.resetModules();
+  const { variantProposalStore } = await import("../src/utils/variant-proposals");
+  const { createProposeVariantTool } = await import("../src/tools/variants/propose-variant");
+
+  const registry = new Registry();
+  const shotCalls: Array<Record<string, unknown>> = [];
+  registry.registerTool<{ udid: string; includeImageInContext?: boolean }>({
+    id: "screenshot",
+    zodSchema: z.object({ udid: z.string(), includeImageInContext: z.boolean().optional() }),
+    services: () => ({}),
+    async execute(_services, params) {
+      shotCalls.push({ ...params });
+      throw error;
     },
   });
   registry.registerTool(createProposeVariantTool(registry));
@@ -134,6 +160,24 @@ describe("propose_variant — server-side preview capture", () => {
     ).rejects.toThrow(/no device to capture the variant preview/i);
 
     expect(shotCalls).toEqual([]);
+    expect(store.snapshot().proposals).toEqual([]);
+  });
+
+  it("propagates a screenshot failure and stages nothing", async () => {
+    const { registry, store, shotCalls } = await freshLensFailingScreenshot(
+      new Error("Screenshot failed: simulator-server not reachable")
+    );
+
+    await expect(
+      registry.invokeTool("propose_variant", {
+        element: "Search field",
+        udid: "SIM-1",
+        variant: variant("Outlined"),
+      })
+    ).rejects.toThrow(/Screenshot failed/i);
+
+    // The capture was attempted, and its failure blocked staging.
+    expect(shotCalls).toEqual([{ udid: "SIM-1", includeImageInContext: false }]);
     expect(store.snapshot().proposals).toEqual([]);
   });
 });
@@ -230,5 +274,31 @@ describe("propose_variant — duplicate-capture guard", () => {
 
     const [proposal] = store.snapshot().proposals;
     expect(proposal!.variants.map((v) => v.name)).toEqual(["Outlined", "Pill"]);
+  });
+
+  it("dup-checks one element across case- and whitespace-divergent matchers", async () => {
+    // proposalKey normalizes the matcher, so "Search" and "  search  " are the
+    // same card — and the duplicate guard, which reuses that key, runs across it.
+    const first = shotFile("norm-a", "identical-screen");
+    const second = shotFile("norm-b", "identical-screen");
+    const { registry, store } = await freshLens([first, second]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      match: { by: "text", value: "Search" },
+      variant: variant("Outlined"),
+    });
+    await expect(
+      registry.invokeTool("propose_variant", {
+        element: "Search field",
+        udid: "SIM-1",
+        match: { by: "text", value: "  search  " },
+        variant: variant("Pill"),
+      })
+    ).rejects.toThrow(/byte-identical .*variant "Outlined"/i);
+
+    expect(store.snapshot().proposals).toHaveLength(1);
+    expect(store.snapshot().proposals[0]!.variants.map((v) => v.name)).toEqual(["Outlined"]);
   });
 });
