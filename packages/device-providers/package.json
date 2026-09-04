@@ -11,11 +11,11 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "zod": "^4.0.0"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.4.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }
