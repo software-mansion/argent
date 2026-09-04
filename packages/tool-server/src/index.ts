@@ -192,7 +192,13 @@ export function start(): void {
   const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
-  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+  // Rebound to the HTTP app's idle timer once createHttpApp has run below; the
+  // watcher only consults it on interval ticks, never during the awaited first
+  // poll, so the placeholder is never observed as "stale".
+  let lastActivityAt: () => number = () => Date.now();
+  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry, {
+    lastActivityAt: () => lastActivityAt(),
+  });
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -388,6 +394,7 @@ export function start(): void {
       });
     },
   });
+  lastActivityAt = () => httpHandle.getLastActivityAt();
 
   // Do not bind until the first watcher poll has attempted dylib injection for
   // every booted simulator (so launch-app cannot race it) and the identity

@@ -18,6 +18,37 @@ const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 10_000;
 
+// A tick is skipped once no client has talked to the server for this long. An
+// autospawned server whose editor died keeps running until its idle timeout, and
+// without this gate it kept spawning `simctl list` every tick — on Xcode 26 each
+// spawn makes CoreSimulator re-scan its cryptex runtime volumes, and a few such
+// orphans together were enough to saturate a laptop. The MCP health check
+// (`GET /tools` every 30 s) keeps a live client well inside the window.
+const CLIENT_ACTIVITY_WINDOW_MS = 120_000;
+
+export interface SimulatorWatcherOptions {
+  /**
+   * Epoch ms of the last inbound request the server saw. Omit to poll
+   * unconditionally (tests, or a caller with no request path to observe).
+   */
+  lastActivityAt?: () => number;
+}
+
+/**
+ * Every booted simulator runs a `launchd_sim`; none on the host means no
+ * simulator is booted. Far cheaper than `simctl list` — no CoreSimulator XPC, no
+ * runtime-volume scan. Exit 1 is pgrep's "no match"; any other failure (pgrep
+ * missing, signal) is not evidence of anything, so fall back to asking simctl.
+ */
+async function anySimulatorProcessRunning(): Promise<boolean> {
+  try {
+    await execFileAsync("pgrep", ["-x", "launchd_sim"]);
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown }).code !== 1;
+  }
+}
+
 async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string>> {
   const { stdout } = await execFileAsync("xcrun", [
     ...simctlPrefix(deviceSet),
@@ -74,13 +105,22 @@ async function initUdid(
   }
 }
 
-export function startSimulatorWatcher(registry: Registry): {
+export function startSimulatorWatcher(
+  registry: Registry,
+  options: SimulatorWatcherOptions = {}
+): {
   stop: () => void;
   ready: Promise<void>;
 } {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
+    // Nothing tracked and no simulator process on the host: there is nothing to
+    // attach to and nothing to dispose, so skip the simctl round-trip. While a
+    // tracked simulator exists we still ask simctl, so its shutdown is seen and
+    // the service disposed.
+    if (trackedServices.size === 0 && !(await anySimulatorProcessRunning())) return;
+
     let booted: Set<string>;
     try {
       booted = await getBootedUdids();
@@ -117,7 +157,14 @@ export function startSimulatorWatcher(registry: Registry): {
   // every booted simulator, so launch-app cannot race it.
   const ready = poll(true);
 
-  const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
+  const interval = setInterval(() => {
+    // Stale client activity: nobody can act on what this tick would learn. The
+    // first request after the gap refreshes the timestamp and the next tick
+    // polls again.
+    const last = options.lastActivityAt?.();
+    if (last !== undefined && Date.now() - last > CLIENT_ACTIVITY_WINDOW_MS) return;
+    poll(false).catch(() => {});
+  }, POLL_INTERVAL_MS);
 
   return { stop: () => clearInterval(interval), ready };
 }
