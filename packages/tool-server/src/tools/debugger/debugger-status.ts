@@ -15,7 +15,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). On Metro the logicalDeviceId debugger-connect returns also resolves here while the alias holds, but prefer the stable list-devices id: tearing down any debugger session for this device drops the alias, and the same logicalDeviceId then opens a SECOND debugger session for one device. On Chromium the two are one string, and a legacy inspector (Vega) reports no logicalDeviceId at all."
     ),
 });
 
@@ -78,12 +78,15 @@ Use when you need to verify connectivity before using other debugger tools. Neve
             return result;
           }
           // Metro path owns its CDPClient: discard the stale node so the next
-          // call reconnects fresh. Tradeoff: dispose closes the LogFileWriter,
-          // which DELETES the captured log file — including a path a prior
-          // debugger-log-registry call returned (that tool has no socket gate,
-          // so it never triggers this). A concurrent terminated cascade may
-          // remove the node first; that end state is what we wanted, so a
-          // failed dispose is absorbed.
+          // call reconnects fresh. This branch fires when the WebSocket is
+          // CLOSING but the close event has not dispatched yet (the terminated
+          // cascade otherwise removes the node first) — which is to say the far
+          // end has already gone. The blueprint's dispose reads that same socket
+          // state, so a session that captured anything KEEPS its log file rather
+          // than unlinking it, and the breadcrumb it leaves names the path when
+          // there is a file to name. The concurrent terminated cascade may win
+          // the race and remove the node first; that end state is what we
+          // wanted, so a failed dispose is absorbed.
           //
           // Track BEFORE disposing: dispose forgets the device alias, and the
           // outcome's platform classifies through it — tracking after would

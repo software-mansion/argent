@@ -1,9 +1,12 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
-import { DEBUGGER_TOOL_CAPABILITY } from "./debugger-service-ref";
-import { canonicalDeviceId } from "../../utils/debugger/device-alias";
-import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
+import { DEBUGGER_TOOL_CAPABILITY, debuggerReapedScope } from "./debugger-service-ref";
+import {
+  describeReapedSession,
+  peekReapedSession,
+  takeReapedSession,
+} from "../../utils/reaped-sessions";
 import {
   buildNotConnected,
   classifyNotConnected,
@@ -19,11 +22,44 @@ interface LogRegistryResponse extends LogStats {
   appName: string;
   logicalDeviceId: string | undefined;
   /**
-   * Set only when a teardown reaped the previous debugger session while it held
-   * captured console output. Without it an empty registry reads as "the app
-   * logged nothing".
+   * Whatever would make the rest of this answer misleading on its own, in the
+   * two states where something does — and both sentences when both hold. The
+   * first carries a further clause of its own where that teardown's record
+   * replaced an earlier one nobody read: how many went unreported, and how many
+   * of their log files went with them, whether the rest are still on disk and
+   * where, or both.
+   *
+   * - This registry is a new session's, minted after the previous one for this
+   *   device was torn down holding console history — by a
+   *   `stop-all-simulator-servers`, or by its runtime going away. Without it
+   *   the counts here read as the dead session's own, which they never are — a
+   *   zero as "nothing was ever logged on this device", anything else as that
+   *   session's output. Names the old log file when that
+   *   teardown left it on disk, which a runtime death does unless its writer
+   *   never opened one, or something removed it since.
+   * - {@link LogStats.file} names a path that is not there: `open()` failed and
+   *   the writer buffered instead, or something removed the file after it was
+   *   written. The counts are real and the clusters a capped, truncated view of
+   *   them; the file is not there at all. Only a new session gets one: `open()`
+   *   runs once, and `debugger-connect` hands back the live session.
    */
   note?: string;
+}
+
+/**
+ * Consume the breadcrumb the previous session's dispose left. The store files
+ * one teardown under every id its device answered to and spends them together,
+ * so the id the caller named finds it whichever one that is.
+ *
+ * That id and no other. The resolved session's own `logicalDeviceId` is not a
+ * candidate: Metro answers an unmatched device_id with its single remaining
+ * target rather than failing (`selectTarget`'s one-device fallback), so that id
+ * can belong to a different device, whose breadcrumb this read would then
+ * consume and report as its own.
+ */
+function takeReapedNote(deviceId: string, scope?: string): string | undefined {
+  const entry = takeReapedSession("js-runtime-debugger", deviceId, scope);
+  return entry ? describeReapedSession(entry, "JS-runtime debugger session") : undefined;
 }
 
 const zodSchema = z.object({
@@ -31,7 +67,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). On Metro the logicalDeviceId debugger-connect returns also resolves here while the alias holds, but prefer the stable list-devices id: tearing down any debugger session for this device drops the alias, and the same logicalDeviceId then opens a SECOND debugger session for one device. On Chromium the two are one string, and a legacy inspector (Vega) reports no logicalDeviceId at all."
     ),
 });
 
@@ -43,15 +79,13 @@ export function createDebuggerLogRegistryTool(
     interaction: {
       startedMsg: () => "Reading app logs",
       completedMsg: ({ result }) =>
-        result.status === "connected"
-          ? "Read app logs"
-          : "JavaScript debugger is not connected — no logs captured",
+        result.status === "connected" ? "Read app logs" : "JavaScript debugger is not connected",
       failedMsg: ({ failureSignal }) => `Failed to read app logs: ${failureSignal.error_code}`,
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet — but check { note }, which is present only when the stats are empty BECAUSE a stop-all-simulator-servers tore the previous debugger session down and deleted its log file. Absent that note, empty really does mean the app has logged nothing.
-When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file — follow the guidance (do not retry in a loop, and do not try to read a log file from this state). A "connected" result's stats may come from a session whose socket has since died — use debugger-status, not this tool, to judge debugger health.`,
+Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. ALWAYS check { note } before acting on the rest: it appears only when something would otherwise mislead you, and it says which of two things it is — or both, when both hold. Either the previous debugger session for this device was torn down while holding captured logs — by a stop-all-simulator-servers, or by the app's JS runtime going away — so the counts here are a new session's own and cover nothing that session captured, whatever they say, and when that teardown left the old log file on disk (a crash or force-quit does, unless the writer never opened one) the note names its path to read instead, plus where the logs stand for any earlier record it replaced unread. Or nothing is at { file } — the writer could not create it, or something has removed it since — so it is not there to grep, and what is left is the counts plus clusters that are a capped and truncated view rather than the lines themselves. Only a new debugger session gets a file: the writer opens one once, and debugger-connect hands back the live session. Absent a note, empty means nothing has been captured since this session began, and { file } is readable.
+When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } and no log file of its own — follow the guidance (do not retry in a loop). A crashed app reaches that state too, so check { note } there as well: when the dead session left its log file behind the note names it, and that file is readable even though the debugger is not. The one exception is reason "reconnecting", which holds the record back for the retry its guidance asks for, so no note there says nothing about what the previous session left. A "connected" result's stats may come from a session whose socket has since died — use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a
@@ -60,10 +94,11 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
     async execute(_services, params, ctx) {
       try {
         const api = await resolveDebuggerService(registry, params);
-        // No socket-state gate (unlike debugger-status): captured logs are
-        // readable over a dead socket, and disposing the stale service would
-        // close the LogFileWriter — destroying the post-crash logs the caller
-        // came for.
+        // Unlike debugger-status, no socket-state gate here: captured logs are
+        // readable over a dead socket, and this is the tool that hands out the
+        // path to read them from. Disposing the stale service would mint a new
+        // session over a new path and reduce this answer to a breadcrumb, which
+        // is strictly less than the caller came for.
         const stats = api.logWriter.getStats();
         const clusters = api.logWriter.getClusters(20);
 
@@ -77,36 +112,116 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
           logicalDeviceId: api.logicalDeviceId,
         };
 
-        // Resolving above silently reconnects after a teardown, so only an
-        // EMPTY registry is ambiguous; one with entries is this session's own
-        // capture, and consuming a breadcrumb there would attach a stale
-        // explanation to a healthy result.
-        if (stats.totalEntries === 0) {
-          // Every id this device answers to, unconditionally — not `a ?? b`. The
-          // disposer writes one breadcrumb under both the connect id and the
-          // `logicalDeviceId` Metro echoed; leaving either behind would explain a
-          // later, unrelated empty read. `forgetDeviceAlias` ran in that same
-          // dispose, so only the freshly resolved api still knows the logical id.
-          const aliases = [
-            canonicalDeviceId(params.device_id),
-            params.device_id,
-            api.logicalDeviceId,
-          ].filter((id): id is string => id !== undefined);
-          let reaped: ReturnType<typeof takeReapedSession>;
-          for (const id of new Set(aliases)) {
-            // Take from every id, keep the first hit: `reaped ??= take(...)`
-            // would stop taking once one matched.
-            const entry = takeReapedSession("js-runtime-debugger", id);
-            reaped ??= entry;
-          }
-          if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
+        // Resolving the service above silently RECONNECTED if the previous
+        // session had been reaped, so an empty registry here is ambiguous: the
+        // app has logged nothing, or a teardown took the old log file with it,
+        // or the runtime died and left that file on disk. The breadcrumb is what
+        // separates the three.
+        //
+        // A plain teardown explains an empty registry and nothing else: one
+        // attached to an answer with entries of its own is a stale explanation
+        // of a healthy result.
+        //
+        // The two arms beside it are read whatever the counts say, because for
+        // both this read is the last chance. A kept file's path lives in its
+        // record alone, and a record that replaced an unread session is the only
+        // account of what that session lost. Either one left unspent because
+        // this session had since logged is unreachable for good — no later read
+        // can ask for it, and the next death on these ids unlinks the file it
+        // named. Anything that re-mints the session and logs one line before the
+        // agent asks lands there, a registry self-heal inside a call that
+        // returns ordinary success included. Looked at before it is spent, so
+        // the only records this answer destroys are the ones it reports.
+        const scope = debuggerReapedScope(params);
+        const pending = peekReapedSession("js-runtime-debugger", params.device_id, scope);
+        const empty = stats.totalEntries === 0;
+        const reaped =
+          pending && (empty || pending.keptAt !== undefined || pending.superseded)
+            ? takeReapedNote(params.device_id, scope)
+            : undefined;
+        // Both can be true at once — an unwritable directory outlives the
+        // session that died in it — and they are about different files, the old
+        // session's and this one's, so neither may swallow the other.
+        const notes: string[] = [];
+        if (reaped) {
+          // The counts beside it are the new session's, and the reader must not
+          // read them as the old one's. On the empty answer that means saying
+          // what this zero does not cover; on a non-empty one, that these
+          // entries are not the ones the record is about. Neither goes on to say
+          // the app HAS logged: a relaunched session may have captured nothing
+          // yet, and both are true at once.
+          notes.push(
+            empty
+              ? `${reaped} The counts here are the new session's own, so this zero ` +
+                  `says nothing about what the old one captured.`
+              : `${reaped} The counts here are the new session's own and do not ` +
+                  `include anything that record is about.`
+          );
         }
+        if (!api.logWriter.hasFile()) {
+          // Whatever the counts say, `file` names nothing: `open()` swallows its
+          // failure and buffers, and the documented next step is to grep that
+          // path. Checked on an empty registry too — a session that has not
+          // logged yet is where an unwritable directory shows up first, and
+          // saying so beats letting the caller find out by grepping. `hasFile`
+          // is a look at the path, so it cannot tell a writer that never got
+          // one from a file something has since removed; the note says both.
+          notes.push(
+            `There is no log file at ${stats.file}, so the entries counted here are nowhere ` +
+              `on disk — do not try to read that path. What is left of them is those counts, ` +
+              `and clusters that are a capped and truncated view rather than the lines ` +
+              `themselves. The writer either could not create it, or something has removed it ` +
+              `since. Check that ~/.argent/tmp is writable. The writer opens its file once and ` +
+              `does not try again, and debugger-connect hands back this same session, so end it ` +
+              `with stop-all-simulator-servers, passing in devices the id you called ` +
+              `debugger-connect WITH — a session opened under a logicalDeviceId answers to no ` +
+              `other, and { left_running } names it when the scope missed — then connect. A ` +
+              `list-devices id reaps every service that device owns, another agent's ` +
+              `included; a logicalDeviceId reaps the debugger session and what rides on it.`
+          );
+        }
+        if (notes.length > 0) response.note = notes.join(" ");
         return response;
       } catch (err) {
         const reason = classifyNotConnected(err);
         if (!reason) throw err;
         trackDebuggerOutcome("debugger-log-registry", reason, params, ctx);
-        return buildNotConnected(reason, err, params);
+        // A crash is the ordinary way here: the app drops off Metro's target
+        // list, so the resolve above throws and this is the only answer the
+        // caller gets. The breadcrumb the dead session left is what names the
+        // file it kept, and reading it back is the whole point of keeping it:
+        // `debugger-connect` is the only other tool that reports it, and an
+        // agent that relaunches without going through it never hears of the file
+        // at all.
+        //
+        // Except while that session is still being torn down. The dispose files
+        // the breadcrumb before it awaits anything, and a read landing in the
+        // awaits that follow — the console server's close waits out the sockets
+        // attached to it — gets `reconnecting`, whose guidance is to wait and
+        // ask again. The asking again is what would find it spent.
+        const withheld = reason === "reconnecting";
+        const scope = debuggerReapedScope(params);
+        const note = withheld ? undefined : takeReapedNote(params.device_id, scope);
+        const result = buildNotConnected(reason, err, params, { reportsOwnNote: true });
+        // `guidance` is the field an agent acts on, and these strings are
+        // written for `debugger-status`, which carries no note: one that names a
+        // note sends the reader here to fetch it, which is backwards in this
+        // tool's own answer, and the rest name none at all. So this tool says
+        // what its own result holds beside the guidance.
+        //
+        // The withheld answer says neither: it is holding a breadcrumb it did
+        // not spend, and "wait and ask again" is already what its reason's own
+        // guidance says.
+        if (withheld) return result;
+        return {
+          ...result,
+          ...(note ? { note } : {}),
+          guidance: note
+            ? `Read this result's note first — it explains what became of the previous session's console log, and of any session whose record that one replaced unread. ${result.guidance}`
+            : `${result.guidance} This result has no note: no unread record of a previous session ` +
+              `under this ${scope ? "device id and port" : "device id"}. One is filed only for a ` +
+              `session that ended holding console history, and the first read of it spends it.`,
+        };
       }
     },
   };

@@ -16,7 +16,7 @@ import {
   rememberLogicalKeyedDevice,
   forgetLogicalKeyedDevice,
 } from "../utils/debugger/device-alias";
-import { recordReapedSession } from "../utils/reaped-sessions";
+import { recordReapedSession, describeLostHistory } from "../utils/reaped-sessions";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
@@ -173,7 +173,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         error_kind: "validation",
       });
     }
-    const port = parseInt(payload.slice(0, colonIdx), 10);
+    // The URN's port text, not the parsed number: it is what identifies this
+    // session — `parseInt` folds "8081.5" onto 8081 while the URN keeps them
+    // apart — and the reaped-session scope below has to agree with the readers,
+    // which key on the same text.
+    const portKey = payload.slice(0, colonIdx);
+    const port = parseInt(portKey, 10);
     if (!Number.isFinite(port)) {
       throw new FailureError(`JsRuntimeDebugger payload has invalid port: "${payload}"`, {
         error_code: FAILURE_CODES.JS_RUNTIME_PAYLOAD_PORT_INVALID,
@@ -213,26 +218,41 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
     };
 
-    await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
-    await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
-    await cdp.send("Runtime.enable");
-    await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
-    await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-    await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
-    await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
-    await cdp.addBinding("__argent_callback");
+    // No dispose exists until this factory returns, so anything that throws
+    // from here on leaves the connected socket with nothing to close it, and
+    // Metro holds a debugger target open for the life of the process. The
+    // un-`catch`ed sends are the reachable case: a request timeout against a
+    // frozen runtime is `runtime_unresponsive`, a documented not-connected
+    // state.
+    let logWriter: LogFileWriter;
+    let sourceResolver: SourceResolver;
+    try {
+      await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
+      await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
+      await cdp.send("Runtime.enable");
+      await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+      await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+      await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+      await cdp.addBinding("__argent_callback");
 
-    await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
+      await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
-    await sourceMaps.waitForPending();
+      await sourceMaps.waitForPending();
 
-    const sourceResolver = createSourceResolver(port, metro.projectRoot);
+      sourceResolver = createSourceResolver(port, metro.projectRoot);
 
-    const logWriter = new LogFileWriter(port);
+      // Its constructor mkdir -p's ~/.argent/tmp, which an unwritable home
+      // makes throw.
+      logWriter = new LogFileWriter(port);
+    } catch (err) {
+      await cdp.disconnect();
+      throw err;
+    }
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
-    cdp.events.on("consoleAPICalled", (params) => {
+    const onConsoleAPI = (params: ConsoleAPICalledParams) => {
       const entry: ConsoleLogEntry = {
         id: nextLogId++,
         level: params.type,
@@ -253,9 +273,22 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         stackTrace: entry.stackTrace,
       });
       consoleEvents.emit("log", entry);
-    });
+    };
+    cdp.events.on("consoleAPICalled", onConsoleAPI);
 
-    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+    // Same rule, now with a writer to undo as well: its fd, its file and its
+    // hourly keepalive would last as long as the process, and the keepalive
+    // would hold that file out of `pruneStaleLogs` for exactly that long.
+    let consoleServer: Awaited<ReturnType<typeof createConsoleLogServer>>;
+    try {
+      consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+    } catch (err) {
+      // Off before close, for the reason the dispose below gives.
+      cdp.events.off("consoleAPICalled", onConsoleAPI);
+      logWriter.close();
+      await cdp.disconnect();
+      throw err;
+    }
 
     const api: JsRuntimeDebuggerApi = {
       port,
@@ -300,26 +333,66 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     return {
       api,
       dispose: async () => {
-        // `logWriter.close()` below unlinks the log file, and this dispose is
-        // routinely another agent's `stop-all-simulator-servers`. Breadcrumb so
-        // `debugger-log-registry`'s bare `totalEntries: 0` can explain the lost
-        // history — only when there was history to lose, and under both ids,
-        // since `forgetDeviceAlias` below drops the only join between them.
+        // Before the writer closes below: `disconnect()` waits out a close
+        // handshake, and a frame delivered in that window would reach a closed
+        // writer, whose `write` throws.
+        cdp.events.off("consoleAPICalled", onConsoleAPI);
+        // This dispose ends the capture session — up to 50,000 captured console
+        // entries stop being reachable through the registry, because the next
+        // resolve builds a new writer over a new path. That is invisible, and
+        // `JsRuntimeDebugger` is in the teardown's namespace set, so this
+        // dispose is routinely triggered by another agent's
+        // `stop-all-simulator-servers`. Leave a breadcrumb so
+        // `debugger-log-registry`'s otherwise silent `totalEntries: 0` can say
+        // what happened to the history, and where it went: on a runtime death
+        // `close` below keeps the file, so the breadcrumb can name it.
+        //
+        // Only when there IS history to lose, and under every id this device
+        // answers to: the caller may read back with either the id it connected
+        // with or the `logicalDeviceId` Metro echoed, and `forgetDeviceAlias`
+        // below removes the only thing that joins them. One call, so the two
+        // are one event and reading either spends both; a copy left behind
+        // would explain some later unrelated answer, and the next teardown
+        // would reclaim the file this one named.
+        //
+        // The socket is the whole of "did the app die?" here, and the
+        // `disconnected` event is not consulted at all: `CDPClient` nulls its
+        // socket before emitting, so every death this blueprint can see is
+        // already visible as a closed socket — including the ones that never
+        // reach a listener, where `debugger-status`'s stale_connection branch or
+        // the registry's `recoverable` self-heal disposes in the window between
+        // the socket leaving OPEN and the close event dispatching. Nothing
+        // re-points this client either: `reconnect()` is Chromium's tab switch
+        // alone, so an OPEN socket here really does mean a live app, and an
+        // explicit teardown removes the file.
+        const runtimeDied = !cdp.isConnected();
         const captured = logWriter.getStats().totalEntries;
+        const keptAt = runtimeDied && logWriter.hasFile() ? logWriter.getFilePath() : undefined;
         if (captured > 0) {
-          const salvage =
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-            `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-            `than the app having logged nothing.`;
-          recordReapedSession("js-runtime-debugger", deviceId, salvage);
-          if (api.logicalDeviceId && api.logicalDeviceId !== deviceId) {
-            recordReapedSession("js-runtime-debugger", api.logicalDeviceId, salvage);
-          }
+          const ids = [deviceId];
+          if (api.logicalDeviceId) ids.push(api.logicalDeviceId);
+          recordReapedSession("js-runtime-debugger", ids, describeLostHistory(captured, keptAt), {
+            cause: runtimeDied ? "runtime-death" : "teardown",
+            keptAt,
+            // What proves a later event is this same device rather than the one
+            // `selectTarget`'s fallback minted on this device's id: Metro names
+            // the device, the caller's id does not. Undefined for a legacy
+            // inspector, which is the whole of the reason the store will not
+            // reclaim on matching ids alone.
+            logicalId: api.logicalDeviceId,
+            // This device can hold another session on another Metro port, with
+            // its own log file; without the port that one's death would reclaim
+            // this file, and its teardown would replace the record naming it.
+            scope: portKey,
+          });
         }
         forgetDeviceAlias(api.logicalDeviceId);
         forgetLogicalKeyedDevice(deviceId);
         await consoleServer.close();
-        logWriter.close();
+        // Gated on `captured` for the same reason the breadcrumb is: a death
+        // that logged nothing leaves an empty file no breadcrumb names and
+        // nothing reclaims for a day.
+        logWriter.close({ keepFile: runtimeDied && captured > 0 });
         await cdp.disconnect();
       },
       events,

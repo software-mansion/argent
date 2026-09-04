@@ -135,6 +135,198 @@ steps:
     expect(result.ok).toBe(false);
   });
 
+  it("carries the note into the reason line, which is all the CLI renders", async () => {
+    // The guidance a noted answer carries opens with "Read this result's note
+    // first", and `renderStepLine` prints `reason` and nothing else — the CLI
+    // never renders a tool step's result (flow.ts's onStepReport). A note left
+    // only in `result` is a pointer at a field that run never shows.
+    const NOTED = {
+      ...NOT_CONNECTED_RESULT,
+      reason: "no_app_connected",
+      guidance: "Read this result's note first — it explains what became of the console log.",
+      note: "The log file it left at /tmp/argent-logs-8081-1.log is still readable.",
+    };
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "noted.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-log-registry
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-log-registry" ? NOTED : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "noted", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const gate = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(gate.status).toBe("fail");
+    expect(gate.reason).toContain(NOTED.guidance);
+    expect(gate.reason).toContain(NOTED.note);
+    // Once, not twice: the CLI prints the reason line and then a line per
+    // warning, so a second copy here reads as a second finding and adds a
+    // phantom entry to the run's warning count.
+    expect("warning" in gate).toBe(false);
+  });
+
+  it("adds nothing to the reason line for an answer that carries no note", async () => {
+    // The `note ? … : ""` arm: an un-noted gate — which is most of them — gets
+    // nothing appended, not the string "undefined".
+    const flowFile = await writeFlow(GATED_FLOW);
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-status" ? NOT_CONNECTED_RESULT : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+      )
+    );
+
+    const gate = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(gate.reason).toBe(
+      `debugger not connected (${NOT_CONNECTED_RESULT.reason}): ` +
+        `${NOT_CONNECTED_RESULT.detail} — ${NOT_CONNECTED_RESULT.guidance}`
+    );
+  });
+
+  it("warns on a step that SUCCEEDED carrying a note, which is the crash-recovery shape", async () => {
+    // The other arm of the same tool. debugger-connect is the step the crash
+    // guidance prescribes, and it succeeds - so the not_connected mapping above
+    // never sees it, while the read that produced its note has already spent
+    // the record, leaving nothing able to report the log file a second time.
+    // `warning` rather than `reason` because it is the field all three CLI
+    // renderers put a line under, and the only one renderFailedSteps keeps for
+    // a passing step.
+    const CONNECTED_WITH_NOTE = {
+      port: 8081,
+      projectRoot: "/proj",
+      deviceName: "iPhone 16 Pro Max",
+      appName: "MyApp",
+      isNewDebugger: true,
+      connected: true,
+      note: "The log file is kept at /tmp/argent-logs-8081-1-2-0.log — grep that file for the 42 captured console entries it holds.",
+    };
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "connected.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-connect
+    args:
+      port: 8081
+      device_id: X
+  - tool: gesture-tap
+    args:
+      udid: X
+      x: 0.5
+      y: 0.5
+`,
+      "utf8"
+    );
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-connect" ? CONNECTED_WITH_NOTE : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "connected", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const steps = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
+    expect(steps[0]!.status).toBe("pass");
+    expect(steps[0]!.warning).toBe(CONNECTED_WITH_NOTE.note);
+    // The second arm: a CONNECTED log-registry carries the same note off an
+    // empty registry, and it is the tool the crash guidance reaches first.
+    const logFile = path.join(flowsDir, "logged.yaml");
+    await fs.writeFile(
+      logFile,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-log-registry
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+    const logged = asRun(
+      await createRunFlowTool(
+        makeRegistry(async () => ({
+          status: "connected",
+          totalEntries: 0,
+          note: CONNECTED_WITH_NOTE.note,
+        }))
+      ).execute({}, { name: "logged", project_root: PROJECT_ROOT, flow_file: logFile, device: "X" })
+    );
+    const loggedStep = logged.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(loggedStep.status).toBe("pass");
+    expect(loggedStep.warning).toBe(CONNECTED_WITH_NOTE.note);
+    // A success is not a gate: the flow goes on, and the tap that follows runs.
+    expect(result.ok).toBe(true);
+    expect(steps[1]!.tool).toBe("gesture-tap");
+    // And a note-less success stays a plain pass - the warning glyph is what
+    // separates the two in every renderer. The KEY, not its value: an explicit
+    // `warning: undefined` reaches a JSON client as a field that is there.
+    expect("warning" in steps[1]!).toBe(false);
+  });
+
+  it("leaves a note alone on a tool that answers with one every call", async () => {
+    // `note` is a generic name on an unknown result, and other tools use it for
+    // a routine remark: `react-profiler-status` reports a healthy running
+    // session that way, and `open-url` says an https link's handling app cannot
+    // be observed. Warning on those makes a step that is working correctly warn
+    // on every run, with nothing for the reader to resolve - and the qa-flows
+    // contract requires resolving every passing-step warning. The two debugger
+    // tools answer with one only where something IS wrong: a reaped session's
+    // record, which the read spends, or a log file that is not on disk, which
+    // returns for the rest of the session whatever is done to the directory.
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "profiler.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: react-profiler-status
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+    const registry = makeRegistry(async () => ({
+      session_status: "active",
+      is_running: true,
+      note: "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling.",
+    }));
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "profiler", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const step = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(step.status).toBe("pass");
+    expect("warning" in step).toBe(false);
+  });
+
   it("passes the gate and runs the whole flow on a connected result", async () => {
     const flowFile = await writeFlow(GATED_FLOW);
     const registry = makeRegistry(async (id) => {

@@ -135,6 +135,8 @@ A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
+A `debugger-connect` or `debugger-log-registry` step that succeeds and returns a `note` passes with a warning. The warning repeats the note. The note tells you what became of a session that ended while it held console logs. It gives the log file when that session kept one. It can also say that no file was kept, or that a kept one was removed. Both tools remove that record when they read it, so no later call repeats it. A `debugger-log-registry` note can also say that the current session's log file is not on disk. Nothing removes that one. The writer opens its file one time only, so the note repeats on every call for the rest of the session. Either the writer could not create the file or something removed it since. Check that `~/.argent/tmp` is writable and correct it if not. `debugger-connect` returns the live session and does not make a new one. End the session with `stop-all-simulator-servers`, scoped to the id you passed to `debugger-connect`. A session opened with a `logicalDeviceId` answers to that id alone. Then connect again. Other tools that return a `note` do not raise a warning.
+
 ### Launch map
 
 Use the map form for a flow that runs on more than one platform:

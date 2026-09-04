@@ -40,7 +40,7 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
-import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
+import { isDebuggerNotConnectedResult, takenDebuggerNote } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
@@ -192,7 +192,11 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited. Also carries the `note` of a `debugger-connect` or
+   * `debugger-log-registry` step that succeeded. Either a reaped session's
+   * record, which the read spends, so what it says is reported nowhere else; or,
+   * from the registry alone, that this session's own log file is not on disk,
+   * which nothing spends and which returns for the rest of the session.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -2465,12 +2469,18 @@ async function execLeafStep(
           // error text lives (device_mismatch's guidance points the agent at
           // the logicalDeviceId "listed in the detail message", and the
           // metro_not_running `got:` fragment names what actually answered the
-          // port).
+          // port). And `note`, because the guidance that comes with one opens
+          // by telling the reader to read it, and the CLI renders no tool-step
+          // result at all — `renderStepLine` prints this string and nothing
+          // else — so a pointer left in the result alone names a field nothing
+          // there shows.
           return {
             ...base,
             status: "fail",
             tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
+            reason:
+              `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}` +
+              (result.note ? ` ${result.note}` : ``),
             result,
             outputHint,
             args,
@@ -2505,7 +2515,22 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        // A debugger tool that succeeded carrying a `note` reports either a
+        // session that ended holding console logs, whose record the read spent —
+        // so a note left in the result alone is lost — or this session's own log
+        // file not being on disk, which no read spends. The default CLI
+        // renderer prints a step's `reason` and nothing else of it, and
+        // `warning` is what puts a line under a passing one.
+        const takenNote = takenDebuggerNote(step.name, result);
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(takenNote ? { warning: takenNote } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a

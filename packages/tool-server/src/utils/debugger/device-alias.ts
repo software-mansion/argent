@@ -2,20 +2,22 @@
  * Collapses the two ids that name the same device onto one canonical id, so its
  * debugger service is cached once instead of twice.
  *
- * A caller connects with a stable id from `list-devices` (iOS UDID, Android or
- * Vega serial); Metro's inspector-proxy echoes back an unrelated per-connection
- * `logicalDeviceId`. The service is cached by a URN embedding `device_id`
- * verbatim (`JsRuntimeDebugger:<port>:<device_id>`), and Metro never sees the
- * UDID, so there is nothing to join the two on synchronously. Without an alias,
- * a caller that forwards the returned logicalDeviceId mints a second URN, and so
- * a second CDPClient, console-log server and log file for one device.
+ * A device is reached through two different id namespaces:
+ *   - the stable id the caller connects with — an iOS UDID / Android serial /
+ *     Vega serial from `list-devices`;
+ *   - the `logicalDeviceId` Metro's inspector-proxy echoes back, which the app
+ *     derives from the device and its bundle and Metro passes through.
  *
  * The alias is learned at connect — the one place both ids are known at once —
  * and read synchronously, so the tools' `services()` callbacks stay synchronous.
  *
- * A logicalDeviceId is unique per Metro connection, so the map is 1:1 and never
- * mis-collapses two devices. A stale entry (reconnect, fresh logicalDeviceId) is
- * harmless: the caller is handed the new id, so the old key is never looked up.
+ * A logicalDeviceId names one device+bundle, so the key is 1:1 and stable
+ * across relaunches — a key that outlives its session still names the same
+ * device, and it is cleared on dispose anyway. The VALUE carries no such
+ * guarantee: it is whatever id the caller connected with, and `selectTarget`'s
+ * one-device fallback answers an unmatched id with the one device left on the port,
+ * so a connect aimed at a device that has gone teaches this map to send that
+ * survivor's own logicalDeviceId to the dead device's id.
  */
 const logicalIdToConnectId = new Map<string, string>();
 

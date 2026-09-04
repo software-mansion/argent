@@ -26,12 +26,62 @@ export interface DebuggerNotConnectedResult {
   /** Original error message; guidance strings point agents at its text. */
   detail: string;
   guidance: string;
+  /**
+   * What became of a previous debugger session's console history, when this
+   * device had one that was torn down holding captured logs — and where its log
+   * file is if that teardown left it on disk. A crashed app is the ordinary way
+   * to reach `no_app_connected`, and the crash is exactly when those logs
+   * matter, so the answer that reports the app is gone is also the one that has
+   * to say where its last words went. Set by debugger-log-registry only:
+   * debugger-status is a health read that consumes nothing, and a breadcrumb is
+   * spent by whoever reads it first — spending it there would take it from the
+   * tool the agent then calls to actually find the logs.
+   */
+  note?: string;
 }
 
 /**
- * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
- * live in CHROMIUM_GUIDANCE: there launch-app is a no-op that re-resolves the
- * CDP service that just failed, so pointing an agent at it only fails again.
+ * `cdp_unreachable`'s two halves, kept apart because the second is dropped for
+ * the tool that carries the record itself. Everything a crash leaves is behind
+ * that pointer, and on Chromium it is the only reason a crashed renderer leaves
+ * standing: a read landing inside the terminated cascade gets `reconnecting`,
+ * which withholds the record for the retry its guidance asks for, and the
+ * re-resolve after that cascade fails here. So an agent that follows this
+ * guidance straight to a relaunch never learns the kept log exists.
+ */
+const CDP_UNREACHABLE_RECOVERY =
+  "The runtime's CDP endpoint could not be reached. Verify the app is running " +
+  "(launch-app), then call debugger-connect and retry once.";
+const CDP_UNREACHABLE_NOTE_POINTER =
+  " Before you relaunch anything: a session whose runtime died holding console logs keeps " +
+  "its file, and debugger-log-registry's note names it when there is one — or debugger-connect's " +
+  "note; whichever answer carries it is the one that spent it.";
+const CHROMIUM_CDP_UNREACHABLE_RECOVERY =
+  "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
+  "detail). launch-app cannot start a Chromium app; make sure the app is running " +
+  "with --remote-debugging-port (for an Electron app, boot-device with " +
+  "electronAppPath relaunches it), then retry once.";
+const CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER =
+  " Before you relaunch anything: a renderer that died holding console logs keeps its file, " +
+  "and debugger-log-registry's note names it when there is one — the record is filed under the CDP port, which " +
+  "is the device id, so relaunching on a port boot-device picks strands it.";
+
+/**
+ * Guidance strings for Metro-backed targets (iOS / Android / Vega). Chromium
+ * ids get platform-corrected overrides below — on Chromium, launch-app cannot
+ * start anything (its handler is a documented no-op) and it re-resolves the
+ * very CDP service that just failed, so pointing an agent at it from a
+ * cdp_unreachable result would manufacture a guaranteed second failure.
+ *
+ * Three reasons carry no note pointer, and neither of the transient two strands
+ * the record. `runtime_unresponsive` describes a session that is still alive, so
+ * the event files none of its own; an earlier session's is reported inline by
+ * `debugger-log-registry`, which spends it on every reason but `reconnecting`. `metro_not_running` and `reconnecting` are read from two
+ * tools that treat them differently: `debugger-status` spends nothing, so its
+ * retry once Metro is up answers `no_app_connected` or connects and reaches a
+ * tool that does report the note; `debugger-log-registry` attaches the record to
+ * its own `metro_not_running` answer there and then, and withholds it only for
+ * the `reconnecting` retry its guidance asks for.
  */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
@@ -39,24 +89,33 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "until Metro is started. Start Metro (e.g. `npx react-native start` or `npx expo start`) " +
     "or ask the user, wait for it to report ready, then retry once.",
   no_app_connected:
-    "Metro is running but no app is attached. Do not retry immediately — launch or restart " +
-    "the RN app on the target device (launch-app / restart-app), wait a few seconds for the " +
-    "bundle to load, then retry once.",
+    "Metro is running but no app is attached. A crashed app reads as this too, and a session " +
+    "whose runtime died holding console logs keeps its file: read debugger-log-registry's note, " +
+    "which names that file when there is one — or debugger-connect's note; whichever answer " +
+    "carries it is the one that spent it. Do not retry immediately — " +
+    "launch or restart the RN app on the target device (launch-app / restart-app), wait a few " +
+    "seconds for the bundle to load, then retry once.",
   device_mismatch:
-    "The device_id does not match any debugger target on this Metro. Re-target with the " +
-    "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
-  cdp_unreachable:
-    "The runtime's CDP endpoint could not be reached. Verify the app is running " +
-    "(launch-app), then call debugger-connect and retry once.",
+    "The device_id does not match any debugger target on this Metro; while two or more devices " +
+    "share the port, a target is matched by its logicalDeviceId alone, so a list-devices udid " +
+    "or serial is refused every time. A dead session's console-log record is filed under every " +
+    "id its device answered to, and a re-target asks under another device's — read " +
+    "debugger-log-registry's note with this same device_id first, or debugger-connect's note. " +
+    "Then re-target with a " +
+    "logicalDeviceId from the detail message, or give the device its own Metro port, which is " +
+    "the only route for a legacy inspector that reports no logicalDeviceId at all.",
+  cdp_unreachable: CDP_UNREACHABLE_RECOVERY + CDP_UNREACHABLE_NOTE_POINTER,
   runtime_unresponsive:
     "The runtime accepted the debugger connection but did not answer within the " +
     "timeout — it is likely frozen, or paused at a breakpoint. Do not retry in a " +
     "loop (each attempt waits out the full timeout). Check the app; if it is hung, " +
     "restart it (restart-app), then retry once.",
   stale_connection:
-    "The cached debugger connection went stale; it has been discarded. Restart the app " +
-    "(restart-app) if it is not running, then call debugger-connect — the next call " +
-    "reconnects fresh.",
+    "The cached debugger connection went stale; it has been discarded. That discard keeps " +
+    "whatever console log the session had captured, and debugger-log-registry's note names the " +
+    "file when there is one — or debugger-connect's note; whichever answer carries it spent it. Restart the app " +
+    "(restart-app) if it is not running, then call " +
+    "debugger-connect — the next call reconnects fresh.",
   reconnecting:
     "The debugger connection is being re-established (the previous one was torn down or a " +
     "tab switch is in progress). Wait a moment and retry once.",
@@ -95,11 +154,7 @@ export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason |
 
 /** Chromium overrides; reasons without one fall back to GUIDANCE. */
 const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
-  cdp_unreachable:
-    "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
-    "detail). launch-app cannot start a Chromium app; make sure the app is running " +
-    "with --remote-debugging-port (for an Electron app, boot-device with " +
-    "electronAppPath relaunches it), then retry once.",
+  cdp_unreachable: CHROMIUM_CDP_UNREACHABLE_RECOVERY + CHROMIUM_CDP_UNREACHABLE_NOTE_POINTER,
   runtime_unresponsive:
     "The app accepted the debugger connection but did not answer within the " +
     "timeout — it is likely frozen. Do not retry in a loop (each attempt waits out " +
@@ -107,10 +162,50 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "electronAppPath and force: true), then retry once.",
 };
 
+/**
+ * Reason guidance that must read differently in debugger-log-registry's answer,
+ * the one that carries the note the shared strings send an agent to fetch.
+ * Read from there, "read debugger-log-registry's note" is an errand the answer
+ * in hand has already run — and on a crash that captured nothing it is one that
+ * cannot be run at all: the tool that just reported no note would be sending the
+ * agent back to itself for one. That answer says what it holds instead, in a
+ * sentence of its own beside the guidance. Keyed sparsely, like the map above:
+ * `stale_connection` carries the same pointer and needs no entry, since
+ * debugger-status mints that reason itself and NOT_CONNECTED_CODE_MAP has no
+ * code for it — debugger-log-registry never emits it.
+ */
+const OWN_NOTE_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
+  device_mismatch:
+    "The device_id does not match any debugger target on this Metro; while two or more devices " +
+    "share the port, a target is matched by its logicalDeviceId alone, so a list-devices udid " +
+    "or serial is refused every time. Re-target with a logicalDeviceId from the detail message, " +
+    "or give the device its own Metro port, which is the only route for a legacy inspector that " +
+    "reports no logicalDeviceId at all.",
+  no_app_connected:
+    "Metro is running but no app is attached; a crashed app reads as this too. Do not retry " +
+    "immediately — launch or restart the RN app on the target device (launch-app / " +
+    "restart-app), wait a few seconds for the bundle to load, then retry once.",
+  cdp_unreachable: CDP_UNREACHABLE_RECOVERY,
+};
+
+/**
+ * The Chromium overrides for that same caller. Needed because the platform
+ * override is consulted first, so without an entry here the Chromium answer
+ * keeps its note pointer — and `cdp_unreachable` is the one reason reachable on
+ * both platforms that has one. The documented old-port lookup is the call an
+ * agent makes BECAUSE it knows that endpoint is dead, and it would be sent to
+ * this same tool for the note it is already holding.
+ */
+const CHROMIUM_OWN_NOTE_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
+  cdp_unreachable: CHROMIUM_CDP_UNREACHABLE_RECOVERY,
+};
+
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
-  params: { port: number; device_id?: string }
+  params: { port: number; device_id?: string },
+  /** Set by the tool that reports the breadcrumb itself — see OWN_NOTE_GUIDANCE. */
+  opts?: { reportsOwnNote?: boolean }
 ): DebuggerNotConnectedResult {
   const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
   return {
@@ -119,7 +214,11 @@ export function buildNotConnected(
     ...(isChromium ? {} : { port: params.port }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
-    guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],
+    guidance:
+      (isChromium && opts?.reportsOwnNote ? CHROMIUM_OWN_NOTE_GUIDANCE[reason] : undefined) ??
+      (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ??
+      (opts?.reportsOwnNote ? OWN_NOTE_GUIDANCE[reason] : undefined) ??
+      GUIDANCE[reason],
   };
 }
 
@@ -165,6 +264,28 @@ export async function resolveDebuggerService(
   return typeof ref === "string"
     ? registry.resolveService<JsRuntimeDebuggerApi>(ref)
     : registry.resolveService<JsRuntimeDebuggerApi>(ref.urn, ref.options);
+}
+
+/**
+ * The `note` of a debugger tool that SUCCEEDED, which a flow step has to carry
+ * or raise nowhere. Both report the record a reaped session left and spend it
+ * in the reading, so no later call names that kept log again.
+ * `debugger-log-registry` answers with a second kind beside it, that its own
+ * log file is not on disk, which nothing spends: the writer opens its file once,
+ * so that one returns for the rest of the session whatever is done to the
+ * directory meanwhile.
+ *
+ * By tool id, the way {@link isDebuggerNotConnectedResult} is. `note` is a
+ * generic name on an `unknown` result, and other tools answer with one on their
+ * healthy path — `react-profiler-status` reports a running session that way —
+ * which a flow would then flag on every run with nothing to resolve. Neither of
+ * these two does: a session with a readable log and no record behind it answers
+ * with no note at all.
+ */
+export function takenDebuggerNote(toolId: string, result: unknown): string | undefined {
+  if (toolId !== "debugger-connect" && toolId !== "debugger-log-registry") return undefined;
+  const note = (result as { note?: unknown } | null)?.note;
+  return typeof note === "string" && note ? note : undefined;
 }
 
 /**
