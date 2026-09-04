@@ -8,6 +8,7 @@ import {
   fetchRegistryInfo,
   pickInstallableTarget,
 } from "@argent/update-core";
+import { getConfigValueByKey } from "@argent/configuration-core";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
@@ -68,6 +69,7 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
+let lifecycleGeneration = 0;
 let suppressUntil = loadSuppressUntil();
 
 export function getUpdateState(): Readonly<UpdateState> {
@@ -96,11 +98,18 @@ function isNewerVersion(latest: string, current: string): boolean {
   return semver.gt(latest, current);
 }
 
-async function check(): Promise<void> {
+interface UpdateCheckerOptions {
+  /** Called when an eligible update is found and autoUpdate.enabled is true. */
+  onAutoUpdate?: (version: string) => void;
+}
+
+async function check(options: UpdateCheckerOptions, generation: number): Promise<void> {
   const info = await fetchRegistryInfo(REGISTRY_URL);
-  if (info === null) return;
+  if (generation !== lifecycleGeneration || info === null) return;
 
   const minReleaseAgeMs = await detectMinReleaseAgeMs();
+  if (generation !== lifecycleGeneration) return;
+
   const updateAvailable = isNewerVersion(info.latest.version, currentVersion);
   const target = pickInstallableTarget(info.latest, info.times, currentVersion, minReleaseAgeMs);
 
@@ -116,6 +125,9 @@ async function check(): Promise<void> {
 
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
+    if (getConfigValueByKey("autoUpdate.enabled") === true) {
+      options.onAutoUpdate?.(target.version);
+    }
   } else if (updateAvailable && minReleaseAgeMs > 0) {
     process.stderr.write(
       `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
@@ -125,26 +137,29 @@ async function check(): Promise<void> {
 }
 
 /** Checks immediately, then every 24h. Returns a dispose fn for the timer. */
-export function startUpdateChecker(): { dispose(): void } {
-  // Clear any leaked interval from a prior call.
+export function startUpdateChecker(options: UpdateCheckerOptions = {}): { dispose(): void } {
+  // Invalidate any in-flight check from a prior lifecycle.
+  const generation = ++lifecycleGeneration;
   if (interval) {
     clearInterval(interval);
   }
 
   // Fire-and-forget initial check — don't block startup.
-  check().catch(() => {});
+  check(options, generation).catch(() => {});
 
-  interval = setInterval(() => {
-    check().catch(() => {});
+  const lifecycleInterval = setInterval(() => {
+    check(options, generation).catch(() => {});
   }, CHECK_INTERVAL_MS);
-  interval.unref();
+  lifecycleInterval.unref();
+  interval = lifecycleInterval;
 
   return {
     dispose() {
-      if (interval) {
-        clearInterval(interval);
+      clearInterval(lifecycleInterval);
+      if (interval === lifecycleInterval) {
         interval = null;
       }
+      if (lifecycleGeneration === generation) lifecycleGeneration++;
     },
   };
 }

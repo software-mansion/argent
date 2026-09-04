@@ -19,6 +19,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { scheduleAutomaticUpdate } from "./tools/system/update-argent";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
   variantProposalStore,
@@ -190,7 +191,7 @@ export function start(): void {
   const warmKeepAlive = setInterval(() => {}, 1_000);
   void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
-  const updateChecker = startUpdateChecker();
+  const updateChecker = startUpdateChecker({ onAutoUpdate: scheduleAutomaticUpdate });
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
 
