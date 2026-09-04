@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore, FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 
 // The staged-baseline store is a module singleton keyed by device, so every test
 // here uses a udid of its own rather than resetting shared state between them.
@@ -284,6 +285,73 @@ describe("screenshot-diff staged baselines", () => {
     ).rejects.toThrow("No baseline is staged for STAGE-11.");
   });
 
+  // Staging on a physical iPhone routes through the on-device runner, not the
+  // simulator-server. Pins that the staging branch reaches the same backend
+  // `services()` resolves for a captureBaseline call on hardware.
+  it("declares the runner service for a staging call on a physical iPhone", () => {
+    const udid = "00008110-000978540290401E";
+    expect(screenshotDiffTool.services({ captureBaseline: true, udid })).toEqual({
+      iosDeviceRunner: {
+        urn: `IosDeviceRunner:${udid}`,
+        options: { device: { id: udid, platform: "ios", kind: "device" } },
+      },
+    });
+  });
+
+  it("stages and later compares through the runner on a physical iPhone", async () => {
+    const udid = "00008120-0011223344556677";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-staged-device-"));
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        imageBase64: pngBytes(4, 4, { r: 10, g: 20, b: 30 }).toString("base64"),
+      })
+      .mockResolvedValueOnce({
+        imageBase64: pngBytes(4, 4, { r: 220, g: 20, b: 30 }).toString("base64"),
+      });
+
+    const staged = await executeScreenshotDiffTool(
+      { iosDeviceRunner: { run, udid } },
+      { captureBaseline: true, udid, outputDir: dir },
+      { artifacts: new ArtifactStore() }
+    );
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      { command: "screenshot" },
+      { readOnly: true, timeoutMs: RUNNER_COMMAND_TIMEOUT_MS }
+    );
+    expect(Object.keys(staged)).toEqual(["summary"]);
+    expect(staged.summary).toContain("Screenshot diff baseline staged");
+    const stagedFile = (await fs.readdir(dir)).find((name) =>
+      /^baseline-[a-f0-9]{8}\.live\.png$/.test(name)
+    );
+    expect(stagedFile).toBeDefined();
+
+    const compared = await executeScreenshotDiffTool(
+      { iosDeviceRunner: { run, udid } },
+      { captureCurrent: true, udid, outputDir: dir },
+      { artifacts: new ArtifactStore() }
+    );
+
+    // The current side captured live through the runner too.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(compared.summary.startsWith(`Baseline:\n- staged_baseline: udid=${udid}`)).toBe(true);
+    expect(compared.summary).toContain("Screenshot diff summary");
+    expect(compared.summary).toContain("- status: changed");
+    expect(compared.diffPath).toMatchObject({ kind: "screenshot-diff" });
+  });
+
+  it("refuses a staging call on a physical iPhone without the runner service", async () => {
+    await expect(
+      executeScreenshotDiffTool(
+        {},
+        { captureBaseline: true, udid: "00008130-00AABBCCDDEEFF00", outputDir: "/tmp" }
+      )
+    ).rejects.toThrow("requires an iosDeviceRunner service");
+  });
+
   it("still refuses every invalid combination of saved and live inputs", async () => {
     const base = { udid: "STAGE-12", outputDir: "/tmp" };
 
@@ -340,6 +408,14 @@ async function writePng(
   height: number,
   fill: { r: number; g: number; b: number }
 ): Promise<void> {
+  await fs.writeFile(filePath, pngBytes(width, height, fill));
+}
+
+function pngBytes(
+  width: number,
+  height: number,
+  fill: { r: number; g: number; b: number }
+): Buffer {
   const png = new PNG({ width, height });
 
   for (let y = 0; y < height; y++) {
@@ -352,5 +428,5 @@ async function writePng(
     }
   }
 
-  await fs.writeFile(filePath, PNG.sync.write(png));
+  return PNG.sync.write(png);
 }
