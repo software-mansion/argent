@@ -222,4 +222,38 @@ describe("dispatchByPlatform", () => {
     await expect(a({}, { udid: iosUdid })).resolves.toBe("ok");
     await expect(a({}, { udid: androidUdid })).resolves.toBe("ok");
   });
+
+  // Chromium is the fallthrough at the end of the dispatch chain, so a platform
+  // with no branch of its own lands there instead of erroring. Deleting the
+  // explicit harmony check would hand a HarmonyOS device to the CDP handler and
+  // report its result as success, which is why this asserts the chromium handler
+  // is never entered rather than only that the call rejects.
+  it("rejects a HarmonyOS device instead of falling through to the chromium handler", async () => {
+    const chromiumHandler = vi.fn().mockResolvedValue("from-chromium");
+
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "test",
+      // Both kinds declared: a bare `harmony-<key>` resolves to kind 'device'
+      // and a `harmony-emulator-<name>` id to kind 'emulator', so declaring
+      // only one lets assertSupported reject the other before dispatch runs.
+      capability: {
+        ...capabilityBoth,
+        harmony: { device: true, emulator: true },
+        chromium: { app: true },
+      },
+      ios: { handler: vi.fn() },
+      android: { handler: vi.fn() },
+      chromium: { handler: chromiumHandler },
+    });
+
+    for (const udid of ["harmony-Phone_1", "harmony-emulator-argent_phone"]) {
+      await expect(execute({}, { udid })).rejects.toBeInstanceOf(NotImplementedOnPlatformError);
+      expect(chromiumHandler).not.toHaveBeenCalled();
+    }
+  });
 });

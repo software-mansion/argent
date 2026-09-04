@@ -910,6 +910,28 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     expect(registry.disposeService).not.toHaveBeenCalled();
   });
 
+  it("reports a device whose only service is a dead ERROR node as unmatched, while still disposing it", async () => {
+    // A flow run against a HarmonyOS device mints `SimulatorServer:<id>` even
+    // when the blueprint refuses the platform — a failed start leaves an ERROR
+    // node holding nothing. Ownership for `unmatched` must not count it: the
+    // id owns no live or previously-live service here, so reporting
+    // `{ stopped: [] }` with no `unmatched` would read as a clean machine when
+    // the caller most needs to know their scope matched nothing real. The
+    // tombstone is still swept — disposal and ownership are separate questions.
+    const services = new Map([
+      [`SimulatorServer:harmony-127.0.0.1:5555`, { state: ServiceState.ERROR, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: ["harmony-127.0.0.1:5555"] });
+
+    expect(result).toEqual({ stopped: [], unmatched: ["harmony-127.0.0.1:5555"] });
+    // The sweep still cleans up the failed start; it just doesn't count as
+    // ownership.
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:harmony-127.0.0.1:5555`);
+  });
+
   it("reports nothing unmatched when the same device is stopped twice in a row", async () => {
     // The session-end sequence the argent rules prescribe: stop the device you
     // finished with, then sweep the rest. The second call finds every URN the
@@ -1188,10 +1210,13 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     expect(registry.disposeService).toHaveBeenCalledOnce();
   });
 
-  it("does not report an ERROR-only device as unmatched — its dead node was cleaned up", async () => {
-    // The other side of the IDLE case above: neither state is a miss (both own
-    // nodes), but an ERROR node is still DISPOSED — it never ran, so it never
-    // shows up in `stopped`, yet the dead node has to be cleared.
+  it("disposes an ERROR-only device's dead node but reports it unmatched, unlike an IDLE one", async () => {
+    // An ERROR node never ran, so it never shows up in `stopped` — but it also
+    // holds nothing, so it is not ownership: the id lands in `unmatched` like
+    // any other id whose scope matched nothing real (a flow minted the node by
+    // running a tool this device cannot serve). The dead node is still swept.
+    // The IDLE control is the boundary of that exception: a device already
+    // stopped once DID hold services, so it stays matched.
     const services = new Map([
       [`SimulatorServer:${MINE}`, { state: ServiceState.ERROR, dependents: [] }],
       [`SimulatorServer:${THEIRS}`, { state: ServiceState.IDLE, dependents: [] }],
@@ -1201,8 +1226,7 @@ describe("stop-all-simulator-servers unmatched ids", () => {
 
     const result = await tool.execute!({}, { devices: [MINE, THEIRS] });
 
-    expect(result).toEqual({ stopped: [] });
-    expect(result).not.toHaveProperty("unmatched");
+    expect(result).toEqual({ stopped: [], unmatched: [MINE] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
     expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${MINE}`);
   });

@@ -399,6 +399,59 @@ describe("pinch: gating", () => {
     expect(result.calls).toHaveLength(0);
   });
 
+  it("dispatches pinch on HarmonyOS — `uinput -T -m` moves both fingers in one call", async () => {
+    // The platform arm below refuses `rotate` on HarmonyOS, and once refused
+    // both they were one branch. A guard that still names `pinch` takes a
+    // gesture the platform can perform, and takes it silently: the step reports
+    // `fail` with authoring guidance rather than erroring.
+    await writeFlow("pinch-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "pinch", scale: 2 }],
+    });
+
+    const result = await run("pinch-harmony", "harmony-127.0.0.1:5555");
+
+    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-pinch"]);
+  });
+
+  it("rejects rotate on HarmonyOS, naming the straight line rather than the missing contact", async () => {
+    // The arc is what the platform cannot do, not the second finger: `uinput
+    // -T -m` carries both contacts but only along one straight line each. A
+    // reason still blaming multi-touch sends an author looking for a workaround
+    // to a wall that moved.
+    await writeFlow("rotate-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "rotate", by: 90 }],
+    });
+
+    const result = await run("rotate-harmony", "harmony-127.0.0.1:5555");
+
+    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/unsupported on HarmonyOS/);
+    expect(result.steps[0].reason).toMatch(/straight line/);
+    expect(result.steps[0].reason).not.toMatch(/one contact at a time/);
+    // The authoring guidance, not a dispatch trace.
+    expect(result.steps[0].reason).not.toMatch(/does not support platform/);
+    expect(result.calls).toHaveLength(0);
+  });
+
+  it("leaves tap on HarmonyOS untouched — it is the one gesture that has a backend", async () => {
+    // Positive control: a guard widened to every touch directive would take the
+    // one thing a HarmonyOS flow can actually do with it.
+    currentTree = () =>
+      screen([n({ label: "Zoom in", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 } })]);
+    await writeFlow("tap-harmony-coord", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.5, y: 0.5 }],
+    });
+
+    const result = await run("tap-harmony-coord", "harmony-127.0.0.1:5555");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+  });
+
   it("rejects pinch on a physical iOS device without paying the settle or the selector auto-wait", async () => {
     // Selector against an empty tree: without the upfront guard this step
     // would burn waitForFrame's full auto-wait before failing. Counting tree

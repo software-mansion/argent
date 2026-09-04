@@ -23,9 +23,12 @@ vi.mock("../src/utils/ios-devices", async () => {
   );
   return { ...actual, isTvOsSimulator: async () => false };
 });
+// Mutable so the one Android TV case can flip the form factor; every other test
+// runs on the phone shape the fixtures describe.
+const adbProbe = vi.hoisted(() => ({ isTv: false }));
 vi.mock("../src/utils/adb", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
-  return { ...actual, isAndroidTv: async () => false };
+  return { ...actual, isAndroidTv: async () => adbProbe.isTv };
 });
 
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
@@ -101,6 +104,7 @@ describe("await-ui-element tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
+    adbProbe.isTv = false;
   });
 
   it("exposes the await-ui-element id", () => {
@@ -579,6 +583,36 @@ describe("await-ui-element tool", () => {
     expect(result.success).toBe(true);
   });
 
+  it("a success on Android TV carries no note", async () => {
+    // The nearest twin of the degraded-simulator case: the TV hint is a form
+    // factor, true of every read from this device, so a wait that resolved has
+    // nothing to add with it.
+    adbProbe.isTv = true;
+    const xml =
+      `<hierarchy rotation="0">` +
+      `<node text="Sign in" resource-id="com.demo:id/signin" class="android.widget.Button" clickable="true" bounds="[100,200][980,320]" />` +
+      `</hierarchy>`;
+    const android: AndroidDevtoolsApi = {
+      getHierarchy: async () => ({ xml }),
+      getScreenSize: async () => ({ width: 1080, height: 2400, rotation: 0 }),
+    } as unknown as AndroidDevtoolsApi;
+    const tool = createAwaitUiElementTool(makeMockRegistry({ android }));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: ANDROID_SERIAL,
+        condition: "visible",
+        selector: { text: "Sign in" },
+        timeoutMs: 2000,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.note).toBeUndefined();
+  });
+
   it("does NOT confirm `hidden` on Android when a seen element is followed by an empty tree", async () => {
     // Android never sets hint / should_restart, so before the everMatched guard a
     // transient empty `uiautomator dump` after the element had appeared would let
@@ -614,13 +648,13 @@ describe("await-ui-element tool", () => {
 
   // ── Chromium branch ──────────────────────────────────────────────────────
 
-  function makeChromiumApi(treeJson: unknown): ChromiumCdpApi {
+  function makeChromiumApi(treeJson: unknown, truncated = false): ChromiumCdpApi {
     return {
       refreshViewport: async () => ({ width: 1024, height: 768 }),
       cdp: {
         send: async (method: string) => {
           if (method === "Runtime.evaluate") {
-            return { result: { value: JSON.stringify({ tree: treeJson, truncated: false }) } };
+            return { result: { value: JSON.stringify({ tree: treeJson, truncated }) } };
           }
           return {};
         },
@@ -628,24 +662,25 @@ describe("await-ui-element tool", () => {
     } as unknown as ChromiumCdpApi;
   }
 
+  const CHROMIUM_TREE = {
+    role: "html",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      {
+        role: "button",
+        label: "Continue",
+        clickable: true,
+        frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
+        children: [],
+      },
+    ],
+  };
+
   it("drives the Chromium CDP path and matches a DOM node", async () => {
-    const tree = {
-      role: "html",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [
-        {
-          role: "button",
-          label: "Continue",
-          clickable: true,
-          frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.05 },
-          children: [],
-        },
-      ],
-    };
     const tool = createAwaitUiElementTool(makeMockRegistry({}));
 
     const result = await tool.execute(
-      { chromium: makeChromiumApi(tree) },
+      { chromium: makeChromiumApi(CHROMIUM_TREE) },
       {
         udid: CHROMIUM_ID,
         condition: "visible",
@@ -656,6 +691,28 @@ describe("await-ui-element tool", () => {
     );
 
     expect(result.success).toBe(true);
+    expect(result.note).toBeUndefined();
+  });
+
+  it("says the tree was partial when the walker hit its node budget", async () => {
+    // Truncation is a property of this read, like HarmonyOS' suspended panel:
+    // the page is only partly there, so the wait resolved on less than the
+    // screen and the caller is owed that.
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const result = await tool.execute(
+      { chromium: makeChromiumApi(CHROMIUM_TREE, true) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "visible",
+        selector: { text: "Continue" },
+        timeoutMs: 2000,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.note).toMatch(/PARTIAL tree/);
   });
 
   it("surfaces a Chromium fetch failure in the timeout note (last tree fetch failed)", async () => {
@@ -729,6 +786,36 @@ describe("await-ui-element tool", () => {
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/boot-device/i);
   });
+
+  it.each(["visible", "exists"] as const)(
+    "a `%s` success on a degraded simulator carries no note",
+    async (condition) => {
+      // `degraded` means the simulator was not booted through argent — a common
+      // state, and the tree it returns is live and populated. The boot hint ends
+      // "You MUST call boot-device with force=true now", so folding it into a
+      // success hands the agent an order to restart the device (losing the app
+      // state the wait was gating) after a wait that worked.
+      const { api } = makeSequencedAXService(
+        [axResponse([{ label: "General", frame: FRAME, traits: ["button"] }])],
+        { degraded: true }
+      );
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_UDID,
+          condition,
+          selector: { text: "General" },
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.note).toBeUndefined();
+    }
+  );
 
   // ── The cause an unmet wait reports ──────────────────────────────────────
   //
@@ -831,12 +918,11 @@ describe("await-ui-element tool", () => {
   }
 
   it("keeps a genuine miss unmet when only the final poll fails", async () => {
-    // `lastError` describes only the last fetch. One bad trailing read must not
-    // read as "nothing was ever compared", for a step that hard-fails at
-    // replay. The trusted read is one clamped sleep back, inside the tolerance.
-    // `pollIntervalMs` is above `timeoutMs` on purpose: the sleep clamps to the
-    // deadline, and the 2000ms ceiling absorbs scheduler slip. At 500 a ~400ms
-    // slip flipped the cause under load.
+    // One bad trailing read must not read as "nothing was ever compared", for a
+    // step that hard-fails at replay. The trusted read is one clamped sleep
+    // back, inside the tolerance. `pollIntervalMs` is above `timeoutMs` on
+    // purpose: the sleep clamps to the deadline, and the 2000ms ceiling absorbs
+    // scheduler slip. At 500 a ~400ms slip flipped the cause under load.
     const tool = createAwaitUiElementTool(makeMockRegistry({}));
 
     const result = await tool.execute(
@@ -850,7 +936,11 @@ describe("await-ui-element tool", () => {
       }
     );
 
-    expect(result.note).toMatch(/last tree fetch failed/i);
+    // Only the cause is asserted. The deadline poll lands with 0ms of budget
+    // and the loop drops a failure it caused itself, so whether the note quotes
+    // that read is decided by a timer edge — which is exactly why the cause is
+    // carried by the loop instead of read back off `lastError`.
+    expect(result.success).toBe(false);
     expect(unmetUiWaitCause(result)).toBe("unmet");
   });
 

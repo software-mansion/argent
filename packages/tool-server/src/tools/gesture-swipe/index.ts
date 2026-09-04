@@ -4,7 +4,16 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { dragBetween, getViewport, toPoints } from "../../utils/ios-device/runner-commands";
-import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import {
+  HARMONY_INTERACTION_TIMEOUT_MS,
+  assertHarmonyDisplayReady,
+  harmonyDisplay,
+  holdUitestQueue,
+  remainingBudget,
+  toDevicePoint,
+} from "../../utils/harmony-uitest";
+import { ensureDep } from "../../utils/check-deps";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -34,7 +43,11 @@ const MAX_DURATION_MS = 10_000;
 
 const zodSchema = z
   .object({
-    udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    udid: z
+      .string()
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, or HarmonyOS id)."
+      ),
     fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
     fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
     toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
@@ -96,6 +109,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
 };
 
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
@@ -109,18 +123,22 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   },
   // The bounds are spelled out rather than interpolated: extract-tools scans this
   // description statically, so a `${}` in it drops the tool out of the scan.
-  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
-Generates interpolated Move events for a natural feel (~60fps).
+  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, Android emulator, or HarmonyOS device). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
+Generates interpolated Move events for a natural feel (~60fps); HarmonyOS takes the whole gesture in one call and interpolates it on-device.
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.
-Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend, or \`hdc\` on HarmonyOS, is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
+    // HarmonyOS swipes go over hdc; resolving the iOS/Android-only blueprint
+    // would fail the swipe before it runs — the factory refuses any platform
+    // but those two.
+    if (device.platform === "harmony") return {};
 
     if (isIosPhysicalDevice(device)) {
       return { iosDeviceRunner: iosDeviceRunnerRef(device) };
@@ -133,6 +151,42 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
     const momentumFree = params.momentum === false;
     const timestampMs = Date.now();
     const device = resolveDevice(params.udid);
+
+    // HarmonyOS has no simulator-server controller: the whole gesture is one
+    // `uitest uiInput` call, which owns its own interpolation on-device, so
+    // there is no per-frame Move train to emit here.
+    if (device.platform === "harmony") {
+      await ensureDep("hdc");
+      const connectKey = harmonyConnectKey(device.id);
+      // One deadline for both display reads and the injection they feed, so the
+      // whole gesture stays under the MCP layer's abort-and-replay cap.
+      const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
+      // Fast prefilter, ahead of the queue wait: a panel already suspended or
+      // not yet composited is refused without waiting behind this device's
+      // queued work. It is NOT the check the injection trusts — see inside.
+      const display = await harmonyDisplay(connectKey);
+      // A swipe against a panel that is suspended, or that the render service
+      // could not size, reports `No Error` and lands nowhere.
+      assertHarmonyDisplayReady(display, "swipe");
+      await holdUitestQueue(connectKey, deadline, async (ui) => {
+        // The check the injection trusts, read while holding the queue: the
+        // prefilter saw a state that may be a full queue depth stale by the
+        // time this call reaches the device — and on a foldable the geometry
+        // may have changed with it, so the endpoints scale against what is
+        // live now.
+        const live = await harmonyDisplay(
+          connectKey,
+          remainingBudget(connectKey, deadline, "the display re-read")
+        );
+        assertHarmonyDisplayReady(live, "swipe");
+        const fromPx = toDevicePoint(params.fromX, params.fromY, live);
+        const toPx = toDevicePoint(params.toX, params.toY, live);
+        const distance = Math.hypot(toPx.x - fromPx.x, toPx.y - fromPx.y);
+        const seconds = Math.max(duration, 1) / 1000;
+        await ui.swipe(momentumFree ? "swipe" : "fling", fromPx, toPx, distance / seconds);
+      });
+      return { swiped: true, timestampMs };
+    }
 
     if (isIosPhysicalDevice(device)) {
       // XCTest is one planned drag. momentum: false holds at the destination,

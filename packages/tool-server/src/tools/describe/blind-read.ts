@@ -6,6 +6,7 @@ import type { DescribeTreeData } from "./contract";
  */
 export function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   if (data.tree.children.length > 0) return false;
-  // The physical-device describe path stamps a hint on every childless tree. This predicate depends on that.
+  // The physical-device and HarmonyOS describe paths stamp a hint on a childless
+  // tree instead of throwing (a dump that listed no windows). This predicate depends on that.
   return Boolean(data.hint || data.should_restart || everMatched);
 }

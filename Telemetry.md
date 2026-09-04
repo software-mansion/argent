@@ -63,7 +63,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 - Argent version, Node.js version, operating system, processor architecture;
 - whether the process runs in an interactive terminal and whether it runs in a CI environment;
-- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, or a Chromium-based target.
+- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, HarmonyOS, or a Chromium-based target.
 
 ### Diagnostics
 

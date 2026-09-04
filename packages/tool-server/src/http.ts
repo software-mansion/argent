@@ -240,14 +240,21 @@ export function platformFromArgs(data: unknown): TelemetryPlatform | null {
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  // Its HarmonyOS twin: an instance is named, not addressed, until `hdc`
+  // reports the connect key it registered as. The other spelling of a harmony
+  // boot — the `harmony-emulator-<name>` id `list-devices` reports — is a
+  // `udid`, and classifies by shape above. `harmony` has no runtime kinds to
+  // refine into, so this is the whole answer rather than a coarse one.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") return "harmony";
   return null;
 }
 
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the AI client is
- * inherited, but the platform is re-derived from the child's OWN device arg.
- * Orchestrators like flow-execute carry no platform (and a flow can span several
- * devices), so the parent's platform is only the fallback.
+ * inherited, but the platform is re-derived from the child's OWN device arg —
+ * `udid` / `device_id` / `devices` / `avdName` / `harmonyInstance`, whichever it
+ * spells. Orchestrators like flow-execute carry no platform (and a flow can span
+ * several devices), so the parent's platform is only the fallback.
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
   const childPlatform = platformFromArgs(childArgs);

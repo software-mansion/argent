@@ -20,6 +20,21 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// The two HarmonyOS deps ship inside DevEco Studio rather than on PATH, so they
+// probe through their own resolvers. Mocked for the same reason as the Android
+// pair above: a dev machine with DevEco installed would report them available
+// however the test stubs PATH.
+const resolveHdcMock = vi.fn();
+const resolveHarmonyEmulatorMock = vi.fn();
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  resolveHdc: () => resolveHdcMock(),
+}));
+vi.mock("../src/utils/harmony-cli", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-cli")>()),
+  resolveHarmonyEmulator: () => resolveHarmonyEmulatorMock(),
+}));
+
 import {
   DependencyMissingError,
   __resetDepCacheForTests,
@@ -47,6 +62,8 @@ describe("check-deps", () => {
     __resetDepCacheForTests();
     commandOnPathMock.mockReset();
     resolveAndroidBinaryMock.mockReset();
+    resolveHdcMock.mockReset().mockResolvedValue("/deveco/hdc");
+    resolveHarmonyEmulatorMock.mockReset().mockResolvedValue("/deveco/Emulator");
   });
 
   it("returns without throwing when all deps are on PATH", async () => {
@@ -93,5 +110,29 @@ describe("check-deps", () => {
   it("ensureDep is the single-dep form of ensureDeps", async () => {
     stubProbe(["xcrun"]);
     await expect(ensureDep("xcrun")).rejects.toBeInstanceOf(DependencyMissingError);
+  });
+
+  // Neither HarmonyOS dep is a PATH binary on an IDE install: `hdc` lives under
+  // the SDK and the manager is named `Emulator`, too generic to match on PATH.
+  // Probed through `commandOnPath` they read as missing on every machine that
+  // has DevEco Studio, gating the whole platform off behind a 424.
+  it("probes the HarmonyOS deps through the DevEco resolvers, not PATH", async () => {
+    stubProbe(["hdc", "Emulator", "harmony-emulator"]);
+
+    await expect(ensureDeps(["hdc", "harmony-emulator"])).resolves.toBeUndefined();
+    expect(commandOnPathMock).not.toHaveBeenCalledWith("hdc");
+    expect(commandOnPathMock).not.toHaveBeenCalledWith("harmony-emulator");
+  });
+
+  it("reports each HarmonyOS dep as missing when its own resolver finds nothing", async () => {
+    stubProbe([]);
+    resolveHdcMock.mockResolvedValue(null);
+    resolveHarmonyEmulatorMock.mockResolvedValue(null);
+
+    // The hint is the whole value of the 424: it names DevEco Studio and
+    // `$DEVECO_STUDIO_HOME`, which is the only way to point at a non-macOS
+    // install. A caller told merely "hdc is missing" has nowhere to go.
+    await expect(ensureDep("hdc")).rejects.toThrow(/DEVECO_STUDIO_HOME/);
+    await expect(ensureDep("harmony-emulator")).rejects.toBeInstanceOf(DependencyMissingError);
   });
 });

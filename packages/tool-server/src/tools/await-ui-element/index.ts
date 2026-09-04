@@ -8,12 +8,13 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { pollDescribeTree } from "../../utils/poll-describe-tree";
+import { pollDescribeTree, readCaveats } from "../../utils/poll-describe-tree";
+import { READ_CAVEAT_SOURCES } from "../describe/contract";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { isBlindRead } from "../describe/blind-read";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
@@ -21,6 +22,7 @@ import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
+import { describeHarmony, harmonyRequires } from "../describe/platforms/harmony";
 import {
   selectorSchema,
   nodeText,
@@ -97,7 +99,9 @@ const zodSchema = z
     udid: z
       .string()
       .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, HarmonyOS id, or Chromium id)."
+      ),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
       .describe(
@@ -125,8 +129,8 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium, " +
-          "and on physical iOS."
+        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
+          "including physical iOS."
       ),
     timeoutMs: z
       .number()
@@ -251,6 +255,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 // The matching engine lives in utils/ui-tree-match so the flow directives and
@@ -263,14 +268,7 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
 // the real cause rather than a bare "no element matched".
 function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
-  if (!lastData) return base;
-  const extras: string[] = [];
-  if (lastData.should_restart) {
-    extras.push(
-      "the foreground app may need a restart for native inspection — call restart-app and retry"
-    );
-  }
-  if (lastData.hint) extras.push(lastData.hint);
+  const extras = readCaveats(lastData);
   return extras.length === 0 ? base : `${base} (${extras.join("; ")})`;
 }
 
@@ -321,7 +319,8 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     params: Params,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    budgetMs: number
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
       // Physical devices poll the same XCUITest runner snapshot as describe.
@@ -335,6 +334,9 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     }
     if (device.platform === "vega") {
       return describeVega(device.id);
+    }
+    if (device.platform === "harmony") {
+      return describeHarmony(harmonyConnectKey(device.id), budgetMs);
     }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
@@ -365,14 +367,19 @@ case-insensitive substrings of the element's label/value and role; identifier ma
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
 (iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
-Vega automation toolkit) every pollIntervalMs
+Vega automation toolkit, HarmonyOS \`uitest dumpLayout\`) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
-Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
-condition holding, which is not always a verdict on the condition: \`cause\` says which it was — \`unmet\` (the tree
-was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or
-\`cancelled\` — and \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
-tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
+Returns { success: boolean, elapsed: number, note?, cause? }, and the \`note\` is worth reading on either
+outcome. success=false means the wait ended without the condition holding, which is not always a verdict on
+the condition: \`cause\` says which it was — \`unmet\` (the tree was read and the condition was false there),
+\`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\` — and \`note\` describes what was
+seen. Only \`unmet\` licenses rewriting the check. A \`note\` on success=true says why the pass is weaker than
+it looks: either \`hidden\` was satisfied by a selector that never matched anything (so the element may have
+been gone all along, or the selector is wrong — treat that as a failed check and fix the selector), or the
+tree it matched is not the whole live screen (a suspended HarmonyOS panel still serving its last frame, a
+Chromium page truncated at the walker's node budget). Use this after a tap/navigation to wait for the next
+screen, or before tapping an element that appears asynchronously.`,
     alwaysLoad: true,
     searchHint:
       "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
@@ -394,6 +401,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
+      else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =
@@ -421,7 +429,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       let lastTrustedReadAt: number | undefined;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: (budgetMs) => fetchTree(device, params, services, isTvOs, androidIsTv, budgetMs),
         timeoutMs,
         pollIntervalMs,
         signal,
@@ -432,11 +440,21 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
           if (!blind) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
-            if (params.condition === "hidden" && !everMatched) {
-              result.note =
-                "condition met immediately — the selector never matched any element, " +
-                "so it may have already been hidden before the wait, or the selector is wrong";
-            }
+            // Both, not the first that applies: a `hidden` that met its
+            // condition on sight is exactly the wait a suspended panel resolves
+            // — the selector matches nothing in a frame composited before the
+            // screen went dark — and the caveat is what stops the tap that
+            // follows from landing nowhere.
+            const notes = [
+              params.condition === "hidden" && !everMatched
+                ? "condition met immediately — the selector never matched any element, " +
+                  "so it may have already been hidden before the wait, or the selector is wrong"
+                : null,
+              // A success read off a tree that may not be the live screen still
+              // owes the agent that caveat.
+              data.hint && READ_CAVEAT_SOURCES.has(data.source) ? data.hint : null,
+            ].filter((n): n is string => n !== null);
+            if (notes.length > 0) result.note = notes.join(" ");
             return { done: true, result };
           }
           return { done: false };
@@ -446,17 +464,19 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       if (poll.aborted) return cancelled();
       if (poll.result) return poll.result;
 
-      // The final attempt is trusted only if it settled and came back with a
-      // tree the condition could be judged on. `lastError` alone cannot say:
-      // the loop leaves it unset for an attempt it abandoned at the deadline,
-      // so that the note can still be built from an older tree.
-      const finalRead: FinalRead = !poll.lastAttemptSettled
-        ? "unsettled"
-        : poll.lastError === undefined &&
-            poll.lastData !== null &&
-            !isBlindRead(poll.lastData, everMatched)
-          ? "trusted"
-          : "untrusted";
+      // The final attempt is trusted only if it came back with a tree the
+      // condition could be judged on. `lastError` cannot stand in for that: the
+      // loop leaves it unset both for an attempt it abandoned at the deadline
+      // and for one that failed with no budget left, so that the note can still
+      // be built from an older tree.
+      const finalRead: FinalRead =
+        poll.lastAttempt === "unsettled"
+          ? "unsettled"
+          : poll.lastAttempt === "tree" &&
+              poll.lastData !== null &&
+              !isBlindRead(poll.lastData, everMatched)
+            ? "trusted"
+            : "untrusted";
       return {
         success: false,
         elapsed: Date.now() - start,

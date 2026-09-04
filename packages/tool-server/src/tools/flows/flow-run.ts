@@ -38,6 +38,8 @@ import {
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { assertSupported } from "../../utils/capability";
+import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
@@ -2341,9 +2343,15 @@ async function execLeafStep(
         // at all — a tree source that failed, or one that answered and then
         // wedged. Scoring that `fail` would make CI read an environment problem
         // as a regression. `error` keeps the run non-ok while saying plainly
-        // that the app was never judged. Scoped to `idle`, whose whole verdict
-        // rests on being able to observe the screen.
-        if (!r.ok && r.indeterminate && step.kind === "idle") {
+        // that the app was never judged. Also scored never-judged on a platform
+        // with no flow tree source at all: there every read fails by
+        // construction, so an await/assert indeterminate is the platform's
+        // shape, not a window the app went dark in.
+        if (
+          !r.ok &&
+          r.indeterminate &&
+          (step.kind === "idle" || (device !== null && !supportsFlowTree(device.platform)))
+        ) {
           return { ...base, status: "error", reason: r.reason };
         }
         return {
@@ -2405,7 +2413,20 @@ async function execLeafStep(
         step.args,
         state.deviceIsExplicit
       );
-      const outputHint = registry.getTool(step.name)?.outputHint;
+      const def = registry.getTool(step.name);
+      const outputHint = def?.outputHint;
+      // `Registry.invokeTool` does not run the capability gate (only the HTTP
+      // layer does), so pre-flight here the way run-sequence does for its
+      // sub-steps — otherwise a replayed step reaches a backend this platform
+      // lacks and stops on the service blueprint's low-level refusal instead,
+      // minting a dead service node on the way.
+      if (device && def?.capability) {
+        try {
+          assertSupported(def.id, def.capability, device);
+        } catch (err) {
+          return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
+        }
+      }
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }

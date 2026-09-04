@@ -223,6 +223,8 @@ The identity selector must exist only on the destination. `idle` waits until the
 
 One outcome stops the run: the runner cannot read the UI tree at all. Argent marks the step as errored and skips the later steps.
 
+On a platform with no UI-tree source for flows (HarmonyOS, a remote iOS device), `idle` cannot run. The step errors immediately and names `wait:` as the replacement.
+
 `idle` has no `assert` form and no `when` form.
 
 ## Optional steps

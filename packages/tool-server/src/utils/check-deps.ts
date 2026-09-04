@@ -1,6 +1,8 @@
 import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
+import { resolveHarmonyEmulator } from "./harmony-cli";
+import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
 
 /**
@@ -42,6 +44,10 @@ const INSTALL_HINTS: Record<ToolDependency, string> = {
     "`sim-remote` CLI not found on PATH. Install via the radon-cloud project (see its README) and run `sim-remote login` before invoking any ios-remote tool. Only required for remote iOS simulators.",
   "vega":
     "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
+  "harmony-emulator":
+    "HarmonyOS emulator manager not found. Install DevEco Studio; a macOS install at `/Applications/DevEco-Studio.app` is found automatically, and anywhere else set `$DEVECO_STUDIO_HOME` to the directory holding `tools/emulator/Emulator` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to list or launch HarmonyOS emulators.",
+  "hdc":
+    "`hdc`, the HarmonyOS device connector, was not found. Install DevEco Studio (it ships `hdc` under `sdk/default/openharmony/toolchains`, and a macOS install at `/Applications/DevEco-Studio.app` is found automatically), or put `hdc` from the OpenHarmony command-line tools on PATH, or set `$DEVECO_STUDIO_HOME` to the directory holding `sdk/default/openharmony/toolchains/hdc` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to drive HarmonyOS devices.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
@@ -55,6 +61,17 @@ async function probe(dep: ToolDependency): Promise<boolean> {
   // resolver check the SDK's default install location.
   if (dep === "vega") {
     return (await resolveVegaBinary()) !== null;
+  }
+  // The emulator manager lives inside DevEco Studio rather than on PATH, so it
+  // resolves through the DevEco-aware resolver.
+  if (dep === "harmony-emulator") {
+    return (await resolveHarmonyEmulator()) !== null;
+  }
+  // `hdc` ships inside DevEco Studio's SDK rather than on PATH for IDE installs,
+  // so it resolves through the DevEco-aware resolver (which falls back to PATH
+  // for standalone command-line-tools installs).
+  if (dep === "hdc") {
+    return (await resolveHdc()) !== null;
   }
   // Probe existence without invoking the dep: a bare `xcrun` can pop the Xcode
   // license dialog on first use.

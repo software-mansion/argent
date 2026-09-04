@@ -59,12 +59,13 @@ Use single quotes for anchored, case-sensitive regexes:
 
 Flow selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
-| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
-| iOS      | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
+| Platform  | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
+| --------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
+| iOS       | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
+| Android   | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
+| Chromium  | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
+| Vega      | toolkit page source                                       | same source                     | Same elements, different shape                         |
+| HarmonyOS | none                                                      | `uitest` layout dump            | The runner has no tree at all, so no selector resolves |
 
 On iOS, Android, and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
@@ -201,6 +202,8 @@ It **never fails a run.** Every outcome short of a clean settle passes with a wa
 
 Only a tree source this step could not read stops the run, as an errored step — one still failing when the wait ends, one that wedges after answering, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read. The same outage stops no [selector-less gesture](#directives), which needs no frame and passes with its own warning instead.
 
+On a platform flows have no UI-tree source on at all (HarmonyOS, a remote iOS device), `idle` cannot run: it errors immediately — no polling, and no relaunch can help, since there is nothing to restore — names `wait:` as the replacement, and skips the rest of the run.
+
 `idle` proves readiness only and never identifies the screen, so it cannot serve as acceptance evidence or replace the identity gate. Gate the next action on a stable element. Add `idle` during polish after each screen change, not after every step.
 
 ## Optional divergences
@@ -222,6 +225,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
+- HarmonyOS has no runner tree, so every selector directive errors with `ui-tree matching is not supported on platform "harmony"` — `type:` included, since it is selector-only. `long-press:` and `rotate:` are refused up front whether or not they carry a selector: `uitest uiInput` sends one whole gesture per call with no hold duration, and `uinput -T -m` — the two-contact injection `pinch:` rides on — moves each contact along one straight line, never an arc. What runs is a coordinate `tap:`, a selector-less `pinch:`, `snapshot:`, and raw `tool:` steps for the tools that declare HarmonyOS support. Name the device as `--device harmony-<connectKey>`: there is no `--platform harmony`, and a HarmonyOS device is never auto-resolved.
 
 ## Snapshots and standalone runs
 
