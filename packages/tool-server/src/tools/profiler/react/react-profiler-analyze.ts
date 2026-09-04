@@ -37,14 +37,57 @@ async function fileArtifact(
   return p ? store.register({ hostPath: p, kind }) : null;
 }
 
-const annotationSchema = z.object({
-  offsetMs: z.coerce
-    .number()
-    .describe(
-      "Milliseconds since profiling started. Compute as: tapTimestampMs - startedAtEpochMs, using the timestampMs returned by tap/swipe and the startedAtEpochMs returned by react-profiler-start."
-    ),
-  label: z.string().describe("Description of the action performed"),
-});
+/**
+ * Turn each annotation into the `offsetMs` the report renderer wants. A
+ * `timestampMs` is a gesture tool's own epoch reading, resolved here against
+ * the wall-clock anchor `react-profiler-start` stored with the session — the
+ * subtraction the caller used to be asked to do, and the reason `Date.now()`
+ * was never a valid substitute: only the tool-server's clock is on both sides.
+ */
+export function resolveAnnotations(
+  annotations: Array<{ timestampMs?: number; offsetMs?: number; label: string }> | undefined,
+  profileStartWallMs: number | null
+): Array<{ offsetMs: number; label: string }> | undefined {
+  if (!annotations) return undefined;
+  return annotations.map((a) => {
+    if (a.offsetMs !== undefined) return { offsetMs: a.offsetMs, label: a.label };
+    // Unreachable through the schema, which requires one of the two.
+    const timestampMs = a.timestampMs as number;
+    if (profileStartWallMs === null) {
+      throw new FailureError(
+        `Annotation "${a.label}" gave timestampMs, but this session stored no profiling start to ` +
+          `measure it against. Pass offsetMs instead, or re-record the session.`,
+        {
+          error_code: FAILURE_CODES.REACT_PROFILER_ANALYZE_ANNOTATION_UNANCHORED,
+          failure_stage: "react_profiler_analyze_annotations",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    return { offsetMs: timestampMs - profileStartWallMs, label: a.label };
+  });
+}
+
+const annotationSchema = z
+  .object({
+    timestampMs: z.coerce
+      .number()
+      .optional()
+      .describe(
+        "The `timestampMs` a gesture tool returned, passed through unchanged. Preferred over `offsetMs`: the session's start is read from the stored profile here, so you do not carry it across the session or subtract anything yourself."
+      ),
+    offsetMs: z.coerce
+      .number()
+      .optional()
+      .describe(
+        "Milliseconds since profiling started, for a caller that already holds an offset. Prefer `timestampMs`."
+      ),
+    label: z.string().describe("Description of the action performed"),
+  })
+  .refine((a) => (a.timestampMs === undefined) !== (a.offsetMs === undefined), {
+    message: "give exactly one of `timestampMs` (preferred) or `offsetMs`",
+  });
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -62,8 +105,9 @@ const zodSchema = z.object({
     .array(annotationSchema)
     .optional()
     .describe(
-      "Optional list of user actions with their time offset from profiling start. " +
-        "Compute offsetMs = tapTimestampMs - startedAtEpochMs, where tapTimestampMs comes from the tap/swipe tool return value and startedAtEpochMs comes from react-profiler-start return value."
+      "Optional list of user actions to mark on the timeline. Give each one the `timestampMs` " +
+        "the tap/swipe tool returned and a `label`; this tool converts it against the profiling " +
+        "start it recorded."
     ),
 });
 
@@ -86,10 +130,11 @@ Raw profiling data is saved to disk with a unique session timestamp for later re
 After presenting the report, ask the user whether to investigate further (drill-down with
 profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
 Requires react-profiler-stop to have been called first.
-Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
-the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
-where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.
+Optional annotations param: provide Array<{timestampMs, label}> to annotate commits with
+the user action that preceded them, passing the timestampMs a gesture tool returned as-is.
+This tool subtracts the profiling start it recorded, so nothing has to be tracked across the
+session. {offsetMs, label} is still accepted for a caller that already holds an offset; give
+exactly one of the two per annotation.
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
@@ -122,15 +167,19 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     let commitTree: DevToolsCommitTree;
     let unattributedByCommit: Array<[number, number, number]> | undefined;
+    let profileStartWallMs: number | null = null;
     if (sessionPaths.commitsPath) {
       const onDisk = await readCommitTree(sessionPaths.commitsPath);
       commitTree = { commits: onDisk.commits, hookNames: new Map() };
       if (onDisk.meta?.unattributedByCommit) {
         unattributedByCommit = onDisk.meta.unattributedByCommit;
       }
+      profileStartWallMs = onDisk.meta?.profileStartWallMs ?? null;
     } else {
       commitTree = { commits: [], hookNames: new Map() };
     }
+
+    const annotations = resolveAnnotations(params.annotations, profileStartWallMs);
 
     const { detectedArchitecture, anyCompilerOptimized, hotCommitIndices, totalReactCommits } =
       sessionPaths;
@@ -227,7 +276,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       recordingMs: pipelineOutput.recordingMs,
       anyRuntimeCompilerDetected: pipelineOutput.anyRuntimeCompilerDetected,
       reactCommits: pipelineOutput.reactCommits,
-      annotations: params.annotations,
+      annotations,
       debugDir,
       allClear: pipelineOutput.allClear,
       maxCommitMs: pipelineOutput.maxCommitMs,

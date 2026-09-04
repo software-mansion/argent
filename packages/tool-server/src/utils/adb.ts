@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 import { parse as parseIni } from "ini";
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -192,6 +193,47 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
     return stdout as unknown as Buffer;
   } catch (err) {
     throw describeAdbFailure(args, err);
+  }
+}
+
+/** Metro's default port, matching the `port` default every debugger tool declares. */
+const DEFAULT_METRO_PORT = 8081;
+
+/**
+ * Port `ensureMetroReverse` forwards. `ARGENT_METRO_PORT` covers a project that
+ * runs Metro somewhere other than 8081; an unparseable or out-of-range value is
+ * ignored rather than forwarded, since a bad reverse is worse than none.
+ */
+function metroReversePort(): number {
+  const raw = process.env.ARGENT_METRO_PORT;
+  if (!raw) return DEFAULT_METRO_PORT;
+  const port = Number.parseInt(raw, 10);
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_METRO_PORT;
+}
+
+/**
+ * Point the device's `localhost:<metro port>` back at the host's, so a React
+ * Native app finds Metro when it starts. An Android device has no equivalent of
+ * the iOS simulator's shared loopback, and the mapping is dropped whenever the
+ * device reboots or the adb server restarts — so a launch re-asserts it instead
+ * of assuming an earlier one still holds. `adb reverse` is idempotent, so
+ * re-asserting an existing mapping is a no-op.
+ *
+ * Best-effort by construction: the caller is launching an app, not a debugger
+ * session, and plenty of launches are of apps that never talk to Metro. A
+ * device that refuses the reverse still launches, and an app that did need
+ * Metro fails exactly as it did before this existed.
+ *
+ * Returns the port forwarded, or null when the flag opted out or adb refused.
+ */
+export async function ensureMetroReverse(serial: string): Promise<number | null> {
+  if (isFlagEnabled("disable-metro-reverse")) return null;
+  const port = metroReversePort();
+  try {
+    await runAdb(["-s", serial, "reverse", `tcp:${port}`, `tcp:${port}`], { timeoutMs: 5_000 });
+    return port;
+  } catch {
+    return null;
   }
 }
 

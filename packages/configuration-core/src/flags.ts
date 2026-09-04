@@ -38,6 +38,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Disable the accessibility element tree appended after interaction tools.",
   },
   {
+    name: "disable-metro-reverse",
+    description:
+      "Disable the `adb reverse` that points an Android device's Metro port back at the host before an app launch.",
+  },
+  {
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",

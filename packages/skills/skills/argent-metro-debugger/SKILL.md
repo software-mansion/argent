@@ -15,13 +15,17 @@ For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Ele
 
 ### Android: reverse port for Metro
 
-Android emulators and physical devices do not resolve the host's `localhost` by default. Before the RN app can reach Metro, forward port 8081 (or whichever port Metro is on) from the device back to the host:
+Android emulators and physical devices do not resolve the host's `localhost` by default, so the device's Metro port has to be forwarded back to the host before the RN app starts.
+
+`launch-app` and `restart-app` do this for you on Android — they assert the reverse before starting the process, on every call, so a device reboot or an adb restart cannot leave it stale. Once reversed, the app connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged.
+
+Do it yourself only when the app is started by something other than those tools — `npx react-native run-android`, Android Studio, or a launcher tap:
 
 ```bash
 adb -s <serial> reverse tcp:8081 tcp:8081
 ```
 
-`<serial>` is the Android `serial` from `list-devices`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+`<serial>` is the Android `serial` from `list-devices`. Set `ARGENT_METRO_PORT` if Metro is not on 8081; `argent enable disable-metro-reverse` turns the automatic reverse off. A failing Metro connection on Android still most often means no reverse is in place — re-launching through `restart-app` is the quickest way to re-assert it.
 
 ## 2. Tool Overview
 

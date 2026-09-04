@@ -25,7 +25,7 @@ If you delegate simulator tasks to sub-agents, make sure they have MCP permissio
 
 Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
-**Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
+**Load deferred tool schemas before first use.** `gesture-pinch`, `gesture-rotate` and `gesture-custom` may be deferred — their parameter schemas are not loaded until fetched, and calling one unfetched can coerce numeric parameters to strings. Use ToolSearch on those three before the first call. `gesture-tap`, `gesture-swipe`, `gesture-scroll` and `gesture-drag` are always loaded and need no fetch.
 
 ## 2. Best Practices
 
@@ -389,7 +389,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### Android
 
-- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.
+- **Metro reachability**: `launch-app` and `restart-app` run the `adb reverse` that makes Metro reachable from the device, so a launch through either tool needs no setup. See `argent-metro-debugger` for the full workflow.
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.

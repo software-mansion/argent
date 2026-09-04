@@ -1,6 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { adbShell, shellQuote, isAndroidTv, ensureMetroReverse } from "../../../utils/adb";
 import {
   assertAmStartOk,
   normalizeActivityComponent,
@@ -16,6 +16,9 @@ export const androidImpl: PlatformImpl<
   requires: ["adb"],
   handler: async (_services, params) => {
     const { udid, bundleId, activity } = params;
+    // A restart is the usual recovery after a device reboot dropped the
+    // reverse, so re-assert it while the app is down.
+    await ensureMetroReverse(udid);
     await adbShell(udid, `am force-stop ${shellQuote(bundleId)}`, { timeoutMs: 15_000 });
     let component: string;
     if (activity) {
