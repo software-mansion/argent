@@ -312,7 +312,7 @@ The outcome line of a flow that produced a report gives the result and the step 
 
 `--json` and `--json-stream` print no header, no outcome line and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report. That covers a rejected run, a run error, and a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
 A single flow run with `--json` writes the report of that flow. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
 
