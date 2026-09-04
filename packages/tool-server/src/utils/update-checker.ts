@@ -69,6 +69,7 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
+let lifecycleGeneration = 0;
 let suppressUntil = loadSuppressUntil();
 
 export function getUpdateState(): Readonly<UpdateState> {
@@ -102,11 +103,13 @@ interface UpdateCheckerOptions {
   onAutoUpdate?: (version: string) => void;
 }
 
-async function check(options: UpdateCheckerOptions): Promise<void> {
+async function check(options: UpdateCheckerOptions, generation: number): Promise<void> {
   const info = await fetchRegistryInfo(REGISTRY_URL);
-  if (info === null) return;
+  if (generation !== lifecycleGeneration || info === null) return;
 
   const minReleaseAgeMs = await detectMinReleaseAgeMs();
+  if (generation !== lifecycleGeneration) return;
+
   const updateAvailable = isNewerVersion(info.latest.version, currentVersion);
   const target = pickInstallableTarget(info.latest, info.times, currentVersion, minReleaseAgeMs);
 
@@ -135,25 +138,28 @@ async function check(options: UpdateCheckerOptions): Promise<void> {
 
 /** Checks immediately, then every 24h. Returns a dispose fn for the timer. */
 export function startUpdateChecker(options: UpdateCheckerOptions = {}): { dispose(): void } {
-  // Clear any leaked interval from a prior call.
+  // Invalidate any in-flight check from a prior lifecycle.
+  const generation = ++lifecycleGeneration;
   if (interval) {
     clearInterval(interval);
   }
 
   // Fire-and-forget initial check — don't block startup.
-  check(options).catch(() => {});
+  check(options, generation).catch(() => {});
 
-  interval = setInterval(() => {
-    check(options).catch(() => {});
+  const lifecycleInterval = setInterval(() => {
+    check(options, generation).catch(() => {});
   }, CHECK_INTERVAL_MS);
-  interval.unref();
+  lifecycleInterval.unref();
+  interval = lifecycleInterval;
 
   return {
     dispose() {
-      if (interval) {
-        clearInterval(interval);
+      clearInterval(lifecycleInterval);
+      if (interval === lifecycleInterval) {
         interval = null;
       }
+      if (lifecycleGeneration === generation) lifecycleGeneration++;
     },
   };
 }

@@ -165,6 +165,54 @@ describe("update-checker", () => {
     expect(mockFetchRegistryInfo).toHaveBeenCalledTimes(1); // No additional calls after dispose.
   });
 
+  it("ignores an in-flight check after dispose", async () => {
+    let resolveFetch!: (info: RegistryInfo | null) => void;
+    mockFetchRegistryInfo.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+    mockGetConfigValueByKey.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    handle.dispose();
+
+    resolveFetch(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockDetectMinReleaseAgeMs).not.toHaveBeenCalled();
+    expect(mockGetConfigValueByKey).not.toHaveBeenCalled();
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateState().updateAvailable).toBe(false);
+  });
+
+  it("does not finish a check disposed during the release-age probe", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    let resolveReleaseAge!: (ageMs: number) => void;
+    mockDetectMinReleaseAgeMs.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveReleaseAge = resolve;
+        })
+    );
+    mockGetConfigValueByKey.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockDetectMinReleaseAgeMs).toHaveBeenCalledOnce();
+
+    handle.dispose();
+    resolveReleaseAge(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockGetConfigValueByKey).not.toHaveBeenCalled();
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateState().updateAvailable).toBe(false);
+  });
+
   // ── Semver comparison ─────────────────────────────────────────────
 
   it("does not flag update when running a newer local version", async () => {
