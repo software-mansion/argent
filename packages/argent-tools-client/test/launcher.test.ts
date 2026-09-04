@@ -17,4 +17,15 @@ describe("buildToolsServerEnv", () => {
     expect(env.ARGENT_SIMULATOR_SERVER_DIR).toBe(paths.simulatorServerDir);
     expect(env.ARGENT_NATIVE_DEVTOOLS_DIR).toBe(paths.nativeDevtoolsDir);
   });
+
+  it("clears an inherited ARGENT_AUTH_TOKEN when spawned without a token (--no-auth)", () => {
+    const env = buildToolsServerEnv(
+      paths,
+      43123,
+      { [AUTH_TOKEN_ENV]: "developer-exported", TEST_VAR: "1" },
+      {}
+    );
+
+    expect(env[AUTH_TOKEN_ENV]).toBe("");
+  });
 });

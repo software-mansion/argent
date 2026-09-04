@@ -5,6 +5,29 @@ const path = require("path");
 const lightCodeTheme = require("prism-react-renderer").themes.github;
 const darkCodeTheme = require("prism-react-renderer").themes.vsDark;
 
+// DocSearch credentials. Argent has no Algolia application of its own yet, so
+// an ordinary build has none and the block is left out of themeConfig
+// altogether: the classic preset loads the search theme only when it is there,
+// and a search UI without credentials answers every query with "no results".
+const algoliaAppId = process.env.ALGOLIA_APP_ID;
+const algoliaApiKey = process.env.ALGOLIA_API_KEY;
+if (Boolean(algoliaAppId) !== Boolean(algoliaApiKey)) {
+  console.warn(
+    "ALGOLIA_APP_ID and ALGOLIA_API_KEY must be set together — only one of them " +
+      "is set, so DocSearch stays disabled for this build."
+  );
+}
+const algolia =
+  algoliaAppId && algoliaApiKey
+    ? {
+        appId: algoliaAppId,
+        apiKey: algoliaApiKey,
+        indexName: process.env.ALGOLIA_INDEX_NAME ?? "argent",
+        // The site is unversioned, so there are no version facets to filter by.
+        contextualSearch: false,
+      }
+    : undefined;
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "Argent",
@@ -98,16 +121,7 @@ const config = {
         links: [],
         copyright: "All trademarks and copyrights belong to their respective owners.",
       },
-      // The shared theme always renders a DocSearch bar, so an Algolia block must be
-      // present. The placeholders stand in until Argent has its own DocSearch application;
-      // the bar stays hidden meanwhile, see src/css/overrides.css.
-      algolia: {
-        appId: process.env.ALGOLIA_APP_ID ?? "ARGENT_DOCSEARCH_APP_ID",
-        apiKey: process.env.ALGOLIA_API_KEY ?? "ARGENT_DOCSEARCH_API_KEY",
-        indexName: process.env.ALGOLIA_INDEX_NAME ?? "argent",
-        // Unversioned site: no version facets to filter by.
-        contextualSearch: false,
-      },
+      ...(algolia ? { algolia } : {}),
       prism: {
         additionalLanguages: ["bash", "diff", "json", "toml", "yaml"],
         theme: lightCodeTheme,
@@ -116,9 +130,14 @@ const config = {
     }),
   plugins: [
     process.env.NODE_ENV !== "production" && "@docusaurus/plugin-debug",
-    // Renders one Open Graph card per page after the build and repoints the social image tags.
+    // Supplies @theme/SearchTranslations, which the search theme owns and the
+    // shared theme's navbar pulls into the bundle either way.
+    !algolia && require.resolve("./plugins/search-translations-fallback"),
+    // Renders one Open Graph card per page after the build and rewrites the
+    // social image tags of every built HTML file to point at it.
     require.resolve("./plugins/og-image"),
-    // The shared theme ships untranspiled JSX, so it needs the site's own JS loader.
+    // Parts of the shared theme ship as untranspiled JSX, so they need the same
+    // JS loader Docusaurus applies to the site's own sources.
     /** @type {() => import('@docusaurus/types').Plugin} */
     function tRexUiJsxPlugin() {
       return {
