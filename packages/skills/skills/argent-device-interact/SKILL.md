@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, changing a device-wide display, accessibility or radio setting (dark mode, text size, reduce motion, airplane mode, wifi, location), or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -58,28 +58,29 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool                | Notes                                                             |
-| ----------------- | ------------------- | ----------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)             |
-| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                          |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                               |
-| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                |
-| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                        |
-| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                     |
-| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down  |
-| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                            |
-| Long press        | `gesture-custom`    | Context menus, drag start                                         |
-| Drag & drop       | `gesture-custom`    | Complex drag interactions                                         |
-| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                          |
-| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                       |
-| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                 |
-| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
-| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
-| Rotate device     | `rotate`            | Orientation changes                                               |
-| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
-| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
+| Action            | Tool                | Notes                                                                             |
+| ----------------- | ------------------- | --------------------------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)                             |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                                          |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                                               |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                                |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                                        |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                                     |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down                  |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                                            |
+| Long press        | `gesture-custom`    | Context menus, drag start                                                         |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions                                                         |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                                          |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                                       |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                                 |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                                |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both                        |
+| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only                 |
+| Rotate device     | `rotate`            | Orientation changes                                                               |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu                    |
+| Device setting    | `system-settings`   | Dark mode, text size, a11y toggles; Android radios/location. iOS sim/Android only |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text                     |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                                |
 
 ## 5. Finding Tap Targets
 
@@ -221,6 +222,26 @@ Tap the field first so it has focus; pasting with no focused field is a silent n
 ```
 
 Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
+
+### system-settings — Device-wide display, accessibility and radio settings
+
+Puts the **device** into a state during setup, without walking the system Settings app: dark mode, a larger text size, airplane mode, location off. Not per-app — there is no `bundleId`.
+
+```json
+{ "udid": "<UDID>", "setting": "appearance", "value": "dark" }
+```
+
+- Both platforms: `appearance` (`light`/`dark`), `text-size` (the 12 Dynamic Type categories, `extra-small` … `accessibility-extra-extra-extra-large`, default `large`), `increase-contrast`, `reduce-motion`, `invert-colors`. iOS support is simulator-only (Apple TV simulators are rejected); Android covers emulators and real devices; a setting whose `cmd`/`svc` service the device's Android version doesn't implement fails rather than reporting a change it never made.
+- Android only: `wifi`, `cellular`, `airplane-mode`, `location` (needs Android 10+), `auto-rotate`. Asking for one of these on an iOS simulator is rejected with the list of what iOS supports. Over a network transport (an mDNS serial, or `host:port` for anything but loopback), `wifi` off and `airplane-mode` on are refused — they would switch off the link adb reaches the device over, leaving no way to undo them.
+- `location` here is the **device-wide** master switch for every app — not one app's location permission; for that use `argent-settings-permissions`. `auto-rotate` toggles the rotation **lock**, it does not rotate the screen (use `rotate`): it writes a stored flag, so on hardware with no accelerometer (Android TV) or during an active screen-sharing session on a physical device — which holds rotation fixed — the write lands but nothing turns.
+- Every setting except `appearance` and `text-size` takes `on` | `off`, where `on` turns the named setting on (`reduce-motion` on reduces motion).
+- Returns `{ setting, value, applied }` — `applied` names the concrete platform change (`night_mode=yes`, `font_scale=1.94`, `ReduceMotionEnabled=YES`).
+
+Inside a flow the status bar is pinned to a fixed demo state (full signal, 100% battery, 9:37), so a flow screenshot keeps showing full bars after `wifi`, `cellular` or `airplane-mode` changes — read the tool result instead.
+
+A `screenshot` is the wrong way to confirm `invert-colors` (Classic Invert on iOS — the whole screen, photos included) on either platform: Android's capture path skips the display-level color transform entirely, and on iOS the inversion reaches the captured frame in `dark` appearance but not in `light`. Read the tool result. The accessibility toggles (`reduce-motion`, `invert-colors`) post their own change notification, so running apps usually pick them up live; appearance and text size some apps re-read only on launch, so `restart-app` if the change doesn't appear.
+
+For an app **permission** (camera, location, notifications, …) this is the wrong tool — use the `argent-settings-permissions` skill.
 
 ### await-ui-element — Block until a UI element reaches a state
 

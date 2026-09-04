@@ -13,7 +13,7 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
     shellQuote: actual.shellQuote,
     // Real classifier — the Android handler uses it to tell a transport/timeout
     // failure (propagate) from a pm rejection (fold into `skipped`).
-    isTerminalAdbError: actual.isTerminalAdbError,
+    isAdbTransportFailure: actual.isAdbTransportFailure,
   };
 });
 

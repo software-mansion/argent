@@ -83,7 +83,7 @@ Decision order:
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
   machine-wide cleanup.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
+- Reaching for `xcrun simctl` or `adb` to drive a device — simulator, emulator or physical — means checking the tool list first. Device-wide settings (`system-settings`), shaking (`shake`), rotation (`rotate`) and hardware keys including power/lock (`button`) all have tools. A CLI is the fallback only for something outside the device — reading a project file, a build, a git operation. On a physical iPhone even the fallback is gone: it is driven over CoreDevice, not `xcrun`/`adb`.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 
@@ -119,7 +119,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, changing a device-wide display/accessibility/radio setting (dark mode, text size, reduce motion, airplane mode, wifi, location — the `system-settings` tool), taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`

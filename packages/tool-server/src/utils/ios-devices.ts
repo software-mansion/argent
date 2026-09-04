@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_LIST_TIMEOUT_MS } from "./simctl-config";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -42,7 +42,7 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
