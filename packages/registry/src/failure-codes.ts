@@ -285,6 +285,16 @@ export const FAILURE_CODES = {
 
   SCREENSHOT_DIFF_INPUT_INVALID: "SCREENSHOT_DIFF_INPUT_INVALID",
 
+  // run-script: the agent-authored JavaScript body either would not compile, threw
+  // at runtime, blew its deadline, or one of the `ui` facade calls it made had its
+  // underlying tool fail. Kept as four distinct codes so the agent's recovery
+  // differs: fix the syntax, fix the logic, raise `timeout_ms` / shorten the
+  // script, or address the failing step.
+  RUN_SCRIPT_SYNTAX_ERROR: "RUN_SCRIPT_SYNTAX_ERROR",
+  RUN_SCRIPT_THREW: "RUN_SCRIPT_THREW",
+  RUN_SCRIPT_TIMEOUT: "RUN_SCRIPT_TIMEOUT",
+  RUN_SCRIPT_STEP_FAILED: "RUN_SCRIPT_STEP_FAILED",
+
   BOOT_DEVICE_TARGET_SELECTION_INVALID: "BOOT_DEVICE_TARGET_SELECTION_INVALID",
   BOOT_IOS_UNSUPPORTED_HOST: "BOOT_IOS_UNSUPPORTED_HOST",
   BOOT_ANDROID_NO_AVDS: "BOOT_ANDROID_NO_AVDS",

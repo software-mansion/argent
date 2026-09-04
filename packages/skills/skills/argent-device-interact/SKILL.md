@@ -385,6 +385,69 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ---
 
+## 8b. Scripted interaction with `run-script`
+
+`run-script` runs an **agent-authored JavaScript program** that drives the device through many steps in a single call, **deciding what to do next from what it observes on screen**. Reach for it when a task needs conditionals, loops, retries, or waits _between_ steps — the case `run-sequence` explicitly does not cover (its steps are all known in advance). It is distinct from `flow-execute`, which replays an authored `.yaml` flow file; `run-script` is throwaway logic you author inline right now.
+
+**Opt-in.** The tool is hidden unless the feature flag is enabled: `argent enable run-script`. It executes model-written code locally, in a separate, disposable Node.js process the tool-server spawns for the call (process isolation, not a jail), so it is off by default.
+
+**Language.** The `script` is **plain JavaScript** (an async function body), _not_ TypeScript — no type annotations. The only injected globals are `ui` (the device facade below) and `console`; each `ui.*` call crosses an IPC boundary to the tool-server. Only `ui` and `console` are supported — do not use `require`, `import`, `fs`, or network, and the process is thrown away after the run with no access to tool-server state. `await` every `ui.*` call. Use `console.log(...)` to surface values — captured (tail-capped) in the result's `logs`.
+
+**Result.** `{ completed: true, logs, steps }` on success. On failure it fails with one of `RUN_SCRIPT_SYNTAX_ERROR` (the body would not compile), `RUN_SCRIPT_THREW` (your logic threw), `RUN_SCRIPT_TIMEOUT` (exceeded `timeout_ms`, default 120000, max 600000), or `RUN_SCRIPT_STEP_FAILED` (a `ui.*` call's underlying tool failed). One screenshot + element tree is captured automatically after the whole run, exactly like `run-sequence`.
+
+### The `ui` API (authoring reference)
+
+Selectors are `{ text?, identifier?, role? }` and every provided field must match; `text` and `identifier` are the portable fields (`role` values differ per platform: Android class-derived vs iOS `AX*`).
+
+```ts
+interface Ui {
+  describe(): Promise<DescribeNode>;                       // the accessibility / DOM tree
+  find(selector): Promise<DescribeNode | null>;            // best visible match, or null
+  findAll(selector): Promise<DescribeNode[]>;              // every match, in tree order
+  exists(selector): Promise<boolean>;                      // matches anywhere (never throws)
+  visible(selector): Promise<boolean>;                     // matches with a non-zero frame
+  tap(selector): Promise<void>;                            // settle → rank → tap → verify an effect
+  tapPoint(x, y): Promise<void>;                            // raw normalized tap (no verify)
+  fill(selector, text, opts?): Promise<void>;              // tap field → focus → type; opts.mode 'paste' pastes
+  pressKey(key): Promise<void>;                             // e.g. 'enter', 'backspace'
+  button(name): Promise<void>;                              // hardware button, e.g. 'home', 'back'
+  swipe(from, to, opts?): Promise<void>;                   // {x,y} points; momentum:false by default
+  scrollUntilVisible(selector, opts?): Promise<boolean>;   // opts: { maxScrolls=10, direction='down'|'up'|'left'|'right' }
+  await(condition, selector, opts?): Promise<void>;        // condition 'exists'|'visible'|'hidden'|'text'; opts: { timeoutMs, expectedText, textMatch }
+  awaitIdle(opts?): Promise<void>;                          // wait for the screen to stop changing
+  launchApp(bundleId): Promise<void>;
+  openUrl(url): Promise<void>;
+  sleep(ms): Promise<void>;
+}
+```
+
+`ui.tap` settles the tree (waits out any fling), ranks the selector to a frame, taps its centre, and then verifies the screen actually changed — throwing `RUN_SCRIPT_STEP_FAILED` if nothing happened (iOS taps are fire-and-forget). Use `ui.tapPoint` to bypass the verify. On iOS, prefer `ui.fill(sel, text, { mode: 'paste' })` for text entry.
+
+### Example — branch on a condition, then wait
+
+```js
+// Dismiss a cookie banner only if it is present, then wait for the home feed.
+if (await ui.exists({ text: 'Accept' })) {
+  await ui.tap({ text: 'Accept' });
+}
+await ui.await('visible', { identifier: 'home-feed' }, { timeoutMs: 8000 });
+console.log('on the home feed');
+```
+
+### Example — scroll to a row, then fill a field
+
+```js
+// Scroll a settings list until "Wi-Fi" appears, open it, and set a network name.
+const found = await ui.scrollUntilVisible({ text: 'Wi-Fi' }, { maxScrolls: 12 });
+if (!found) throw new Error('Wi-Fi row never appeared');
+await ui.tap({ text: 'Wi-Fi' });
+await ui.await('visible', { text: 'Network Name' });
+await ui.fill({ identifier: 'ssid-field' }, 'my-network', { mode: 'paste' });
+await ui.pressKey('enter');
+```
+
+---
+
 ## 9. Platform-specific notes
 
 ### Android
