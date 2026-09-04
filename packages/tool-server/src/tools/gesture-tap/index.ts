@@ -127,7 +127,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       // Mouse dispatch stalls at ~5s per event on a hidden window.
-      await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
+      await assertChromiumWindowVisible(chromium, "tap");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };
     }
