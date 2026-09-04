@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
+import type { ArtifactHandle } from "../../artifacts";
 import { variantProposalStore } from "../../utils/variant-proposals";
 import { captureElementFrame } from "../../utils/match-element-frame";
+import { InvalidToolInputError } from "../../utils/capability";
+import { invokeSubTool } from "../../utils/sub-invoke";
 
 const zodSchema = z.object({
   element: z
@@ -67,10 +72,13 @@ const zodSchema = z.object({
         .string()
         .min(1)
         .max(2_000)
+        .optional()
         .describe(
-          "Required preview of how the variant looks, shown on the floating card. An http(s) " +
-            "URL, a data: URI, or a local image file path (e.g. a screenshot path returned by " +
-            "the screenshot tool after you rendered the variant)."
+          "Optional preview of how the variant looks, shown on the floating card. Omit it and the " +
+            "tool screenshots the device itself at propose time, which is what you want whenever " +
+            "the variant is on screen. Pass an http(s) URL, a data: URI, or a local image file " +
+            "path only when the preview cannot come from the device right now — the image is used " +
+            "verbatim, so it must be a full, uncropped screen."
         ),
       frame: z
         .object({
@@ -93,6 +101,12 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+async function sha256File(path: string): Promise<string> {
+  return createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex");
+}
+
 export function createProposeVariantTool(registry: Registry): ToolDefinition<Params> {
   return {
     id: "propose_variant",
@@ -110,8 +124,11 @@ Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Fo
 propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
 blocked — keep proposing and keep working. Each element appears live in the Argent Lens window (a
 native window that opens automatically) as a floating card beside the streamed simulator, with a thin
-line connecting it to the matched on-screen element; you don't open or display anything yourself. Pass
-variant.previewImage (e.g. a screenshot path) to show how each variant looks.
+line connecting it to the matched on-screen element; you don't open or display anything yourself.
+
+Apply the variant on the device and call this while it is on screen: the tool screenshots the device
+for you and reads the element's crop frame from a live describe, so you need no separate screenshot
+call. Pass variant.previewImage only to override that capture.
 
 When you have proposed every variant for every element, you are done staging — the human reviews them
 in the Argent Lens window and sends back their picks and comments. If an \`await_user_selection\` tool
@@ -119,23 +136,64 @@ is available, call it once to block until they submit; otherwise just end your t
 arrives as a follow-up message (this is the case in an \`argent lens\` CLI session).
 
 Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
-it does not wait for the user.`,
+it does not wait for the user.
+Fails when no device is known for a capture (no udid was ever set this session and no
+variant.previewImage), when the screenshot cannot be taken, and when the capture is byte-identical to
+another variant of the same element — that variant is not on screen, so re-apply it before proposing.`,
     searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
+      // A later propose of the round may omit `udid`; the device is still known.
+      const udid = params.udid?.trim() || variantProposalStore.getDevice();
+
+      let previewImage = params.variant.previewImage;
+      let previewHash: string | undefined;
+      if (!previewImage) {
+        if (!udid) {
+          throw new InvalidToolInputError(
+            "propose_variant has no device to capture the variant preview from. Pass `udid` (the " +
+              "simulator/emulator the variant is showing on), or pass `variant.previewImage` with " +
+              "an image of the variant yourself."
+          );
+        }
+        // The tool, not `captureScreenshotUpright` directly: only the tool knows
+        // which platforms have no simulator-server backend (tvOS, Vega, Chromium),
+        // where resolving one hangs on its ready timeout.
+        const shot = await invokeSubTool<{ image: ArtifactHandle }>(registry, ctx, "screenshot", {
+          udid,
+          includeImageInContext: false,
+        });
+        previewImage = shot.image.hostPath;
+        previewHash = await sha256File(previewImage);
+        const twin = variantProposalStore.findDuplicatePreview({
+          element: params.element,
+          match: params.match,
+          previewHash,
+        });
+        if (twin) {
+          throw new InvalidToolInputError(
+            `The screen is byte-identical to the one captured for variant "${twin}" of ` +
+              `"${params.element}", so "${params.variant.name}" is not on screen and both cards ` +
+              `would show the same thumbnail. Apply this variant on the device (reload the bundle, ` +
+              `navigate back to the element) and propose again, or pass variant.previewImage if the ` +
+              `preview cannot come from the device right now.`
+          );
+        }
+      }
+
       // Describe NOW — the variant is on screen at propose time — so each variant
       // crops to its own layout instead of inheriting the first variant's frame.
       // Best-effort: failure leaves the frame undefined and the preview UI falls back.
       let frame = params.variant.frame;
-      if (!frame && params.udid) {
+      if (!frame && udid) {
         const match = params.match ?? { by: "text" as const, value: params.element };
-        const captured = await captureElementFrame(registry, params.udid, match);
+        const captured = await captureElementFrame(registry, udid, match);
         if (captured) frame = captured;
       }
       const res = variantProposalStore.proposeVariant({
         ...params,
-        variant: { ...params.variant, frame },
+        variant: { ...params.variant, previewImage, previewHash, frame },
       });
       // In an `argent lens` CLI session await_user_selection is hidden and the
       // user's feedback arrives as a message instead.
