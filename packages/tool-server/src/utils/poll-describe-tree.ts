@@ -8,9 +8,9 @@ import { settleWithin, sleepOrAbort } from "./timing";
  */
 
 /** Verdict from evaluating one successfully-fetched tree. */
-export type PollVerdict<R> = { done: true; result: R } | { done: false };
+type PollVerdict<R> = { done: true; result: R } | { done: false };
 
-export interface PollDescribeTreeArgs<R> {
+interface PollDescribeTreeArgs<R> {
   /**
    * Read the current tree. Called once per poll; must be read-only.
    *

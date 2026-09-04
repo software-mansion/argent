@@ -5,10 +5,15 @@ import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
+import { iosDeviceImpl } from "./platforms/ios-device";
 import { androidImpl } from "./platforms/android";
 import { harmonyImpl } from "./platforms/harmony";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
+
+// Same head-restricted alphabet as launch-app so a bundleId cannot masquerade
+// as a devicectl flag.
+const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
   udid: z
@@ -21,6 +26,13 @@ const zodSchema = z.object({
     .string()
     .describe(
       "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0). For Chromium this navigates the renderer."
+    ),
+  bundleId: z
+    .string()
+    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .optional()
+    .describe(
+      "Physical iOS only: the app that receives the URL. Defaults to Safari for http(s); required for any other scheme. Ignored elsewhere."
     ),
 });
 
@@ -58,6 +70,7 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
 Use to navigate to a web page or deep-link into an app. On Chromium, this navigates the primary renderer to the given URL.
 Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link. HarmonyOS resolves any scheme through \`aa start -U\`.
 Deep-linking caveat: an https:// link opens the native app only when an installed app is verified for the link's domain (iOS Universal Links / Android App Links) — otherwise it opens in the browser, and on iOS simulators it may open in Safari even when the owning app is installed. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app with its bundle id.
+On a physical iPhone, http(s) URLs default to Safari and any other scheme needs bundleId; the receiving app becomes the app under automation.
 Returns { opened, url, note? }. note carries the deep-linking caveat when a web URL was opened on a native device; on HarmonyOS every URL carries a note, because \`aa start -U\` reports success whenever the system accepts the URI - a web URL can leave the screen unchanged, and a scheme the system routes to its app selector (tel:, mailto:) can leave a modal "No options to open with" dialog covering it - so confirm with describe or screenshot before treating the link as followed. Fails if no app is registered to handle the URI (iOS/Android, and on HarmonyOS only when nothing claims the scheme at all) or the renderer rejects the navigation (Chromium).`,
   zodSchema,
   capability,
@@ -81,6 +94,7 @@ Returns { opened, url, note? }. note carries the deep-linking caveat when a web 
     toolId: "open-url",
     capability,
     ios: iosImpl,
+    iosDevice: iosDeviceImpl,
     android: androidImpl,
     harmony: harmonyImpl,
     iosRemote: iosRemoteImpl,

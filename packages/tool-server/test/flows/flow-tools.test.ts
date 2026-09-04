@@ -1830,6 +1830,86 @@ describe("flow-finish-recording", () => {
     expect(result.summary).toEqual(["1. await: screen idle"]);
   });
 
+  it("uses file-facing target labels in gesture summaries", async () => {
+    const name = "gesture-target-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [
+          {
+            kind: "tap",
+            selector: { text: "Tap me" },
+          },
+          {
+            kind: "long-press",
+            x: 0.25,
+            y: 0.75,
+          },
+          {
+            kind: "swipe",
+            from: { selector: { text: "Card", loose: true } },
+            direction: "left",
+          },
+          {
+            kind: "swipe",
+            from: { x: 0.1, y: 0.2 },
+            to: { selector: { identifier: "destination" } },
+          },
+        ],
+      })
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    expect(result.summary).toEqual([
+      '1. tap: {"text":"Tap me"}',
+      "2. long-press: (0.25, 0.75)",
+      '3. swipe: left from "Card"',
+      '4. swipe: to {"id":"destination"} from (0.1, 0.2)',
+    ]);
+  });
+
+  it("renders swipe options and by-deltas so distinct gestures stay distinguishable", async () => {
+    const name = "swipe-options-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // Raw YAML on purpose: `momentum: true` is normalized to absent by the
+    // parser, so step 2 IS a plain `swipe: left` and must render without noise.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      [
+        `executionPrerequisite: ${PREREQ}`,
+        "steps:",
+        "  - swipe: { direction: left, momentum: false }",
+        "  - swipe: { direction: left, momentum: true }",
+        "  - swipe: { direction: left, duration: 800 }",
+        "  - swipe: { by: { x: -0.31 } }",
+        "  - swipe: { direction: left, momentum: false, duration: 800 }",
+        "",
+      ].join("\n")
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    // `by` spelled exactly as the run report's stepTarget spells it.
+    expect(result.summary).toEqual([
+      "1. swipe: left (momentum-free)",
+      "2. swipe: left",
+      "3. swipe: left (800ms)",
+      "4. swipe: by x=-0.31",
+      "5. swipe: left (momentum-free, 800ms)",
+    ]);
+  });
+
   it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
     const name = "text-comparison-summary";
     await flowStartRecordingTool.execute(

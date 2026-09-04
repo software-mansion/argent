@@ -1,5 +1,4 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { getFailureSignal } from "@argent/registry";
 
 // Keep the real module (blueprints import from it too) but neutralise the
 // fire-and-forget WebSocket send so no real socket is opened during the test.
@@ -35,8 +34,10 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDep: vi.fn(async () => {}),
 }));
 
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { buttonTool, BUTTONS_BY_PLATFORM } from "../src/tools/button";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 import { DependencyMissingError, ensureDep } from "../src/utils/check-deps";
 import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
@@ -49,6 +50,8 @@ const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidUdid = "emulator-5554";
 const harmonyConnectKey = "025DEK236V035771";
 const harmonyUdid = `harmony-${harmonyConnectKey}`;
+// Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the runner branch.
+const deviceUdid = "00008110-000978540290401E";
 const services = { simulatorServer: {} } as never;
 
 /**
@@ -359,6 +362,92 @@ describe("button tool — a suspended HarmonyOS panel", () => {
     const budget = uiInputs()[0]?.[2];
     expect(budget).toBeLessThan(HARMONY_INTERACTION_TIMEOUT_MS - READ_MS);
     expect(budget).toBeGreaterThan(0);
+  });
+});
+
+describe("button tool: physical iOS", () => {
+  // The buttons XCUIDevice can press on hardware. volumeUp/volumeDown are
+  // unavailable on the SIMULATOR SDK only, so hardware gets them; power and
+  // appSwitch have no XCUIDevice API at all.
+  const runnerButtons = ["home", "volumeUp", "volumeDown", "actionButton"] as const;
+
+  function runnerRig() {
+    const run = vi.fn().mockResolvedValue({});
+    return { run, services: { iosDeviceRunner: { udid: deviceUdid, run } } as never };
+  }
+
+  it("presses every runner-capable button through the runner's `button` command", async () => {
+    for (const button of runnerButtons) {
+      const { run, services: runnerServices } = runnerRig();
+      vi.mocked(sendCommand).mockClear();
+      vi.mocked(injectAndroidKeycode).mockClear();
+      await expect(
+        buttonTool.execute(runnerServices, { udid: deviceUdid, button })
+      ).resolves.toEqual({ pressed: button });
+      // One device-scoped command carrying the button name: no appBundleId, and
+      // no per-button command kind. Asserting the exact request keeps the wire
+      // shape pinned to PROTOCOL.md's `button` entry.
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toEqual({ command: "button", button });
+      // Hardware never rides the simulator-server HID transport or adb.
+      expect(sendCommand).not.toHaveBeenCalled();
+      expect(injectAndroidKeycode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects the buttons XCUITest exposes no API for", async () => {
+    for (const button of ["power", "appSwitch"] as const) {
+      const { run, services: runnerServices } = runnerRig();
+      await expect(
+        buttonTool.execute(runnerServices, { udid: deviceUdid, button })
+      ).rejects.toBeInstanceOf(UnsupportedOperationError);
+      expect(run).not.toHaveBeenCalled();
+    }
+  });
+
+  it("maps the runner's UNSUPPORTED_OPERATION to the capability rejection, message kept", async () => {
+    // Only the device knows whether it has an Action button: a non-Pro iPhone
+    // answers UNSUPPORTED_OPERATION from the runner. That is the same verdict
+    // as the platform gates above, so it must be a 400-class capability error,
+    // not a raw runner failure surfacing as a 500.
+    const { run, services: runnerServices } = runnerRig();
+    run.mockRejectedValueOnce(
+      new RunnerCommandError("this device has no action button", {
+        code: "UNSUPPORTED_OPERATION",
+      })
+    );
+
+    const error = await buttonTool
+      .execute(runnerServices, { udid: deviceUdid, button: "actionButton" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(UnsupportedOperationError);
+    expect((error as Error).message).toContain("this device has no action button");
+    expect(getFailureSignal(error)?.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+  });
+
+  it("passes every other runner failure through untouched", async () => {
+    const { run, services: runnerServices } = runnerRig();
+    const original = new RunnerCommandError("runner busy", { code: "RUNNER_BUSY" });
+    run.mockRejectedValueOnce(original);
+
+    await expect(
+      buttonTool.execute(runnerServices, { udid: deviceUdid, button: "home" })
+    ).rejects.toBe(original);
+  });
+
+  it("declares the runner service only for a button it can actually press", () => {
+    for (const button of runnerButtons) {
+      expect(buttonTool.services({ udid: deviceUdid, button })).toHaveProperty("iosDeviceRunner");
+    }
+    // A button `execute` refuses must not stand a runner up first: a cold start
+    // is an xcodebuild build of up to 15 minutes plus a 120s ready-wait, paid
+    // for a request that never reaches the device.
+    for (const button of ["power", "appSwitch", "back"] as const) {
+      expect(buttonTool.services({ udid: deviceUdid, button })).toEqual({});
+    }
   });
 });
 

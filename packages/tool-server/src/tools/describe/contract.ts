@@ -75,7 +75,9 @@ export type DescribeSource =
   | "cdp-dom"
   | "vega-automation"
   | "harmony-uitest"
-  | "tv-focus";
+  | "tv-focus"
+  // Physical iOS: the XCUITest runner accessibility snapshot.
+  | "xcuitest-runner";
 
 // Sources whose `hint` questions the tree just read: HarmonyOS keeps dumping the
 // last composited frame while the panel is suspended, so a matched element need
@@ -101,6 +103,8 @@ export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
+  // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
+  // Each path writes this hint once.
   hint?: string;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —

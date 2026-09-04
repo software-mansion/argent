@@ -480,7 +480,7 @@ async function runUinputDirect(connectKey: string, args: string, timeoutMs: numb
  * is charged what is left of the hold's shared deadline rather than a ceiling of
  * its own.
  */
-export interface UitestSlot {
+interface UitestSlot {
   touch(command: HarmonyTouchCommand, point: { x: number; y: number }): Promise<void>;
   swipe(
     command: HarmonySwipeCommand,

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyDevice, isAndroidEmulatorSerial, resolveDevice } from "../src/utils/device-info";
+import {
+  classifyDevice,
+  isAndroidEmulatorSerial,
+  isIosPhysicalDevice,
+  resolveDevice,
+} from "../src/utils/device-info";
 
 describe("classifyDevice", () => {
   it("classifies iOS simulator UUIDs as ios", () => {
@@ -47,6 +52,22 @@ describe("resolveDevice", () => {
     const d = resolveDevice("amazon-4a27df03c9777152");
     expect(d.platform).toBe("vega");
     expect(d.kind).toBe("vvd");
+  });
+});
+
+describe("isIosPhysicalDevice", () => {
+  it("is true for a physical iPhone UDID", () => {
+    expect(isIosPhysicalDevice(resolveDevice("00008110-000978540290401E"))).toBe(true);
+  });
+
+  it("is false for an iOS simulator", () => {
+    expect(isIosPhysicalDevice(resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))).toBe(false);
+  });
+
+  it("is false for physical Android hardware (kind 'device' too, the bare-kind hazard)", () => {
+    const android = resolveDevice("HT82A0203045");
+    expect(android.kind).toBe("device");
+    expect(isIosPhysicalDevice(android)).toBe(false);
   });
 });
 

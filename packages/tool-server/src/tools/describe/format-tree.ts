@@ -155,7 +155,7 @@ function renderNested(
   return lines;
 }
 
-export interface FormatDescribeOptions {
+interface FormatDescribeOptions {
   source: DescribeSource;
 }
 
@@ -165,13 +165,15 @@ export interface FormatDescribeOptions {
  * tool the device's own gate then refuses costs a round trip and leaves nothing
  * to fall back on.
  *
- * Only the sources whose platform is not the touch default appear here, which
- * is Chromium alone: it has no touch at all and gets the CDP-driven pair
- * instead. HarmonyOS reaches every tool in the default — pinch included, over
- * `uinput` rather than `uitest`.
+ * Only the sources whose platform is not the touch default appear here:
+ * Chromium has no touch at all and gets the CDP-driven pair; physical iOS
+ * (`xcuitest-runner`) has no two-finger gestures, so pinch is dropped. HarmonyOS
+ * reaches every tool in the default — pinch included, over `uinput` rather than
+ * `uitest`.
  */
 const GESTURE_TOOLS_BY_SOURCE: Partial<Record<DescribeSource, string>> = {
   "cdp-dom": "gesture-tap / gesture-scroll / gesture-drag",
+  "xcuitest-runner": "gesture-tap / gesture-swipe",
 };
 
 const DEFAULT_GESTURE_TOOLS = "gesture-tap / gesture-swipe / gesture-pinch";
@@ -185,7 +187,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "android-devtools" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
-    opts.source === "harmony-uitest"
+    opts.source === "harmony-uitest" ||
+    // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
+    opts.source === "xcuitest-runner"
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
@@ -205,7 +209,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     );
   } else {
     header.push(
-      `Pass them straight to ${GESTURE_TOOLS_BY_SOURCE[opts.source] ?? DEFAULT_GESTURE_TOOLS}, which expect this same space.`
+      `Pass them straight to ${GESTURE_TOOLS_BY_SOURCE[opts.source] ?? DEFAULT_GESTURE_TOOLS}, which expect this same space.` +
+        // Physical iOS drops pinch (table above); spell out why so an agent does not reach for it.
+        (opts.source === "xcuitest-runner" ? " No two-finger gestures on physical iOS." : "")
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."

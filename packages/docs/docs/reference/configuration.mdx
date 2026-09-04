@@ -36,11 +36,14 @@ argent config get ios.additionalDeviceSets
 | Key                        | Scopes          | Merge            | Description                                                                                                                             |
 | -------------------------- | --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file) |
+| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                    |
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                          |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths   |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                       |
 
 A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
+
+`allowlist.enabled` only affects `argent update`. When it is `false`, an update leaves editor auto-approve allowlists entirely alone — rules already written stay, and `argent init` still asks its auto-approve question as before. When the key is unset (the default), nothing changes: update keeps refreshing the rules for editors that already have Argent configured. `false` in either scope wins, so a committed project file opts out a whole team.
 
 Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
 
@@ -91,6 +94,7 @@ argent enable argent-lens --scope project    # this project only
 | ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `argent-lens`             | Off     | Enable Argent Lens: the `propose_variant` and `await_user_selection` tools, the preview window, and the `argent lens` command |
 | `disable-auto-screenshot` | Off     | Stop the automatic screenshot that Argent captures after each interaction tool                                                |
+| `disable-auto-describe`   | Off     | Stop the accessibility element tree that Argent appends after each interaction tool                                           |
 | `artifacts-list-endpoint` | Off     | Expose the `GET /artifacts` endpoint of the tool-server for remote artifact consumers                                         |
 | `tool-server-event-log`   | Off     | Write the lifecycle events of the tool-server to a JSONL file                                                                 |
 | `boot-sound`              | Off     | Default the `sound` argument of `boot-device` to true, so Android emulators boot with audio output instead of muted           |
@@ -186,12 +190,13 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### Devices
 
-| Variable                                               | Default                                 | Description                                                                                       |
-| ------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `ARGENT_SIMULATOR_NO_WINDOW`                           | unset                                   | Set `1`, `true` or `yes` to boot an iOS simulator without the Simulator window                    |
-| `ARGENT_EMULATOR_NO_WINDOW`                            | unset                                   | Set `1` to boot an Android emulator without a window, for CI, containers or Wayland-only sessions |
-| `ARGENT_EMULATOR_GPU_MODE`                             | `auto` on macOS, `swiftshader` on Linux | The value of the emulator `-gpu` option, for example `host`                                       |
-| `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs    |
+| Variable                                               | Default                                 | Description                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_SIMULATOR_NO_WINDOW`                           | unset                                   | Set `1`, `true` or `yes` to boot an iOS simulator without the Simulator window                                                                                                                                                                                                                                 |
+| `ARGENT_EMULATOR_NO_WINDOW`                            | unset                                   | Set `1` to boot an Android emulator without a window, for CI, containers or Wayland-only sessions                                                                                                                                                                                                              |
+| `ARGENT_EMULATOR_GPU_MODE`                             | `auto` on macOS, `swiftshader` on Linux | The value of the emulator `-gpu` option, for example `host`                                                                                                                                                                                                                                                    |
+| `ARGENT_IOS_TEAM_ID`                                   | unset                                   | The Apple Developer Team ID that signs the runner for [physical iOS devices](/docs/features/physical-ios-devices). Unset, Argent detects the team from the keychain of the Mac. The variable must be in the environment of the tool-server; a value in the shell of the client does not reach a running server |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs                                                                                                                                                                                                                 |
 
 ### MCP server
 

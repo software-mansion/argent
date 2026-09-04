@@ -46,9 +46,9 @@ export interface UploadEntry {
   sha256: string;
 }
 
-export type UploadLookup = (uploadId: string) => UploadEntry | undefined;
+type UploadLookup = (uploadId: string) => UploadEntry | undefined;
 
-export interface ResolveFileInputsResult {
+interface ResolveFileInputsResult {
   /** The request body, with file-input wrappers resolved away. */
   args: Record<string, unknown>;
   /** Per-target outcomes, forwarded via `InvokeToolOptions.fileInputs`. */

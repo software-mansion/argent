@@ -14,6 +14,7 @@ import {
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import { FlagParseException } from "./flag-parser.js";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
 export interface FlowCommandOptions {
   paths: ToolsServerPaths;
@@ -146,6 +147,17 @@ Examples:
 `);
 }
 
+// --help/-h never reach this parser: flow() intercepts them first.
+const RUN_OPTIONS = {
+  "update-baselines": { kind: "boolean" },
+  "json": { kind: "boolean" },
+  "json-stream": { kind: "boolean" },
+  "recursive": { kind: "boolean", alias: "r" },
+  "device": { kind: "value" },
+  "platform": { kind: "value" },
+  "output": { kind: "value" },
+} as const satisfies OptionSpecs;
+
 export function parseRunArgs(argv: string[]): {
   /**
    * The positional argument exactly as supplied. Which of name, YAML path, or
@@ -161,90 +173,34 @@ export function parseRunArgs(argv: string[]): {
   json: boolean;
   jsonStream: boolean;
 } {
-  const out = {
-    updateBaselines: false,
-    recursive: false,
-    json: false,
-    jsonStream: false,
-  } as ReturnType<typeof parseRunArgs>;
-  // One helper for both positional paths, so the end-of-options marker below
-  // cannot drift from the ordinary one in what it accepts.
-  const takePositional = (tok: string): void => {
-    if (out.flowRef !== undefined) {
-      throw new FlagParseException(
-        `unexpected argument ${JSON.stringify(tok)}; flow run accepts one flow name, YAML file path, or directory path`
-      );
-    }
-    out.flowRef = tok;
-  };
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    // End of options, as flag-parser.ts (`argent run`) already honors it. The
-    // flow-name charset admits a leading "-", so `-dash` is a legal saved-flow
-    // name that every argv parser reads as a flag; without this marker such a
-    // flow would be addressable by path only.
-    if (tok === "--") {
-      for (const rest of argv.slice(i + 1)) takePositional(rest);
-      break;
-    }
-    if (!tok.startsWith("-")) {
-      takePositional(tok);
-      continue;
-    }
-    // Accept `--flag=value` alongside `--flag value`, like the `argent run`
-    // parser (flag-parser.ts) does.
-    const eq = tok.startsWith("--") ? tok.indexOf("=") : -1;
-    const flag = eq === -1 ? tok : tok.slice(0, eq);
-    const inline = eq === -1 ? undefined : tok.slice(eq + 1);
-    // A value-taking flag must consume a real value: a missing one would be
-    // dropped silently and the run would fall back to device auto-detection,
-    // running against whatever happens to be booted instead of erroring.
-    const takeValue = (name: string): string => {
-      if (inline !== undefined) {
-        if (inline === "") throw new FlagParseException(`${name} requires a value`);
-        return inline;
-      }
-      const v = argv[i + 1];
-      if (v === undefined || v.startsWith("-")) {
-        throw new FlagParseException(`${name} requires a value`);
-      }
-      i += 1;
-      return v;
-    };
-    const noValue = (name: string): void => {
-      if (inline !== undefined) throw new FlagParseException(`${name} does not take a value`);
-      // `argent run` consumes a `true`/`false` word after a boolean flag, so a
-      // user who learned that syntax there will try it here — where staying
-      // silent would leave the switch on while `false` was quietly taken as the
-      // flow name (the first bare token). Say so instead.
-      const next = argv[i + 1]?.trim().toLowerCase();
-      if (next === "true" || next === "false") {
-        throw new FlagParseException(
-          `${name} does not take a value — it is a switch; omit it to leave the option off`
-        );
-      }
-    };
-    if (flag === "--update-baselines") {
-      noValue("--update-baselines");
-      out.updateBaselines = true;
-    } else if (flag === "--json") {
-      noValue("--json");
-      out.json = true;
-    } else if (flag === "--json-stream") {
-      noValue("--json-stream");
-      out.jsonStream = true;
-    } else if (flag === "--recursive" || flag === "-r") {
-      // Bare `-r` never carries an inline value (the `=` split applies to
-      // `--` tokens only), so noValue guards just the long form.
-      noValue("--recursive");
-      out.recursive = true;
-    } else if (flag === "--device") out.device = takeValue("--device");
-    else if (flag === "--platform") out.platform = takeValue("--platform");
-    else if (flag === "--output") out.output = takeValue("--output");
-    // A typo like --platfrom must not silently fall back to device
-    // auto-detection. --help/-h never reach here: flow() intercepts them.
-    else throw new FlagParseException(`unknown flag ${tok}`);
+  let parsed: ReturnType<typeof parseCommandArgs>;
+  try {
+    parsed = parseCommandArgs(argv, RUN_OPTIONS);
+  } catch (err) {
+    // flow's callers classify bad input by this exception; keep that contract.
+    if (err instanceof UsageError) throw new FlagParseException(err.message);
+    throw err;
   }
+  const { positionals, options } = parsed;
+  // The parser honors `--` as end of options: the flow-name charset admits a
+  // leading "-", so `-dash` is a legal saved-flow name that every argv parser
+  // reads as a flag; without the marker such a flow would be addressable by
+  // path only.
+  if (positionals.length > 1) {
+    throw new FlagParseException(
+      `unexpected argument ${JSON.stringify(positionals[1])}; flow run accepts one flow name, YAML file path, or directory path`
+    );
+  }
+  const out: ReturnType<typeof parseRunArgs> = {
+    updateBaselines: options["update-baselines"] === true,
+    recursive: options.recursive === true,
+    json: options.json === true,
+    jsonStream: options["json-stream"] === true,
+  };
+  if (positionals[0] !== undefined) out.flowRef = positionals[0];
+  if (options.device !== undefined) out.device = options.device as string;
+  if (options.platform !== undefined) out.platform = options.platform as string;
+  if (options.output !== undefined) out.output = options.output as string;
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
@@ -694,7 +650,7 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
  * vanish from the output. Runs after the optional `--output` export, which has
  * already replaced the failed snapshots' handles with durable local copies.
  */
-export function resolveArtifactDisplayPaths(report: FlowReport): void {
+function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
     for (const [role, value] of Object.entries(s.artifacts)) {

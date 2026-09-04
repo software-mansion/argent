@@ -94,7 +94,7 @@ function velocity(): number {
 }
 
 describe("gesture-swipe on HarmonyOS", () => {
-  it("sends the `fling` verb when not settling, at the converted pixel endpoints", async () => {
+  it("sends the `fling` verb with momentum, at the converted pixel endpoints", async () => {
     await expect(
       gestureSwipeTool.execute(services, { ...base, durationMs: 500 })
     ).resolves.toMatchObject({ swiped: true });
@@ -105,16 +105,16 @@ describe("gesture-swipe on HarmonyOS", () => {
     expect(uiInput().command).toBe("uitest uiInput fling 300 1800 900 1000 2000");
 
     runHdcShell.mockClear();
-    await gestureSwipeTool.execute(services, { ...base, durationMs: 500, settle: false });
+    await gestureSwipeTool.execute(services, { ...base, durationMs: 500, momentum: true });
     expect(uiInput().command).toBe("uitest uiInput fling 300 1800 900 1000 2000");
   });
 
-  it("sends the `swipe` verb when settling - the momentum-free one, despite the name", async () => {
-    await gestureSwipeTool.execute(services, { ...base, durationMs: 500, settle: true });
+  it("sends the `swipe` verb for a momentum-free swipe, despite the name", async () => {
+    await gestureSwipeTool.execute(services, { ...base, durationMs: 500, momentum: false });
 
     // The mapping reads backwards at a glance, so it is pinned rather than left
-    // to review: `settle` asks for no fling, so it takes `swipe` (a drag ending
-    // where it ends) and leaves `fling` (which hands the scroller a release
+    // to review: `momentum: false` asks for no fling, so it takes `swipe` (a drag
+    // ending where it ends) and leaves `fling` (which hands the scroller a release
     // velocity to coast on) as the default. Inverting the ternary is silent -
     // both verbs exist, both exit 0, and only the coast distance differs.
     expect(uiInput().command).toBe("uitest uiInput swipe 300 1800 900 1000 2000");

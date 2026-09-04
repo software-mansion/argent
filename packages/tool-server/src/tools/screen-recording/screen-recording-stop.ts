@@ -24,7 +24,7 @@ const zodSchema = z.object({
  */
 const RECORDINGS_DIR = ".argent/recordings";
 
-export interface ScreenRecordingStopResult {
+interface ScreenRecordingStopResult {
   /** The finished recording (mp4). */
   video: ArtifactHandle;
   /**
