@@ -34,9 +34,15 @@ interface RunOptions {
   argvForFlags: string[];
 }
 
+// Flags `splitOptions` strips before the schema-driven parser ever runs. A tool
+// property of the same name can't be reached through its flag, so it must not be
+// offered in the per-tool Flags block — where it would duplicate the Global flags
+// entry below (e.g. `screenshot`'s `out`).
+const GLOBAL_FLAG_NAMES = new Set(["json", "out"]);
+
 function splitOptions(argv: string[]): RunOptions {
   // Consumed here rather than by the schema-driven flag parser, so a tool with its
-  // own "json" or "out" property can't capture them.
+  // own "json" or "out" property can't capture them (see GLOBAL_FLAG_NAMES).
   let json = false;
   let outPath: string | null = null;
   const rest: string[] = [];
@@ -85,7 +91,7 @@ function printToolHelp(meta: ToolMeta): void {
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
   console.log("Flags:");
-  console.log(formatSchemaUsage(schema));
+  console.log(formatSchemaUsage(withoutGlobalFlagProps(schema)));
   console.log("\nGlobal flags:");
   if (!hasOwnArgsField) {
     console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
@@ -95,6 +101,15 @@ function printToolHelp(meta: ToolMeta): void {
   console.log("  --json                 Print the raw JSON result");
   console.log("  --out <path>           For image results, save to <path> instead of fetching URL");
   console.log("  --help, -h             Show this help");
+}
+
+/** Drop schema properties whose name a global flag shadows, so the per-tool Flags
+ *  block never lists a flag `splitOptions` would intercept before the tool sees it. */
+function withoutGlobalFlagProps(schema: JsonSchema | undefined): JsonSchema | undefined {
+  if (!schema?.properties) return schema;
+  const kept = Object.entries(schema.properties).filter(([name]) => !GLOBAL_FLAG_NAMES.has(name));
+  if (kept.length === Object.keys(schema.properties).length) return schema;
+  return { ...schema, properties: Object.fromEntries(kept) };
 }
 
 async function fetchImageToFile(

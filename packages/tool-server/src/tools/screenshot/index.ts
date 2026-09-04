@@ -56,6 +56,17 @@ const zodSchema = z.object({
     .describe(
       "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
     ),
+  // Input-only, like `includeImageInContext`: the write happens on the CLIENT
+  // (argent-mcp's content.ts), because the path names the agent's own
+  // filesystem - a different host under `argent link`, and the one where
+  // `screenshot-diff` resolves a baseline path.
+  out: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Save the PNG here on YOUR machine instead of leaving it in a session temp directory that is deleted later. Relative paths resolve against your working directory; missing parent directories are created, and an existing file is overwritten. Pass it whenever the file has to outlive this session - notably a baseline or current image you will hand to `screenshot-diff`."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -183,7 +194,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false. The PNG file itself goes wherever the out parameter points, or - with no out - into a session temp directory that is deleted later.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,

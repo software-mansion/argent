@@ -307,6 +307,128 @@ describe("toMcpContent with artifact ctx", () => {
     ]);
   });
 
+  // `out` is the agent's own path for a capture that has to outlive the
+  // session — the temp cache above is deleted with it. Written client-side, so
+  // the file lands next to the agent even against a remote tool-server.
+  it("writes the PNG to `out` and reports that path in place of the temp cache", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    // Two directory levels below `root` are missing, so a non-recursive mkdir
+    // would ENOENT here — this also pins the recursive mkdir.
+    const out = join(root, "keep", "nested", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result[0]?.type).toBe("image");
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${out}` });
+  });
+
+  it("resolves a relative `out` against the working directory", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x43];
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      const result = await toMcpContent(
+        { image: artifactHandle("img2", "shot.png", "image/png") },
+        "image",
+        { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning(pngBytes) },
+        { udid: "DEV-1", out: "shots/base.png" }
+      );
+      // Not `root`: macOS resolves the chdir'd cwd through /var -> /private/var.
+      const expected = path.resolve(process.cwd(), "shots/base.png");
+      expect(await fs.readFile(expected)).toEqual(Buffer.from(pngBytes));
+      expect((result[1] as { text: string }).text).toBe(`Saved: ${expected}`);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  // No shell expands an MCP argument, so a leading `~` would otherwise become a
+  // directory of that name in the agent's project.
+  it("expands a leading ~ in `out`", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x44];
+    const home = process.env.HOME;
+    process.env.HOME = join(root, "home");
+    try {
+      await toMcpContent(
+        { image: artifactHandle("img3", "shot.png", "image/png") },
+        "image",
+        { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning(pngBytes) },
+        { udid: "DEV-1", out: "~/shots/base.png" }
+      );
+      expect(await fs.readFile(join(root, "home", "shots", "base.png"))).toEqual(
+        Buffer.from(pngBytes)
+      );
+    } finally {
+      if (home === undefined) delete process.env.HOME;
+      else process.env.HOME = home;
+    }
+  });
+
+  // The capture is the expensive part and it already succeeded; an `out` that
+  // cannot be written must cost the copy, not the image.
+  it("keeps the image and the temp path when `out` cannot be written", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x45];
+    const blocker = join(root, "blocker");
+    await fs.writeFile(blocker, "not a directory");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img4", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: join(blocker, "base.png") }
+    );
+
+    expect(result[0]).toEqual({
+      type: "image",
+      data: Buffer.from(pngBytes).toString("base64"),
+      mimeType: "image/png",
+    });
+    const text = (result[1] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\n/);
+    expect(text).toContain(`Could not save to ${join(blocker, "base.png")}`);
+  });
+
+  // The screenshot-diff recipe: a full-resolution baseline kept on disk and
+  // deliberately not spent on context.
+  it("writes `out` even when the image is suppressed from context", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x46];
+    const out = join(root, "baseline.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img5", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+  });
+
+  // Surrounding whitespace (e.g. a stray newline from loose serialization) is
+  // stripped before the path is resolved, so the file lands at the clean path
+  // rather than one whose name literally ends in spaces.
+  it("trims surrounding whitespace in `out`", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x47];
+    const clean = join(root, "trimmed", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img6", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: `${clean}   ` }
+    );
+
+    expect(await fs.readFile(clean)).toEqual(Buffer.from(pngBytes));
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${clean}` });
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },

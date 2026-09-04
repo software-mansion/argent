@@ -1,10 +1,13 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
   type MaterializeContext,
+  type MaterializedImage,
 } from "@argent/tools-client";
 
 export type ContentBlock =
@@ -67,7 +70,7 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        const saved: ContentBlock = { type: "text", text: await savedText(images[0]!, args) };
         if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
         blocks.push(saved);
@@ -88,6 +91,38 @@ export async function toMcpContent(
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+/**
+ * The `Saved:` line for an image result, honoring the caller's `out` path.
+ *
+ * A materialized PNG sits in a temp directory that goes away with the session;
+ * `out` asks for a copy the agent keeps. It is written HERE rather than by the
+ * tool because the path names the agent's filesystem - a different host under
+ * `argent link`, and the one `screenshot-diff` resolves a `baselinePath`
+ * against. A failed write is reported and the temp path is still handed back,
+ * so a bad `out` costs the agent a copy, never the capture.
+ */
+async function savedText(image: MaterializedImage, args: unknown): Promise<string> {
+  const out = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+  if (!out) return `Saved: ${image.localPath}`;
+  const target = resolve(expandTilde(out));
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, image.data);
+    return `Saved: ${target}`;
+  } catch (err) {
+    return `Saved: ${image.localPath}\nCould not save to ${target}: ${(err as Error).message}`;
+  }
+}
+
+/**
+ * `~` never reaches an MCP arg through a shell, so expand it here rather than
+ * creating a directory literally named `~` in the agent's project.
+ */
+function expandTilde(p: string): string {
+  if (p === "~") return homedir();
+  return p.startsWith("~/") || p.startsWith(`~${sep}`) ? join(homedir(), p.slice(2)) : p;
 }
 
 /**
