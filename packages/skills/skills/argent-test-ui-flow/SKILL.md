@@ -47,7 +47,7 @@ Goal: Test [feature name]
 Steps:
 1. Classify expected result: visual / structural / runtime-log-network / mixed → choose evidence
 2. [Navigate / tap / type to reach stable comparable starting point] → verify auto-screenshot
-3. screenshot { scale: 1.0, includeImageInContext: false, out } → save baseline path when visual or mixed evidence needs diffing
+3. screenshot { scale: 1.0, includeImageInContext: false, out: "/tmp/baseline.png" } → save baseline path when visual or mixed evidence needs diffing
 4. [Perform the action to test] → verify auto-screenshot
 5. Use screenshot-diff when requested or when comparable images add useful visual evidence
 6. Report: pass / fail with combined visual, structural, runtime/log/network evidence as applicable
@@ -85,7 +85,7 @@ Steps:
 ```
 1. Classify expected result as visual or mixed.
 2. Navigate to the stable starting state.
-3. screenshot { scale: 1.0, includeImageInContext: false, out } → save baseline path.
+3. screenshot { scale: 1.0, includeImageInContext: false, out: "/tmp/baseline.png" } → save baseline path.
 4. describe / debugger-component-tree → find the control and use its returned tap coordinates.
 5. gesture-tap → perform the visual behavior under test.
 6. screenshot-diff { baselinePath, captureCurrent: true, udid, outputDir } → inspect visible change or stability.
