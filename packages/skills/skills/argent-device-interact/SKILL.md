@@ -237,7 +237,7 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
-Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
+Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false **at the deadline**. `unreadable` covers every wait with no read that speaks for the screen there — a source that never answered, one that went dark at the end, and a last good read left further behind the deadline than a poll excuses, which a wide `pollIntervalMs` produces on a perfectly healthy source when its last read still lands more than ~2s before the deadline. The note then says how far back that read sits.
 
 ### await-screen-idle — Block until the screen stops changing
 
@@ -248,6 +248,10 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 ```
 
 On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
+
+`settled: false` means the screen kept changing only when no `note` came back with it. A `note` says stillness went **untested** instead, and which way: the tree read failed outright, the wait was cancelled, the tree was never read twice inside the budget (the note names the knob — `timeoutMs` for a slow tree, `pollIntervalMs` when the interval left no room for a second read), no read returned any content (nothing rendered yet, or the tree could not be read — where the adapter offers a hint the note appends it, and that is what tells the two apart; iOS carries one on a degraded read, an Android or blank Chromium read carries none), only one read returned content so nothing was compared with it, the content that was read never differed and `minStableMs` was never met over it, or content did differ and the reads then went dark before the deadline. Fix what the note names and re-run rather than reading it as motion.
+
+The `timeoutMs` above is a starting point, not a safe default everywhere: an Android `describe` reads the tree uncached, which costs roughly 0.3-0.8 ms per node, so a screen of a few thousand nodes needs several seconds of budget before two reads fit. The note names the knob when that happens.
 
 Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
@@ -318,7 +322,7 @@ Use the sequencing when:
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
-Add an `await-ui-element` step to gate a later tap on a screen transition (e.g. tap → wait for the next screen's button → tap it). If its condition is **not** met before the timeout, the sequence stops at that step and the following steps do **not** run — so a mistimed tap can't fire against a screen that never settled.
+Add an `await-ui-element` step to gate a later tap on a screen transition (e.g. tap → wait for the next screen's button → tap it). If that wait does **not** succeed before the timeout — whatever the cause (`unmet`, `unreadable`, or `cancelled`) — the sequence stops at that step and the following steps do **not** run, so a mistimed tap can't fire against a screen that never settled.
 
 ### Examples
 
@@ -379,9 +383,9 @@ Tap, wait for the next screen, then act on it — the `await-ui-element` step **
 }
 ```
 
-Prefer this over a fixed `delayMs` when a step depends on a screen transition: it adapts to real load time, and if the condition is not met before the timeout the sequence **stops there** so the next tap can't fire against a screen that never settled.
+Prefer this over a fixed `delayMs` when a step depends on a screen transition: it adapts to real load time, and if that wait does not succeed before the timeout the sequence **stops there** so the next tap can't fire against a screen that never settled.
 
-Stops on the first error (or unmet `await-ui-element` condition) and returns partial results.
+Stops on the first error (or any `await-ui-element` wait that returns `success: false`, whatever its `cause`) and returns partial results.
 
 ---
 

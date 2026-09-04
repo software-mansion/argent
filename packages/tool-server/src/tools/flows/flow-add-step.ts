@@ -352,21 +352,26 @@ const UNMET_WAIT_WARNING =
   "and this one did not pass";
 
 /**
- * The same `success: false`, reached without a trustworthy read of the tree —
- * see {@link unmetUiWaitCause}. It must not reuse the unmet text, which asserts
- * that the wait never held: nothing judged the condition here, so the step may
- * be perfectly good.
+ * The same `success: false`, reached with no read that speaks for the screen at
+ * the deadline — see {@link unmetUiWaitCause}. It must not reuse the unmet text,
+ * which asserts that the wait never held: no verdict here stands for the
+ * deadline, so the step may be perfectly good.
  */
 const UNREADABLE_WAIT_WARNING =
-  "recorded, but this wait reached its deadline without a trustworthy read of the UI tree, so " +
-  "the condition was never judged — `await-ui-element` returns success:false for that too, and " +
-  "the step was written to the flow anyway. Either no read in the window could be trusted, or " +
-  "the reads went dark before the end and what they saw no longer describes it. Whether the " +
-  "condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source error " +
-  "where a fetch threw, and describes what was seen where the tree was merely empty or " +
-  "degraded. Get that source back and re-record the step to find out. Do not delete the step on " +
-  "this warning alone. The cross-tree re-probe was skipped: it asks whether a check that PASSED " +
-  "would survive conversion to `await:`/`assert:`, and this one never got an answer";
+  "recorded, but this wait reached its deadline with no read that speaks for the screen there, " +
+  "so nothing judged the condition AT the deadline — `await-ui-element` returns success:false " +
+  "for that too, and the step was written to the flow anyway. No read in the window could be " +
+  "trusted, or the reads went dark before the end, or the last good read sits further behind the " +
+  "deadline than a poll excuses — which a wide `pollIntervalMs` produces on a source that never " +
+  "failed, when its last read still lands more than ~2s before the deadline, its reads every one " +
+  "of them fine and that last one too early. " +
+  "Whether the condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source " +
+  "error where a fetch threw, describes what was seen where the tree was merely empty or " +
+  "degraded, and says how far behind the deadline the last read sits where the polling was too " +
+  "sparse. Fix what the note names — get the source back, or poll more often — and re-record the " +
+  "step to find out. Do not delete the step on this warning alone. The cross-tree re-probe was " +
+  "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
+  "and this one never got an answer";
 
 const CANCELLED_WAIT_WARNING =
   "recorded, but this wait was cancelled before its deadline, so the condition was never settled " +
