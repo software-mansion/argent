@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/device-providers",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "The external device provider contract (schema v1): types, validators, discovery and the publish helpers providers write with",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
