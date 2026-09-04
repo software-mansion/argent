@@ -11,6 +11,7 @@ import {
   precheckNativeDevtools,
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
+import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import type { RestartAppParams, RestartAppResult } from "../types";
@@ -27,13 +28,25 @@ export function makeIosImpl(
     requires: ["xcrun"],
     handler: async (_services, params, device) => {
       const { udid, bundleId } = params;
-      const ndRef = nativeDevtoolsRef(device);
-      const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-        ndRef.urn,
-        ndRef.options
-      );
-      const blocked = await precheckNativeDevtools(nativeDevtools, udid);
-      if (blocked) return blocked;
+      /**
+       * Same reasoning as launch-app. native-devtools is a granted mechanism,
+       * so resolving it unconditionally would fail the restart on a
+       * provider-supplied device that (quite reasonably) withholds injection.
+       *
+       * Keyed on the provider's claim, not on the `ext:` spelling. The same
+       * device named by its raw udid would otherwise take the branch below and
+       * fail on a grant the provider withheld, so one device would launch or
+       * not depending only on which of its names was used.
+       */
+      if (!externalClaimForAnyId(device.id)) {
+        const ndRef = nativeDevtoolsRef(device);
+        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
+          ndRef.urn,
+          ndRef.options
+        );
+        const blocked = await precheckNativeDevtools(nativeDevtools, udid);
+        if (blocked) return blocked;
+      }
       try {
         await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
       } catch {

@@ -5,6 +5,7 @@ import type { ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 export interface RawEntry {
   id: number;
@@ -459,7 +460,7 @@ export function buildTextTree(
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -523,7 +524,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   // no equivalent — use `describe` there.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

@@ -1,30 +1,37 @@
-import { type DeviceInfo, type DeviceKind, type Platform } from "@argent/registry";
+import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
+import {
+  EXTERNAL_PREFIX,
+  externalNativeId,
+  isIosPhysicalUdid,
+  nativeIdPlatform,
+} from "./external-devices";
 
 /**
- * iOS simulator UDID shape: 8-4-4-4-12 hex. Everything here classifies by shape
- * because `xcrun simctl list` and `adb devices` are slow enough that listing on
- * every hot tool call would dominate its latency.
+ * Everything here classifies by shape because `xcrun simctl list` and `adb
+ * devices` are slow enough that listing on every hot tool call would dominate
+ * its latency.
+ *
+ * The iOS-or-Android half is {@linkcode nativeIdPlatform}, in the contract
+ * package, so `argent providers check` can ask the same question without a
+ * second copy of the UDID shape. The prefixes below stay here, they name device
+ * shapes the contract has no business knowing about.
  */
-const IOS_UDID_SHAPE =
-  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
 /**
- * Physical iOS device UDID format (A12/2018 hardware and newer): 8 hex digits,
- * a dash, then 16 hex digits (e.g. `00008110-000978540290401E`). Distinct from
+ * True when `udid` has the modern physical-iPhone UDID shape: 8 hex digits, a
+ * dash, then 16 hex digits (e.g. `00008110-000978540290401E`). Distinct from
  * both the simulator UUID shape and every known Android serial form, so it is
- * safe to classify by shape on the hot path. Legacy 40-hex UDIDs (A11 hardware
- * and older) are deliberately unsupported: 40 bare hex characters are
- * ambiguous with Android serials, so classifying them by shape here would
- * misroute a device. Age alone would not settle it - the A10 iPad 6th and 7th
- * generations carry a 40-hex UDID and do run iPadOS 17, the floor for the
- * CoreDevice (`devicectl`) tooling this backend is built on.
+ * safe to classify by shape on the hot path.
+ *
+ * Re-exported from the contract package, which owns the regex because
+ * {@linkcode nativeIdPlatform} needs it too. Legacy 40-hex UDIDs (A11 hardware
+ * and older) are unsupported there for the reason recorded alongside it: 40
+ * bare hex characters are ambiguous with Android serials. Age alone would not
+ * settle it, the A10 iPad 6th and 7th generations carry a 40-hex UDID and do
+ * run iPadOS 17, the floor for the CoreDevice (`devicectl`) tooling this
+ * backend is built on.
  */
-const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
-
-/** True when `udid` has the modern physical-iPhone UDID shape (see above). */
-export function isIosPhysicalUdid(udid: string): boolean {
-  return IOS_PHYSICAL_UDID_SHAPE.test(udid);
-}
+export { isIosPhysicalUdid };
 
 /**
  * Prefix on device ids that route through `sim-remote` to a remote iOS
@@ -52,10 +59,22 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
 const VEGA_SERIAL_PREFIX = "amazon-";
 
 export function classifyDevice(udid: string): Platform {
+  /**
+   * An `ext:<providerId>:<nativeId>` device classifies by its NATIVE id's
+   * shape. The prefix carries no platform information on purpose, so there is
+   * one set of classification rules, not a second for attached devices. A
+   * malformed `ext:` id yields itself back, and falling through rather than
+   * recursing is what stops `"ext:"` looping forever.
+   */
+  if (udid.startsWith(EXTERNAL_PREFIX)) {
+    const nativeId = externalNativeId(udid);
+    if (nativeId !== udid) return classifyDevice(nativeId);
+  }
+
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
-  return IOS_UDID_SHAPE.test(udid) || IOS_PHYSICAL_UDID_SHAPE.test(udid) ? "ios" : "android";
+  return nativeIdPlatform(udid);
 }
 
 /**
@@ -82,10 +101,15 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
  */
 export function resolveDevice(udid: string): DeviceInfo {
   const platform = classifyDevice(udid);
-
+  /**
+   * Kind derives from the native id too, so a prefixed `emulator-5554` still
+   * reads as an emulator rather than a physical phone and a prefixed physical
+   * iPhone UDID still reads as a device. Identity for other ids.
+   */
+  const shapeId = externalNativeId(udid);
   const kind: DeviceKind =
     platform === "ios"
-      ? isIosPhysicalUdid(udid)
+      ? isIosPhysicalUdid(shapeId)
         ? "device"
         : "simulator"
       : platform === "ios-remote"
@@ -93,11 +117,10 @@ export function resolveDevice(udid: string): DeviceInfo {
         : platform === "vega"
           ? "vvd"
           : platform === "android"
-            ? isAndroidEmulatorSerial(udid)
+            ? isAndroidEmulatorSerial(shapeId)
               ? "emulator"
               : "device"
             : "app";
-
   return { id: udid, platform, kind };
 }
 

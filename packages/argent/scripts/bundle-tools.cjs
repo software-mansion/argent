@@ -8,6 +8,10 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/device-providers/src/index.ts"
+);
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
@@ -50,6 +54,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry. An unset ARGENT_OTEL_INGEST_TOKEN

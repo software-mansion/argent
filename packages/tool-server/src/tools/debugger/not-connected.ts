@@ -7,6 +7,7 @@ import {
 import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
 import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { metroPort } from "../../utils/debugger/metro-port";
 import { debuggerServiceRef } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
@@ -110,13 +111,15 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
-  params: { port: number; device_id?: string }
+  params: { port?: number; device_id?: string }
 ): DebuggerNotConnectedResult {
   const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
   return {
     status: "not_connected",
     connected: false,
-    ...(isChromium ? {} : { port: params.port }),
+    // Resolved through metroPort so the reported port is the one the resolve
+    // actually used (caller, then provider-published, then 8081).
+    ...(isChromium ? {} : { port: metroPort(params) }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
     guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],
@@ -159,7 +162,7 @@ export function trackDebuggerOutcome(
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port: number; device_id?: string }
+  params: { port?: number; device_id?: string }
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"

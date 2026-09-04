@@ -6,6 +6,7 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point";
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 export interface InspectItem {
   name: string;
@@ -116,7 +117,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -189,7 +190,7 @@ Use when you need the source file and line for a component at a tap coordinate. 
   // Metro's /symbolicate; the Chromium session has no source resolver.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

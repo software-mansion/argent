@@ -22,6 +22,20 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+/**
+ * iOS argv goes through `simctlArgsForUdid`, which resolves the device set the
+ * UDID lives in and probes with `simctl list` when extra sets are configured.
+ * That would make the spawn counts below depend on the developer's own
+ * `ios.additionalDeviceSets`, so pin the config: no extra sets, no probe. The
+ * `--set`-scoped spelling is covered in ios-device-sets' own tests.
+ */
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, getAdditionalIosDeviceSets: () => [] };
+});
+
 vi.mock("../src/utils/android-binary", () => ({
   resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
   __resetAndroidBinaryCacheForTesting: () => {},

@@ -38,6 +38,8 @@ import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
+import { InvalidToolInputError } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -1347,6 +1349,34 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         );
       }
       if (hasUdid) {
+        /**
+         * Argent attaches to a provider's device, it does not own its
+         * lifecycle. `InvalidToolInputError` maps to a 400, so the agent is
+         * told to ask the provider instead of getting a raw `simctl` failure.
+         *
+         * The raw udid is refused too, `bootIos` reboots the simulator and the
+         * spelling the agent used does not change whose device it is.
+         * `additionalDeviceSets` surfaces such a device by its real udid.
+         *
+         * `ext:` failures get the provider named at the HTTP edge, so naming it
+         * here as well would print it twice. A raw udid gets no such
+         * attribution, hence the name inline.
+         */
+        const claim = externalClaimForNativeId(params.udid!);
+
+        if (isExternalId(params.udid!) || claim) {
+          throw new InvalidToolInputError(
+            `'${params.udid}' is supplied by ${claim ? claim.provider.name : "an external provider"}, ` +
+              `which owns its lifecycle — argent cannot boot, reboot or shut it down. ` +
+              `Start the device from that application, then it will appear in list-devices.`,
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_LIFECYCLE_REFUSED,
+              error_kind: "unsupported",
+              failure_area: "tool_server",
+              failure_stage: "boot_device_external_refused",
+            }
+          );
+        }
         if (classifyDevice(params.udid!) === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
         }

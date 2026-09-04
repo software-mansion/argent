@@ -4,10 +4,12 @@ import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 import {
   configuredAdditionalDeviceSets,
+  deviceSetForUdid,
   rememberDeviceSet,
   simctlPrefix,
   type DeviceSetPath,
 } from "./ios-device-sets";
+import { externalNativeId, isExternalId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -107,7 +109,15 @@ const runtimeKindCache = new Map<string, "mobile" | "tv">();
 export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
-  const kind = (await listIosSimulators()).find((s) => s.udid === udid)?.runtimeKind;
+  /**
+   * An external provider's simulator is not in any configured set, so the
+   * all-sets listing cannot see it. Scope to the set the provider declared and
+   * match on the native UDID.
+   */
+  const listing = isExternalId(udid)
+    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
+    : await listIosSimulators();
+  const kind = listing.find((s) => s.udid === externalNativeId(udid))?.runtimeKind;
   if (kind) runtimeKindCache.set(udid, kind);
   return kind;
 }

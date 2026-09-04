@@ -231,6 +231,54 @@ if (shouldPatchCursor) {
   console.log("• Skipped Cursor patch (no ~/.cursor directory found)\n");
 }
 
+// An external device provider (Radon IDE) spawns `[node, cli.js, "providers",
+// ...]`, resolving both paths from `~/.argent/cli.json`, written by `argent
+// init`/`update`, which a repo checkout never runs. Its only fallback is
+// `argent` on PATH, which dev mode does not provide, so without this the
+// provider integration is the one thing left pointing away from the local
+// build. Patched and restored like the editor configs above.
+const CLI_RECORD = path.join(STATE_DIR, "cli.json");
+const originalCliRecord = fs.existsSync(CLI_RECORD) ? fs.readFileSync(CLI_RECORD, "utf8") : null;
+
+const devCliRecord = {
+  cli: LOCAL_MCP_ENTRY,
+  /**
+   * Neither "global" nor "local". This names a repo checkout. Nothing branches
+   * on it (`argent uninstall` compares paths) so the value is inert.
+   */
+  mode: "dev",
+  node: process.execPath,
+  updatedAt: new Date().toISOString(),
+  version: readJson(path.join(ARGENT_PKG, "package.json")).version ?? "0.0.0",
+};
+
+writeJson(CLI_RECORD, devCliRecord);
+console.log(`✓ Patched ~/.argent/cli.json → node ${LOCAL_MCP_ENTRY} providers\n`);
+
+/**
+ * Put `~/.argent/cli.json` back, unless something else rewrote it meanwhile. An
+ * `argent init` mid-session leaves a record for a real install and clobbering
+ * that would point providers at a checkout we are shutting down. Returns
+ * whether it acted.
+ */
+function restoreCliRecord() {
+  try {
+    const current = fs.existsSync(CLI_RECORD) ? fs.readFileSync(CLI_RECORD, "utf8") : null;
+    if (current !== JSON.stringify(devCliRecord, null, 2) + "\n") return false;
+
+    if (originalCliRecord === null) {
+      fs.unlinkSync(CLI_RECORD);
+    } else {
+      fs.writeFileSync(CLI_RECORD, originalCliRecord);
+    }
+
+    return true;
+  } catch {
+    /** A stale record only costs the next run a re-patch */
+    return false;
+  }
+}
+
 let toolServerPid = null;
 
 function cleanup() {
@@ -250,6 +298,9 @@ function cleanup() {
   if (shouldPatchCursor) {
     restoreMcpEntry(CURSOR_MCP_JSON, originalCursorArgentEntry, cursorConfigExists);
     console.log("✓ Restored ~/.cursor/mcp.json");
+  }
+  if (restoreCliRecord()) {
+    console.log("✓ Restored ~/.argent/cli.json");
   }
   console.log("Done.");
 }
