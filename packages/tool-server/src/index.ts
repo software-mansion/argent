@@ -24,6 +24,7 @@ import { collectHostDepsReport } from "./utils/host-deps-report";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { scheduleAutomaticUpdate } from "./tools/system/update-argent";
 import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
@@ -215,7 +216,7 @@ export function start(): void {
   const warmKeepAlive = setInterval(() => {}, 1_000);
   void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
-  const updateChecker = startUpdateChecker();
+  const updateChecker = startUpdateChecker({ onAutoUpdate: scheduleAutomaticUpdate });
 
   const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
