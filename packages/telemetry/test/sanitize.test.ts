@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { DEBUGGER_TOOL_OUTCOMES, EVENT_NAMES, PLATFORMS } from "../src/events.js";
+import { DEBUGGER_TOOL_OUTCOMES, EVENT_NAMES, PLATFORMS, ZOD_ISSUE_CODES } from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -619,6 +619,25 @@ describe("sanitize", () => {
         invalid_params: ["a".repeat(65)],
       });
       expect("invalid_params" in out).toBe(false);
+    });
+  });
+
+  describe("tool:fail invalid_param_issues validator", () => {
+    const base = { tool: "await-ui-element", duration_ms: 1 };
+
+    it("accepts every code zod can raise, so no real rejection is voided", () => {
+      // arrayOf is all-or-nothing: one code missing from the allowlist would
+      // silently drop the whole property for that call.
+      const out = sanitize("tool:fail", { ...base, invalid_param_issues: [...ZOD_ISSUE_CODES] });
+      expect(out.invalid_param_issues).toEqual([...ZOD_ISSUE_CODES]);
+    });
+
+    it("drops the whole property when a value is not a zod issue code", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_param_issues: ["too_big", "timeoutMs=300000"],
+      });
+      expect("invalid_param_issues" in out).toBe(false);
     });
   });
 

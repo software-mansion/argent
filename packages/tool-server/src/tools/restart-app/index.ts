@@ -51,6 +51,9 @@ const capability: ToolCapability = {
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
+    // Can outlive the MCP client's 30s fetch cap (~65s on Android); without this the
+    // client aborts and REPLAYS the call against the same device.
+    longRunning: true,
     interaction: {
       startedMsg: ({ params }) => `Restarting ${params.bundleId}`,
       completedMsg: ({ params }) => `Restarted ${params.bundleId}`,

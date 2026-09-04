@@ -158,7 +158,34 @@ export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
    * from Argent's own schemas only — never values, never user-typed keys.
    */
   invalid_params?: string[];
+  /**
+   * Which zod constraints those parameters broke, deduped. The name alone
+   * cannot separate a value over the bound (`too_big`, answered by widening
+   * it) from a value of the wrong type (`invalid_type`, answered by the
+   * parameter description) — opposite fixes.
+   */
+  invalid_param_issues?: ZodIssueCode[];
 }
+
+/**
+ * Zod's own issue codes, as of zod 4. A closed vocabulary from the schema
+ * library, so nothing user-typed can reach telemetry through it.
+ */
+export const ZOD_ISSUE_CODES = [
+  "invalid_type",
+  "too_big",
+  "too_small",
+  "invalid_format",
+  "not_multiple_of",
+  "unrecognized_keys",
+  "invalid_union",
+  "invalid_key",
+  "invalid_element",
+  "invalid_value",
+  "custom",
+] as const;
+
+export type ZodIssueCode = (typeof ZOD_ISSUE_CODES)[number];
 
 /**
  * Reasons debugger-status / debugger-log-registry return a structured

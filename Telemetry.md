@@ -68,7 +68,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 ### Diagnostics
 
 - the fact that an error occurred (event type and code only — never the error content or message);
-- when a tool call is rejected because its parameters fail validation: which parameter names failed. These names come exclusively from Argent's own published tool schemas — never the values you supplied, and never key names you typed that are not part of the schema (an unrecognised key is recorded only as the fixed marker "unrecognized_keys", not the key itself);
+- when a tool call is rejected because its parameters fail validation: which parameter names failed, and which validation rules were broken across the call (for example: wrong type, above the permitted maximum, unrecognised key) — a deduplicated set of the schema library's fixed issue codes, not a per-parameter mapping. The names come exclusively from Argent's own published tool schemas — never the values you supplied, and never key names you typed that are not part of the schema (an unrecognised key is recorded only as the fixed marker "unrecognized_keys", not the key itself);
 - the outcome of a debugger connectivity check, recorded as one of a fixed set of coded reasons (for example: connected, Metro not running, no app attached) — never the underlying error text.
 
 ### Identifiers

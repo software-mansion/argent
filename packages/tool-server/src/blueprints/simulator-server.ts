@@ -51,6 +51,11 @@ const getPaths = () => {
 
 const READY_TIMEOUT_MS = 30_000;
 
+// Bounds on the stderr kept from a spawn that never became ready. Mirrors the
+// android-devtools blueprint, which reports the same exited-before-ready shape.
+const STDERR_KEEP_BYTES = 4 * 1024;
+const STDERR_REPORT_CHARS = 400;
+
 export interface SimulatorServerApi {
   apiUrl: string;
   streamUrl: string;
@@ -211,29 +216,47 @@ async function spawnSimulatorServerProcess(
     });
 
     const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
+    // The binary names the cause of an early exit only on stderr — "emulator
+    // <serial> not found among running emulators", a missing resource, a
+    // permission refusal — and the exit code is 1 for every one of them. Keep a
+    // bounded tail so the failure below can carry the one thing that separates
+    // them.
+    let stderrBuf = "";
     proc.stderr?.on("data", (data: Buffer) => {
       process.stderr.write(`[sim ${udidTag}] ${data}`);
+      stderrBuf += data.toString("utf-8");
+      if (stderrBuf.length > STDERR_KEEP_BYTES) stderrBuf = stderrBuf.slice(-STDERR_KEEP_BYTES);
     });
+    // The LAST characters, unlike the android-devtools twin's first: this binary
+    // prints ~500ms of media-stack chatter before it reports why it is quitting,
+    // so the head of the buffer is noise and the fatal line is at the end.
+    const stderrDetail = (): string => {
+      const tail = stderrBuf.trim();
+      return tail ? ` stderr=${tail.slice(-STDERR_REPORT_CHARS)}` : "";
+    };
 
     proc.on("exit", (code, signal) => {
       settle(() =>
         reject(
-          new FailureError("simulator-server exited with code before becoming ready", {
-            error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
-            failure_stage: "simulator_server_spawn_ready",
-            failure_area: "tool_server",
-            error_kind: "subprocess",
-            failure_command: "simulator_server",
-            ...(typeof code === "number" ? { failure_exit_code: code } : {}),
-            ...(signal === "SIGABRT" ||
-            signal === "SIGHUP" ||
-            signal === "SIGINT" ||
-            signal === "SIGKILL" ||
-            signal === "SIGQUIT" ||
-            signal === "SIGTERM"
-              ? { failure_signal: signal }
-              : {}),
-          })
+          new FailureError(
+            `simulator-server exited with code before becoming ready (code=${code} signal=${signal}).${stderrDetail()}`,
+            {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
+              failure_stage: "simulator_server_spawn_ready",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              failure_command: "simulator_server",
+              ...(typeof code === "number" ? { failure_exit_code: code } : {}),
+              ...(signal === "SIGABRT" ||
+              signal === "SIGHUP" ||
+              signal === "SIGINT" ||
+              signal === "SIGKILL" ||
+              signal === "SIGQUIT" ||
+              signal === "SIGTERM"
+                ? { failure_signal: signal }
+                : {}),
+            }
+          )
         )
       );
     });
@@ -260,14 +283,17 @@ async function spawnSimulatorServerProcess(
       settle(
         () =>
           reject(
-            new FailureError("Timed out waiting for simulator-server to become ready", {
-              error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
-              failure_stage: "simulator_server_spawn_ready",
-              failure_area: "tool_server",
-              error_kind: "timeout",
-              failure_command: "simulator_server",
-              failure_signal: "SIGKILL",
-            })
+            new FailureError(
+              `Timed out waiting for simulator-server to become ready.${stderrDetail()}`,
+              {
+                error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
+                failure_stage: "simulator_server_spawn_ready",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+                failure_command: "simulator_server",
+                failure_signal: "SIGKILL",
+              }
+            )
           ),
         () => proc.kill()
       );

@@ -10,6 +10,7 @@ import {
 import {
   DEBUGGER_TOOL_OUTCOMES,
   PLATFORMS,
+  ZOD_ISSUE_CODES,
   type EventName,
   type EventPropertyMap,
 } from "./events.js";
@@ -230,6 +231,7 @@ export const ALLOWED: ValidatorMap = {
     // Emit side sends only names declared in the tool's zod shape, capped at 16
     // because arrayOf voids the whole array once it is longer.
     invalid_params: arrayOf(matches(/^[a-z][a-z0-9_]{0,63}$/i, 64), 16),
+    invalid_param_issues: arrayOf(oneOf(ZOD_ISSUE_CODES), 16),
     ...FAILURE_SIGNAL,
     ...AI_TELEMETRY,
   },

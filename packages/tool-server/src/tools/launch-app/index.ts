@@ -60,6 +60,9 @@ const capability: ToolCapability = {
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    // Can outlive the MCP client's 30s fetch cap (~40s on Android); without this the
+    // client aborts and REPLAYS the call against the same device.
+    longRunning: true,
     interaction: {
       startedMsg: ({ params }) => `Launching ${params.bundleId}`,
       completedMsg: ({ params }) => `Launched ${params.bundleId}`,

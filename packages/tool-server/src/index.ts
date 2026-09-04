@@ -382,6 +382,9 @@ export function start(): void {
         tool: toolId,
         ...(meta.platform ? { platform: meta.platform } : {}),
         ...(meta.invalid_params?.length ? { invalid_params: meta.invalid_params } : {}),
+        ...(meta.invalid_param_issues?.length
+          ? { invalid_param_issues: meta.invalid_param_issues }
+          : {}),
         duration_ms: durationMs,
         ...signal,
         ...aiTelemetryFromMeta(meta),
