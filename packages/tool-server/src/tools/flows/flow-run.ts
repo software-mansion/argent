@@ -418,6 +418,20 @@ export function flowLaunchGateReason(
       // measured remedy would have the author restart a healthy tool-server. The
       // figure is the whole spend: the poll checks the live map once before its
       // first sleep, so a dial during the post-launch settle counts too.
+      //
+      // This is the one reader that does NOT fall back to the terminal
+      // injection diagnosis `adviseOnUninjectedApp` produces for this state.
+      // That diagnosis rests on a relaunch this reader did not perform — it
+      // needs a `stale_process` hand-out recorded against one pid and a later
+      // reading against a different one, and that configuration CAN obtain
+      // here (an authoring-time `native-devtools-status` probe records the
+      // hand-out, the step's own launch replaces the process). The gate stays
+      // safe by never consulting the record, not because the record's
+      // precondition is structurally absent — whereas here the reading arrives
+      // one launch-wait after the step's own relaunch, where a cold start
+      // produces the identical one. So a re-run stays worth its cost instead of
+      // terminal, and the sentence below is what keeps it from being read as
+      // "restart things".
       return (
         `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
         `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`

@@ -55,6 +55,7 @@ function makeNativeApi(options: {
     envSetup = true;
   });
   const isAppRunning = vi.fn(async () => options.appRunning ?? false);
+  const relaunchAdvised = new Set<string>();
 
   return {
     api: {
@@ -66,6 +67,11 @@ function makeNativeApi(options: {
       isConnected: () => options.connected ?? false,
       isAppRunning,
       listConnectedBundleIds: () => [],
+      holdsEndpoint: () => true,
+      noteRelaunchAdvice: (bundleId: string) => {
+        relaunchAdvised.add(bundleId);
+      },
+      wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
       appConnectionState: async () => {
         if (options.connected) return "connected";
         // Mirrors the real API: the unconnected path re-applies the launchd env
@@ -1085,10 +1091,14 @@ describe("native-* tool descriptions document every precheck outcome", () => {
       expect(tool.description, `${tool.id} must mention connect_pending`).toContain(
         "connect_pending"
       );
-      // The fourth member of NativeDevtoolsPrecheckBlock, and the only status
-      // whose remedy is neither a restart nor a wait — an agent with no arm for
-      // it retries a simulator that needs re-booting.
+      // `init_failed` and `injection_failed` are the two members whose remedy is
+      // neither a restart nor a wait — an agent with no arm for the first
+      // retries a simulator that needs re-booting, and one with no arm for the
+      // second keeps restarting an app whose dylib dyld never loads.
       expect(tool.description, `${tool.id} must mention init_failed`).toContain("init_failed");
+      expect(tool.description, `${tool.id} must mention injection_failed`).toContain(
+        "injection_failed"
+      );
       expect(tool.description, `${tool.id} must name the tool-server remedy`).toContain(
         "argent server stop && argent server start --detach"
       );
@@ -1328,7 +1338,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     "discards the one in progress and returns you to this same state.";
   const UNREGISTERED_ESCAPE =
     "If you have already restarted the tool-server for this app and it reads this way again, " +
-    "stop: the process is loading argent's dylib but never dialing, which no further restart on " +
+    "stop: the process carries argent's dylib but never dials, which no further restart on " +
     "either side fixes. Treat native devtools as unavailable — read the screen with describe or " +
     "screenshot and drive it by coordinate.";
   const INDETERMINATE_ESCALATION =
@@ -1402,12 +1412,28 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     }
   });
 
-  it("routes exactly the four precheck statuses on every native-* tool", () => {
-    // The clause pins slice up to the NEXT `If status is `, so the last slice is
-    // open-ended: a fifth clause is unconstrained on all six tools at once.
+  // The six feature tools' arm is pinned verbatim below, but native-devtools-status
+  // carries its own wording and is the surface the flow-recovery ladder sends an
+  // author to (argent-create-flow/references/reliability-and-recovery.md step 3).
+  // Unpinned, the arm can be dropped while that doc keeps promising it — and the
+  // prohibition it has to carry is the tool-server one, since this description
+  // prescribes exactly that restart four lines above for `state: unregistered`.
+  it("routes injection_failed on native-devtools-status, forbidding both restarts", () => {
+    const line = nativeDevtoolsStatusTool
+      .description!.split("\n")
+      .find((l) => l.startsWith('Returns { status: "injection_failed"'));
+    expect(line, "description has no injection_failed line").toBeTypeOf("string");
+    expect(line).toBe(
+      'Returns { status: "injection_failed", message } instead once this app has been told to restart, has done so, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. Do NOT restart the app again and do NOT restart the tool-server: no restart on either side changes this. Follow the message — it names the likely cause and the one passive re-check that can still clear this verdict — then read the screen with `describe` or `screenshot`.'
+    );
+  });
+
+  it("routes exactly the five precheck statuses on every native-* tool", () => {
+    // The clause pins below bound each slice by the next clause or the line's
+    // end, so a SIXTH clause is what would be unconstrained on all six at once.
     for (const tool of tools) {
       const count = tool.description!.match(/If status is /g)?.length ?? 0;
-      expect(count, `${tool.id} routes ${count} statuses`).toBe(4);
+      expect(count, `${tool.id} routes ${count} statuses`).toBe(5);
     }
   });
 
@@ -1437,7 +1463,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "unregistered",
-      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
+      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate — unless the message says this tool-server no longer owns the simulator's devtools socket, which names both steps in the order they work. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process carries argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
     ],
     [
       "indeterminate",
@@ -1454,14 +1480,21 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "service_stale",
-      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
+      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names what is left to do.",
+    ],
+    [
+      "injection_failed",
+      "If status is injection_failed: the app was told to restart, did, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. Do NOT restart the app again and do NOT restart the tool-server: no restart on either side changes this. Follow the message — it names the likely cause and the one passive re-check that can still clear this verdict — then read the screen with the standard `describe` tool or `screenshot`.",
     ],
   ])("routes %s identically on all six native-* tools", (status, clause) => {
     for (const tool of tools) {
       const start = tool.description!.indexOf(`If status is ${status}:`);
       expect(start, `${tool.id} does not route ${status}`).toBeGreaterThanOrEqual(0);
+      // The routing clauses share one line, and the last one has no clause after
+      // it — bound by the line's end too, or its pin would swallow the sentences
+      // below and no verbatim match could hold.
       const rest = tool.description!.slice(start);
-      const next = rest.slice(1).search(/If status is /);
+      const next = rest.slice(1).search(/If status is |\n/);
       expect(rest.slice(0, next === -1 ? undefined : next + 1).trim(), tool.id).toBe(clause);
     }
   });

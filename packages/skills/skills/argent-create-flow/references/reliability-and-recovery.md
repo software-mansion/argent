@@ -43,7 +43,7 @@ The full iOS flow tree exists only for an app launched by Argent with instrument
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop. `requiresRestart` covers only the states a fresh process fixes: an `unregistered` or `connecting` app reports it false, because it already launched under the terms a restart would recreate.
+3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop. `requiresRestart` covers only the states a fresh process fixes: an `unregistered` or `connecting` app reports it false, because it already launched under the terms a restart would recreate. A `status: "injection_failed"` reading is terminal: the app's dylib reaches the process but nothing ever dials, so neither an app restart nor a tool-server restart fixes it — skip step 4 and report an instrumentation blocker. Its message prescribes coordinates, and a coordinate-driven flow is the only thing left here - but that yields a **fragment**, not a QA test, on the terms the last paragraph of the next section sets out.
 4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. One tool-server serves every agent on this Argent install, so an unscoped call tears down their devices too. This does not change app or account data. Then restart and check status again.
 5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA flow.
 
@@ -57,8 +57,8 @@ Argent refuses `com.apple.*` bundle ids at every native-devtools read that names
 
 Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the refusal bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the tree-free form:
 
+- Point taps or long-presses derived from `describe`, each named by an echo. `tap: { x: 0.5, y: 0.35 }` takes a point directly and reads no tree.
 - Raw `tool: await-ui-element` accessibility checks.
-- Point taps or long-presses derived from `describe`, each named by an echo.
 - A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
 - Raw swipes with `momentum: false` because `scroll-to` needs the missing flow tree. Momentum-free scrolling keeps later coordinate taps valid. `momentum: false` needs `durationMs` of at least 150 and is rejected below it, so keep the 300 default or raise it.
 
@@ -66,7 +66,7 @@ Every point tap, long-press or coordinate swipe in such a flow passes **carrying
 
 A recorded wait carries a different warning: it adds about one second and reports that the runner tree is unavailable. That warning is expected too. Keep the wait as a raw `tool:` step.
 
-Report that the flow has no flow tree and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
+Report that the flow has no flow tree and its coordinates are not portable. Being e2e does not make such a flow a QA test: its points are not genuinely unlabeled targets, so it fails the coordinate-fallback rule. Report the artifact and the platform blocker instead. For a flow you intend to keep, target an app you install.
 
 A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first non-echo step is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
