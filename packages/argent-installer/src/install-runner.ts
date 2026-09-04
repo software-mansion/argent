@@ -1,8 +1,10 @@
+import * as path from "node:path";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
+  getGloballyInstalledPackageRoot,
   getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
@@ -20,37 +22,100 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
+import type { PackageManager } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
+import {
+  blockedGlobalTargetCause,
+  canRecoverBlockedGlobal,
+  forgetInheritedNpmPrefix,
+  isNixStorePath,
+  localInstallRemedy,
+  ownershipRemedy,
+  blockedGlobalBinDir,
+  blockedGlobalInstallMessage,
+  npmGlobalBinDir,
+  unwritableGlobalBinMessage,
+  npmUserConfigPath,
+  probeGlobalInstallTarget,
+  suggestedNpmPrefix,
+  unwritableGlobalTargetMessage,
+  type GlobalInstallTarget,
+  type RemedyContext,
+} from "./global-prefix.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
+import { InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
   INSTALL_GLOBAL_PACKAGE_FAILED,
+  INSTALL_GLOBAL_PREFIX_UNWRITABLE,
   INSTALL_LOCAL_PACKAGE_FAILED,
   INSTALL_LOCAL_PRECONDITION_FAILED,
   INSTALL_FROM_TAR_PACKAGE_FAILED,
   INSTALL_INIT_TRIGGERED_UPDATE_FAILED,
 } from "./init-telemetry.js";
 
-// Step 0 — ensure argent is installed for the chosen mode and return the
-// resolved version. Exits the process on a fatal install failure, after
-// emitting its terminal telemetry.
+export interface InstallOutcome {
+  version: string;
+  /**
+   * Mode the install actually landed in. A global install whose target
+   * directory cannot be written can be recovered as a local one, and every
+   * later step of init — configs, scope, install record — follows this, not
+   * the mode originally asked for.
+   */
+  installMode: InstallMode;
+  /**
+   * Directory the argent binary now lives in that the user's shells do not
+   * know about yet. The MCP entries init writes name a bare `argent`, so until
+   * this is on PATH the editors it just configured cannot start it.
+   */
+  pathHint: string | null;
+}
+
+// Step 0 — ensure argent is installed and report the version and mode the rest
+// of init should work against. Exits the process on a fatal install failure,
+// emitting its terminal telemetry first; a cancelled prompt throws
+// InitCancelled instead, for init to unwind like any other cancelled step.
 export async function runInstall(args: {
   installMode: InstallMode;
   fromTar: string | null;
   nonInteractive: boolean;
   version: string;
+  /**
+   * Where a fresh global install would land, probed by the caller so the
+   * install-mode prompt and the install itself agree without querying the
+   * package manager twice. Null when no fresh global install is in play.
+   */
+  globalTarget: GlobalInstallTarget | null;
+  /**
+   * The install-mode step already showed that `globalTarget` cannot be written
+   * and named what argent would do about it, and the user chose global anyway.
+   * That choice is the answer, so the recovery carries the remedy out instead
+   * of asking the same question a second time.
+   */
+  globalBlockAcknowledged: boolean;
   tel: InitTelemetry;
-}): Promise<string> {
-  const { installMode, fromTar, nonInteractive, tel } = args;
+}): Promise<InstallOutcome> {
+  const { installMode, fromTar, nonInteractive, globalTarget, globalBlockAcknowledged, tel } = args;
 
   if (installMode === "local") {
     await installLocally({ fromTar, tel });
-    return getLocallyInstalledVersion(resolveProjectRoot(process.cwd())) ?? args.version;
+    return { version: localVersion(args.version), installMode: "local", pathHint: null };
   }
 
-  return runGlobal({ fromTar, nonInteractive, version: args.version, tel });
+  return runGlobal({
+    fromTar,
+    nonInteractive,
+    version: args.version,
+    globalTarget,
+    globalBlockAcknowledged,
+    tel,
+  });
+}
+
+function localVersion(fallback: string): string {
+  return getLocallyInstalledVersion(resolveProjectRoot(process.cwd())) ?? fallback;
 }
 
 // Exits the process on a missing package.json or a failed/empty install — the
@@ -206,23 +271,265 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   await tel.trackPackageAction("fresh_install", startedAt, true, undefined, attemptTelemetry());
 }
 
+type BlockedGlobalRecovery = { local: true } | { local: false; binDir: string };
+
+/**
+ * Offer the two ways out of a global directory that cannot be written, and
+ * carry out the chosen one: install into the project instead, or move npm's
+ * prefix somewhere writable and carry on with the global install, naming the
+ * bin directory the commands will land in. Cancelling throws InitCancelled.
+ *
+ * Runs with nobody to ask never reach the prompt: rewriting the user's npm
+ * prefix and changing where argent gets installed are both decisions to make
+ * with them, not while nobody is watching.
+ */
+async function recoverBlockedGlobalInstall(opts: {
+  target: GlobalInstallTarget;
+  pm: PackageManager;
+  nonInteractive: boolean;
+  acknowledged: boolean;
+  remedies: RemedyContext;
+  startedAt: number;
+  tel: InitTelemetry;
+}): Promise<BlockedGlobalRecovery> {
+  const { target, pm, nonInteractive, acknowledged, remedies, startedAt, tel } = opts;
+
+  const failWith = (message: string): Promise<never> => failGlobalInstall(message, startedAt, tel);
+  const failWithAdvice = (blocked: GlobalInstallTarget): Promise<never> =>
+    failWith(unwritableGlobalTargetMessage(blocked, pm, "install", remedies));
+
+  // npm is the only manager whose global directory argent can relocate.
+  const canMovePrefix = pm === "npm";
+  // A local install needs a package.json to add the devDependency to.
+  const canInstallLocally = remedies.localViable;
+  // A prompt with no terminal behind it never settles: the run would end at a
+  // rendered menu, exit 0, and have installed nothing.
+  const canAsk = !nonInteractive && process.stdin.isTTY === true;
+
+  // Nobody to ask, or nothing to offer them — spell the ways out as commands
+  // instead of opening a prompt whose only option is to give up. init skips its
+  // own mode step on the same two conditions, so an acknowledged choice never
+  // reaches here.
+  if (!canAsk || !canRecoverBlockedGlobal(pm, canInstallLocally)) return failWithAdvice(target);
+
+  if (acknowledged) {
+    // Chosen knowing the block, but for a manager whose directory argent
+    // cannot relocate — the project install was the other option and picking
+    // "Globally" declined it. The choice still happened, so the funnel hears
+    // where it ended.
+    if (!canMovePrefix) {
+      track("installation:global_install_decision", { decision: "unrecoverable" });
+      return failWithAdvice(target);
+    }
+  } else {
+    p.log.warn(blockedGlobalTargetCause(target, pm, "install"));
+
+    const options: Array<{ value: "local" | "prefix" | "cancel"; label: string; hint?: string }> =
+      [];
+    if (canInstallLocally) {
+      options.push({
+        value: "local",
+        label: "Install into this project instead",
+        hint: "a devDependency — no global directory needed",
+      });
+    }
+    if (canMovePrefix) {
+      options.push({
+        value: "prefix",
+        label: `Point npm at ${suggestedNpmPrefix()} and install there`,
+        hint: "its bin directory has to be on your PATH",
+      });
+    }
+    options.push({ value: "cancel", label: "Cancel" });
+
+    const choice = await p.select({ message: "How would you like to proceed?", options });
+
+    if (p.isCancel(choice) || choice === "cancel") {
+      track("installation:global_install_decision", { decision: "cancel" });
+      throw new InitCancelled("global_install");
+    }
+
+    if (choice === "local") {
+      track("installation:global_install_decision", { decision: "install_local" });
+      return { local: true };
+    }
+  }
+
+  track("installation:global_install_decision", { decision: "set_prefix" });
+  const prefix = suggestedNpmPrefix();
+  const spinner = p.spinner();
+  spinner.start(`Pointing npm at ${prefix}...`);
+  try {
+    await runShellCommand({ bin: "npm", args: ["config", "set", "prefix", prefix] });
+  } catch (err) {
+    // Reachable where this recovery exists: home-manager can own the npm user
+    // config as a read-only store symlink, leaving the project install as the
+    // way forward — where there is one.
+    spinner.stop(pc.red("Could not set the npm prefix."));
+    const cause =
+      `npm would not record a global prefix at ${npmUserConfigPath()}, so there is ` +
+      `nowhere writable to install into:\n${err}`;
+    await failWith(withRemedies(cause, [localInstallRemedy(remedies)]));
+  }
+  spinner.stop(`npm prefix set to ${prefix}.`);
+  // The write outlives this run whether or not the install ahead succeeds, and
+  // it lands wherever npm's user config resolves — not always `~/.npmrc`.
+  p.log.info(
+    pc.dim(
+      `Recorded in ${npmUserConfigPath()} — future global installs land there too. ` +
+        `Undo later with ${pc.cyan("npm config delete prefix")}.`
+    )
+  );
+  forgetInheritedNpmPrefix();
+
+  // Confirm rather than assume: a prefix npm accepted but still cannot write to
+  // would fail the install a step later, with npm's error instead of ours.
+  // Repeating "point npm at a writable prefix" here would only send the user
+  // back through the step that just ran.
+  const moved = probeGlobalInstallTarget(pm);
+  if (moved?.blocked) {
+    await failWith(
+      withRemedies(blockedGlobalTargetCause(moved, pm, "install"), [
+        ownableRemedy(moved.dir),
+        localInstallRemedy(remedies),
+      ])
+    );
+  }
+  // npmGlobalBinDir over path.join: one answer for where npm links its commands,
+  // and the prefix write above is what it now reports.
+  return { local: false, binDir: npmGlobalBinDir() ?? path.join(prefix, "bin") };
+}
+
+/**
+ * The cause, then whichever remedies still apply. The recovery's own failures
+ * leave out the remedy that prescribes moving the prefix: it is the step that
+ * just ran.
+ */
+function withRemedies(cause: string, remedies: (string | null)[]): string {
+  const usable = remedies.filter((remedy): remedy is string => remedy !== null);
+  return usable.length === 0 ? cause : `${cause}\n\n${usable.join("\n\n")}`;
+}
+
+/** Ownership, unless Nix would undo the chown at the next rebuild. */
+function ownableRemedy(dir: string): string | null {
+  return isNixStorePath(dir) ? null : ownershipRemedy(dir);
+}
+
+async function failGlobalInstall(
+  message: string,
+  startedAt: number,
+  tel: InitTelemetry
+): Promise<never> {
+  p.log.error(message);
+  await tel.trackPackageAction("fresh_install", startedAt, false, INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+  await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+  process.exit(1);
+}
+
+/**
+ * Stop before an install npm would fail on the one directory the package-
+ * directory preflight does not cover. Returns where nothing was proven.
+ */
+async function confirmGlobalBinWritable(ctx: {
+  pm: PackageManager;
+  remedies: RemedyContext;
+  prefixJustMoved: boolean;
+  startedAt: number;
+  tel: InitTelemetry;
+}): Promise<void> {
+  const blocked = blockedGlobalBinDir(ctx.pm);
+  if (blocked === null) return;
+  await failGlobalInstall(
+    unwritableGlobalBinMessage(blocked, "install", ctx.remedies, ctx.prefixJustMoved),
+    ctx.startedAt,
+    ctx.tel
+  );
+}
+
+/**
+ * Make `binDir` resolvable for the rest of THIS run so the install can be
+ * verified and the configs written here name a binary that resolves, and
+ * report it. The user's own shells still need the line — and argent does not
+ * add it for them: on the Nix-managed machines this exists for, the shell
+ * profile is itself a read-only store symlink. Null when PATH already has it
+ * and there is nothing to say.
+ */
+function adoptGlobalBinDir(binDir: string): string | null {
+  if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir)) return null;
+  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
+  // No command spelled out on Windows: there is no one shell to write it for,
+  // and `setx` truncates a PATH longer than 1024 characters.
+  p.log.warn(
+    process.platform === "win32"
+      ? `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}.`
+      : `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:\n` +
+          `    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
+  );
+  return binDir;
+}
+
 async function runGlobal(opts: {
   fromTar: string | null;
   nonInteractive: boolean;
   version: string;
+  globalTarget: GlobalInstallTarget | null;
+  globalBlockAcknowledged: boolean;
   tel: InitTelemetry;
-}): Promise<string> {
-  const { fromTar, nonInteractive, tel } = opts;
+}): Promise<InstallOutcome> {
+  const { fromTar, nonInteractive, globalTarget, globalBlockAcknowledged, tel } = opts;
   let version = opts.version;
+  let pathHint: string | null = null;
+  let recoveredBinDir: string | null = null;
   const globallyInstalled = isGloballyInstalled();
+  // Without a global install there is no `argent` on PATH: that run came in
+  // through `npx @swmansion/argent init`, so a remedy naming a bare `argent`
+  // would be `command not found` for the person reading it.
+  const remedies: RemedyContext = {
+    localViable: hasProjectPackageJson(resolveProjectRoot(process.cwd())),
+    argentOnPath: globallyInstalled,
+  };
 
   if (!globallyInstalled) {
+    // Nowhere to install to: the manager's global directory cannot be written
+    // (a Nix-managed toolchain puts it in the immutable store). Where a way
+    // out can be carried out, ask rather than stop here.
+    const pm = detectPackageManager();
+    const preflightStartedAt = performance.now();
+    if (globalTarget?.blocked) {
+      const recovery = await recoverBlockedGlobalInstall({
+        target: globalTarget,
+        pm,
+        nonInteractive,
+        acknowledged: globalBlockAcknowledged,
+        remedies,
+        startedAt: preflightStartedAt,
+        tel,
+      });
+      if (recovery.local) {
+        await installLocally({ fromTar, tel });
+        return { version: localVersion(version), installMode: "local", pathHint: null };
+      }
+      // The prefix now points somewhere writable — fall through and install.
+      recoveredBinDir = recovery.binDir;
+    }
+    // Outside the recovery too: its `npm config set prefix` outlives the run
+    // that wrote it, so a later init installs into that prefix with nothing but
+    // the package directory preflighted. Ahead of adopting the directory, so a
+    // run that is about to be refused never advertises it.
+    await confirmGlobalBinWritable({
+      pm,
+      remedies,
+      prefixJustMoved: recoveredBinDir !== null,
+      startedAt: preflightStartedAt,
+      tel,
+    });
+    if (recoveredBinDir !== null) pathHint = adoptGlobalBinDir(recoveredBinDir);
+
     // No consent prompt here: choosing "Globally" (or --global) in the
     // install-mode step directly above IS the consent to install it.
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
@@ -232,6 +539,15 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
+      // The recovery's `npm config set prefix` outlives its run, so a later
+      // init installs into that prefix without ever entering the recovery —
+      // and the MCP entries written below name a bare `argent`. Ahead of the
+      // version read, which resolves through PATH: this branch fires only when
+      // that read would have missed the install it just made.
+      if (pathHint === null && pm === "npm" && !isGloballyInstalled()) {
+        const binDir = npmGlobalBinDir();
+        if (binDir !== null) pathHint = adoptGlobalBinDir(binDir);
+      }
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
@@ -247,13 +563,26 @@ async function runGlobal(opts: {
       await tel.finalize(INSTALL_GLOBAL_PACKAGE_FAILED);
       process.exit(1);
     }
-    return version;
+    return { version, installMode: "global", pathHint };
   }
 
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
     const pm = detectPackageManager();
+    // Replacing the existing install writes to the same unwritable directories a
+    // fresh one would.
+    const blockedCause = blockedGlobalInstallMessage(
+      pm,
+      getGloballyInstalledPackageRoot(),
+      "install",
+      remedies
+    );
+    if (blockedCause !== null) {
+      p.log.error(blockedCause);
+      await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+      process.exit(1);
+    }
     const cmd = globalInstallCommand(pm, fromTar);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
@@ -269,7 +598,7 @@ async function runGlobal(opts: {
       await tel.finalize(INSTALL_FROM_TAR_PACKAGE_FAILED);
       process.exit(1);
     }
-    return version;
+    return { version, installMode: "global", pathHint };
   }
 
   // Compare the registry against the GLOBAL install's version, never the
@@ -303,6 +632,17 @@ async function runGlobal(opts: {
   } else if (latest && isNewerVersion(latest, version)) {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
+    const updatePm = detectPackageManager();
+    // Probed only on the branch that would run the install — a --yes run skips
+    // the update outright and must not pay for the package manager's query.
+    const blockedCause = nonInteractive
+      ? null
+      : blockedGlobalInstallMessage(
+          updatePm,
+          getGloballyInstalledPackageRoot(),
+          "update",
+          remedies
+        );
     if (nonInteractive) {
       // Emit the same update_decision as the interactive branches so the
       // upgrade funnel isn't blind to --yes/CI runs.
@@ -312,6 +652,22 @@ async function runGlobal(opts: {
         decision: "skip",
       });
       await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
+    } else if (blockedCause !== null) {
+      // Offering an update argent cannot perform asks a question whose "yes"
+      // only produces an EACCES dump. init's real work still succeeds against
+      // the installed version, so this warns rather than aborting.
+      p.log.warn(blockedCause);
+      track("installation:update_decision", {
+        from_major: fromMajor,
+        to_major: toMajor,
+        decision: "skip",
+      });
+      await tel.trackPackageAction(
+        "update_failed",
+        packageActionStartedAt,
+        false,
+        INSTALL_GLOBAL_PREFIX_UNWRITABLE
+      );
     } else {
       const updateChoice = await p.select({
         message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
@@ -337,8 +693,7 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
-        const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+        const cmd = globalInstallCommand(updatePm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
         updateSpinner.start(`Updating to v${latest}...`);
@@ -377,5 +732,5 @@ async function runGlobal(opts: {
     await tel.trackPackageAction("no_update", packageActionStartedAt, true);
   }
 
-  return version;
+  return { version, installMode: "global", pathHint };
 }

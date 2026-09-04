@@ -149,7 +149,15 @@ export const ALLOWED: ValidatorMap = {
     install_mode: INSTALL_MODE,
   },
   "installation:global_install_decision": {
-    decision: oneOf(["install", "cancel", "already_installed"] as const),
+    // `from_tar` is intentionally absent; the installer skips that dev path.
+    decision: oneOf([
+      "install",
+      "cancel",
+      "already_installed",
+      "install_local",
+      "set_prefix",
+      "unrecoverable",
+    ] as const),
   },
   "installation:update_decision": {
     from_major: MAJOR_VERSION,

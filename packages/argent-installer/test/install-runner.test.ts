@@ -1,8 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runInstall } from "../src/install-runner.js";
+import * as os from "node:os";
+import * as path from "node:path";
+import { runInstall, type InstallOutcome } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isLocallyInstalled } from "../src/utils.js";
-import type { InitTelemetry } from "../src/init-telemetry.js";
+import {
+  detectPackageManager,
+  getGloballyInstalledVersion,
+  getLatestVersion,
+  hasProjectPackageJson,
+  isGloballyInstalled,
+  isLocallyInstalled,
+} from "../src/utils.js";
+import {
+  probeGlobalInstallTarget,
+  blockedGlobalBinDir,
+  blockedGlobalInstallMessage,
+  npmGlobalBinDir,
+} from "../src/global-prefix.js";
+import { InitCancelled } from "../src/init-args.js";
+import { log, select } from "@clack/prompts";
+import { track } from "@argent/telemetry";
+import { INSTALL_GLOBAL_PREFIX_UNWRITABLE, type InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
 // don't-retry rules (missing binary, signal-terminated install), the
@@ -27,6 +45,23 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
+    detectPackageManager: vi.fn(() => "npm" as const),
+    isGloballyInstalled: vi.fn(() => false),
+    getGloballyInstalledVersion: vi.fn(() => "2.0.0"),
+    getGloballyInstalledPackageRoot: vi.fn(() => "/opt/argent/lib/node_modules/@swmansion/argent"),
+    getLatestVersion: vi.fn(async () => null),
+  };
+});
+
+// Only the probes are faked — the messages the recovery prints are the real ones.
+vi.mock("../src/global-prefix.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/global-prefix.js")>();
+  return {
+    ...original,
+    probeGlobalInstallTarget: vi.fn(),
+    blockedGlobalBinDir: vi.fn(() => null),
+    blockedGlobalInstallMessage: vi.fn(() => null),
+    npmGlobalBinDir: vi.fn(() => null),
   };
 });
 
@@ -37,10 +72,16 @@ vi.mock("@clack/prompts", async (importOriginal) => {
     ...actual,
     spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() })),
     log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    select: vi.fn(),
+    cancel: vi.fn(),
   };
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+
+// The messages are styled with picocolors, which stays on under CI.
+// eslint-disable-next-line no-control-regex
+const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
@@ -58,12 +99,14 @@ function makeTel(): InitTelemetry & { trackPackageAction: ReturnType<typeof vi.f
   } as unknown as InitTelemetry & { trackPackageAction: ReturnType<typeof vi.fn> };
 }
 
-function localInstall(tel: InitTelemetry): Promise<string> {
+function localInstall(tel: InitTelemetry): Promise<InstallOutcome> {
   return runInstall({
     installMode: "local",
     fromTar: null,
     nonInteractive: true,
     version: "0.0.0",
+    globalTarget: null,
+    globalBlockAcknowledged: false,
     tel,
   });
 }
@@ -92,7 +135,11 @@ describe("installLocally failure handling", () => {
         vi.mocked(isLocallyInstalled).mockReturnValue(true);
       });
 
-    await expect(localInstall(tel)).resolves.toBe("1.0.0");
+    await expect(localInstall(tel)).resolves.toEqual({
+      version: "1.0.0",
+      installMode: "local",
+      pathHint: null,
+    });
 
     expect(runShellCommand).toHaveBeenCalledTimes(2);
     expect(tel.trackPackageAction).toHaveBeenCalledWith(
@@ -186,6 +233,668 @@ describe("installLocally failure handling", () => {
       expect(runShellCommand).toHaveBeenCalledTimes(2);
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+});
+
+// The Nix case: npm's global directory is inside the read-only store. Every way
+// out is something init can carry out, so an interactive run offers them.
+describe("a global install whose target directory cannot be written", () => {
+  const blocked = {
+    dir: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
+    blocked: true,
+    nixStore: true,
+  };
+  // What the re-probe sees once `npm config set prefix` has run.
+  const writableAfterMove = {
+    dir: "/home/dev/.npm-global/lib/node_modules",
+    blocked: false,
+    nixStore: false,
+  };
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let savedPath: string | undefined;
+  let savedIsTty: boolean | undefined;
+  const binDir = path.join(os.homedir(), ".npm-global", "bin");
+
+  const globalInstall = (
+    tel: InitTelemetry,
+    opts: { nonInteractive?: boolean; acknowledged?: boolean } = {}
+  ): Promise<InstallOutcome> =>
+    runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: opts.nonInteractive ?? false,
+      version: "0.0.0",
+      globalTarget: blocked,
+      globalBlockAcknowledged: opts.acknowledged ?? false,
+      tel,
+    });
+
+  const decisions = (): string[] =>
+    vi
+      .mocked(track)
+      .mock.calls.filter(([event]) => event === "installation:global_install_decision")
+      .map(([, props]) => (props as { decision: string }).decision);
+
+  beforeEach(() => {
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined as never);
+    vi.mocked(select).mockReset();
+    vi.mocked(track).mockClear();
+    vi.mocked(log.error).mockReset();
+    vi.mocked(log.warn).mockReset();
+    vi.mocked(hasProjectPackageJson).mockReturnValue(true);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(null);
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(null);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(null);
+    // Implementations outlive vi.clearAllMocks, so every mock a test in here
+    // reshapes has to be put back — one makes the version read PATH-sensitive,
+    // another moves off npm.
+    vi.mocked(getGloballyInstalledVersion).mockReturnValue("2.0.0");
+    vi.mocked(detectPackageManager).mockReturnValue("npm");
+    savedPath = process.env.PATH;
+    // The prompts below only exist for a user who can answer them.
+    savedIsTty = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    process.env.PATH = "/usr/bin";
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    process.env.PATH = savedPath;
+    process.stdin.isTTY = savedIsTty as boolean;
+  });
+
+  it("installs into the project when that recovery is chosen", async () => {
+    vi.mocked(select).mockResolvedValue("local" as never);
+    vi.mocked(isLocallyInstalled).mockReturnValue(true);
+
+    await expect(globalInstall(makeTel())).resolves.toEqual({
+      version: "1.0.0",
+      installMode: "local",
+      pathHint: null,
+    });
+
+    // The devDependency install ran, and no global install was attempted.
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands).toEqual([expect.objectContaining({ bin: "pnpm" })]);
+    expect(commands.flatMap((c) => c.args)).not.toContain("-g");
+    expect(decisions()).toEqual(["install_local"]);
+  });
+
+  it("offers both recoveries, and cancelling, when both can be carried out", async () => {
+    vi.mocked(select).mockResolvedValue("local" as never);
+
+    await globalInstall(makeTel());
+
+    const [{ options }] = vi.mocked(select).mock.calls[0] as [
+      { options: Array<{ value: string }> },
+    ];
+    expect(options.map((o) => o.value)).toEqual(["local", "prefix", "cancel"]);
+  });
+
+  it("moves the npm prefix, then installs globally, when that recovery is chosen", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    const outcome = await globalInstall(makeTel());
+
+    expect(outcome.installMode).toBe("global");
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands[0]).toEqual({
+      bin: "npm",
+      args: ["config", "set", "prefix", expect.stringContaining(".npm-global")],
+    });
+    expect(commands[1]).toEqual(
+      expect.objectContaining({ bin: "npm", args: expect.arrayContaining(["-g"]) })
+    );
+    // On PATH for the rest of the run, so the install can be verified here —
+    // and reported, because the configs init writes run a bare `argent` that
+    // the user's own shells cannot find until they add it too.
+    expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+    // The post-install repair must not run on top of this: adoptGlobalBinDir
+    // answers null for a directory already on PATH, which would drop the hint
+    // the Summary prints.
+    expect(outcome.pathHint).toBe(binDir);
+    expect(decisions()).toEqual(["set_prefix", "install"]);
+  });
+
+  it("stops when the moved prefix can be written but its bin directory cannot", async () => {
+    // `npm install -g` also links its commands into <prefix>/bin, which the
+    // package-directory probe never walks.
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(binDir);
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Only the prefix move ran — no install against a directory npm cannot
+    // link into.
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands).toEqual([
+      expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
+    ]);
+    expect(vi.mocked(blockedGlobalBinDir).mock.lastCall).toEqual(["npm"]);
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(message).toContain(`it cannot write to ${binDir}`);
+    // A directory the user already chose: pointing npm at another one is what
+    // just ran, so taking ownership is the way out this path can still offer.
+    expect(message).toContain(`sudo chown -R $(whoami) ${binDir}`);
+    expect(message).toContain("npx @swmansion/argent init --local");
+    // Refused before advertised: telling the user to put a directory on their
+    // PATH and then refusing it in the next line reads as two verdicts.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
+    expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
+    expect(process.env.PATH?.split(path.delimiter)).not.toContain(binDir);
+  });
+
+  it("does not prescribe the prefix move it just carried out", async () => {
+    // The blocked directory is the nearest EXISTING ancestor, so a prefix whose
+    // bin directory does not exist yet reports one above it — which the
+    // already-pointed-there bail does not cover.
+    const aboveTheMove = os.homedir();
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(aboveTheMove);
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain(`it cannot write to ${aboveTheMove}`);
+    expect(failure).not.toContain("npm config set prefix");
+  });
+
+  it("prescribes the prefix move on a run that never made one", async () => {
+    // The same directory, reached without the recovery: moving the prefix is
+    // untried here, and it is the remedy that works.
+    const blockedBin = "/opt/shared/bin";
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(blockedBin);
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain("npm config set prefix");
+  });
+
+  it("stops on a bin directory left unwritable by a prefix an earlier run set", async () => {
+    // Nothing preflights that prefix: the package directory under it is
+    // writable, so the recovery never opens and only this check is left.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(blockedGlobalBinDir).mockReturnValue(binDir);
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    expect(select).not.toHaveBeenCalled();
+    expect(vi.mocked(runShellCommand).mock.calls).toEqual([]);
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).toContain(`it cannot write to ${binDir}`);
+    // npm already points at the prefix this directory is under, so prescribing
+    // the move would be a no-op ahead of the remedy that works.
+    expect(failure).not.toContain("npm config set prefix");
+    expect(failure).toContain(`sudo chown -R $(whoami) ${binDir}`);
+  });
+
+  it("reports a bin directory the shells cannot see, with no recovery involved", async () => {
+    // The recovery's `npm config set prefix` outlives its run, so a later init
+    // installs into that prefix without ever entering the recovery.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(outcome.pathHint).toBe(binDir);
+    expect(process.env.PATH?.split(path.delimiter)).toContain(binDir);
+    // The line is the whole point: PATH here is this process's, and the user's
+    // own shells only learn about the directory if they are told.
+    const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
+    expect(warning).toContain(`Add ${binDir} to your PATH`);
+    expect(warning).toContain(`export PATH="${binDir}:$PATH"`);
+  });
+
+  it("says nothing about PATH for an install the shells can already find", async () => {
+    // The repair exists for a version read that would have missed the install
+    // it just made; where the read finds it, there is nothing to add and
+    // nothing to spend a query on.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(isGloballyInstalled).mockImplementation(
+      () => vi.mocked(runShellCommand).mock.calls.length > 0
+    );
+    // A delta, not toHaveBeenCalled: this mock keeps its history across the
+    // tests above.
+    const queriesBefore = vi.mocked(npmGlobalBinDir).mock.calls.length;
+    try {
+      const outcome = await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+
+      expect(outcome.pathHint).toBeNull();
+      expect(vi.mocked(npmGlobalBinDir).mock.calls.length).toBe(queriesBefore);
+      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
+      expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
+    } finally {
+      vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    }
+  });
+
+  it("spells out no shell command on Windows, where there is no one shell", async () => {
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+
+    const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
+    expect(warning).toContain(binDir);
+    expect(warning).not.toContain("export PATH=");
+  });
+
+  it("does not answer a non-npm install with npm's global bin directory", async () => {
+    // The remedy is `npm prefix -g`; pointing a pnpm user at it names a
+    // directory their install did not go into.
+    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(outcome.pathHint).toBeNull();
+    expect(process.env.PATH?.split(path.delimiter)).not.toContain(binDir);
+  });
+
+  it("reads the installed version through the PATH it just repaired", async () => {
+    // getGloballyInstalledVersion resolves through PATH, and this branch fires
+    // only when that resolution has already failed — so reading before the
+    // repair reports the running copy's version for the one just installed, and
+    // pins the skills tag to it.
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(getGloballyInstalledVersion).mockImplementation(() =>
+      (process.env.PATH ?? "").split(path.delimiter).includes(binDir) ? "9.9.9" : null
+    );
+
+    const outcome = await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      globalTarget: writableAfterMove,
+      globalBlockAcknowledged: false,
+      tel: makeTel(),
+    });
+
+    expect(outcome.version).toBe("9.9.9");
+  });
+
+  it("reports no PATH step when the new bin directory is already on it", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    process.env.PATH = `${binDir}${path.delimiter}/usr/bin`;
+
+    expect((await globalInstall(makeTel())).pathHint).toBeNull();
+  });
+
+  it("stops when the moved prefix is not writable either, without prescribing the move again", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    // The blocked target the recovery starts from is passed in, not probed —
+    // the one call on this path is the re-probe after the move.
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue({
+      dir: "/home/dev/.npm-global/lib/node_modules",
+      blocked: true,
+      nixStore: false,
+    });
+    const tel = makeTel();
+
+    await expect(globalInstall(tel)).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Only `npm config set prefix` ran — no install against a directory that
+    // would have failed the same way.
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands).toEqual([
+      expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
+    ]);
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(message).toContain("/home/dev/.npm-global/lib/node_modules");
+    expect(message).toContain("npx @swmansion/argent init --local");
+    expect(message).not.toContain("npm config set prefix");
+    expect(tel.trackPackageAction).toHaveBeenCalledWith(
+      "fresh_install",
+      expect.any(Number),
+      false,
+      INSTALL_GLOBAL_PREFIX_UNWRITABLE
+    );
+  });
+
+  // ~/.npmrc is itself a read-only store symlink on a home-manager machine.
+  // The probe is staged writable so that a run which failed to move the prefix
+  // and carried on anyway would be visible as an install.
+  it("stops with the per-project way out when npm will not take the new prefix", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError("EACCES ~/.npmrc", 1, null));
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands).toEqual([
+      expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
+    ]);
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    // npm's own error alone names neither argent nor a way forward.
+    expect(message).toContain("would not record a global prefix");
+    expect(message).toContain("EACCES ~/.npmrc");
+    expect(message).toContain("npx @swmansion/argent init --local");
+  });
+
+  // `npx @swmansion/argent init` inherits npm's own prefix as an environment
+  // variable, which outranks the ~/.npmrc the move just wrote — the install
+  // would go straight back to the directory that could not be written.
+  it("drops the prefix inherited from the npm that launched it", async () => {
+    process.env.npm_config_prefix = "/nix/store/abc-nodejs-22.16.0";
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    try {
+      await globalInstall(makeTel());
+
+      expect(process.env.npm_config_prefix).toBeUndefined();
+    } finally {
+      delete process.env.npm_config_prefix;
+    }
+  });
+
+  it("installs nothing when the user cancels", async () => {
+    vi.mocked(select).mockResolvedValue("cancel" as never);
+    const tel = makeTel();
+
+    // Cancelling is a choice, not a failure: it unwinds like every other
+    // cancelled init prompt rather than exiting non-zero on a failure signal.
+    await expect(globalInstall(tel)).rejects.toThrow(InitCancelled);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(tel.finalize).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(decisions()).toEqual(["cancel"]);
+  });
+
+  it("does not offer the project install where there is no package.json to add it to", async () => {
+    vi.mocked(hasProjectPackageJson).mockReturnValue(false);
+    vi.mocked(select).mockResolvedValue("cancel" as never);
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(InitCancelled);
+
+    const [{ options }] = vi.mocked(select).mock.calls[0] as [
+      { options: Array<{ value: string }> },
+    ];
+    expect(options.map((o) => o.value)).toEqual(["prefix", "cancel"]);
+  });
+
+  it("never prompts under --yes — it fails with the remedies spelled out", async () => {
+    const tel = makeTel();
+
+    await expect(globalInstall(tel, { nonInteractive: true })).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(select).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+    const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(message).toContain("read-only Nix store");
+    // `argent` is not on PATH here by construction: this run came in through
+    // `npx @swmansion/argent init`, so a bare `argent` would not resolve.
+    expect(message).toContain("npx @swmansion/argent init --local");
+    expect(message).not.toMatch(/^\s*argent init --local$/m);
+    expect(tel.trackPackageAction).toHaveBeenCalledWith(
+      "fresh_install",
+      expect.any(Number),
+      false,
+      INSTALL_GLOBAL_PREFIX_UNWRITABLE
+    );
+  });
+
+  // A menu nobody can answer never settles: the run would end at a rendered
+  // prompt, exit 0, and have installed nothing.
+  it("never prompts without a terminal to answer on", async () => {
+    process.stdin.isTTY = false;
+
+    await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(select).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+  });
+
+  // The install-mode step already showed the cause and said "Globally" moves
+  // npm's prefix here; re-asking would put the same question on screen twice.
+  it("moves the prefix without re-asking when the mode step already said so", async () => {
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+
+    const outcome = await globalInstall(makeTel(), { acknowledged: true });
+
+    expect(select).not.toHaveBeenCalled();
+    // The PATH advice still warns; the cause the mode step already gave does not.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => m as string);
+    expect(warnings.filter((m) => m.includes("read-only Nix store"))).toEqual([]);
+    expect(outcome.installMode).toBe("global");
+    const commands = vi.mocked(runShellCommand).mock.calls.map(([cmd]) => cmd);
+    expect(commands[0]).toEqual({
+      bin: "npm",
+      args: ["config", "set", "prefix", expect.stringContaining(".npm-global")],
+    });
+    expect(commands[1]).toEqual(
+      expect.objectContaining({ bin: "npm", args: expect.arrayContaining(["-g"]) })
+    );
+  });
+
+  // "Globally" is still offered for a manager argent cannot relocate — picking
+  // it leaves nothing to carry out, and npm's knob is not pnpm's to set.
+  it("does not move a prefix for a manager it cannot relocate, even when told to install globally", async () => {
+    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
+    try {
+      await expect(globalInstall(makeTel(), { acknowledged: true })).rejects.toThrow(ExitCalled);
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(runShellCommand).not.toHaveBeenCalled();
+      // The user answered the warned mode step, so the funnel must hear which
+      // way their choice went — like every other branch of this step.
+      expect(decisions()).toEqual(["unrecoverable"]);
+    } finally {
+      vi.mocked(detectPackageManager).mockReturnValue("npm");
+    }
+  });
+
+  // The prefix write outlives the run whether or not the install it enables
+  // succeeds, so say so — and how to undo it — while it is being made.
+  it("says the prefix move persists, and how to undo it", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+
+    await globalInstall(makeTel());
+
+    const infos = vi.mocked(log.info).mock.calls.map(([m]) => m as string);
+    expect(infos.some((m) => m.includes("npm config delete prefix"))).toBe(true);
+  });
+
+  // Measured on npm 11: a plain PREFIX is only the default for an npmrc with
+  // no prefix key, so once the move has written that key npm ignores it. It is
+  // a general-purpose variable the install and every step after it inherit,
+  // and dropping it would be a change to a run argent does not own.
+  it("leaves a plain PREFIX alone — it cannot outrank the prefix just written", async () => {
+    process.env.PREFIX = "/usr/local";
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    try {
+      await globalInstall(makeTel());
+
+      expect(process.env.PREFIX).toBe("/usr/local");
+    } finally {
+      delete process.env.PREFIX;
+    }
+  });
+
+  // A working install that simply cannot be upgraded here: offering the update
+  // would ask a question whose "yes" only produces an EACCES dump, so init says
+  // why and carries on with the version that is installed.
+  it("warns instead of offering an update it cannot install, and still finishes", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(true);
+    vi.mocked(getLatestVersion).mockReturnValue("9.9.9");
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(
+      "npm cannot update @swmansion/argent globally: it cannot write to /nix/store/x/bin."
+    );
+    const tel = makeTel();
+    try {
+      const outcome = await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: null,
+        globalBlockAcknowledged: false,
+        tel,
+      });
+
+      expect(outcome.installMode).toBe("global");
+      expect(select).not.toHaveBeenCalled();
+      expect(runShellCommand).not.toHaveBeenCalled();
+      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => m as string);
+      expect(warnings.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(
+        true
+      );
+      // The upgrade funnel hears about it, like every other update branch.
+      expect(track).toHaveBeenCalledWith(
+        "installation:update_decision",
+        expect.objectContaining({ decision: "skip" })
+      );
+      // Not attempted is not the same as declined: the code separates "we did
+      // not try" from "npm tried and failed".
+      expect(tel.trackPackageAction).toHaveBeenCalledWith(
+        "update_failed",
+        expect.any(Number),
+        false,
+        INSTALL_GLOBAL_PREFIX_UNWRITABLE
+      );
+    } finally {
+      vi.mocked(isGloballyInstalled).mockReturnValue(false);
+      vi.mocked(getLatestVersion).mockImplementation((() => null) as never);
+    }
+  });
+
+  // Replacing an existing install writes into the same unwritable directory a
+  // fresh one would — the --from path preflights too.
+  it("refuses a --from reinstall whose target cannot be written", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(true);
+    vi.mocked(blockedGlobalInstallMessage).mockReturnValue(
+      "npm cannot install @swmansion/argent globally: it cannot write to /nix/store/x/bin."
+    );
+    const tel = makeTel();
+    try {
+      await expect(
+        runInstall({
+          installMode: "global",
+          fromTar: "/tmp/argent.tgz",
+          nonInteractive: false,
+          version: "0.0.0",
+          globalTarget: null,
+          globalBlockAcknowledged: false,
+          tel,
+        })
+      ).rejects.toThrow(ExitCalled);
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(runShellCommand).not.toHaveBeenCalled();
+      expect(tel.finalize).toHaveBeenCalledWith(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+      // The installed package's own directory is the fallback for a manager
+      // whose global-directory query fails — pnpm, yarn and bun all can.
+      // lastCall, not toHaveBeenCalledWith: this mock keeps its history across
+      // the tests above, which would satisfy the matcher on their own calls.
+      expect(vi.mocked(blockedGlobalInstallMessage).mock.lastCall).toEqual([
+        "npm",
+        "/opt/argent/lib/node_modules/@swmansion/argent",
+        "install",
+        { localViable: true, argentOnPath: true },
+      ]);
+    } finally {
+      vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    }
+  });
+
+  // pnpm's global directory argent cannot relocate, and with no package.json
+  // there is no devDependency to fall back to — a prompt here would offer
+  // nothing but "Cancel".
+  it("spells out the remedies instead of prompting when it can carry out neither", async () => {
+    vi.mocked(detectPackageManager).mockReturnValue("pnpm");
+    vi.mocked(hasProjectPackageJson).mockReturnValue(false);
+    try {
+      await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(select).not.toHaveBeenCalled();
+      expect(runShellCommand).not.toHaveBeenCalled();
+      const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+      // The per-project install is not a way out with no package.json to hold
+      // the devDependency: printing it would send the reader into
+      // installLocally's precondition error, which points back at --global.
+      expect(message).not.toContain("init --local");
+      expect(message).toContain("Point pnpm at a global directory you can write to");
+    } finally {
+      vi.mocked(detectPackageManager).mockReturnValue("npm");
     }
   });
 });

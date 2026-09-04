@@ -1,0 +1,128 @@
+name: Nix Install E2E
+
+# Regression guard for installing and updating argent on a Nix-managed
+# toolchain. npm's global prefix is derived from the node binary, so under Nix
+# it is a store path the developer running the install cannot write, and
+# `npm install -g` fails with EACCES. The job asserts that argent preflights
+# that instead of surfacing npm's stack trace, that its printed remedies
+# actually work, and — via the preconditions in run-e2e.sh — that the
+# environment really is Nix-backed, so the suite cannot pass vacuously.
+#
+# Manual + on-change trigger only.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    # The whole installer and the CLI that dispatches to it, not just the files
+    # that implement the preflight: every scenario runs through `argent init` /
+    # `argent update`, and its assertions are strings the installer builds
+    # (PACKAGE_NAME, the flag parsing, the captured npm stderr). Listing only
+    # the preflight files let a change to any of those land without a run.
+    paths:
+      - "packages/argent-installer/src/**"
+      - "packages/argent/src/**"
+      - "packages/argent/scripts/**"
+      # The manifest names the bin the scenarios invoke and the version they
+      # assert on; the lockfile pins picocolors and @clack/prompts, whose
+      # colouring and wrapping every string assertion is written against.
+      - "packages/argent/package.json"
+      - "package-lock.json"
+      - "scripts/download-simulator-server.sh"
+      - "scripts/download-native-binaries.sh"
+      - "scripts/download-trace-processor.sh"
+      - "scripts/ci/nix-install/**"
+      - ".github/workflows/nix-install-e2e.yml"
+
+# A 30-minute job: a superseded push should not keep a runner for its whole run.
+concurrency:
+  group: nix-install-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nix-install-e2e:
+    name: Install + update argent under Nix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # The tarball under test is the real published shape, built from this
+      # branch — the bundle step needs the downloaded runtime assets, exactly
+      # as in build-package-artifact.yml.
+      - name: Download signed simulator-server binary
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download signed native binaries
+        run: bash scripts/download-native-binaries.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+      - run: npx tsc --build
+      - run: npm run build -w @swmansion/argent
+
+      - name: Pack the argent tarball
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkg"
+          npm pack -w @swmansion/argent --pack-destination "$RUNNER_TEMP/pkg"
+          echo "ARGENT_TGZ=$(ls "$RUNNER_TEMP"/pkg/*.tgz)" >> "$GITHUB_ENV"
+
+      - name: Install Nix
+        # Pinned: this runs the Nix installer under sudo on untrusted `pull_request`.
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+
+      # Node for the scenarios comes from the fixture project's own toolchain
+      # pin, so the prefix under test is a genuine store path.
+      - name: Build the project's Nix toolchain
+        run: nix-build scripts/ci/nix-install/project/toolchain.nix -o "$RUNNER_TEMP/nix-node"
+
+      - name: Scenarios A-C (no global install yet)
+        run: |
+          export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
+          bash scripts/ci/nix-install/run-e2e.sh preinstall
+        env:
+          ARGENT_E2E_WORK: ${{ runner.temp }}/nix-e2e-logs
+
+      # The state the bug report came from: a global argent inside the store,
+      # which only root can put there.
+      - name: Seed a global install into the Nix store
+        run: |
+          export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
+          sudo env "PATH=$PATH" npm install -g --omit=optional --ignore-scripts "$ARGENT_TGZ"
+
+      - name: Scenarios D-E (update and reinstall over the store-resident install)
+        run: |
+          export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
+          bash scripts/ci/nix-install/run-e2e.sh update
+        env:
+          ARGENT_E2E_WORK: ${{ runner.temp }}/nix-e2e-logs
+
+      # A failure here names the assertion but not the CLI output behind it,
+      # and this job is the only place the Nix toolchain exists.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nix-install-e2e-logs
+          # The logs only — the same directory holds each scenario's scratch
+          # HOME and project, node_modules and all.
+          path: ${{ runner.temp }}/nix-e2e-logs/*.log
+          if-no-files-found: warn
+          retention-days: 7

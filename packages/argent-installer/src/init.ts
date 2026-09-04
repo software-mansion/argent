@@ -15,7 +15,9 @@ import {
   resolveProjectRoot,
   resolveInstallModeFromFlags,
   InstallModeFlagError,
+  hasProjectPackageJson,
   isDeclaredLocally,
+  isGloballyInstalled,
   readInstallRecord,
   writeInstallRecord,
   removeInstallRecord,
@@ -29,7 +31,8 @@ import {
   INSTALL_MODE_FLAG_CONFLICT,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
-import { promptInstallMode } from "./init-mode-prompt.js";
+import { promptInstallMode, type BlockedGlobalInstall } from "./init-mode-prompt.js";
+import { canRecoverBlockedGlobal, probeGlobalInstallTarget } from "./global-prefix.js";
 import { runInstall } from "./install-runner.js";
 import { chooseAdapters } from "./init-adapters.js";
 import { chooseScope, type Scope } from "./init-scope.js";
@@ -104,12 +107,58 @@ export async function init(args: string[]): Promise<void> {
       throw err;
     }
 
-    tel.installMode = modeFromFlags ?? (await promptInstallMode(recordedMode ?? "global"));
+    // Probed once and used both to describe the choice and to carry it out, so
+    // the prompt cannot promise something the install then refuses. Skipped
+    // where no FRESH global install can happen — it costs a package-manager
+    // query, and the reinstall and update paths probe for themselves.
+    const globalTarget =
+      modeFromFlags !== "local" && !isGloballyInstalled()
+        ? probeGlobalInstallTarget(detectPackageManager())
+        : null;
+    const blockedGlobal: BlockedGlobalInstall | null = globalTarget?.blocked
+      ? { target: globalTarget, pm: detectPackageManager() }
+      : null;
+
+    // Two ways a blocked global install leaves nothing to ask: no terminal for
+    // the menu to settle on, and nothing argent could carry out even if it were
+    // answered. Fall back to what the project already recorded, the same answer
+    // resolveInstallModeFromFlags gives `--yes` for this situation; without a
+    // record the global path makes the install step below say why, with the
+    // remedies spelled out, instead of offering a choice that ends there.
+    const skipBlockedModePrompt =
+      blockedGlobal !== null &&
+      (process.stdin.isTTY !== true ||
+        !canRecoverBlockedGlobal(blockedGlobal.pm, hasProjectPackageJson(initProjectRoot)));
+    tel.installMode =
+      modeFromFlags ??
+      (skipBlockedModePrompt
+        ? (recordedMode ?? "global")
+        : await promptInstallMode(recordedMode ?? "global", blockedGlobal));
     track("installation:install_mode_decision", { install_mode: tel.installMode });
 
-    // `--local --no-telemetry`: the global opt-out above only covers this
-    // machine. A local install is meant to be committed, so also record the
-    // opt-out in the project config — `false` there wins on every clone.
+    // Step 0 — install / update check.
+
+    const installed = await runInstall({
+      installMode: tel.installMode,
+      fromTar: parsed.fromTar,
+      nonInteractive: parsed.nonInteractive,
+      version,
+      globalTarget,
+      globalBlockAcknowledged:
+        modeFromFlags === null && blockedGlobal !== null && !skipBlockedModePrompt,
+      tel,
+    });
+    version = installed.version;
+    // An unwritable global directory can send a global install to the project
+    // instead; every step below configures the install that exists, not the one
+    // that was asked for.
+    tel.installMode = installed.installMode;
+
+    // `--no-telemetry` with a local install: the global opt-out above only
+    // covers this machine. A local install is meant to be committed, so also
+    // record the opt-out in the project config — `false` there wins on every
+    // clone. Reads the mode the install landed in, which a recovery can have
+    // changed from the one that was asked for.
     let wroteProjectTelemetryOptOut = false;
     if (parsed.noTelemetry && tel.installMode === "local") {
       try {
@@ -123,16 +172,6 @@ export async function init(args: string[]): Promise<void> {
         p.log.warn(`Could not write the project telemetry opt-out: ${err}`);
       }
     }
-
-    // Step 0 — install / update check.
-
-    version = await runInstall({
-      installMode: tel.installMode,
-      fromTar: parsed.fromTar,
-      nonInteractive: parsed.nonInteractive,
-      version,
-      tel,
-    });
 
     p.log.step(pc.bold("Step 1: MCP Server Configuration"));
 
@@ -278,6 +317,7 @@ export async function init(args: string[]): Promise<void> {
 
     printSummary({
       installMode: tel.installMode,
+      pathHint: installed.pathHint,
       selectedAdapters: writtenAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
@@ -332,6 +372,8 @@ function sanitizeEditorName(raw: string): string {
 
 interface SummaryArgs {
   installMode: InstallMode;
+  /** Bin directory the configured `argent` command lives in but PATH lacks. */
+  pathHint: string | null;
   selectedAdapters: McpConfigAdapter[];
   scope: Scope;
   allowlistEnabled: boolean;
@@ -343,6 +385,7 @@ interface SummaryArgs {
 
 function printSummary({
   installMode,
+  pathHint,
   selectedAdapters,
   scope,
   allowlistEnabled,
@@ -359,6 +402,15 @@ function printSummary({
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
     `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
   ];
+
+  if (pathHint !== null) {
+    // The configs above run a bare `argent`, and an editor started from the
+    // desktop never sees this run's PATH — so this is the step between a
+    // finished init and a server that actually starts.
+    summaryLines.push(
+      `${pc.yellow("PATH")} add ${pc.cyan(pathHint)} to your shell profile — the configured ${pc.cyan("argent")} command lives there`
+    );
+  }
 
   p.note(summaryLines.join("\n"), "Summary");
 

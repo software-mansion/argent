@@ -67,7 +67,14 @@ describe("sanitize", () => {
     });
 
     it("accepts the documented global_install_decision enum values", () => {
-      for (const decision of ["install", "cancel", "already_installed"] as const) {
+      for (const decision of [
+        "install",
+        "cancel",
+        "already_installed",
+        "install_local",
+        "set_prefix",
+        "unrecoverable",
+      ] as const) {
         expect(sanitize("installation:global_install_decision", { decision })).toEqual({
           decision,
         });

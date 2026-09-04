@@ -12,7 +12,7 @@ export function parseTargetFlags(args: string[]): TargetFlags {
 }
 
 export interface DecideTargetsContext {
-  /** A global install exists on PATH. */
+  /** A global install is present — however the caller established that. */
   globalPresent: boolean;
   /** The project's devDependency is both declared and installed. */
   localPresent: boolean;
