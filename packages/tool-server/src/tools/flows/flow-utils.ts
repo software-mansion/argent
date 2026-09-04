@@ -1076,6 +1076,32 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   return out;
 }
 
+// C0, DEL and C1.
+// eslint-disable-next-line no-control-regex
+const INLINE_UNSAFE = /[\u0000-\u001f\u007f-\u009f]/g;
+const INLINE_SHORT: Record<string, string> = {
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\f": "\\f",
+  "\r": "\\r",
+};
+
+/**
+ * A value going inline into a one-line label, with its control characters
+ * spelled the way JSON spells them: a raw newline in a selector field splits a
+ * report step across two lines, and a raw escape byte repaints the reader's
+ * terminal. ONLY the control characters — a backslash in a regex source or an
+ * identifier is content, and doubling it would print a pattern nobody could
+ * copy back into the .yaml.
+ */
+export function escapeInline(value: string): string {
+  return value.replace(
+    INLINE_UNSAFE,
+    (c) => INLINE_SHORT[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
+
 /**
  * Render a selector for a human-readable message (failure reasons, recording
  * warnings). The internal `loose` flag is dropped.
@@ -1090,7 +1116,9 @@ export function describeSelector(s: FlowSelector): string {
     // file uses. A regex matcher prints in /slashes/ so it can't be misread as
     // a literal.
     .map(([k, v]) =>
-      k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+      k === "textMatches"
+        ? `text=/${escapeInline(String(v))}/`
+        : `${k === "identifier" ? "id" : k}=${JSON.stringify(String(v))}`
     )
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
