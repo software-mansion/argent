@@ -24,6 +24,7 @@ import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotati
 import type { RotationPeek } from "../../utils/device-orientation";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
+import { getStagedBaseline, stageBaseline, type StagedBaseline } from "./staged-baselines";
 
 const zodSchema = z
   .object({
@@ -31,12 +32,16 @@ const zodSchema = z
       .string()
       .min(1)
       .optional()
-      .describe("Path to the baseline PNG file. Required unless captureBaseline is true."),
+      .describe(
+        "Path to the baseline PNG file. Omit to compare against the baseline staged for this udid by an earlier captureBaseline call."
+      ),
     currentPath: z
       .string()
       .min(1)
       .optional()
-      .describe("Path to the current PNG file. Required unless captureCurrent is true."),
+      .describe(
+        "Path to the current PNG file. Omit when capturing the current side live with captureCurrent, or when the call only stages a baseline."
+      ),
     udid: z
       .string()
       .min(1)
@@ -45,13 +50,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
+        "Capture the baseline screenshot live. With a current side it is diffed straight away; with no current side (no currentPath, no captureCurrent) it is staged for this udid and the call returns without comparing. Cannot be combined with captureCurrent."
       ),
     captureCurrent: z.coerce
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live at full resolution before diffing. Cannot be combined with captureBaseline."
+        "Capture the current screenshot live before diffing. With no baseline side it is compared against the baseline staged for this udid. Cannot be combined with captureBaseline."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -106,14 +111,14 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     completedMsg: () => "Compared screenshots",
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
-  description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
+  description: `Compare two PNG screenshots and return a compact visual-diff summary, or stage a live baseline for a later comparison.
+Accepts saved baseline/current PNG paths, or a live capture from a device on either side. Always provide udid so the capture backend can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
+For the visual-regression flow, call it twice: captureBaseline: true with no current side stages the baseline for this udid, then captureCurrent: true with no baseline side compares the live screen against it. Set at most one of captureBaseline or captureCurrent per call.
 Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
-Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
+Returns { summary, diffPath, contextDiffPath }; a staging call returns { summary } alone. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display. A comparison against a staged baseline opens with that baseline's udid, capture time and age.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
+Fails if the input sources are invalid, no baseline is staged for the udid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
@@ -167,7 +172,23 @@ export async function executeScreenshotDiffTool(
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
 
-  const { baselinePath, currentPath } = await resolveInputPaths(
+  if (classifyInputSources(params) === "stage-baseline") {
+    const staged = stageBaseline(
+      params.udid,
+      await captureLiveSide(
+        "baseline",
+        services,
+        params,
+        outputDir,
+        options,
+        captureScreenshot,
+        peekFor
+      )
+    );
+    return { summary: formatStagedBaselineSummary(params.udid, staged) };
+  }
+
+  const { baselinePath, currentPath, staged } = await resolveInputPaths(
     services,
     params,
     outputDir,
@@ -184,7 +205,9 @@ export async function executeScreenshotDiffTool(
 
   const artifacts = requireArtifacts(options);
   return {
-    summary: result.summary,
+    summary: staged
+      ? `${formatStagedBaselineProvenance(params.udid, staged)}\n\n${result.summary}`
+      : result.summary,
     ...(result.diffPath
       ? {
           diffPath: await artifacts.register({
@@ -247,78 +270,167 @@ async function resolveInputPaths(
   options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot,
   peekFor?: (device: DeviceInfo) => RotationPeek
-): Promise<{ baselinePath: string; currentPath: string }> {
-  validateInputSources(params);
-
-  // Physical iPhones capture through the on-device XCUITest runner. Simulators
-  // and Android capture through the simulator-server.
-  const captureLive = (name: "baseline" | "current"): Promise<string> => {
-    const device = resolveDevice(params.udid);
-    if (isIosPhysicalDevice(device)) {
-      return captureIosDeviceLiveInput({
-        runner: requireIosDeviceRunner(services),
-        outputDir,
-        name,
-      });
-    }
-    return captureLiveInput({
-      api: requireSimulatorServer(services),
-      device,
-      peekFor,
-      outputDir,
-      name,
-      rotation: params.rotation,
-      signal: options?.signal,
-      captureScreenshot,
-    });
-  };
+): Promise<{ baselinePath: string; currentPath: string; staged?: StagedBaseline }> {
+  const staged =
+    params.captureBaseline || params.baselinePath ? undefined : await requireStaged(params.udid);
 
   const baselinePath = params.captureBaseline
-    ? await captureLive("baseline")
-    : params.baselinePath!;
-  const currentPath = params.captureCurrent ? await captureLive("current") : params.currentPath!;
+    ? await captureLiveSide(
+        "baseline",
+        services,
+        params,
+        outputDir,
+        options,
+        captureScreenshot,
+        peekFor
+      )
+    : (staged?.path ?? params.baselinePath!);
+  const currentPath = params.captureCurrent
+    ? await captureLiveSide(
+        "current",
+        services,
+        params,
+        outputDir,
+        options,
+        captureScreenshot,
+        peekFor
+      )
+    : params.currentPath!;
 
-  return { baselinePath, currentPath };
+  return { baselinePath, currentPath, ...(staged && { staged }) };
 }
 
-function validateInputSources(params: Params): void {
-  const invalid = (message: string, stage: string): FailureError =>
-    new FailureError(message, {
-      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
-      failure_stage: stage,
-      failure_area: "tool_server",
-      error_kind: "validation",
+/**
+ * Route a live capture to the right backend for the device: the on-device
+ * XCUITest runner for a physical iPhone, the simulator-server for simulators and
+ * Android. Shared by the staging branch and the two-sided comparison so both
+ * reach the same backend for a given udid.
+ */
+function captureLiveSide(
+  name: "baseline" | "current",
+  services: Record<string, unknown>,
+  params: Params,
+  outputDir: string,
+  options: Partial<ToolContext> | undefined,
+  captureScreenshot: CaptureScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
+): Promise<string> {
+  const device = resolveDevice(params.udid);
+  if (isIosPhysicalDevice(device)) {
+    return captureIosDeviceLiveInput({
+      runner: requireIosDeviceRunner(services),
+      outputDir,
+      name,
     });
+  }
+  return captureLiveInput({
+    api: requireSimulatorServer(services),
+    device,
+    peekFor,
+    outputDir,
+    name,
+    rotation: params.rotation,
+    signal: options?.signal,
+    captureScreenshot,
+  });
+}
+
+function invalidInput(message: string, stage: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+    failure_stage: stage,
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/**
+ * Which of the two shapes the call is, rejecting everything that is neither.
+ *
+ * The conflict checks run first on purpose: a call that names a baseline BOTH
+ * ways still has no current side, so testing for staging ahead of them would
+ * accept it and ignore the `baselinePath` it was given.
+ */
+function classifyInputSources(params: Params): "stage-baseline" | "diff" {
   if (params.captureBaseline && params.captureCurrent) {
-    throw invalid(
-      "captureBaseline and captureCurrent cannot both be true; provide one saved image path and capture the other side live.",
+    throw invalidInput(
+      "captureBaseline and captureCurrent cannot both be true; stage the baseline in one call, then capture the current side in the next.",
       "screenshot_diff_both_captures"
     );
   }
   if (params.captureBaseline && params.baselinePath) {
-    throw invalid(
+    throw invalidInput(
       "Provide either baselinePath or captureBaseline, not both.",
       "screenshot_diff_baseline_conflict"
     );
   }
   if (params.captureCurrent && params.currentPath) {
-    throw invalid(
+    throw invalidInput(
       "Provide either currentPath or captureCurrent, not both.",
       "screenshot_diff_current_conflict"
     );
   }
-  if (!params.captureBaseline && !params.baselinePath) {
-    throw invalid(
-      "baselinePath is required unless captureBaseline is true.",
-      "screenshot_diff_baseline_missing"
-    );
-  }
-  if (!params.captureCurrent && !params.currentPath) {
-    throw invalid(
-      "currentPath is required unless captureCurrent is true.",
+  // The conflict check above rejects `captureCurrent` with `currentPath`, so
+  // this reads as "the call named a current side", not "it named exactly one".
+  const hasCurrentSide = Boolean(params.captureCurrent) || Boolean(params.currentPath);
+  if (params.captureBaseline && !hasCurrentSide) return "stage-baseline";
+  if (!hasCurrentSide) {
+    throw invalidInput(
+      "currentPath is required unless captureCurrent is true, or captureBaseline is staging a baseline for a later call.",
       "screenshot_diff_current_missing"
     );
   }
+  return "diff";
+}
+
+/**
+ * The baseline a `captureBaseline`-only call left for this device. A missing or
+ * reaped one is a hard failure rather than a silent live re-capture: the whole
+ * point of the staged baseline is that it predates the change under test.
+ */
+async function requireStaged(udid: string): Promise<StagedBaseline> {
+  const staged = getStagedBaseline(udid);
+  if (!staged) {
+    throw invalidInput(
+      `No baseline is staged for ${udid}. Pass baselinePath, or stage one first by calling screenshot-diff with captureBaseline: true and no current side.`,
+      "screenshot_diff_no_staged_baseline"
+    );
+  }
+  try {
+    await fs.access(staged.path);
+  } catch {
+    throw invalidInput(
+      `The baseline staged for ${udid} at ${new Date(staged.capturedAt).toISOString()} is no longer on disk. Stage a new one by calling screenshot-diff with captureBaseline: true and no current side.`,
+      "screenshot_diff_staged_baseline_gone"
+    );
+  }
+  return staged;
+}
+
+function formatStagedBaselineSummary(udid: string, staged: StagedBaseline): string {
+  return [
+    "Screenshot diff baseline staged",
+    "",
+    "Baseline:",
+    `- staged_baseline: udid=${udid} captured_at=${new Date(staged.capturedAt).toISOString()} file=${path.basename(staged.path)}`,
+    "- no comparison ran, so this result carries no diff images",
+    "- next: call screenshot-diff again for this udid with a current side (captureCurrent: true, or currentPath) and no baseline side",
+    "- it stays staged until another staging call for this udid replaces it, or the tool-server stops",
+  ].join("\n");
+}
+
+/**
+ * Leads the diff summary rather than trailing it: a staged baseline is the one
+ * input the call does not name, so its age is read before the figures measured
+ * against it.
+ */
+function formatStagedBaselineProvenance(udid: string, staged: StagedBaseline): string {
+  const ageSeconds = Math.max(0, Math.round((Date.now() - staged.capturedAt) / 1000));
+  return [
+    "Baseline:",
+    `- staged_baseline: udid=${udid} captured_at=${new Date(staged.capturedAt).toISOString()} age_seconds=${ageSeconds} file=${path.basename(staged.path)}`,
+    "  - captured by an earlier screenshot-diff staging call, not by this one; everything the screen did since captured_at is inside this diff",
+  ].join("\n");
 }
 
 // On the registry path the service is always resolved before a live-capture branch
