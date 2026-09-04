@@ -28,6 +28,15 @@ Argent removes the still parts of the recording. When the screen does not change
 
 Argent stamps a small Argent watermark into the corner of the video. You can turn the watermark off.
 
+## Remote simulators
+
+Argent also records remote (`remote:`) simulators. The recording is made on the machine that runs the simulator, and the stop call downloads the finished mp4. A large recording therefore takes a moment to transfer.
+
+Two details differ from a local recording:
+
+- Argent removes the still parts and stamps the watermark after the download, in a second pass over the finished video. When `ffmpeg` is not installed, Argent gives you the recording anyway and tells you that it did neither, instead of failing the recording.
+- The still parts collapse completely. A local recording keeps the first second of each still part.
+
 ## Where the video lands
 
 Argent saves each video in the `.argent/recordings/` directory of the project. The file name contains the device and the time of the recording. Argent does not overwrite an existing file. You can change the directory in the Argent configuration.
@@ -43,9 +52,9 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 
 ## Limits
 
-- Argent records iOS simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, Vega devices, or remote simulators.
+- Argent records iOS simulators, remote simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, or Vega devices.
 - One recording per device at a time. Different devices can record at the same time.
-- Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording.
+- Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in.
 - On Android, a secure screen such as a password field or a DRM video comes out black.
 - A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
 
