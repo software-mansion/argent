@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import pc from "picocolors";
 import {
   EXTERNAL_CAPABILITIES,
+  isIosPhysicalUdid,
   nativeIdPlatform,
   type ProviderDevice,
   type ProviderRecordStrict,
@@ -224,6 +225,21 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
           `${label}: declares platform '${device.platform}' but its nativeId has the shape of ` +
             `${shape === "ios" ? "an iOS udid" : "an android serial"}, so argent would ignore ` +
             `this device entirely`
+        )
+      );
+    }
+
+    /**
+     * Adoption refuses a provider-offered physical iPhone outright (see
+     * `adoptDevice`), Argent would route the hardware UDID to its own devicectl
+     * backend, past this descriptor's grants. Say so here too or the device is
+     * simply absent with a green check behind it.
+     */
+    if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId)) {
+      findings.push(
+        error(
+          `${label}: '${device.nativeId}' is a physical iPhone udid; argent cannot yet attach ` +
+            `to a physical iPhone offered by a provider, so it would ignore this device entirely`
         )
       );
     }

@@ -20,6 +20,7 @@ import * as path from "node:path";
 import {
   CAPABILITY_SET,
   type ExternalDevice,
+  isIosPhysicalUdid,
   makeExternalId,
   PROVIDER_SCHEMA_VERSION,
   providerDeviceSchema,
@@ -257,6 +258,26 @@ function adoptDevice(
       `${record.id}:platform:${device.nativeId}`,
       `${record.name}: ignoring device '${device.nativeId}': declared platform ` +
         `'${device.platform}' but its id classifies as '${shape}'`
+    );
+
+    return undefined;
+  }
+
+  /**
+   * A provider may not offer a physical iPhone yet. Argent routes a hardware
+   * UDID to its own `devicectl` / usbmux backend, which talks to the device
+   * directly, past the provider's simulator-server and past the grants in
+   * this descriptor. Adopting one would hand out an ownership bypass, so it is
+   * refused here rather than half-honoured.
+   *
+   * The shape cannot collide with a simulator UDID (8-4-4-4-12 hex against
+   * 8-16), so no simulator a provider offers is caught by this.
+   */
+  if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId)) {
+    warnOnce(
+      `${record.id}:ios-physical:${device.nativeId}`,
+      `${record.name}: ignoring device '${device.nativeId}': argent cannot yet attach to a ` +
+        `physical iPhone offered by a provider`
     );
 
     return undefined;

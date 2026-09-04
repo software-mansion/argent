@@ -168,6 +168,19 @@ describe("readProviderDevices", () => {
     expect(readProviderDevices(discoverProviders()[0]!, classify)).toEqual([]);
   });
 
+  it("rejects a physical iPhone, which argent would drive past the provider", () => {
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    write(
+      "acme.json",
+      descriptor({
+        devices: [iosDevice({ kind: "device", nativeId: "00008110-000978540290401E" })],
+      })
+    );
+
+    expect(readProviderDevices(discoverProviders()[0]!, classify)).toEqual([]);
+  });
+
   it("filters unknown capability tokens out of the adopted device", () => {
     write(
       "acme.json",
