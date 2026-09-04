@@ -312,7 +312,9 @@ describe("toMcpContent with artifact ctx", () => {
   // the file lands next to the agent even against a remote tool-server.
   it("writes the PNG to `out` and reports that path in place of the temp cache", async () => {
     const pngBytes = [...PNG_SIGNATURE, 0x42];
-    const out = join(root, "keep", "base.png");
+    // Two directory levels below `root` are missing, so a non-recursive mkdir
+    // would ENOENT here — this also pins the recursive mkdir.
+    const out = join(root, "keep", "nested", "base.png");
 
     const result = await toMcpContent(
       { image: artifactHandle("img1", "shot.png", "image/png") },
@@ -321,7 +323,6 @@ describe("toMcpContent with artifact ctx", () => {
       { udid: "DEV-1", out }
     );
 
-    // The parent did not exist, so this also pins the recursive mkdir.
     expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
     expect(result[0]?.type).toBe("image");
     expect(result[1]).toEqual({ type: "text", text: `Saved: ${out}` });
@@ -408,6 +409,24 @@ describe("toMcpContent with artifact ctx", () => {
 
     expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
     expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+  });
+
+  // Surrounding whitespace (e.g. a stray newline from loose serialization) is
+  // stripped before the path is resolved, so the file lands at the clean path
+  // rather than one whose name literally ends in spaces.
+  it("trims surrounding whitespace in `out`", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x47];
+    const clean = join(root, "trimmed", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img6", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: `${clean}   ` }
+    );
+
+    expect(await fs.readFile(clean)).toEqual(Buffer.from(pngBytes));
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${clean}` });
   });
 
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
