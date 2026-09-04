@@ -6,7 +6,7 @@ import {
 import { NPM_REGISTRY, PACKAGE_NAME } from "./constants.js";
 import type { PackageManager } from "./utils.js";
 
-export interface ResolvedUpdateTarget {
+interface ResolvedUpdateTarget {
   latestVersion: string;
   latestPublishedAt: string | null;
   /** Newest stable upgrade installable now under the release-age policy. */

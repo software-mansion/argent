@@ -63,7 +63,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
   // loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
   },
   services: (params) => ({

@@ -44,15 +44,24 @@ export interface CreateToolsClientOptions {
  * A tool invocation the SERVER answered with an error — an HTTP error status or
  * the NDJSON stream's terminal `error` line. `errorKind`/`errorCode` carry the
  * server's failure signal (e.g. kind "validation") when it sent one.
+ *
+ * `issues` is the issue list a 400 carries beside its prose message, so a caller
+ * can map a rejected field back to the flag its user typed. Undefined for an
+ * older server.
  */
 export class ToolInvocationError extends Error {
   readonly errorCode?: string;
   readonly errorKind?: string;
-  constructor(message: string, signal?: { errorCode?: string; errorKind?: string }) {
+  readonly issues?: readonly unknown[];
+  constructor(
+    message: string,
+    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] }
+  ) {
     super(message);
     this.name = "ToolInvocationError";
     this.errorCode = signal?.errorCode;
     this.errorKind = signal?.errorKind;
+    this.issues = signal?.issues;
   }
 }
 
@@ -115,6 +124,20 @@ async function consumeToolStream(
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
   return { data, note: final.note };
+}
+
+/**
+ * A schema rejection sends the raw issue JSON in `error`, which is what a CLI
+ * released before `issues` parses, and the prose in `message`. Every other error
+ * body sends `error` alone.
+ */
+export function errorBodyMessage(body: {
+  error?: string;
+  message?: string;
+  issues?: unknown;
+}): string | undefined {
+  if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
+  return body.error ?? body.message;
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -194,15 +217,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       note?: string;
       error_code?: string;
       error_kind?: string;
+      issues?: unknown;
     };
     if (!res.ok) {
-      throw new ToolInvocationError(
-        json.error ?? json.message ?? `${res.status} ${res.statusText}`,
-        {
-          errorCode: json.error_code,
-          errorKind: json.error_kind,
-        }
-      );
+      throw new ToolInvocationError(errorBodyMessage(json) ?? `${res.status} ${res.statusText}`, {
+        errorCode: json.error_code,
+        errorKind: json.error_kind,
+        issues: Array.isArray(json.issues) ? json.issues : undefined,
+      });
     }
     // File boundary, inbound: persist client-write directives (e.g. recorded
     // flow YAMLs) and rewrite them to the written paths.

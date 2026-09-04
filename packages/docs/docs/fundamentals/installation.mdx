@@ -58,6 +58,8 @@ This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP
 
 Pass `--global` to force the default mode in scripts. `--local` and `--global` are mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the project already opted into local mode.
 
+Add `--no-telemetry` to also commit a telemetry opt-out for the repository. Local mode then writes `.argent/config.json` with `telemetry.enabled: false`, which turns telemetry off on every clone. See [Telemetry and privacy](/docs/reference/telemetry#opt-out-for-a-whole-repository).
+
 :::note
 In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
 :::
