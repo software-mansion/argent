@@ -14,12 +14,22 @@ const otelMock = vi.hoisted(() => ({
       url: string;
       headers: Record<string, string>;
       timeoutMillis: number;
+      compression?: string;
       httpAgentOptions?: { timeout?: number };
     };
   }>,
   processors: [] as Array<{ opts: Record<string, unknown> }>,
   providers: [] as ProviderInstance[],
+  loggerNames: [] as string[],
 }));
+
+/** One OTLP log record as `OtelClient.emit` hands it to the SDK. */
+interface EmittedRecord {
+  severityNumber: number;
+  severityText: string;
+  body: string;
+  attributes: Record<string, unknown>;
+}
 
 vi.mock("@opentelemetry/api-logs", () => ({ SeverityNumber: { INFO: 9 } }));
 vi.mock("@opentelemetry/resources", () => ({
@@ -45,7 +55,15 @@ vi.mock("@opentelemetry/sdk-logs", () => ({
   ) {
     const emit = vi.fn();
     const shutdown = vi.fn().mockResolvedValue(undefined);
-    Object.assign(this, { config, emit, shutdown, getLogger: () => ({ emit }) });
+    Object.assign(this, {
+      config,
+      emit,
+      shutdown,
+      getLogger: (name: string) => {
+        otelMock.loggerNames.push(name);
+        return { emit };
+      },
+    });
     otelMock.providers.push(this);
   }),
 }));
@@ -55,6 +73,7 @@ describe("otel endpoint invariance", () => {
     otelMock.exporters.length = 0;
     otelMock.processors.length = 0;
     otelMock.providers.length = 0;
+    otelMock.loggerNames.length = 0;
     resetClient();
     (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "otel_real";
   });
@@ -139,6 +158,82 @@ describe("otel endpoint invariance", () => {
     expect(otelMock.processors[0]!.opts.exportTimeoutMillis).toBe(1_500);
   });
 
+  it("decides the request encoding in code rather than leaving it to the SDK", () => {
+    // Absent, the SDK resolves compression from OTEL_EXPORTER_OTLP_COMPRESSION.
+    // otel-endpoint-live.test.ts is what proves the explicit value actually wins
+    // there; this is the constructor half, next to the other options.
+    getClient();
+    expect(otelMock.exporters[0]!.opts.compression).toBe("none");
+  });
+
+  it("identifies itself as the service and scope the collector's schema keys on", () => {
+    // These two strings are how a stored record is attributed: the resource's
+    // service.name lands in ServiceName and the instrumentation scope in
+    // ScopeName, and the ingestion side filters on both. They are load-bearing
+    // identifiers rather than labels, so renaming either silently orphans every
+    // record written afterwards from every query written before.
+    getClient();
+    expect(otelMock.providers[0]!.config.resource).toEqual({
+      attributes: { "service.name": "argent" },
+    });
+    expect(otelMock.loggerNames).toEqual(["@argent/telemetry"]);
+  });
+
+  it("maps an event onto the record fields the collector reads", () => {
+    // The event name is the record BODY, not an attribute - the analytics table
+    // reads it out of Body - and the severity is fixed at INFO because these are
+    // product events rather than diagnostics.
+    const client = getClient();
+    expect(client).not.toBeNull();
+    client!.emit({
+      distinctId: "d".repeat(64),
+      event: "tool:invoke",
+      properties: { tool: "screenshot", is_ci: false, duration_ms: 412 },
+    });
+
+    const emit = otelMock.providers[0]!.emit;
+    expect(emit).toHaveBeenCalledTimes(1);
+    const record = emit.mock.calls[0]![0] as EmittedRecord;
+    expect(record.body).toBe("tool:invoke");
+    expect(record.severityNumber).toBe(9);
+    expect(record.severityText).toBe("INFO");
+    expect(record.attributes).toEqual({
+      "distinct_id": "d".repeat(64),
+      "event.name": "tool:invoke",
+      "tool": "screenshot",
+      "is_ci": false,
+      "duration_ms": 412,
+    });
+  });
+
+  it("drops properties with no value instead of sending them as null", () => {
+    // The SDK does not reject a null attribute - it serializes one as an empty
+    // OTLP value (`{"key":"cloud_agent","value":{}}`, droppedAttributesCount 0),
+    // which is stored as, and unrecoverable from, a property that really was
+    // empty. Every property here means the same thing absent as it would
+    // explicitly null - `cloud_agent` is null on any machine that is not a cloud
+    // agent, which is nearly all of them.
+    const client = getClient();
+    client!.emit({
+      distinctId: "d".repeat(64),
+      event: "tool:invoke",
+      properties: { cloud_agent: null, os_version: undefined, tool: "screenshot" },
+    });
+
+    const record = otelMock.providers[0]!.emit.mock.calls[0]![0] as EmittedRecord;
+    // toEqual treats a key whose value is undefined as absent, so on its own it
+    // cannot tell os_version being dropped from os_version surviving as
+    // undefined - only the null half of the guard would be under test. Assert
+    // both keys are gone explicitly so a guard that dropped only null fails here.
+    expect("cloud_agent" in record.attributes).toBe(false);
+    expect("os_version" in record.attributes).toBe(false);
+    expect(record.attributes).toEqual({
+      "distinct_id": "d".repeat(64),
+      "event.name": "tool:invoke",
+      "tool": "screenshot",
+    });
+  });
+
   it("bounds connection establishment too, not just the request", () => {
     // timeoutMillis alone is NOT enough: the exporter applies it with
     // req.setTimeout(), which Node arms only once the socket is CONNECTED. A
@@ -148,9 +243,10 @@ describe("otel endpoint invariance", () => {
     // connect timeout (~75s on macOS) after shutdown() already resolved. The
     // agent's socket timeout is armed at socket CREATION, so it covers connect.
     //
-    // keepAlive rides along because supplying httpAgentOptions replaces the
-    // agent the SDK would build, whose default is keepAlive: true — dropping it
-    // costs the long-lived tool-server a TCP+TLS handshake per 10s batch.
+    // keepAlive rides along to match the agent the SDK would otherwise build
+    // (default keepAlive: true); dropping it would open and close a socket per
+    // request. The 1500ms timeout reaps idle sockets, so keepAlive does not
+    // preserve reuse across the 10s cadence - only within a burst of batches.
     getClient();
     expect(otelMock.exporters[0]!.opts.httpAgentOptions).toEqual({
       timeout: 1_500,

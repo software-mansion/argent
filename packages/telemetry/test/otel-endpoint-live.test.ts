@@ -3,8 +3,8 @@
  * exporter rather than a mock of it.
  *
  * `otel-endpoint.test.ts` mocks `@opentelemetry/exporter-logs-otlp-http`, so it
- * can only show that `otel.ts` passes `url` and `headers` to the constructor —
- * it cannot show what the SDK then does with `OTEL_EXPORTER_OTLP_*`. An SDK
+ * can only show what `otel.ts` passes to the constructor — it cannot show what
+ * the SDK then does with `OTEL_EXPORTER_OTLP_*`. An SDK
  * upgrade that changed that handling would keep every assertion there green
  * while telemetry started going somewhere else, or carrying something extra.
  *
@@ -19,13 +19,16 @@ import http from "node:http";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { SeverityNumber } from "@opentelemetry/api-logs";
+import { diag, DiagLogLevel } from "@opentelemetry/api";
 import { createExporter } from "../src/otel.js";
+import { listenLoopback, snapshotEnv } from "./helpers.js";
 
 interface Capture {
-  server: http.Server;
   url: string;
   requests: Array<{ path: string; headers: http.IncomingHttpHeaders }>;
 }
+
+const closers: Array<() => Promise<void>> = [];
 
 async function startCapture(): Promise<Capture> {
   const requests: Capture["requests"] = [];
@@ -37,10 +40,9 @@ async function startCapture(): Promise<Capture> {
       res.end("{}");
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("no port");
-  return { server, url: `http://127.0.0.1:${address.port}/v1/logs`, requests };
+  const port = await listenLoopback(server);
+  closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  return { url: `http://127.0.0.1:${port}/v1/logs`, requests };
 }
 
 const OTLP_ENV_VARS = [
@@ -49,26 +51,29 @@ const OTLP_ENV_VARS = [
   "OTEL_EXPORTER_OTLP_HEADERS",
   "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
   "OTEL_EXPORTER_OTLP_PROTOCOL",
-] as const;
+  "OTEL_EXPORTER_OTLP_COMPRESSION",
+  "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
+  "OTEL_EXPORTER_OTLP_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
+];
 
-let saved: Record<string, string | undefined> = {};
+let restoreEnv: () => void;
 let code: Capture;
 let hostile: Capture;
 
 beforeEach(async () => {
-  saved = Object.fromEntries(OTLP_ENV_VARS.map((name) => [name, process.env[name]]));
+  restoreEnv = snapshotEnv(OTLP_ENV_VARS);
   code = await startCapture();
   hostile = await startCapture();
 });
 
 afterEach(async () => {
-  for (const [name, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-  await Promise.all(
-    [code, hostile].map((c) => new Promise<void>((resolve) => c.server.close(() => resolve())))
-  );
+  restoreEnv();
+  await Promise.all(closers.splice(0).map((close) => close()));
 });
 
 /** Emit one record through the same provider wiring `OtelClient` builds. */
@@ -137,16 +142,84 @@ describe("what reaches the collector, against the real OTLP exporter", () => {
     expect(headers.authorization).toBe("Bearer real-ingest-token");
   }, 15_000);
 
-  it("leaves the OTLP header environment as it found it", () => {
-    // Clearing the variables is a means, not a side effect to inflict on the
-    // rest of the process — anything else in this CLI that reads them later
-    // must still see what the user set.
+  it("posts the encoding the code chose when an env var asks for gzip", async () => {
+    // A machine that already runs OpenTelemetry sets this for its own collector,
+    // and the encoding argent posts is not that machine's to pick.
+    // otel-wire.test.ts captures the uncompressed request the ingestion side is
+    // sized and smoke-tested against.
+    process.env.OTEL_EXPORTER_OTLP_COMPRESSION = "gzip";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_COMPRESSION = "gzip";
+
+    await exportOneRecord(code.url, "real-ingest-token");
+
+    expect(code.requests).toHaveLength(1);
+    expect(code.requests[0]!.headers["content-encoding"]).toBeUndefined();
+  }, 15_000);
+
+  it("reads no file an OTLP certificate variable names", () => {
+    // The SDK resolves these with a synchronous fs.readFileSync while the
+    // exporter is constructed, and only then discards the https agent it built
+    // from them in favour of the explicit httpAgentOptions. So the read is for
+    // nothing - and a path that never answers, a dead network mount or a fifo
+    // with no writer, hangs the command that emitted the event instead
+    // (measured: the constructor never returned). createExporter clears the
+    // variables so the read is never attempted; the SDK emits a "Failed to
+    // read ..." warning only when it does attempt one and fails, so the absence
+    // of that warning is what says the clear held.
+    const warnings: string[] = [];
+    diag.setLogger(
+      {
+        error: () => {},
+        warn: (message) => warnings.push(String(message)),
+        info: () => {},
+        debug: () => {},
+        verbose: () => {},
+      },
+      DiagLogLevel.WARN
+    );
+    // Both spellings: the SDK reads `signalSpecific ?? nonSignalSpecific`, so
+    // the _LOGS_ form wins - and it is the one a machine already exporting logs
+    // elsewhere has set.
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = "/nonexistent/argent-probe-ca.pem";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE = "/nonexistent/argent-probe-logs-ca.pem";
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = "/nonexistent/argent-probe-cert.pem";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE =
+      "/nonexistent/argent-probe-logs-cert.pem";
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = "/nonexistent/argent-probe-key.pem";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY = "/nonexistent/argent-probe-logs-key.pem";
+
+    try {
+      createExporter({ endpoint: code.url, token: "real-ingest-token", isUsable: true });
+    } finally {
+      diag.disable();
+    }
+
+    // Only the certificate-read warnings, not the whole diag stream: an invalid
+    // OTEL_EXPORTER_OTLP_COMPRESSION or _TIMEOUT in the ambient environment
+    // warns unconditionally, and createExporter deliberately leaves those two in
+    // place (the explicit option already beats them), so matching every warning
+    // would fail this cert test on an unrelated env var.
+    const certReadWarnings = warnings.filter((message) => message.startsWith("Failed to read "));
+    expect(certReadWarnings).toEqual([]);
+  });
+
+  it("leaves the OTLP environment as it found it", () => {
+    // Clearing the header variables is a means, not a side effect to inflict on
+    // the rest of the process — anything else in this CLI that reads them later
+    // must still see what the user set. The compression variable is here for the
+    // opposite reason: the explicit option already beats it, so winning by
+    // clobbering it would be a strictly worse implementation this suite would
+    // otherwise be unable to tell from the shipped one.
     process.env.OTEL_EXPORTER_OTLP_HEADERS = "x-vendor=keep-me";
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_HEADERS;
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = "/etc/ssl/corp-ca.pem";
+    process.env.OTEL_EXPORTER_OTLP_COMPRESSION = "gzip";
 
     createExporter({ endpoint: code.url, token: "real-ingest-token", isUsable: true });
 
     expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-vendor=keep-me");
     expect("OTEL_EXPORTER_OTLP_LOGS_HEADERS" in process.env).toBe(false);
+    expect(process.env.OTEL_EXPORTER_OTLP_CERTIFICATE).toBe("/etc/ssl/corp-ca.pem");
+    expect(process.env.OTEL_EXPORTER_OTLP_COMPRESSION).toBe("gzip");
   });
 });
