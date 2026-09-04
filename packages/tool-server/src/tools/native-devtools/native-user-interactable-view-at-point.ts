@@ -66,7 +66,7 @@ export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Resul
     failedMsg: ({ params, failureSignal }) =>
       `Failed to find interactive view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Inspect the deepest UIView at a raw native window point that would actually receive touch input.
 
 Unlike native-view-at-point, this respects userInteractionEnabled and is closer to

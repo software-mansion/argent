@@ -14,7 +14,7 @@ import { canonicalDeviceId } from "../../utils/debugger/device-alias";
  * reachable from the device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
@@ -44,7 +44,7 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  *     against the legacy inspector.
  */
 export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };

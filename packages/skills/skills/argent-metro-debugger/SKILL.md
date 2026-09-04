@@ -5,6 +5,8 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 
 ## 1. Prerequisites
 
+Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`. Use a simulator.
+
 For **React Native (iOS / Android)**: requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status` — it returns `status: "connected"` or `status: "not_connected"` with a `reason` and `guidance` (it does not fail when the debugger is unreachable).
 
 For **Vega (Fire TV)**: requires a **Debug `.vpkg`** (a Release build never attaches) and **Metro reachable from the device** (`vega device start-port-forwarding --port 8081 --forward false`). Verify via `debugger-status`. `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there — see the `argent-tv-interact` skill.

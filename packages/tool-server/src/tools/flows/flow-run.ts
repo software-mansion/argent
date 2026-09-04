@@ -25,26 +25,20 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
-  describeSelector,
-  describeTextExpectation,
   getFlowPath,
   isBlockStep,
   parseFlow,
   runTargetName,
-  swipeByLabel,
   type BlockStep,
   type FlowFile,
-  type FlowSelector,
-  type GestureTarget,
   type FlowStep,
   type Launch,
-  type WhenCondition,
   LAUNCH_PLATFORMS,
-  SELECTOR_RELATIONS,
 } from "./flow-utils";
-import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
+import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
@@ -82,7 +76,7 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -507,6 +501,20 @@ async function treeSourceGate(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
+  if (isIosPhysicalDevice(device) && !signal?.aborted) {
+    // Physical devices read the XCUITest runner, not native devtools.
+    // Resolve it here. Cold start must not eat the next step's auto-wait.
+    try {
+      const ref = iosDeviceRunnerRef(device);
+      await registry.resolveService(ref.urn, ref.options);
+      return null;
+    } catch (err) {
+      return (
+        `the on-device XCUITest runner did not become ready for ${device.id}: ` +
+        `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
   if (device.platform === "ios" && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {
@@ -1794,126 +1802,6 @@ function pushReport(state: ExecState, report: StepReport): void {
   state.onStepReport?.(report);
 }
 
-function selectorLabel(sel: FlowSelector): string {
-  const parts: string[] = [];
-  // The universal selector prints as CSS spells it, so a scope-only target
-  // never renders as an empty label.
-  if (sel.any) parts.push("*");
-  if (sel.text !== undefined) parts.push(`"${sel.text}"`);
-  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
-  if (sel.identifier) parts.push(`id=${sel.identifier}`);
-  if (sel.role) parts.push(`role=${sel.role}`);
-  // Each relational scope renders after the fields, parenthesized and
-  // recursive, so two steps that differ only by scope don't collapse to the
-  // same target label — mirroring `describeSelector`'s spelling so the two
-  // surfaces stay in lockstep (see `conditionLabel`).
-  for (const relation of SELECTOR_RELATIONS) {
-    const scope = sel[relation];
-    if (scope !== undefined) parts.push(`${relation} (${selectorLabel(scope)})`);
-  }
-  return parts.join(" ");
-}
-
-/**
- * One template for rendering an await/assert/when-guard UI condition,
- * parameterized by selector spelling — {@link selectorLabel} for report
- * targets, `describeSelector` for reason strings — so the two surfaces share
- * a single shape and cannot drift.
- */
-function conditionLabel(
-  cond: {
-    condition: WaitCondition;
-    selector: FlowSelector;
-    expectedText?: string;
-    textMatch?: TextMatchMode;
-  },
-  renderSelector: (sel: FlowSelector) => string
-): string {
-  const sel = renderSelector(cond.selector);
-  // A text condition checks expectedText against the element the selector
-  // locates; the other conditions are about the selector itself.
-  if (cond.condition === "text") {
-    return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
-  }
-  return `${cond.condition} ${sel}`;
-}
-
-/** Human-readable selector/point spelling shared by gesture reports. */
-function gestureTargetLabel(target: GestureTarget): string {
-  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
-}
-
-/** Display-only "what this step acts on" for {@link StepReport.target}. */
-function stepTarget(step: FlowStep): string | undefined {
-  switch (step.kind) {
-    case "tap":
-    case "long-press":
-      if (step.selector) return selectorLabel(step.selector);
-      if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
-      return undefined;
-    case "swipe": {
-      let travel: string;
-      if (step.direction !== undefined) {
-        travel = step.direction;
-      } else if (step.by !== undefined) {
-        travel = `by ${swipeByLabel(step.by)}`;
-      } else if (step.to !== undefined) {
-        travel = `to ${gestureTargetLabel(step.to)}`;
-      } else {
-        return undefined;
-      }
-      return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from)}` : ""}`;
-    }
-    case "type":
-      return `into ${selectorLabel(step.into)}`;
-    case "await":
-    case "assert":
-      return conditionLabel(step, selectorLabel);
-    case "idle":
-      // No target beyond the screen itself, and the caller already prints the
-      // kind.
-      return undefined;
-    case "when":
-      return step.condition.kind === "platform"
-        ? `platform ${step.condition.platform}`
-        : conditionLabel(step.condition, selectorLabel);
-    case "scroll-to": {
-      const dir = step.direction !== "down" ? ` (${step.direction})` : "";
-      return `${selectorLabel(step.target)}${dir}`;
-    }
-    case "pinch": {
-      const scale = `scale ${step.scale}`;
-      return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
-    }
-    case "rotate": {
-      const by = `by ${step.by}°`;
-      return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
-    }
-    case "snapshot":
-      return step.cropOn ? `"${step.name}" cropOn ${selectorLabel(step.cropOn)}` : `"${step.name}"`;
-    case "run":
-      // The as-written path, so a report line shows exactly what the flow
-      // references (`run ../shared/login.yaml`), not just the attribution stem.
-      return step.flow;
-    case "echo":
-    case "tool":
-      // Each carries its subject in a report field of its own (`message`,
-      // `tool`) that renderers print in the target's place.
-      return undefined;
-    case "launch":
-      // A launch's app id may be per-platform (`appIdForPlatform`), and a step
-      // alone does not know the run device.
-      return undefined;
-    case "wait":
-      return undefined;
-    default: {
-      const unclassified: never = step;
-      void unclassified;
-      return undefined;
-    }
-  }
-}
-
 /**
  * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
  * paths; error messages render the human-readable display names.
@@ -2081,12 +1969,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
-}
-
-/** A compact rendering of a when guard for report reasons. */
-function describeWhenCondition(cond: WhenCondition): string {
-  if (cond.kind === "platform") return `platform ${cond.platform}`;
-  return conditionLabel(cond, describeSelector);
 }
 
 /**
