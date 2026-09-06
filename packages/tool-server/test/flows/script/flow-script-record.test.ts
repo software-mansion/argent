@@ -333,17 +333,49 @@ describe("recording a script step", () => {
     expect((err as Error).message).toContain("Check the script's changes before you retry");
   });
 
-  it("blames the hand-edited step, not the script, when the re-parse refuses an earlier one", async () => {
+  it("refuses a recording file that is gone, asking for a restart rather than a repair", async () => {
+    // "Repair it and call this again" cannot be followed when there is nothing
+    // to repair, and this tool cannot re-create the file: only
+    // flow-start-recording establishes the key.
+    const marker = path.join(root, "gone.txt");
+    await start("erased");
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await fs.rm(flowPath("erased"));
+
+    const err = (await addScript("erased", "../../scripts/seed.mjs").catch(
+      (e: unknown) => e
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("was NOT run");
+    expect(err.message).toContain("is gone");
+    expect(err.message).toContain("Start the recording again with flow-start-recording");
+    await expect(fs.access(marker)).rejects.toThrow();
+  });
+
+  it("blames the hand-edited file, not the script, when the re-parse refuses it", async () => {
     // The append re-parses the whole file, so an output reference a mid-recording
     // hand edit put in an EARLIER step refuses this write. The script itself ran
     // and passed; wording it as "recording it failed" would send the author back
     // over the one call that did nothing wrong.
-    await write("scripts/seed.mjs", `output.ok = true;`);
+    //
+    // "Something in the file", not "a step": the same refusal is raised for the
+    // file's own top-level `env:`, which is no step at all.
+    //
+    // The edit is made BY the script, because that is the only window left: a
+    // file already holding the reference is refused before the run, since the
+    // flow-level `env` the run shares with the replay is read off it.
     await start("handedited");
-    await fs.writeFile(
-      flowPath("handedited"),
-      `steps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(flowPath("handedited"))},
+         'steps:\\n  - echo: "created {{output:user.id}}"\\n');
+       output.ok = true;`
     );
 
     const err = (await addScript("handedited", "../../scripts/seed.mjs").catch(
@@ -352,11 +384,43 @@ describe("recording a script step", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain("passed, but the step was not recorded");
-    expect(err.message).toContain("Fix the existing step named below");
+    expect(err.message).toContain("Fix what is named below");
+    expect(err.message).toContain("not in this script");
     expect(err.message).toContain(flowPath("handedited"));
     expect(err.message).toContain("Step 1 (`echo`)");
     // The refusal keeps its own signal; only the framing around it changed.
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it("refuses a file that will not parse before it runs the script", async () => {
+    // The append would refuse the same file afterwards, with the script already
+    // run and nothing rolled back — and the flow-level `env` the run has to
+    // share with the replay is read off that file, so a fallback to the
+    // in-memory copy would hand the script an environment the recorded step
+    // never takes.
+    const marker = path.join(root, "seeded.txt");
+    await start("broken");
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await fs.writeFile(
+      flowPath("broken"),
+      `env:\n  PROBE_A: from-file\n  NODE_OPTIONS: --bogus\nsteps: []\n`,
+      "utf8"
+    );
+
+    const err = (await addScript("broken", "../../scripts/seed.mjs").catch(
+      (e: unknown) => e
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("was NOT run");
+    expect(err.message).toContain(flowPath("broken"));
+    expect(err.message).toContain("about the FILE, not about this script");
+    expect(err.message).toContain("NODE_OPTIONS");
+    await expect(fs.access(marker)).rejects.toThrow();
   });
 
   it("is never itself the step an output-reference refusal names", async () => {
@@ -445,6 +509,7 @@ describe("recording a script step", () => {
 
   it("needs no device of any kind", async () => {
     expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
+      "env",
       "name",
       "path",
       "project_root",
@@ -672,17 +737,25 @@ describe("a script that did not pass records nothing", () => {
   // with what the next append renumbers to has to know which one they are
   // holding, so it is qualified here as the sibling recorder qualifies it.
   it("says when the step count could not come off the file", async () => {
+    // The file parses when the call starts — an unparseable one is refused
+    // before the run — so the break has to land while the script is running,
+    // which is the window a mid-recording hand edit really occupies.
     await start("counted");
     await flowInsertEchoTool.execute(
       {},
       { name: "counted", project_root: root, message: "recorded" }
     );
-    await fs.appendFile(flowPath("counted"), "  - echo: hand-added\n  - bogus: [\n", "utf8");
+    await write(
+      "scripts/break-then-fail.mjs",
+      `import * as fs from "node:fs";
+       fs.appendFileSync(${JSON.stringify(flowPath("counted"))}, "  - bogus: [\\n");
+       throw new Error("seed failed");`
+    );
 
-    const failed = await addScript("counted", "../../scripts/gone.mjs");
+    const failed = await addScript("counted", "../../scripts/break-then-fail.mjs");
 
     expect(failed.status).toBe("fail");
-    // The in-memory snapshot, while the file itself holds two steps.
+    // The in-memory snapshot, while the file itself no longer parses.
     expect(failed.stepCount).toBe(1);
     expect(failed.message).toContain("Could not verify stepCount from");
   });

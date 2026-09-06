@@ -35,13 +35,18 @@ import {
   type FlowFile,
   type FlowStep,
   type Launch,
+  type ScriptEnv,
   LAUNCH_PLATFORMS,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
+import { assertNoEnvOutputReferences } from "./flow-utils";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
+import { describeScriptEnvProblem, mergeScriptEnv } from "./script/flow-script-env";
+import { createScriptRunNotes, type FlowScriptRunNotes } from "./script/flow-script-executor";
 import { sleepOrAbort } from "../../utils/timing";
+import { InvalidToolInputError } from "../../utils/capability";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -134,6 +139,14 @@ const zodSchema = z
       .optional()
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
+      ),
+    env: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        "Environment values every `script` step in this run reads from its environment — `process.env` in a `.mjs`, `$NAME` in a `.sh` — through nested `run:` flows. This is what makes a flow reusable: the file holds the defaults a project checks in, and this map holds what changes per run (a build number, a staging URL, a per-run account), so no CI job has to edit the YAML. Values are strings — quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig — each steers the runner's own process. ARGENT_OUTPUT and ARGENT_REASON are refused too: they name the files a `.sh` step exchanges its output document and its failure reason through, and this map reaches every step whatever its language. Do not send __proto__ either: it is an accessor rather than an entry, and this parameter's own schema DROPS it before any rule of argent runs, so the call would pass with that one value missing and no refusal. These OVERRIDE the flow file's own `env` defaults at every depth; a `script` step's own `env` still wins over them. " +
+          "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: a plaintext value in a tool call enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from the same sources `keyboard` uses (`ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, its `.env.local`/`.env` ARGENT_SECRET_-prefixed keys, then `~/.argent/secrets.env`). " +
+          "A shell `export` does NOT reach a script: the tool server's environment is a snapshot from its first start. Pass the value here, in the flow's `env`, or name it in `scripts.env.allow`."
       ),
   })
   .superRefine((params, ctx) => {
@@ -962,6 +975,18 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
+  /**
+   * The `env` map this CALL supplied, applying to every script step in the run
+   * including those inside nested `run:` fragments. On the run rather than on a
+   * scope because it is constant for the whole root run: a flow-level map is a
+   * default at any depth, so this outranks even the innermost fragment's.
+   */
+  runtimeEnv: Readonly<ScriptEnv>;
+  /**
+   * Notes any script step has already carried in this run. A note about the
+   * host's configuration is true of every step, so it is said once.
+   */
+  scriptRunNotes: FlowScriptRunNotes;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1233,6 +1258,30 @@ Returns a per-step report: the first failure stops the run and the rest report a
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
+      // The run-time map is judged here rather than by the schema, which takes
+      // it as a plain map of strings and stops there. A NAME the operating
+      // system cannot carry, or one that steers the runner's own process, is
+      // the same mistake wherever the map came from and reads best against one
+      // rule — the same one a flow file's own `env:` is held to.
+      const envProblem = describeScriptEnvProblem(params.env ?? {});
+      if (envProblem) {
+        throw new InvalidToolInputError(`\`env\` ${envProblem}`, {
+          failure_stage: "flow_run_env",
+        });
+      }
+      // The same refusal a flow file's own `env` earns, on the channel a CI job
+      // and an agent both use. Without it the reference reaches the script as
+      // literal text and the step reports pass — the outcome that refusal is
+      // written to prevent. Re-raised as caller input, like the check above it:
+      // the shared refusal is worded for a flow FILE and classified as one, and
+      // this is the same parameter.
+      try {
+        assertNoEnvOutputReferences(params.env, "This run's", "flow_run_env");
+      } catch (err) {
+        throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
+          failure_stage: "flow_run_env",
+        });
+      }
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
@@ -1375,6 +1424,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
         snapshotApps: new Map(),
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
+        runtimeEnv: params.env ?? {},
+        scriptRunNotes: createScriptRunNotes(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1386,6 +1437,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         await execSteps(state, flow.steps, {
           runStack: [rootEntry],
           depth: 0,
+          env: flow.env ?? {},
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -1795,6 +1847,18 @@ interface RunStackEntry {
 interface StepScope {
   runStack: RunStackEntry[];
   depth: number;
+  /**
+   * Flow-level `env` DEFAULTS in force here: the root flow's map with each
+   * nested flow's layered over it, outermost first.
+   *
+   * On the scope rather than on {@link ExecState} because a nested flow must
+   * inherit the active values, be able to override them inside itself, and
+   * leave the parent's intact on the way out — which is what {@link childScope}
+   * already does for `runStack`, on every return path including a throw, by
+   * never mutating the parent. Held immutable for that reason: a map shared by
+   * reference would be mutated by the fragment and never restored.
+   */
+  env: Readonly<ScriptEnv>;
 }
 
 /** The flow name steps in this scope are attributed to (StepReport.flow). */
@@ -2220,10 +2284,16 @@ async function execRunStep(
     target,
     ...depthOf(scope),
   });
+  // The fragment's own `env` layers over the values already in force and, being
+  // a fresh object, leaves the parent scope's map exactly as it was when this
+  // `run:` returns — including when a step inside it throws.
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
+    childScope(scope, {
+      runStack: [...scope.runStack, { canonical, display }],
+      ...(fragment.env ? { env: mergeScriptEnv(scope.env, fragment.env) } : {}),
+    })
   );
 }
 
@@ -2263,11 +2333,16 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
+  // The whole precedence, in one expression: the flow-level defaults this scope
+  // carries, then the run-time map (a default loses to a caller at any depth),
+  // then the step's own map, which is not a default at all.
   const { outcome } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
     logBudget: state.scriptLogBudget,
+    env: mergeScriptEnv(scope.env, state.runtimeEnv, step.env),
+    runNotes: state.scriptRunNotes,
     ...(state.signal ? { signal: state.signal } : {}),
   });
   return outcome.reason === undefined

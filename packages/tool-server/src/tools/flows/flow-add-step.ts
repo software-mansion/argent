@@ -23,6 +23,7 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type RecordedStepWarning,
   type RecordingSession,
 } from "./flow-utils";
 import {
@@ -1102,12 +1103,54 @@ async function captureRunTarget(
           `step would replay a different flow than the one that just ran`,
       };
     }
-    return { flow: `${name}.yaml` };
+    // A `run:` step carries no environment of its own, so whatever this call
+    // passed the sub-run is not part of what was recorded — the one lossy
+    // rewrite in this function that used to say nothing.
+    const dropped = envNamesInArgs(args.env);
+    return {
+      flow: `${name}.yaml`,
+      ...(dropped.length > 0
+        ? {
+            warning:
+              `a run: step takes no env, so the ${dropped.length > 1 ? "values" : "value"} this ` +
+              `call passed (${dropped.join(", ")}) ${dropped.length > 1 ? "are" : "is"} NOT part ` +
+              `of the recorded step and the replay runs without ` +
+              `${dropped.length > 1 ? "them" : "it"}. Write ${dropped.length > 1 ? "them" : "it"} ` +
+              `into ${name}.yaml's own env:, or into this recording's, or keep the raw ` +
+              `flow-execute step instead (recording the call with a delayMs does that)`,
+          }
+        : {}),
+    };
   } catch (err) {
     return {
       warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
     };
   }
+}
+
+/**
+ * The `run:` rewrite's own warning, as a verdict the finish can carry.
+ *
+ * {@link captureRunTarget} hands back a `flow` only when the rewrite succeeded,
+ * and the one warning it raises beside a successful rewrite is the dropped
+ * `env`. Every other warning it raises comes with no `flow` and keeps the raw
+ * step, which the summary already renders as `N. tool: flow-execute`.
+ */
+function runEnvWarning(
+  step: FlowStep,
+  warning: string | undefined
+): Omit<RecordedStepWarning, "step"> | undefined {
+  return step.kind === "run" && warning !== undefined ? { warning, kind: "env" } : undefined;
+}
+
+/**
+ * The `env` names a recorded call carried. Names only: this reads out of a tool
+ * call's arguments, where `{{secret:NAME}}` exists precisely so a credential is
+ * not sitting in the clear, and the names alone say which values were lost.
+ */
+function envNamesInArgs(env: unknown): string[] {
+  if (env === null || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env);
 }
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
@@ -1286,6 +1329,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "launch", app: strippedArgs.bundleId as string };
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
+        // Set here too: this branch is lossy as well, and a `run:` step that
+        // silently dropped the sub-run's environment contradicts the promise a
+        // recorded script step is written around.
+        warning = runTarget.warning;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
@@ -1307,10 +1354,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
         // A host-mode append re-parses the file, so the scan that refuses an
-        // output reference sees the steps ALREADY there as well — and a
-        // mid-recording hand edit is a supported way for one of those to carry
-        // one. Blaming the just-run call for that step's field would send the
-        // author back over a call whose args were clean.
+        // output reference sees what is ALREADY there as well — a step from an
+        // earlier call, or the file's own top-level `env:`, both of which a
+        // mid-recording hand edit can put there. Blaming the just-run call for
+        // that would send the author back over a call whose args were clean —
+        // and "fix the step named below" names no step when the refusal is
+        // about the file's own `env:`.
         throw wrapFailure(
           err,
           {
@@ -1322,8 +1371,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           holdsOutputReference(step)
             ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
                 `recorded. Check the call's changes before you retry. ${refused}`
-            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
-                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+            : `The \`${params.command}\` call ran, but something already in the flow file failed ` +
+                `validation. Fix what is named below — it is not in this call. Check the call's ` +
+                `changes before you retry. ${refused}`
         );
       }
 
@@ -1338,9 +1388,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
-      if (waitWarning) {
+      const carried = waitWarning ?? runEnvWarning(step, warning);
+      if (carried) {
         (session.stepWarnings ??= new Map()).set(stepCount, {
-          ...waitWarning,
+          ...carried,
           step: stepAnchor(step),
         });
       }

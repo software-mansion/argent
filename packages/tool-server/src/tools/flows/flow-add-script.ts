@@ -9,7 +9,10 @@ import {
 } from "@argent/registry";
 import {
   appendStepToFlow,
+  assertNoEnvOutputReferences,
   countStepsOnDisk,
+  flowEnvOnDisk,
+  parseScriptEnv,
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
@@ -17,11 +20,14 @@ import {
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
+  type ScriptEnv,
 } from "./flow-utils";
 import { canonicalFlowPath } from "./flow-file-refs";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
+import { describeScriptEnvProblem, mergeScriptEnv } from "./script/flow-script-env";
+import { InvalidToolInputError } from "../../utils/capability";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
 
@@ -37,6 +43,14 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Optional time limit in milliseconds. The default is 30000 and the minimum is 100."),
+  env: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Environment values this script reads from its environment (`process.env` in a `.mjs`, `$NAME` in a `.sh`), for this script only. Recorded verbatim as the step's `env`, and the flow file's own top-level `env` defaults are layered UNDER it here and at replay alike — so the run here matches a replay OF THIS FILE; a real replay can merge two further layers under those, the run's own --env/flow-execute values and each parent flow's `env:` when a `run:` step composes this one. Values are strings; quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, ARGENT_OUTPUT, ARGENT_REASON, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig. Do not use __proto__ either: this parameter's schema DROPS that name before any rule of argent runs, so the call passes with the entry silently gone and the flow file is written without it. " +
+        "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: this map is written into the flow file, so a plaintext value gets committed, and it also enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from `ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, the `ARGENT_SECRET_` keys of its `.env.local`/`.env`, then `~/.argent/secrets.env`. " +
+        "A shell `export` does NOT reach a script: the tool server's environment is a snapshot from its first start. Pass the value here, or name it in `scripts.env.allow`."
+    ),
 });
 
 interface FlowAddScriptResult {
@@ -109,6 +123,40 @@ const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehin
   },
 };
 
+/** Whether the recording's flow-level `env` is still the map the run took. */
+function sameEnv(before: ScriptEnv | undefined, after: ScriptEnv | undefined): boolean {
+  const a = before ?? {};
+  const b = after ?? {};
+  const names = Object.keys(a);
+  if (names.length !== Object.keys(b).length) return false;
+  return names.every((name) => Object.hasOwn(b, name) && a[name] === b[name]);
+}
+
+/** The flow-level names in force, for a message that reports a change. */
+function envNames(env: ScriptEnv | undefined): string {
+  const names = Object.keys(env ?? {});
+  return names.length > 0 ? `env ${names.join(", ")}` : "no flow-level env";
+}
+
+/**
+ * What changed, in names.
+ *
+ * {@link sameEnv} compares VALUES and {@link envNames} renders NAMES, so an
+ * edit that only changed a value would otherwise print the same text on both
+ * sides of the sentence — a difference the message announces and then does not
+ * show. That case says so in words instead; the file at `savedTo` holds both.
+ */
+function describeEnvDrift(before: ScriptEnv | undefined, after: ScriptEnv | undefined): string {
+  const names = Object.keys(before ?? {});
+  const sameNames =
+    names.length === Object.keys(after ?? {}).length &&
+    names.every((name) => Object.hasOwn(after ?? {}, name));
+  return sameNames
+    ? `it ran with ${envNames(before)} and the recorded step will replay with those same names, ` +
+        "at least one of them carrying a different value"
+    : `it ran with ${envNames(before)} and the recorded step will replay with ${envNames(after)}`;
+}
+
 function renderOutput(output: Record<string, unknown>): {
   outputJson: string;
   outputTruncated?: true;
@@ -131,7 +179,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs or .sh file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
+  description: `Run a local .mjs or .sh file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. It runs the file the way a replay OF THIS FILE will: this call's \`env\` over the flow file's own top-level \`env:\`. A real replay can merge two more layers under those — the run's own --env/flow-execute values, and each parent flow's \`env:\` when a \`run:\` step composes this one. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
@@ -159,6 +207,20 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
+    // The `env` ARGUMENT is judged before the entry is built, for the reason
+    // flow-execute judges its own: this is a caller's parameter, so it earns a
+    // caller's refusal — named after the parameter and answered 400 — rather
+    // than the flow parser's "Unrecognized flow entry", which is worded for a
+    // step already written into a file. The parser's own helper below then has
+    // nothing left to reject on this path; it still guards the shape the entry
+    // is built into.
+    const envProblem = describeScriptEnvProblem(params.env ?? {});
+    if (envProblem) {
+      throw new InvalidToolInputError(`\`env\` ${envProblem}`, {
+        failure_stage: "flow_add_script_env",
+      });
+    }
+
     // Validated by the flow parser's own helpers, against the entry they would
     // read out of YAML: a path this tool accepts is a path parseFlow accepts,
     // and a rejection reads the same as in a hand-written flow.
@@ -166,6 +228,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       script: {
         path: params.path,
         ...(params.timeout !== undefined ? { timeout: params.timeout } : {}),
+        ...(params.env !== undefined ? { env: params.env } : {}),
       },
     };
     const step: Extract<FlowStep, { kind: "script" }> = {
@@ -174,7 +237,68 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       ...(params.timeout !== undefined
         ? { timeout: parseScriptTimeout(entry, params.timeout) }
         : {}),
+      ...(params.env !== undefined ? { env: parseScriptEnv(entry, params.env) } : {}),
     };
+
+    // Before the script runs, not after. The append re-parses the whole file
+    // and would refuse this map there — but by then the script has run for real
+    // and nothing it did is rolled back, and that refusal is written for a step
+    // ALREADY in the file, so it would send the caller to edit a flow that does
+    // not hold this step yet. Re-raised as caller input, like the name rule
+    // above it: this is the same argument that rule judges.
+    try {
+      assertNoEnvOutputReferences(step.env, "This call's", "flow_add_script_env");
+    } catch (err) {
+      throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
+        failure_stage: "flow_add_script_env",
+      });
+    }
+
+    // The recording's own flow-level `env` goes UNDER the step's map, exactly as
+    // the runner will layer it at replay. Read off the FILE, because that is
+    // where a top-level `env:` the agent hand-added lives before the first
+    // append catches the in-memory copy up — and without this the live run and
+    // the replay would take different environments, which is the one failure a
+    // recorded script step exists to prevent.
+    //
+    // A file that will not read or parse STOPS the call rather than falling back
+    // to the in-memory copy. That copy is a different environment — in practice
+    // an empty one, since a hand-added `env:` has never been through an append —
+    // so the script would run without the map, silently. The append after the
+    // run would refuse the same file anyway, by which time the script has run
+    // and nothing is rolled back.
+    let flowEnv: ScriptEnv | undefined;
+    try {
+      flowEnv = await flowEnvOnDisk(session);
+    } catch (err) {
+      // A file that is GONE and a file that is malformed ask for opposite
+      // things. "Repair it and call this again" cannot be followed when there
+      // is nothing to repair, and this tool cannot re-create the file: only
+      // flow-start-recording establishes the key.
+      const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+      throw wrapFailure(
+        err,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_add_script_env",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        },
+        `The script "${step.path}" was NOT run and nothing was recorded in "${params.name}": ` +
+          (missing
+            ? `${session.filePath} is gone. Everything recorded into it is gone with it, and ` +
+              `the append after the run would only recreate a file holding this one step. Start ` +
+              `the recording again with flow-start-recording and re-walk it. `
+            : `${session.filePath} is not a flow argent can use as it stands — it may not ` +
+              `parse, or it may parse and break a rule. The append after the run re-reads ` +
+              `that file and would refuse it then, with the script already run and nothing ` +
+              `rolled back — and the flow-level \`env\` this run has to share with the replay ` +
+              `is read off it too, so running now would give the script an environment the ` +
+              `recorded step will not take. The reason below is about the FILE, not about this ` +
+              `script. Repair it and call this again. `) +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
 
     const flowDir = nodePath.dirname(await canonicalFlowPath(session.filePath));
 
@@ -188,6 +312,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       flowDir,
       step,
       projectRoot: params.project_root,
+      env: mergeScriptEnv(flowEnv, step.env),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
@@ -239,17 +364,19 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
 
     let savedTo: FlowSavedTo;
     let stepCount: number;
+    let appendedEnv: ScriptEnv | undefined;
     try {
-      ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+      ({ savedTo, stepCount, flowEnv: appendedEnv } = await appendStepToFlow(session, step));
     } catch (err) {
       // A host-mode append re-parses the WHOLE file before it pushes, so the
-      // scan that refuses an output reference judges the steps already in it as
-      // well — and a mid-recording hand edit is a supported way for one of those
-      // to carry one. A `script` step spells none of the fields that scan reads,
-      // so a refusal on this path is never about the step just run: saying
-      // "recording it failed" would send the author back over the one call that
-      // did nothing wrong, and never name the edit that has to be undone.
-      const refusedAnEarlierStep = getFailureSignal(err)?.failure_stage === "flow_output_reference";
+      // scan that refuses an output reference judges what is already in the file
+      // as well — a step from an earlier call, or the file's own top-level
+      // `env:`, both of which a mid-recording hand edit can put there. The step
+      // just run is not among them: its own `env` is refused before the script
+      // starts, and a `script` step spells no other field that scan reads.
+      // Saying "recording it failed" would send the author back over the one
+      // call that did nothing wrong, and never name the edit to undo.
+      const refusedTheFile = getFailureSignal(err)?.failure_stage === "flow_output_reference";
       throw wrapFailure(
         err,
         {
@@ -259,17 +386,33 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
           error_kind: "unknown",
         },
         `Script "${step.path}" passed, but the step was not recorded. ` +
-          (refusedAnEarlierStep
-            ? `Fix the existing step named below in ${session.filePath}. `
+          (refusedTheFile
+            ? `Fix what is named below in ${session.filePath} — it is already in the file, ` +
+              `not in this script. `
             : "Check the script's changes before you retry. ") +
           `${err instanceof Error ? err.message : String(err)}`
       );
     }
 
+    // The file's `env:` was read before a run that may have taken minutes, and
+    // the append re-read it afterwards. An edit landing in that window is
+    // recorded and replays under an environment this run never took, so the
+    // promise the message makes has to be withdrawn when it no longer holds.
+    const envDrifted = !sameEnv(flowEnv, appendedEnv);
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message: `Added script step to "${params.name}" flow.`,
+      // The plain form is the one the tool already answered with, unchanged:
+      // what a caller reads on a normal call is "the step is in the flow", and
+      // the layering `env` adds is the parameter's own documentation, not news
+      // to repeat on every success.
+      message: envDrifted
+        ? `Added script step to "${params.name}" flow, but the flow file's own \`env\` changed ` +
+          `while the script was running: ${describeEnvDrift(flowEnv, appendedEnv)}. The step IS ` +
+          `in the file — calling this again would append a SECOND one and run the script's ` +
+          `side effect twice. Remove it first if you want it recorded under the environment ` +
+          `now on disk.`
+        : `Added script step to "${params.name}" flow.`,
       ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),

@@ -16,6 +16,7 @@ Read this reference when polishing, composing, or manually reviewing a flow.
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
     - [Bash scripts](#bash-scripts)
+  - [Environment values](#environment-values)
   - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
   - [YAML safety](#yaml-safety)
 
@@ -238,6 +239,9 @@ Use a local `.mjs` or `.sh` script only when the user requests one. A flow of sc
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+- script:
+    path: ../../scripts/create-user.mjs
+    env: { API_KEY: "{{secret:API_KEY}}", USER_TYPE: premium }
 ```
 
 The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js` in the step's own `path`. For a symlink, the target decides only when the target ends in `.mjs` or `.sh`. A target named `tool.bash`, `tool.py`, or one with no extension, keeps the extension the step wrote: a `.sh` step runs it under bash, and a `.mjs` step hands it to Node, which refuses it with a loader error that names the target.
@@ -246,12 +250,13 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 - **`path`** is relative to the flow file that contains the step. Include `.mjs` or `.sh` in lowercase, and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
+- **`env`** is a map of environment values for this script only. It goes INSIDE the `script:` value, never beside it. See [Environment values](#environment-values).
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
 Argent runs the script from the project root, not from the directory of the script file. Thus `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`.
 
-If a script fails, check its changes before you retry.
+If a script fails, check its changes before you retry. An **errored** step can also mean the environment could not be built and nothing ran: an unresolvable `{{secret:…}}`, or a name the runner refuses.
 
 ### Bash scripts
 
@@ -263,15 +268,48 @@ If a script fails, check its changes before you retry.
 - Argent runs the file as `bash <file>`. The file needs no execute bit, and the `#!` line is a comment. The script gets no arguments, and its standard input is empty. Exit 126 means that bash cannot read the file, or that a command in the file is not executable.
 - Argent finds bash from `scripts.bash`, then from PATH, then from `/bin/bash` and `/usr/bin/bash`. On Windows, the fallback is the bash of Git for Windows, never the WSL launcher. A `scripts.bash` that is not a bash errors the step. macOS ships bash 3.2 at `/bin/bash`, so set `scripts.bash` to use bash 4 features.
 - `"$(dirname "${BASH_SOURCE[0]}")"` is the directory of the REAL script file, which is not the working directory. Argent resolves the path before it runs the file, so for a symlinked script this names the directory of the target, not the directory the link sits in.
-- Commands resolve against the PATH of the tool-server, which it inherits from the program that started Argent, usually your editor. A command that is absent from that PATH exits 127. On Windows, the bash of Git for Windows puts its own directories first.
+- Commands resolve against the PATH of the tool-server, which it inherits from the program that started Argent, usually your editor. A command that is absent from that PATH exits 127 — see [Environment values](#environment-values) for the snapshot that PATH comes out of and what to do about it. On Windows, the bash of Git for Windows puts its own directories first.
 - Check the file out with LF line endings, and add `*.sh text eol=lf` to `.gitattributes`. A `$'\r': command not found` line in the log, or the stray-carriage-return failure above, means CRLF line endings.
 - On macOS and Linux, Argent stops the process group of the step when bash exits, so a background job dies with the step. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job: it runs on after the flow ends, and you must stop it yourself. `setsid` is absent on macOS.
 - On Windows there is no process group. A background job outlives a step that passed, so stop each job in the script.
 - Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` signals the whole process group, which holds bash itself. Under bash 5 that ends bash and the step fails; under the bash 3.2 of `/bin/bash` it does not, and the step passes - so the same flow passes on one host and fails on another. Signal the pid of the job.
 
+## Environment values
+
+A `script` step reads its inputs from its environment — `process.env` in a `.mjs`, `$NAME` in a `.sh`. Argent does **not** hand it your shell environment: the tool-server's own environment is a snapshot from its first start, so a later `export` never reaches a script. Values come from five layers, each replacing the one before it:
+
+1. The host allowlist (`PATH`, `HOME`, the toolchain names, `npm_config_*`), extended by the `scripts.env.allow` config key
+2. The root flow's top-level `env:` — a **default**
+3. Each nested flow's `env:`, outermost first — also a default
+4. The run's own values: `argent flow run --env NAME=value`, or `flow-execute`'s `env` parameter
+5. The step's own `env:` — not a default, so nothing outside it wins
+
+```yaml
+env: # a default for every script in this file
+  API_URL: https://api.example.com
+steps:
+  - script: { path: ../../scripts/seed.mjs, env: { USER_TYPE: premium } }
+```
+
+The file holds the defaults a project checks in; the run holds what changes per run, so one flow serves a local run and a CI job with no YAML edit.
+
+A `run:` fragment inherits the values in force, may override them inside itself, and the parent's return when it ends. A `tool: flow-execute` step does **not** inherit them — it starts a separate run, so pass what it needs in that step's own `env` argument.
+
+Values are **strings**: quote a number. A name matches `[A-Za-z_][A-Za-z0-9_]*` and must not be `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`, `ELECTRON_RUN_AS_NODE`, `ARGENT_FLOW_SCRIPT_RUNNER`, `ARGENT_OUTPUT` or `ARGENT_REASON` — the last two name the files a `.sh` writes its output document and its failure reason to, refused whichever language the step runs because a flow-level map applies to every step. Every npm spelling of `npm_config_node-options`, `npm_config_userconfig` and `npm_config_globalconfig` is refused too, because each reaches `NODE_OPTIONS`. `__proto__` is refused as well: it matches the name rule, but every merge on the way to the child copies the map through a plain object, where it is an accessor rather than an entry, so the value would be dropped and the step would pass anyway. That refusal covers the two YAML maps and `--env`. On the two tool parameters — `flow-execute`'s `env` and `flow-add-script`'s — the name is dropped by the schema BEFORE any rule of argent runs, so the call passes with the value missing and no refusal; `flow-add-script` writes its map into the flow file, so the committed step loses it too. The map itself must be a plain map: a YAML tag that builds something else — `!!omap` in its sequence form builds a Map, `!!set` a Set, `!!timestamp` a Date — is refused, because argent reads no entries from any of them and the script would run without every value, silently.
+
+**Write a credential as `{{secret:NAME}}`, never in the clear.** That exact spelling — lowercase `secret`, a colon, a name, no spaces. `{{ secret: NAME }}` and `{{SECRET:NAME}}` are not placeholders; they reach the script as literal text and the step passes. Argent resolves the placeholder on the tool-server host from `ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, the `ARGENT_SECRET_`-prefixed keys of its `.env.local`/`.env`, then `~/.argent/secrets.env`. A name no source defines errors the step and the message lists the names that are available; never ask the user for the value itself.
+
+When a `script` step FAILS, each value a `{{secret:NAME}}` resolved to is replaced by that placeholder in the failure message and stack. That is the only value argent hides, and the failure text is the only place it hides it:
+
+- Every other `env` value is ordinary flow data. It appears as written in reports, in the file `flow-finish-recording` returns, and in `echo` output.
+- Argent does NOT check whether a plaintext value happens to be a credential, and does not compare an `env` value against the secrets it can resolve. A value you write in the clear is a value you wrote in the clear.
+- The document a script RETURNS is not redacted. Do not put a credential or other sensitive value in it — hand a later step a derived value instead.
+
+A script starting `adb` or a version-manager shim can fail with `command not found` on a host where the command works in the user's shell, because `PATH` is that same snapshot; a `.sh` meets this first, as exit 127. The step's reason carries a note saying so. Restart the tool-server, or pass an absolute path through an `env` value. `scripts.env.allow` does NOT fix it: that key adds names to copy out of the snapshot, and `PATH` is copied already.
+
 ## Snapshots and standalone runs
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--env NAME=value] [--json]` runs without an LLM and exits non-zero on failure. `--env` is repeatable and overrides the flow file's own `env` defaults; everything after the first `=` is the value, so quote one holding a space (`--env "AUTH=Bearer abc"`).
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 

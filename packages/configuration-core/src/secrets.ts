@@ -28,10 +28,13 @@ import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
  *   argent must not be able to type. Adding the prefix to one line is the
  *   deliberate act that exposes it.
  *
- * Project sources sit under the project root discovered from the tool-server's
- * cwd, and are skipped when the cwd is not inside a project rather than
- * anchored at an arbitrary directory. The global scope (`~/.argent/secrets.env`)
- * needs no discovery and so always works.
+ * Project sources sit under the project root discovered from a working
+ * directory — the tool-server's own, or the one a caller supplies, which is the
+ * primary path for flows: a run anchors the chain at the project it runs in
+ * rather than at whatever directory spawned the server. They are skipped when
+ * that directory is not inside a project rather than anchored at an arbitrary
+ * one. The global scope (`~/.argent/secrets.env`) needs no discovery and so
+ * always works.
  */
 
 /** The mandatory prefix for a secret exposed through a shared environment or file. */

@@ -2065,6 +2065,39 @@ describe("recording a flow-execute step while several projects are in play", () 
     expect(same.message).toBe('Step added to "quiet" flow');
     expect(await readSteps(recordingRoot, "quiet")).toEqual([{ kind: "run", flow: "helper.yaml" }]);
   });
+
+  it("warns that a rewritten run: step drops the env the recorded call passed", async () => {
+    // A `run:` step carries no environment of its own, so the sub-run's `env`
+    // is not part of what was recorded and the replay runs without it — the one
+    // lossy rewrite that used to say nothing. Names only: a value here may be a
+    // credential.
+    const recordingRoot = await makeRoot("run-target-env");
+    await writeSavedFlow(recordingRoot, "helper", fragment);
+
+    await start(recordingRoot, "wrapper");
+    const res = await addRawStep(recordingRoot, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: recordingRoot,
+      env: { BUILD: "1421", AUTH: "Bearer abc" },
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain("a run: step takes no env");
+    expect(res.message).toContain("BUILD, AUTH");
+    expect(res.message).not.toContain("Bearer abc");
+    expect(await readSteps(recordingRoot, "wrapper")).toEqual([
+      { kind: "run", flow: "helper.yaml" },
+    ]);
+
+    // The finish counts it apart from the two other kinds: the step replays,
+    // just without values the live call had.
+    const finished = (await flowFinishRecordingTool.execute(
+      {},
+      { name: "wrapper", project_root: recordingRoot }
+    )) as { message: string; summary: string[] };
+    expect(finished.message).toContain("1 step lost the env the recorded call ran with");
+    expect(finished.summary.join("\n")).toContain("a run: step takes no env");
+  });
 });
 
 // ── Summarizing a hand-edited file that the parser cannot fully constrain ──

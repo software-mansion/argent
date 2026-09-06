@@ -8,6 +8,7 @@
 //   --name value     (kind: "value")
 //   --name=value
 //   -n value         (single-letter alias of a value option)
+//   --name a --name b (kind: "values" — every occurrence collected)
 //   --name / -n      (kind: "boolean")
 //   --               (end of options; the rest are positionals)
 //
@@ -26,13 +27,24 @@ export type OptionSpec =
       readonly alias?: string;
       /** When set, any other value is a usage error naming the accepted ones. */
       readonly choices?: readonly string[];
+    }
+  | {
+      /**
+       * A value option that may be repeated, collecting every occurrence
+       * (`--env A=1 --env B=2`). Distinct from `"value"` rather than a flag on
+       * it, so the parsed type says which shape a caller gets and a command
+       * cannot read an array as a string.
+       */
+      readonly kind: "values";
+      readonly alias?: string;
     };
 
 export type OptionSpecs = Readonly<Record<string, OptionSpec>>;
 
 /** The parsed options: `true` for a boolean that was given, the string for a
- * value option, absent when not given. A repeated option keeps the last value. */
-type ParsedOptions = Record<string, string | boolean | undefined>;
+ * value option, the list of occurrences for a repeatable one, absent when not
+ * given. A repeated `"value"` option keeps the last value. */
+type ParsedOptions = Record<string, string | boolean | string[] | undefined>;
 
 interface ParsedCommandArgs {
   positionals: string[];
@@ -123,6 +135,12 @@ export function parseCommandArgs(argv: readonly string[], specs: OptionSpecs): P
       value = undefined;
     }
     if (value === undefined) throw new UsageError(`${display} requires a value`);
+    if (spec.kind === "values") {
+      const collected = options[name];
+      if (Array.isArray(collected)) collected.push(value);
+      else options[name] = [value];
+      continue;
+    }
     if (spec.choices && !spec.choices.includes(value)) {
       throw new UsageError(`${display} must be ${listChoices(spec.choices)}, got "${value}"`);
     }

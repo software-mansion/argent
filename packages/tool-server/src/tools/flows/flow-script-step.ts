@@ -2,14 +2,17 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
-import { hasScriptExtension, scriptInterpreter, type FlowStep } from "./flow-utils";
+import { hasScriptExtension, scriptInterpreter, type FlowStep, type ScriptEnv } from "./flow-utils";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
   type FlowScriptResult,
+  type FlowScriptRunNotes,
+  type FlowScriptSecret,
 } from "./script/flow-script-executor";
+import { resolveScriptEnvSecrets } from "./script/flow-script-env";
 
 /**
  * One `script` step, from a path to a verdict.
@@ -42,6 +45,16 @@ interface FlowScriptStepRequest {
   step: Extract<FlowStep, { kind: "script" }>;
   projectRoot: string;
   logBudget?: FlowScriptLogBudget;
+  /**
+   * Every environment value this invocation runs with, already layered by the
+   * caller in the order {@link mergeScriptEnv} fixes — the step's own `env`
+   * included, so this is the whole map and the step is not read again here.
+   * `{{secret:NAME}}` placeholders are still unresolved: they are substituted
+   * below, once, on the one path both callers share.
+   */
+  env?: ScriptEnv;
+  /** Notes an earlier step of the same run already carried. */
+  runNotes?: FlowScriptRunNotes;
   signal?: AbortSignal;
 }
 
@@ -87,6 +100,26 @@ export async function runFlowScriptStep(
     };
   }
 
+  // The secret chain is anchored at the run's project, not at the tool server's
+  // working directory: that is a snapshot from whatever spawned the server, and
+  // an editor sets it to `/` or `$HOME`. Left to the default, a project's own
+  // `.argent/secrets.env` and `.env` would never be found — on exactly the hosts
+  // this feature is most used on. The chain reads those files on each call, so
+  // a secret added while the server is up applies without a restart; the
+  // server's own environment does not work that way.
+  //
+  // A name no source defines is an `error`, not a `fail`: the step never
+  // started, and the fault is the host's missing secret rather than anything
+  // the script did. The resolver's own message lists the available names and
+  // every source it looked in, which is what the author acts on.
+  let env: ScriptEnv;
+  let secrets: FlowScriptSecret[];
+  try {
+    ({ env, secrets } = resolveScriptEnvSecrets(request.env ?? {}, { cwd: request.projectRoot }));
+  } catch (err) {
+    return { ran: "no", outcome: { status: "error", reason: errMsg(err) } };
+  }
+
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
     // Decided here from the CANONICAL path — the file the executor really runs —
@@ -106,13 +139,25 @@ export async function runFlowScriptStep(
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,
-    // No `secrets`: nothing resolves one into a script step yet, so there is
-    // nothing for the executor to redact out of the captured log.
     ...(request.logBudget ? { logBudget: request.logBudget } : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    // The values THIS step's `{{secret:NAME}}` placeholders resolved to, and
+    // nothing else — not the whole resolvable chain, not the plaintext values
+    // beside them. A secret the step never referenced is not in its
+    // environment, so scanning its failure text for one finds nothing and
+    // costs a walk over every failure.
+    ...(secrets.length > 0 ? { secrets } : {}),
+    ...(request.runNotes ? { runNotes: request.runNotes } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
 
-  const verdict = scriptVerdict(result);
+  // Added to the executor's own notes rather than appended after the verdict:
+  // this IS a note about the host, and `scriptVerdict` is where a note joins
+  // the script's own message.
+  const shellLimit = describeShellEnvironmentLimit(result);
+  const verdict = scriptVerdict(
+    shellLimit ? { ...result, notes: [...result.notes, shellLimit] } : result
+  );
   const frames = result.ok
     ? ""
     : scriptFrames(result.failure?.stack, [
@@ -206,6 +251,140 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
   if (frames.length === 0) return "";
   if (dropped > 0) frames.push(`    … ${dropped} more frame${dropped === 1 ? "" : "s"}`);
   return `\n${frames.join("\n")}`;
+}
+
+/**
+ * How a shell says a command was not on `PATH`, in the shapes the shells write
+ * it in. Each matches a whole LINE rather than the phrase inside it, AND a line
+ * that ENDS the failure text. `execSync` folds the child's stderr into the
+ * message it throws, so a script that greps an install log, asserts on an error
+ * path, or wraps a build that failed on its own carries the words with nothing
+ * missing — line-anchoring alone made a quoted shell line the best possible
+ * match, and the note then ended that verdict with a confident instruction
+ * pointing at the wrong subsystem. What the two do not share is the tail: the
+ * shell's own line is the last thing a failed `execSync` folds in, while a
+ * quoted one has the script's own transcript after it. A missed note is the
+ * safe direction, so the tail is what is asked.
+ *
+ * A shell line has a shape a sentence does not, and it is the shape that is
+ * matched, not a length: the writer, then optionally a line number, then the
+ * command, then the phrase and nothing after it —
+ *
+ *   sh: adb: command not found            bash, ksh, macOS /bin/sh
+ *   /path/to/build.sh: line 3: adb: command not found
+ *   /bin/sh: 1: adb: not found            dash, i.e. Debian/Ubuntu and CI
+ *   zsh:1: command not found: adb         zsh puts the phrase first
+ *
+ * `not found` without `command` is dash's wording, and `/bin/sh` IS dash on
+ * Debian and Ubuntu — which is what a bare `execSync` runs and what the unit
+ * test workflow runs on, so the host where the note is most useful was the one
+ * host it never appeared on. That wording is its own pattern, and it requires
+ * the LINE NUMBER dash always writes: without it, `<a>: <b>: not found` is the
+ * shape of an ordinary two-part application error — `fixture: users.json: not
+ * found`, `HTTP 404: /api/users: not found` — and a step that failed on a
+ * missing fixture would end its verdict with a confident instruction to restart
+ * the tool server. Script steps exist to seed databases and read fixtures,
+ * which is exactly where that message shape lives.
+ *
+ * The line number alone does not separate the two: a THREE-part error with a
+ * numeric second field has it as well (`request failed: 404: /api/users: not
+ * found`). What dash writes in front of the number is a path or a bare shell
+ * name and never a sentence, so that is what the pattern asks for.
+ *
+ * The end anchor is what makes the phrase safe to accept at all: `for: command
+ * not found never appeared in it` has the words but keeps going. Nothing caps
+ * how long the line may be, either — bash prefixes the failing script's own
+ * path, and a deep enough checkout would push a genuine miss past a fixed cap.
+ */
+const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
+  /^[^\n:]+: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[^\n:]*[/\\][^\n:]*|(?:ba|da|k|z|a)?sh): (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^[^\n:]+:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
+  // Anchored at the quote cmd.exe opens the line with. Without that anchor any
+  // sentence QUOTING the message matched — `AssertionError: 'foo' is not
+  // recognized as an internal or external command` — which is the same false
+  // positive the two signatures above were tightened for.
+  /^'[^\n']+' is not recognized as an internal or external command/im,
+];
+
+/**
+ * Node's own spelling, for a command it spawned without a shell. Read to the
+ * end of the line rather than to the first space: a path with a space in it is
+ * the flagship case (`spawnSync /Applications/Android Studio.app/… ENOENT`).
+ *
+ * It is kept apart from the shell wordings because it does not say the same
+ * thing. Node raises this when the COMMAND is missing and, identically, when
+ * the `cwd` it was given does not exist — same `syscall`, same `path`, same
+ * message — so a note claiming a command was missing would send an author
+ * looking for one that was there all along, at an absolute path. Bare `ENOENT`
+ * is still not matched at all: that is also how a missing data file reads.
+ *
+ * One token between the two words, so `spawn of the seeder finished; reading
+ * fixtures/orders.json failed: ENOENT` — a missing data file, the very shape
+ * the paragraph above promises is not matched — no longer is. Node writes a
+ * path there and never sentence punctuation.
+ */
+const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?[^\n:;,]+ ENOENT/;
+
+/**
+ * A `.sh` says it in an exit code, not in words.
+ *
+ * Its stdout and stderr are drained and discarded, so the shell's own
+ * `command not found` line never reaches this side unless the script copied it
+ * into `$ARGENT_REASON` itself — and a script that meant to run `adb` wrote no
+ * error handling for a case it does not know is possible. What always arrives
+ * is code 127, which is bash's own name for exactly this. Matched on the
+ * sentence the runner composes rather than on a bare `127`, which is also an
+ * ordinary exit code for a script that chose it.
+ */
+const BASH_COMMAND_NOT_FOUND = /^The script exited with code 127 \(bash: /m;
+
+/**
+ * The note a `command not found` earns, or null when the failure was something
+ * else.
+ *
+ * On its own that failure points nowhere: the command plainly exists, and works
+ * in the author's own shell. What it does not say is that the tool server is a
+ * long-lived process whose environment — `PATH` included — is a snapshot from
+ * its first start, so a later `export`, or an editor that spawned the server
+ * with a short login `PATH`, leaves a version-manager shim or an `adb` out of
+ * reach.
+ *
+ * `scripts.env.allow` is NOT one of the remedies, though it reads like one: it
+ * widens which names are copied out of that snapshot, and `PATH` is on the
+ * built-in allowlist already, so naming it there does nothing. Restarting the
+ * server is what replaces the snapshot.
+ */
+function describeShellEnvironmentLimit(result: FlowScriptResult): string | null {
+  if (result.ok) return null;
+  // The FAILURE only. Nothing a script prints is reported, and a script that
+  // greps an install log, asserts on an error path, or echoes a CI transcript
+  // could carry this phrase back while failing for an unrelated reason.
+  const text = result.failure?.message ?? "";
+  // Bash FIRST, and the order is load-bearing. A `.sh` is told to explain
+  // itself by writing `$ARGENT_REASON`, and the way a shell script explains a
+  // failed command is to send stderr there — which puts the shell's own wording
+  // into the same message as the runner's own 127 hint. Tested the other way
+  // round, such a step matched the `.mjs` branch and earned a prefix on top of
+  // a hint that had already named the cause.
+  const what = BASH_COMMAND_NOT_FOUND.test(text)
+    ? // Nothing: the runner's own 127 hint sits immediately before this note
+      // and has already said what the code means.
+      ""
+    : COMMAND_NOT_FOUND_SIGNATURES.some((signature) => signature.test(text))
+      ? "A command was not found. "
+      : SPAWN_ENOENT.test(text)
+        ? "A command was not found — or the working directory it was given does not exist, " +
+          "which Node reports the same way. "
+        : null;
+  if (what === null) return null;
+  return (
+    `${what}The tool server keeps the environment it started with, so an ` +
+    "`export` made later never reaches a script. `PATH` is already copied from that snapshot, " +
+    "so `scripts.env.allow` cannot widen it — that key only adds NAMES to copy. Restart the " +
+    "tool server to take your current environment, or pass an absolute path through the " +
+    "step's `env`."
+  );
 }
 
 export type ScriptRan = "yes" | "no" | "unknown";

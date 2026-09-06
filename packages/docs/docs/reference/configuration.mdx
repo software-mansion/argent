@@ -40,11 +40,20 @@ argent config get ios.additionalDeviceSets
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                                                     |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                                              |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                                                  |
+| `scripts.env.allow`        | project, global | union            | Extra environment names a flow `script` process inherits from the tool-server, on top of the built-in allowlist. An array of names                                                 |
 | `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100`                        |
 | `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to the Node process of a flow `script` step. Default `512`. Argent refuses a value below `32`. The limit does not apply to a bash script |
 | `scripts.bash`             | global          | global wins      | The absolute path of the bash that runs a `.sh` script step. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)                                                            |
 
 Argent reads the three `scripts.` keys from the global file only. A project file cannot raise the limits that one script step runs under. It also cannot set `scripts.bash`: the value is an absolute path that only one operating system spells that way, so a committed value breaks every `.sh` step for each teammate on another OS. Each developer pins their own bash globally.
+
+Argent reads `scripts.env.allow` from both files, because it names a project input rather than a limit on the host. Argent resolves the project file from the `project_root` of the run, not from the working directory of the tool-server. The working directory of the tool-server is whatever started it, usually your editor, and often `/` or your home directory. So the config comes from the project you ran against, even for a flow kept elsewhere, as in `argent flow run ~/shared-flows/checkout.yaml`.
+
+Argent ignores an entry that names anything starting with `ARGENT_`, whatever its case. That prefix covers its own token, its own port, the address of its own server, and each `ARGENT_SECRET_` value. Argent ignores a name that steers the script process too, and one that is not an environment variable name at all. The run reports each entry it dropped, and names it. Argent ignores `__proto__` as well, although it matches the name rule: Argent copies the environment through a plain object, where that name is an accessor rather than an entry.
+
+Argent drops an entry that is not a string, and a blank entry, when it reads the configuration file. That is before the run can name it. `argent config set` echoes back the list it stored, which is where you see it missing. When the whole value is not a list, as in `"scripts.env.allow": "DATABASE_URL"`, Argent reads no names from it and the run says so, naming the file. Without that note the key reads exactly like one you never set.
+
+Pass the value a script needs under a name of your own. The environment of the tool-server is a snapshot from its first start, so a later `export` in your shell does not reach a name on this list. See [Environment values](/docs/reference/flow-yaml#environment-values).
 
 A `scripts.bash` value that Argent reads and cannot use **errors** the `.sh` step. Argent does not fall back to the PATH. A global file Argent cannot read at all is a different case: wrong permissions, or JSON an interrupted write left half-finished. Argent cannot see the key there, so the step runs under the bash on the PATH, and the report of the step says the configuration was not read.
 
@@ -144,11 +153,13 @@ Argent can remove a flag from the recognized set. `argent flags` shows a flag th
 
 ## Secrets
 
-A flow step or a `keyboard` call can type a credential without the credential in the file or in the agent context. The step contains a placeholder:
+A flow step or a `keyboard` call can use a credential without the credential in the file or in the agent context. The step contains a placeholder:
 
 ```yaml
 - type: { into: { id: password }, text: "{{secret:APP_PASSWORD}}" }
 ```
+
+A placeholder also works in an `env` value of a flow `script` step. Four channels accept one: the top-level `env` of a flow file, the `env` of a `script` step, the `env` parameter of `flow-execute` that `argent flow run --env` fills, and the `env` parameter of `flow-add-script`. Nothing is typed there. The tool-server resolves the name and hands the value to the script process. See [Environment values](/docs/reference/flow-yaml#environment-values).
 
 The tool-server replaces the placeholder when the step runs. The tool-server resolves the name on the machine that runs the tool-server. It takes the first source that defines the name:
 

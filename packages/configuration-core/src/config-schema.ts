@@ -222,6 +222,26 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-local",
     example: "~/Movies/argent",
   },
+  {
+    key: "scripts.env.allow",
+    description:
+      "Extra environment variable names a flow `script` process inherits from the tool " +
+      "server, on top of argent's built-in allowlist (PATH, HOME, the toolchain names and " +
+      "so on). A project input rather than a host control, so both scopes are read and the " +
+      "two lists are unioned. Any name starting with `ARGENT_` is ignored here — the whole " +
+      "prefix, not a list of the names argent uses today — and so is a name that steers the " +
+      "runner's own process, or one that is not an environment variable name at all; the " +
+      "run's notes say when a name was dropped. An entry that is not a string, or a blank " +
+      "one, goes when the file is read, before the run can name it — `argent config set` " +
+      "echoes back the list it stored. Remember the server's environment is a snapshot " +
+      "from its first start, so a later `export` in your shell does not reach it.",
+    scopes: ["project", "global"],
+    parse: asStringArray,
+    // Additive: a project names what its own scripts read, on top of whatever
+    // the machine's global list already carries.
+    merge: "union",
+    example: '["DATABASE_URL", "AWS_PROFILE"]',
+  },
   // All three `scripts.` keys below are global-scope only, for two reasons. The
   // two bounds: a checked-in `.argent/config.json` must not raise the ceiling on
   // how much of the machine a script step may occupy. `scripts.bash`: the value

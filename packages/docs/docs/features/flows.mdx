@@ -49,6 +49,8 @@ A flow can contain more than taps and text. A step can wait for an element, wait
 
 Use a local script for setup or cleanup that device steps cannot do. A script is an `.mjs` file or a `.sh` file. Ask the agent to add the script at the required point in the flow.
 
+A script reads its inputs from its environment. The flow file holds the defaults, and `argent flow run --env NAME=value` holds what changes per run, so one flow serves a local run and a CI job. Write a credential as `{{secret:NAME}}`, which Argent resolves on the machine that runs the flow and keeps out of the failure text of the step. See [Environment values](/docs/reference/flow-yaml#environment-values).
+
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 
 ## Replaying a flow

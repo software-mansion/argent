@@ -117,6 +117,35 @@ describe("recordings.directory — schema entry", () => {
   });
 });
 
+describe("scripts.env.allow — schema entry", () => {
+  it("is unset by default", () => {
+    expect(getConfigValueByKey("scripts.env.allow", opts())).toBeUndefined();
+  });
+
+  it("unions both scopes — a project names what its own scripts read", () => {
+    // Additive rather than "project wins": the key names a project input on top
+    // of the machine's list, unlike the two host bounds beside it.
+    setConfigValue("scripts.env.allow", ["AWS_PROFILE"], "global", opts());
+    setConfigValue("scripts.env.allow", ["DATABASE_URL"], "project", opts());
+    expect(getConfigValueByKey("scripts.env.allow", opts())).toEqual([
+      "AWS_PROFILE",
+      "DATABASE_URL",
+    ]);
+  });
+
+  it("takes both scopes, unlike the global-only host bounds", () => {
+    expect(getConfigDefinition("scripts.env.allow")?.scopes).toEqual(["project", "global"]);
+    expect(getConfigDefinition("scripts.maxTimeoutMs")?.scopes).toEqual(["global"]);
+    expect(getConfigDefinition("scripts.heapLimitMb")?.scopes).toEqual(["global"]);
+  });
+
+  it("drops a blank or non-string entry when the file is read", () => {
+    expect(
+      setConfigValue("scripts.env.allow", ["  DATABASE_URL  ", "  "], "project", opts())
+    ).toEqual(["DATABASE_URL"]);
+  });
+});
+
 describe("setConfigValue — validation", () => {
   it("rejects an unknown key", () => {
     expect(() => setConfigValue("nope.nope", "x", "global", opts())).toThrow(UnknownConfigKeyError);

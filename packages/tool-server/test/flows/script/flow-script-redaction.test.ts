@@ -129,7 +129,12 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("the call to {{secret:API_KEY}} failed");
   }, 30_000);
 
-  it("replaces a secret the script wrote into its output document", async () => {
+  // The document is the script's ANSWER, read by later steps for the id or the
+  // derived value the flow needs. Replacing a resolved secret inside it would
+  // hand those steps `{{secret:NAME}}` — a string nothing downstream can use —
+  // so it comes back exactly as the script wrote it. The reference and the
+  // flow-authoring skill say not to put a credential there.
+  it("leaves the output document as the script wrote it", async () => {
     const ws = workspace();
     const script = ws.write(
       "document.sh",
@@ -145,8 +150,7 @@ describe("flow script executor — redaction of a bash step", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(JSON.stringify(result.output)).not.toContain(SECRET.value);
-    expect(JSON.stringify(result.output)).toContain("API_KEY");
+    expect(result.output).toEqual({ auth: `Bearer ${SECRET.value}` });
   }, 30_000);
 
   // A secret cut in half by a truncation is not a secret any scrub can find:
@@ -278,7 +282,7 @@ describe("flow script executor — redaction", () => {
 
   it("replaces a secret written in one piece", async () => {
     const ws = workspace();
-    const script = ws.write("plain.mjs", `output.auth = "auth: " + process.env.API_KEY;`);
+    const script = ws.write("plain.mjs", `throw new Error("auth: " + process.env.API_KEY);`);
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
@@ -286,7 +290,7 @@ describe("flow script executor — redaction", () => {
       secrets: [SECRET],
     });
 
-    expect(result.output).toEqual({ auth: "auth: {{secret:API_KEY}}" });
+    expect(result.failure?.message).toBe("auth: {{secret:API_KEY}}");
   });
 
   it("replaces a secret in the failure message and its stack", async () => {
@@ -309,7 +313,11 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value);
   });
 
-  it("replaces a secret in the output document, at any depth and in a key", async () => {
+  // The failure text is the only place a resolved value is replaced. A passing
+  // step's document is the script's answer, and a later step reads it for the
+  // value it holds — `{{secret:NAME}}` in its place is a dead string. The docs
+  // say not to put a credential there instead.
+  it("leaves the output document as the script wrote it, at any depth and in a key", async () => {
     const ws = workspace();
     const script = ws.write(
       "echo.mjs",
@@ -325,28 +333,27 @@ describe("flow script executor — redaction", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(JSON.stringify(result.output)).not.toContain(SECRET.value);
     expect(result.output).toEqual({
-      "session": { token: "{{secret:API_KEY}}", scopes: ["read", "{{secret:API_KEY}}"] },
-      "{{secret:API_KEY}}": "keyed",
+      [SECRET.value]: "keyed",
+      session: { token: SECRET.value, scopes: ["read", SECRET.value] },
     });
   });
 
   it("leaves a marker well formed when a value occurs inside another secret's name", async () => {
     const ws = workspace();
-    const script = ws.write("marker.mjs", `output.line = "value=Q";`);
+    const script = ws.write("marker.mjs", `throw new Error("value=Q");`);
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
       secrets: [{ name: "Q0", value: "Q" }],
     });
 
-    expect(result.output).toEqual({ line: "value={{secret:Q0}}" });
+    expect(result.failure?.message).toBe("value={{secret:Q0}}");
   });
 
   it("leaves a marker well formed when two secrets swap name and value", async () => {
     const ws = workspace();
-    const script = ws.write("swapped.mjs", `output.line = "id=TOKEN_ABC and OKEN";`);
+    const script = ws.write("swapped.mjs", `throw new Error("id=TOKEN_ABC and OKEN");`);
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
@@ -356,28 +363,12 @@ describe("flow script executor — redaction", () => {
       ],
     });
 
-    expect(result.output).toEqual({ line: "id={{secret:OKEN}} and {{secret:TOKEN_ABC}}" });
-  });
-
-  it("refuses a document whose redacted key would replace a sibling", async () => {
-    const ws = workspace();
-    const script = ws.write("collide.mjs", `output.doc = { "ab": 1, "{{secret:s}}": 2 };`);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      secrets: [{ name: "s", value: "ab" }],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("Two keys in the script's output become \"");
-    expect(result.failure?.message).toContain("{{secret:s}}");
-    expect(result.output).toBeUndefined();
+    expect(result.failure?.message).toBe("id={{secret:OKEN}} and {{secret:TOKEN_ABC}}");
   });
 
   it("replaces a value that starts inside marker-shaped text the script wrote", async () => {
     const ws = workspace();
-    const script = ws.write("echoed.mjs", `output.line = "head {{secret:TOK}}TAIL tail";`);
+    const script = ws.write("echoed.mjs", `throw new Error("head {{secret:TOK}}TAIL tail");`);
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
@@ -387,9 +378,9 @@ describe("flow script executor — redaction", () => {
       ],
     });
 
-    const line = (result.output as { line: string }).line;
-    expect(line).not.toContain("TOK}}TAIL");
-    expect(line).toContain("{{secret:V}}");
+    const message = result.failure?.message ?? "";
+    expect(message).not.toContain("TOK}}TAIL");
+    expect(message).toContain("{{secret:V}}");
   });
 
   it("replaces a nested secret as part of the value around it, and alone elsewhere", async () => {
@@ -401,8 +392,8 @@ describe("flow script executor — redaction", () => {
     };
     const script = ws.write(
       "nested.mjs",
-      `output.line =
-         "calling " + ${JSON.stringify(url.value)} + " on " + ${JSON.stringify(host.value)};`
+      `throw new Error(
+         "calling " + ${JSON.stringify(url.value)} + " on " + ${JSON.stringify(host.value)});`
     );
     const result = await executor().execute({
       scriptPath: script,
@@ -410,36 +401,39 @@ describe("flow script executor — redaction", () => {
       secrets: [host, url],
     });
 
-    expect(result.output).toEqual({ line: "calling {{secret:URL}} on {{secret:HOST}}" });
+    expect(result.failure?.message).toBe("calling {{secret:URL}} on {{secret:HOST}}");
   });
 
   it("replaces the longer of two secrets when the shorter one is its prefix", async () => {
     const ws = workspace();
     const prefix: FlowScriptSecret = { name: "PFX", value: "sk-" };
     const full: FlowScriptSecret = { name: "FULL", value: "sk-live-9d3f0a1b" };
-    const script = ws.write("prefix.mjs", `output.line = "tok sk-live-9d3f0a1b end";`);
+    const script = ws.write("prefix.mjs", `throw new Error("tok sk-live-9d3f0a1b end");`);
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
       secrets: [prefix, full],
     });
 
-    expect(result.output).toEqual({ line: "tok {{secret:FULL}} end" });
+    expect(result.failure?.message).toBe("tok {{secret:FULL}} end");
   });
 
   it("replaces every occurrence of a value that starts with its own tail", async () => {
     const ws = workspace();
     const value = "0123456789".repeat(4);
-    const script = ws.write("periodic.mjs", `output.blob = ${JSON.stringify(value)}.repeat(128);`);
+    const script = ws.write(
+      "periodic.mjs",
+      `throw new Error(${JSON.stringify(value)}.repeat(128));`
+    );
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
       secrets: [{ name: "P", value }],
     });
 
-    const blob = (result.output as { blob: string }).blob;
-    expect(blob).not.toMatch(/[0-9]/);
-    expect(blob).toContain("{{secret:P}}");
+    const message = result.failure?.message ?? "";
+    expect(message).not.toMatch(/[0-9]/);
+    expect(message).toContain("{{secret:P}}");
   }, 30_000);
 
   it("keeps a secret that straddles the failure-message ceiling out of the report", async () => {
@@ -471,9 +465,8 @@ describe("flow script executor — redaction", () => {
     const ws = workspace();
     const script = ws.write(
       "later.mjs",
-      `output.first = process.env.EARLY;
-       await new Promise((r) => setTimeout(r, 150));
-       output.second = process.env.LATE;`
+      `await new Promise((r) => setTimeout(r, 150));
+       throw new Error(process.env.EARLY + " then " + process.env.LATE);`
     );
     const secrets: FlowScriptSecret[] = [{ name: "EARLY", value: "early-value-aaaa" }];
     const pending = executor().execute({
@@ -488,9 +481,6 @@ describe("flow script executor — redaction", () => {
     setTimeout(() => secrets.push({ name: "LATE", value: "late-value-bbbb" }), 60);
     const result = await pending;
 
-    expect(result.output).toEqual({
-      first: "{{secret:EARLY}}",
-      second: "{{secret:LATE}}",
-    });
+    expect(result.failure?.message).toBe("{{secret:EARLY}} then {{secret:LATE}}");
   });
 });

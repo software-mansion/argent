@@ -142,6 +142,54 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["--json-stream", "checkout.yaml"]).jsonStream).toBe(true);
   });
 
+  it("collects a repeatable --env into one map, last write winning", () => {
+    expect(
+      parseRunArgs([
+        "checkout",
+        "--env",
+        "BUILD=1421",
+        "--env",
+        "BASE_URL=https://staging.example.com",
+        "--env",
+        "BUILD=1422",
+      ]).env
+    ).toEqual({ BUILD: "1422", BASE_URL: "https://staging.example.com" });
+    expect(parseRunArgs(["checkout"]).env).toBeUndefined();
+  });
+
+  it("takes everything after the first = as the value, spaces included", () => {
+    // The shell delivers `--env "AUTH=Bearer abc"` and `--env AUTH="Bearer abc"`
+    // as ONE argument, so a value holding a space needs no argent-side rule.
+    expect(parseRunArgs(["checkout", "--env", "AUTH=Bearer abc"]).env).toEqual({
+      AUTH: "Bearer abc",
+    });
+    expect(parseRunArgs(["checkout", "--env", "Q=a=b=c"]).env).toEqual({ Q: "a=b=c" });
+    expect(parseRunArgs(["checkout", "--env", "EMPTY="]).env).toEqual({ EMPTY: "" });
+    // Unquoted, the shell splits before argent sees it, and the leftover word is
+    // an ordinary unexpected-argument error.
+    expect(() => parseRunArgs(["checkout", "--env", "AUTH=Bearer", "abc"])).toThrow(
+      /unexpected argument "abc"/
+    );
+  });
+
+  it("refuses a malformed --env argument, quoting it", () => {
+    expect(() => parseRunArgs(["checkout", "--env", "NOEQUALS"])).toThrow(
+      /--env expects NAME=value, got "NOEQUALS" — it holds no "="/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "=value"])).toThrow(
+      /it starts with "=", so it names nothing/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "2FA=x"])).toThrow(
+      /"2FA" is not an environment variable name/
+    );
+  });
+
+  it("refuses __proto__, which every map on the way would drop", () => {
+    expect(() => parseRunArgs(["checkout", "--env", "__proto__=x"])).toThrow(
+      /--env cannot set __proto__/
+    );
+  });
+
   it("accepts -r and --recursive in any position", () => {
     expect(parseRunArgs(["flows", "-r"]).recursive).toBe(true);
     expect(parseRunArgs(["--recursive", "flows"]).recursive).toBe(true);
@@ -368,6 +416,30 @@ describe("argent flow run", () => {
       { onProgress: expect.any(Function) }
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
+  });
+
+  it("forwards --env to flow-execute as the tool's env map", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "checkout.yaml", "--env", "BUILD=1421", "--env", "AUTH=Bearer abc"], opts)
+      ).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        flow_path: path.join(runRoot, "checkout.yaml"),
+        project_root: runRoot,
+        prerequisiteAcknowledged: true,
+        env: { BUILD: "1421", AUTH: "Bearer abc" },
+      },
+      { onProgress: expect.any(Function) }
+    );
   });
 
   it("prints a script step's log live, under the step line the event produced", async () => {

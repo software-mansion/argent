@@ -137,6 +137,15 @@ Options (run):
                          same filename sharing <dir> exports to <flow>-<pathhash>/
                          instead (with a warning), so no flow's evidence is
                          overwritten
+  --env <NAME=value>     Environment value every \`script\` step in the run reads
+                         from its environment (process.env in a .mjs, $NAME in
+                         a .sh), through nested flows. Repeatable. Overrides the
+                         flow file's own \`env\` defaults at any depth; a step's
+                         own \`env\` still wins. A repeated name keeps the last
+                         value. Pass a credential as
+                         --env NAME="{{secret:SECRET_NAME}}", never in the clear.
+                         A shell \`export\` does not reach a script: the tool
+                         server's environment is a snapshot from its first start
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the flow's JSON report, or a directory run's JSON
                          aggregate
@@ -151,6 +160,7 @@ Examples:
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run .argent/flows --recursive
+  argent flow run checkout --env BUILD=1421 --env BASE_URL=https://staging.example.com
 `);
 }
 
@@ -163,7 +173,74 @@ const RUN_OPTIONS = {
   "device": { kind: "value" },
   "platform": { kind: "value" },
   "output": { kind: "value" },
+  "env": { kind: "values" },
 } as const satisfies OptionSpecs;
+
+/**
+ * What every operating system carries as a name, and what the tool server's own
+ * authoring rule accepts (`SCRIPT_ENV_NAME_PATTERN`). Kept here as well, not to
+ * own the rule — the server still decides what it takes — but so a malformed
+ * `--env` argument is refused where the caller typed it, with the argument
+ * quoted the way every other CLI refusal quotes one. The CLI cannot import from
+ * the tool server; until that rule is loosened this copy only ever refuses
+ * early what the server refuses late.
+ */
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * The one name {@link ENV_NAME_PATTERN} accepts that no channel can carry.
+ *
+ * It starts with "_", so the shape rule passes it, and the payload's own
+ * `z.record` then builds a fresh object and loses the key before any rule of
+ * argent runs — the run would pass with the value simply absent.
+ */
+const PROTO_NAME = "__proto__";
+
+/**
+ * `--env NAME=value`, collected into the map `flow-execute` takes.
+ *
+ * Everything after the FIRST `=` is the value, so a value holding one needs no
+ * escaping — and a value holding a space is one argument to the shell as long
+ * as it is quoted (`--env "AUTH=Bearer abc"` or `--env AUTH="Bearer abc"`). A
+ * repeated name keeps the last value, the way a shell does.
+ */
+function parseEnvAssignments(raw: string[] | undefined): Record<string, string> | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  let env: Record<string, string> = {};
+  for (const assignment of raw) {
+    const eq = assignment.indexOf("=");
+    if (eq <= 0) {
+      throw new FlagParseException(
+        `--env expects NAME=value, got ${JSON.stringify(assignment)}` +
+          (eq === 0 ? ' — it starts with "=", so it names nothing' : ' — it holds no "="')
+      );
+    }
+    const name = assignment.slice(0, eq);
+    if (!ENV_NAME_PATTERN.test(name)) {
+      throw new FlagParseException(
+        `--env expects NAME=value, got ${JSON.stringify(assignment)} — ${JSON.stringify(name)} ` +
+          'is not an environment variable name: a name starts with a letter or "_" and ' +
+          'continues with letters, digits or "_"'
+      );
+    }
+    // The one name the pattern above admits and nothing downstream can carry:
+    // it reads as a name, and then `z.record` builds its own object and loses
+    // the key before any rule of argent sees it — the run would pass with the
+    // variable simply missing and not a word said.
+    if (name === PROTO_NAME) {
+      throw new FlagParseException(
+        `--env cannot set ${PROTO_NAME}: every map on the way to the script copies it through ` +
+          `a plain object, where ${PROTO_NAME} is an accessor rather than an entry — the value ` +
+          `would be dropped and the script would run without it, silently. Use a name of your own`
+      );
+    }
+    // Spread rather than assignment, as a second line behind the refusal above:
+    // `env[name] = value` would reach the `__proto__` accessor instead of adding
+    // an entry. Nothing reaches it while that refusal stands.
+    env = { ...env, [name]: assignment.slice(eq + 1) };
+  }
+  return env;
+}
 
 export function parseRunArgs(argv: string[]): {
   /**
@@ -175,6 +252,7 @@ export function parseRunArgs(argv: string[]): {
   device?: string;
   platform?: string;
   output?: string;
+  env?: Record<string, string>;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -208,6 +286,8 @@ export function parseRunArgs(argv: string[]): {
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
   if (options.output !== undefined) out.output = options.output as string;
+  const env = parseEnvAssignments(options.env as string[] | undefined);
+  if (env !== undefined) out.env = env;
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
@@ -955,6 +1035,7 @@ function buildRunPayload(
   };
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
+  if (args.env) payload.env = args.env;
   if (args.updateBaselines) payload.updateBaselines = true;
   return payload;
 }

@@ -30,9 +30,11 @@ command: "gesture-tap"
 args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 ```
 
-A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
+A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`. A `run:` step carries no environment of its own, so an `env` you passed the recorded call is **not** part of the recorded step and the replay runs without it. The call says so, and so does `flow-finish-recording` — in `summary` under the step, and counted in `message`. Write the values into the sibling flow's own `env:`, or into this recording's, or keep the raw `flow-execute` step by recording the call with a `delayMs`.
 
 When the user requests a local `.mjs` or `.sh` script, call `flow-add-script` at the point where it must run. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
+
+Its `env` map is recorded verbatim as the step's `env`, and the flow file's own top-level `env:` is layered under it. That is the whole environment the recorder can take: a replay merges two more layers under the step — the run's own `--env`/`flow-execute` values, and each parent flow's `env:` when a `run:` step composes this fragment — so the tool's "It runs the file the way a replay OF THIS FILE will" says all it can. Write a credential as `{{secret:NAME}}`; never in the clear, because this map is written into a file that gets committed. Read [Flow YAML: Environment values](flow-yaml.md#environment-values).
 
 Obey these lifecycle rules:
 

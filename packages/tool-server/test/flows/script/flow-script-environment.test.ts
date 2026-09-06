@@ -77,7 +77,11 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe(process.env.HOME);
+    // `?? null` because the reporter writes null for a name the child did not
+    // see, and HOME is not set on every host — Windows carries the home
+    // directory in USERPROFILE. The assertion is "whatever the parent has, the
+    // child got", which is what the allowlist promises either way.
+    expect(env.HOME).toBe(process.env.HOME ?? null);
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {

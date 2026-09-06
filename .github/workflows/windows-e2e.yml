@@ -48,6 +48,14 @@ on:
       - "packages/tool-server/src/tools/flows/flow-script-step.ts"
       - "packages/tool-server/src/tools/flows/flow-utils.ts"
       - "packages/tool-server/src/tools/flows/flow-add-script.ts"
+      # The environment the two files above ride on, and the runner that hands
+      # a script step its merged map.
+      - "packages/tool-server/src/tools/flows/script/flow-script-env.ts"
+      - "packages/tool-server/src/tools/flows/flow-run.ts"
+      # The scrub the failure text goes through, and the schema entry that
+      # widens the host allowlist.
+      - "packages/tool-server/src/utils/secrets.ts"
+      - "packages/configuration-core/src/config-schema.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
       # The unit tests this job runs — editing one must re-run it here, and so
@@ -64,8 +72,17 @@ on:
       - "packages/tool-server/test/flows/script/flow-script-interpreter.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-bash.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-bash-sweep.test.ts"
-      # The helpers those three import: editing one changes what this job runs
-      # without touching any file listed above it.
+      # `env` values, which have win32 branches of their own on both sides of
+      # the seam: `mergeScriptEnv` folds two layers spelling one name
+      # differently, and `buildChildEnv` drops a host variable whose casing an
+      # override already claimed. Both are decided by `process.platform`, so a
+      # POSIX run asserts the branch that Windows never takes. The `.sh` cases
+      # in the first file are the other half — an `env` value reaching bash
+      # through Git for Windows rather than through a POSIX spawn.
+      - "packages/tool-server/test/flows/script/flow-script-env.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-environment.test.ts"
+      # The helpers the test files above import: editing one changes what this
+      # job runs without touching any file listed above it.
       - "packages/tool-server/test/helpers/host-bash.ts"
       - "packages/tool-server/test/helpers/flow-script-workspace.ts"
       # The same rule, applied to the rest of the import graph of those three.
@@ -142,6 +159,8 @@ jobs:
           test/flows/script/flow-script-interpreter.test.ts
           test/flows/script/flow-script-bash.test.ts
           test/flows/script/flow-script-bash-sweep.test.ts
+          test/flows/script/flow-script-env.test.ts
+          test/flows/script/flow-script-environment.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios
