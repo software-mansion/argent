@@ -3,12 +3,18 @@ import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { RestartAppResult, RestartAppVegaServices, RestartAppIosServices } from "./types";
+import type {
+  RestartAppResult,
+  RestartAppVegaServices,
+  RestartAppIosServices,
+  RestartAppHarmonyServices,
+} from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
+import { harmonyImpl } from "./platforms/harmony";
 
 // Head must be a letter or `_` so a bundleId like `--user` can't masquerade as
 // a flag inside `am force-stop …`.
@@ -21,18 +27,18 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or HarmonyOS id)."),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
-    .describe("App identifier. iOS: bundle id. Android: package name."),
+    .describe("App identifier. iOS: bundle id. Android: package name. HarmonyOS: bundle name."),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS."
+      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS / HarmonyOS."
     ),
 });
 
@@ -43,6 +49,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 // Local iOS resolves native-devtools inside the handler rather than via
@@ -57,12 +64,12 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to restart ${params.bundleId}: ${failureSignal.error_code}`,
     },
-    description: `Terminate then relaunch an app by bundle id / package name.
+    description: `Terminate then relaunch an app by its bundle id (iOS, HarmonyOS, Vega) or package name (Android).
 Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
     searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv harmony harmonyos",
     zodSchema,
     capability,
     // Only ios-remote's handler reads `services.nativeDevtools`, so only it
@@ -80,7 +87,8 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       // No chromium branch.
       Record<string, unknown>,
       RestartAppVegaServices,
-      RestartAppIosServices
+      RestartAppIosServices,
+      RestartAppHarmonyServices
     >({
       toolId: "restart-app",
       capability,
@@ -89,6 +97,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       iosRemote: iosRemoteImpl,
       android: androidImpl,
       vega: vegaImpl,
+      harmony: harmonyImpl,
     }),
   };
 }

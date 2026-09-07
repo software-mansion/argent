@@ -55,10 +55,23 @@ function formatAttr(name: string, value: string | undefined): string {
   return ` ${name}="${escapeForLine(value)}"`;
 }
 
-function formatFlags(n: DescribeNode): string {
+/**
+ * Sources whose platform has no way to perform a long press, so the flag is a
+ * dead end rather than a target.
+ *
+ * Same reasoning as {@link GESTURE_TOOLS_BY_SOURCE}: naming an interaction the
+ * device's own gate then refuses costs a round trip and leaves nothing to fall
+ * back on. HarmonyOS earns it — `uitest` has a `longClick` verb but nothing
+ * wires it, and `gesture-custom`, where the skill sends an agent for a hold,
+ * declares no harmony capability — while 11 of the 86 nodes on the launcher
+ * home screen report `longClickable=true` (measured, 6.1.1).
+ */
+const NO_LONG_PRESS_SOURCES: ReadonlySet<DescribeSource> = new Set(["harmony-uitest"]);
+
+function formatFlags(n: DescribeNode, source: DescribeSource): string {
   const flags: string[] = [];
   if (n.clickable) flags.push("clickable");
-  if (n.longClickable) flags.push("long-clickable");
+  if (n.longClickable && !NO_LONG_PRESS_SOURCES.has(source)) flags.push("long-clickable");
   if (n.scrollable) flags.push("scrollable");
   if (n.checkable) flags.push(n.checked ? "checked" : "checkable");
   if (n.focused) flags.push("focused");
@@ -91,7 +104,7 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
-function formatLine(n: DescribeNode, indent: number): string {
+function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
@@ -99,21 +112,29 @@ function formatLine(n: DescribeNode, indent: number): string {
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
-  const flagPart = formatFlags(n);
+  const flagPart = formatFlags(n, source);
   const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
-function renderFlat(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
+function renderFlat(
+  root: DescribeNode,
+  contentRoles: ReadonlySet<string>,
+  source: DescribeSource
+): string[] {
   return root.children
     .filter((n) => shouldEmit(n, contentRoles))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
-    .map((n) => formatLine(n, 1));
+    .map((n) => formatLine(n, 1, source));
 }
 
-function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
+function renderNested(
+  root: DescribeNode,
+  contentRoles: ReadonlySet<string>,
+  source: DescribeSource
+): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
   // Start at depth 1: the header already prints the root as its ROOT line.
@@ -125,7 +146,7 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
     if (shouldEmit(node, contentRoles) || node.children.length > 0) {
-      lines.push(formatLine(node, depth));
+      lines.push(formatLine(node, depth, source));
     }
     for (let i = node.children.length - 1; i >= 0; i--) {
       stack.push({ node: node.children[i]!, depth: depth + 1 });
@@ -138,6 +159,25 @@ interface FormatDescribeOptions {
   source: DescribeSource;
 }
 
+/**
+ * The gesture tools whose backend covers the platform a source comes from. A
+ * frame is only useful to the agent as an argument to one of these, so naming a
+ * tool the device's own gate then refuses costs a round trip and leaves nothing
+ * to fall back on.
+ *
+ * Only the sources whose platform is not the touch default appear here:
+ * Chromium has no touch at all and gets the CDP-driven pair; physical iOS
+ * (`xcuitest-runner`) has no two-finger gestures, so pinch is dropped. HarmonyOS
+ * reaches every tool in the default — pinch included, over `uinput` rather than
+ * `uitest`.
+ */
+const GESTURE_TOOLS_BY_SOURCE: Partial<Record<DescribeSource, string>> = {
+  "cdp-dom": "gesture-tap / gesture-scroll / gesture-drag",
+  "xcuitest-runner": "gesture-tap / gesture-swipe",
+};
+
+const DEFAULT_GESTURE_TOOLS = "gesture-tap / gesture-swipe / gesture-pinch";
+
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
   // The iOS providers emit a flat list of leaves under a synthetic root; the
   // sources below return a real parent/child tree, whose descendants beyond
@@ -147,6 +187,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "android-devtools" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
+    opts.source === "harmony-uitest" ||
     // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
     opts.source === "xcuitest-runner"
       ? "nested"
@@ -167,12 +208,10 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {
-    // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
     header.push(
-      opts.source === "xcuitest-runner"
-        ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-            "No two-finger gestures on physical iOS."
-        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+      `Pass them straight to ${GESTURE_TOOLS_BY_SOURCE[opts.source] ?? DEFAULT_GESTURE_TOOLS}, which expect this same space.` +
+        // Physical iOS drops pinch (table above); spell out why so an agent does not reach for it.
+        (opts.source === "xcuitest-runner" ? " No two-finger gestures on physical iOS." : "")
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
@@ -184,6 +223,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
 
   // Vega's lowercase toolkit roles count as content only for its own source.
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
-  const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
+  const body =
+    mode === "flat"
+      ? renderFlat(root, contentRoles, opts.source)
+      : renderNested(root, contentRoles, opts.source);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

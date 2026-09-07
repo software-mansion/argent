@@ -11,7 +11,11 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
 });
 
+vi.mock("../src/utils/harmony-screen", () => ({ captureHarmonyScreenshotPng: vi.fn() }));
+vi.mock("../src/utils/check-deps", () => ({ ensureDep: vi.fn(async () => {}) }));
+
 import { createScreenshotTool, downscalePngInPlace } from "../src/tools/screenshot";
+import { captureHarmonyScreenshotPng } from "../src/utils/harmony-screen";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../src/blueprints/ios-device-runner";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 
@@ -101,6 +105,29 @@ describe("screenshot tool", () => {
     });
     expect(result).not.toHaveProperty("includeImageInContext");
     expect(result).not.toHaveProperty("url");
+  });
+
+  it("refuses a rotation override on HarmonyOS rather than returning an unrotated capture", async () => {
+    const registry = {
+      resolveService: vi.fn(),
+    } as unknown as import("@argent/registry").Registry;
+    const screenshotTool = createScreenshotTool(registry);
+
+    // `uitest screenCap` writes the display in its current orientation and has
+    // no override, so the only alternative to this error is a capture whose
+    // orientation silently contradicts the parameter that was accepted.
+    await expect(
+      screenshotTool.execute(
+        {},
+        {
+          udid: "harmony-025DEK236V035771",
+          rotation: "LandscapeLeft",
+          includeImageInContext: true,
+        },
+        { artifacts: new ArtifactStore() }
+      )
+    ).rejects.toThrow(/rotation is not supported on HarmonyOS/);
+    expect(captureHarmonyScreenshotPng).not.toHaveBeenCalled();
   });
 });
 

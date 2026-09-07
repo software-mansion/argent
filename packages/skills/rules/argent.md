@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, Vega (Amazon Fire TV), and HarmonyOS device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting. A "HarmonyOS device" is a phone connected over `hdc` (id `harmony-<connectKey>`, `kind: "device"`, tagged `platform: "harmony"`) — driven by the normal touch tools including `gesture-pinch`, with free-form touch (`gesture-custom`), the arc-shaped `gesture-rotate`, `rotate`, the profilers and the debugger refused as unsupported on harmony. HarmonyOS entries with `kind: "emulator"` (id `harmony-emulator-<name>`) are DevEco Studio instances that only `boot-device` accepts, so never pick one of those as an interaction target - boot it and drive the `harmony-<connectKey>` id that `boot-device` returns.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -60,7 +60,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. A plugged-in HarmonyOS phone - `platform: "harmony"`, `state: "Connected"` - is listed as ready alongside them, but take it only when the user asked for HarmonyOS. With nothing else booted, boot a simulator or ask which target the user means.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -102,7 +102,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`. HarmonyOS entries appear as `platform:"harmony"`; pick one only when the user asked for HarmonyOS, and pick the `kind:"device"` entry (`state:"Connected"`) — a `kind:"emulator"` entry is a boot target, not an interaction target.
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -119,7 +119,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators/emulators and HarmonyOS only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`

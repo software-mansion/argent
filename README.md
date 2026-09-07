@@ -9,7 +9,7 @@
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
-**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators, Android emulators and physical devices, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium desktop and web apps. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
+**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators, Android emulators and physical devices, HarmonyOS phones and emulators, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium desktop and web apps. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent@latest init
@@ -27,10 +27,13 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+| **HarmonyOS**     | Phones over `hdc`, and DevEco Studio emulator instances                 | Touch / gesture  |
+
+> **HarmonyOS drives whatever `hdc` is connected to.** Connect a phone with USB debugging enabled and it appears as `harmony-<connectKey>` (`kind: "device"`), driven by `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `restart-app`, `open-url`, `run-sequence` and the two `await-*` tools - all through the device's own `uitest`, except `launch-app` and `restart-app`, which go through `bm dump` + `aa start` / `aa force-stop`, and `open-url`, which goes through `aa start -U` alone. DevEco Studio's emulator instances appear separately as `harmony-emulator-<name>`, which `boot-device` starts; it then waits for the instance to register with `hdc` and returns that connect key, so a booted emulator is driven by the same tools through the same id shape as a phone. Huawei restricts the emulator **image** download to mainland China, so on a host outside it no instance can be created until an image is obtained. Multi-touch and free-form touch (`gesture-pinch`, `gesture-rotate`, `gesture-custom`) are refused at the capability gate on both device kinds - `Tool '<id>' is not supported on harmony device (no harmony support declared).` on a phone, and the same message with `harmony emulator` in place of `harmony device` on an emulator id: `uitest uiInput` injects only whole gestures (click / longClick / swipe / drag / fling), one contact at a time, and the level below is shut - `hdc shell` is uid 2000 and `/dev/input` is `Permission denied` on a retail phone and on Huawei's own emulator image alike, where `hdc smode` answers `Cannot set root run mode in undebuggable version`. `rotate`, the profilers and the debugger are refused the same way: the device exposes no orientation CLI, and argent's profiler and debugger surfaces have no HarmonyOS ingest path.
 
 ## Capabilities
 
-- **Autonomous mobile, TV and desktop development** - Allow your agent to work with iOS, Android, TV and Electron/web apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
+- **Autonomous mobile, TV and desktop development** - Allow your agent to work with iOS, Android, HarmonyOS, TV and Electron/web apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
 - **UI interaction** - Give your agent the full control toolkit - tapping, swiping, pinching, typing, gestures and hardware buttons on mobile; the directional remote on TV; mouse, scroll and drag on desktop/web. Let it navigate your app exactly as a user would, without lifting a finger.
 - **Record & replay flows** - Capture a sequence of interactions once and let your agent replay it deterministically, so manual repros and smoke tests become repeatable.
 - **Visual regression** - Diff two screenshots (or a saved baseline against a live capture) with OCR- and font-aware comparison to catch unintended UI changes.
@@ -56,6 +59,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 - For iOS / tvOS: macOS with **Xcode** installed (Apple TV uses tvOS simulators — Xcode downloads the tvOS runtime on demand)
 - For Android / Android TV: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 - For Fire TV (Vega): the **Vega SDK** (`vega` CLI) on `PATH`
+- For HarmonyOS: **DevEco Studio**, which ships both binaries Argent drives - `hdc` (the device connector, for phones) and the `Emulator` manager. Both are looked up inside DevEco Studio's install root: `$DEVECO_STUDIO_HOME` first when it is set, then `/Applications/DevEco-Studio.app` on macOS, each tried both as given and with `Contents/` appended so the app bundle itself works. `hdc` also falls back to `PATH` for hosts that installed the OpenHarmony command-line tools without the IDE; `Emulator` never does, since it is too generic a name to match safely. Driving a phone needs only `hdc`. Huawei restricts the emulator **image** download to mainland China, so on a host outside it no emulator instance can be created until an image is obtained.
 - For Electron / Chromium: nothing extra to control an already-running app - just launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you
 
 ##### Linux host: extra prerequisites for Android emulators

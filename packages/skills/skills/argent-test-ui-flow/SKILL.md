@@ -1,22 +1,23 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
+description: Autonomously test an app UI (iOS, Android, or HarmonyOS) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
 ---
 
 ## Platform-agnostic
 
 Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `launch-app` before anything; `describe` fails while the app is backgrounded.
 
-The interaction tool names are identical on iOS and Android — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, adb serial → Android).
+The interaction tool names are identical on iOS, Android and HarmonyOS — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, `harmony-<connectKey>` → HarmonyOS, adb serial → Android). HarmonyOS drives the tap / swipe / pinch / type / read loop; everything outside it is refused there — `gesture-rotate` and `gesture-custom` (the device moves each contact along one straight line per call, so no arc and no long-press), `gesture-drag`, `gesture-scroll`, `rotate`, and the JS / native inspectors `debugger-component-tree`, `debugger-evaluate`, `debugger-log-registry`, `native-describe-screen` and `view-network-logs`.
 
 **Before testing, resolve which device to test on.** Call `list-devices` and follow `<device_selection_rule>`: prefer a running device on any platform;
 
 Once a platform is chosen, the per-platform setup skill takes over:
 
-| Platform | Setup skill                     | Find devices with                                           |
-| -------- | ------------------------------- | ----------------------------------------------------------- |
-| iOS      | `argent-ios-simulator-setup`    | `list-devices` → `boot-device` with `udid` if none booted   |
-| Android  | `argent-android-emulator-setup` | `list-devices` → `boot-device` with `avdName` if none ready |
+| Platform  | Setup skill                     | Find devices with                                                                                             |
+| --------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| iOS       | `argent-ios-simulator-setup`    | `list-devices` → `boot-device` with `udid` if none booted                                                     |
+| Android   | `argent-android-emulator-setup` | `list-devices` → `boot-device` with `avdName` if none ready                                                   |
+| HarmonyOS | `argent-device-interact`        | `list-devices` → a phone on `hdc` is ready as-is; `boot-device` with a `harmony-emulator-<name>` id otherwise |
 
 ## 1. Workflow
 
@@ -27,7 +28,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
-   - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
+   - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree, and on HarmonyOS the `uitest dumpLayout` tree, both in the same DescribeNode shape.
    - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably. When the app raises its own permission dialog, answer it here — that's the real flow under test. To take a prompt _out_ of the flow (pre-grant/deny before launch, re-enable a permission the user already denied, or reset it so the dialog reappears), use the `argent-settings-permissions` skill during setup instead of interacting with the dialog.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
@@ -115,19 +116,19 @@ Steps:
 ## Tips
 
 - **Wait on the UI, don't poll.** When a step needs the screen to change first, gate it with `await-ui-element` (block until an element is `visible`/`hidden` or contains `text`) rather than repeated `screenshot` calls with fixed sleeps. See the `await-ui-element` section of `argent-device-interact`.
-- **Use `gesture-custom` for long-press** context menus (800ms hold).
+- **Use `gesture-custom` for long-press** context menus (800ms hold). Not on HarmonyOS — it has no long-press tool.
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.
-- **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
+- **Record for replay** (iOS, Android, Chromium, Vega): If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually. HarmonyOS is not one of the flow engine's platforms: a harmony device is never auto-resolved as the run's target, `when: { platform: harmony }` is rejected when the YAML is parsed, and any step resolving a selector against the screen fails with `ui-tree matching is not supported on platform "harmony"`. Re-run a HarmonyOS scenario as the live loop above.
 
 ## Related Skills
 
-| Skill                              | When to use                                              |
-| ---------------------------------- | -------------------------------------------------------- |
-| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android)  |
-| `argent-screenshot-diff`           | Visual regression and before/after screenshot comparison |
-| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                  |
-| `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
-| `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                 |
-| `argent-create-flow`               | Record a test sequence as a replayable flow              |
+| Skill                              | When to use                                                                                                                         |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS, Android, HarmonyOS, Chromium — TV targets are focus-driven, see `argent-tv-interact`) |
+| `argent-screenshot-diff`           | Visual regression and before/after screenshot comparison                                                                            |
+| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                                                                                             |
+| `argent-android-emulator-setup`    | Booting and connecting an Android emulator                                                                                          |
+| `argent-react-native-app-workflow` | Starting the app, Metro, build issues                                                                                               |
+| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                                                                                            |
+| `argent-create-flow`               | Record a test sequence as a replayable flow (iOS, Android, Chromium, Vega — not HarmonyOS)                                          |

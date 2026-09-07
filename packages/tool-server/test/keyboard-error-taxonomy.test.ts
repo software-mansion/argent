@@ -1,8 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Registry, FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+
+// The harmony backend rejects an unknown key before injecting, so these tests
+// never reach the device — stub the transport anyway, so a regression that
+// dropped the guard fails on the assertion rather than shelling out to `hdc`.
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  runHdcShell: vi.fn(),
+}));
+
 import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
+import { harmonyImpl } from "../src/tools/keyboard/platforms/harmony";
+import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
 import { makeIosDeviceImpl } from "../src/tools/keyboard/platforms/ios-device";
 import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 import {
@@ -11,6 +22,8 @@ import {
 } from "../src/utils/ios-device/app-session";
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-input";
+
+const runHdcShell = vi.mocked(realRunHdcShell);
 
 // The `keyboard` tool's `key` is a free `z.string()` and its `text` is a free
 // string, so an unknown named key or an un-typeable character passes zod
@@ -57,6 +70,22 @@ const iosPhysicalDevice = {
   platform: "ios",
   kind: "device",
 } as unknown as DeviceInfo;
+
+beforeEach(() => {
+  runHdcShell.mockReset();
+  // An awake panel, so the tests that DO reach the display guard get past it
+  // and the ones pinned to pure validation stay pure.
+  runHdcShell.mockImplementation(async (_key, command) =>
+    command.startsWith("hidumper")
+      ? {
+          stdout:
+            "-- ScreenInfo\nscreen[0]: id=0, powerStatus=POWER_STATUS_ON, backlight=1, " +
+            "render resolution=1216x2688, physical resolution=1216x2688\n",
+          exitCode: 0,
+        }
+      : { stdout: "", exitCode: 0 }
+  );
+});
 
 describe("keyboard backends — input rejection is a 400 with a uniform telemetry taxonomy", () => {
   it("iOS: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
@@ -166,6 +195,88 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
       impl.handler({}, { udid: iosPhysicalDevice.id, key: "   " }, iosPhysicalDevice),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
+  });
+
+  it("harmony: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // `String(keycode)` reaches `uiInput keyEvent ${key}` unquoted, so a
+    // prototype value would be interpolated into the remote shell line rather
+    // than pressing anything — and with `text` alongside it, the reject must
+    // still land before a single character is typed.
+    for (const key of ["constructor", "__proto__", "toString"]) {
+      runHdcShell.mockClear();
+      await expectInvalidInput(
+        harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "hi", key }, harmonyDevice),
+        FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+      );
+      expect(runHdcShell).not.toHaveBeenCalled();
+    }
+  });
+
+  it("harmony: newline in text → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // `uitest uiInput text` validates almost nothing and answers `No Error`
+    // whether or not anything landed, so a newline must be rejected up front —
+    // every sibling backend (android above, vega) already is.
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\nb" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+    // The newline shares its failure code with every other un-typeable
+    // character, so the code alone cannot tell whether its own branch still
+    // exists — and that branch is there only for the recovery it names.
+    await expect(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\nb" }, harmonyDevice)
+    ).rejects.toThrow(/Submit with `key: "enter"` after typing instead/);
+    // Decided without asking the device: see the unsupported-key case below.
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: a control character in text → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\x07b" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: an unsupported key is diagnosed without reaching the device", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // `tab` is one of the keys this backend deliberately does not map, so the
+    // answer never depends on the device — the unreachable transport stubbed
+    // below stands in for one that is unhappy. A device round trip ahead of the
+    // key check turns this 400 into `hdc could not reach HarmonyOS device …:
+    // Device not found or connected`, sending the caller to check a cable over
+    // a key that will never be supported (hubgan review).
+    runHdcShell.mockRejectedValue(new Error("[Fail][E001005] Device not found or connected"));
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, key: "tab" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: every unsupported-input rejection carries the shared `unsupported` kind", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // The android twin tags all three of these `unsupported`
+    // (utils/android-input.ts), and telemetry groups by kind before code — so a
+    // harmony rejection without one lands in the untyped bucket and the same
+    // failure reads as two different things depending on the platform.
+    for (const params of [{ text: "a\nb" }, { text: "a\x07b" }, { key: "tab" }]) {
+      runHdcShell.mockClear();
+      const err = await harmonyImpl
+        .handler({}, { udid: harmonyDevice.id, ...params }, harmonyDevice)
+        .then(
+          () => {
+            throw new Error("expected the call to reject, but it resolved");
+          },
+          (e: unknown) => e
+        );
+      expect(getFailureSignal(err)?.error_kind).toBe("unsupported");
+      expect(runHdcShell).not.toHaveBeenCalled();
+    }
   });
 
   it("iOS device: unknown key -> 400 rejection naming both supported keys", async () => {

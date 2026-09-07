@@ -22,3 +22,4 @@ export interface LaunchAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
 export type LaunchAppVegaServices = Record<string, never>;
+export type LaunchAppHarmonyServices = Record<string, never>;
