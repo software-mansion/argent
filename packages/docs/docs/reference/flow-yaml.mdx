@@ -453,7 +453,7 @@ The tool-server is a long-lived shared process, and its environment is a snapsho
 
 Flow `env` values, `flow-execute` `env` values, and `{{secret:NAME}}` are the input channels of a script. A shell variable is not.
 
-The remedies are to restart the tool-server, to name the value in `scripts.env.allow`, or to pass an absolute path through an `env` value. A failure that reads as a missing command carries a note that says so. `scripts.env.allow` does not fix a missing command: that key adds names to copy out of the snapshot, and `PATH` is copied already.
+The remedies are to restart the tool-server, which replaces the snapshot, or to pass the value through an `env` value. A failure that reads as a missing command carries a note that says so. `scripts.env.allow` is not one of the remedies, though it reads like one: that key only widens which names are copied out of the same snapshot, so it cannot recover a value exported after the server started, and `PATH` is copied already.
 
 Unlike the environment, the secret sources are read on **each** resolution. A secrets file you add while the server is up applies with no restart.
 
