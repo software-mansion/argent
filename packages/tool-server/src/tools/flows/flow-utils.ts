@@ -3697,14 +3697,19 @@ export function validateFlow(flow: FlowFile): void {
 
 /** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
-  // Trimmed only to ask whether the file holds anything. The PARSE takes the
-  // content as written, because `String.prototype.trim` strips the whole
-  // Unicode whitespace class and YAML's plain scalars strip only the ASCII one
-  // — so a value ending in U+00A0 (the shape a token pasted out of a web UI
-  // has) lost that character when it was the last scalar in the file, which is
-  // where the serializer puts a recorded step's `env` value. The parser reads a
-  // leading BOM and leading blank lines on its own.
-  if (content.trim().length === 0) {
+  // Trimmed only at the START, and only to ask whether the file holds anything.
+  //
+  // The TRAILING edge is where the loss was: `String.prototype.trim` strips the
+  // whole Unicode whitespace class and YAML's plain scalars strip only the ASCII
+  // one, so a value ending in U+00A0 — the shape a token pasted out of a web UI
+  // has — lost that character whenever it was the last scalar in the file, which
+  // is where the serializer puts a recorded step's `env` value. Nothing at the
+  // leading edge can be part of a value, because the top level of a flow file is
+  // a map, so the leading trim costs nothing and keeps what it always covered:
+  // a file whose first line opens with a TAB, which YAML refuses as indentation
+  // and this accepted before.
+  const body = content.replace(/^\s+/, "");
+  if (body.length === 0) {
     return { executionPrerequisite: "", steps: [] };
   }
 
@@ -3712,7 +3717,7 @@ export function parseFlow(content: string): FlowFile {
   // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
   try {
-    parsed = yamlParse(content) as YamlFlowFile;
+    parsed = yamlParse(body) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,

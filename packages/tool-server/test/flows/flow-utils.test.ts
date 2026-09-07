@@ -884,6 +884,15 @@ describe("parseFlow", () => {
   // scalar — which is where the serializer puts a recorded script step's `env`
   // value. A token pasted out of a web UI or a chat client with a trailing
   // U+00A0 is the ordinary way in, and nothing said the character was lost.
+  it("still accepts a file whose first line opens with a tab", async () => {
+    // The trim that lost a trailing non-ASCII space also covered the LEADING
+    // edge, where YAML refuses a tab as indentation. Nothing at that edge can
+    // be part of a value — the top level of a flow file is a map — so it is
+    // still trimmed, and a hand-edited file with a stray leading tab still
+    // parses rather than reporting "Tabs are not allowed as indentation".
+    expect(parseFlow("\tsteps:\n  - echo: hi\n").steps).toEqual([{ kind: "echo", message: "hi" }]);
+  });
+
   it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
     // Written as escapes: the characters are invisible in a source file, and
     // one of them silently reformatted is a test that stops testing anything.
