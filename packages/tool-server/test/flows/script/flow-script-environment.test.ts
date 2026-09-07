@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MIN_SCRIPT_HEAP_LIMIT_MB } from "@argent/configuration-core";
 import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+} from "../../../src/tools/flows/script/flow-script-env";
+import {
   FlowScriptExecutor,
   type FlowScriptExecutorOptions,
 } from "../../../src/tools/flows/script/flow-script-executor";
@@ -27,14 +31,27 @@ function withEnv(name: string, value: string): void {
   process.env[name] = value;
 }
 
-async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+async function onPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>): Promise<T> {
   const real = process.platform;
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
     return await body();
   } finally {
     Object.defineProperty(process, "platform", { value: real, configurable: true });
   }
+}
+
+async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("win32", body);
+}
+
+/**
+ * The other side of each rule `asWindows` covers. Forced rather than left to
+ * the host, because this file also runs on the Windows E2E job: a case-sensitive
+ * expectation left to the real platform would assert the wrong branch there.
+ */
+async function asPosix<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("linux", body);
 }
 
 function withoutEnv(name: string): void {
@@ -66,9 +83,24 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
     const ws = workspace();
+    // Both home variables are planted rather than read off the host. Read off
+    // it, the home assertion was `env.HOME` against `process.env.HOME ?? null`,
+    // which on Windows compares null to null and asserts nothing about the
+    // allowlist on the very platform this file was enabled for. USERPROFILE is
+    // the spelling Windows carries the home directory under, and is on the list
+    // beside HOME, so planting both keeps a live assertion on either host.
+    withEnv("HOME", ws.dir);
+    withEnv("USERPROFILE", ws.dir);
     const script = ws.write(
       "env.mjs",
-      reporter(["ARGENT_AUTH_TOKEN", "ARGENT_PORT", "ARGENT_SECRET_APP_PASSWORD", "PATH", "HOME"])
+      reporter([
+        "ARGENT_AUTH_TOKEN",
+        "ARGENT_PORT",
+        "ARGENT_SECRET_APP_PASSWORD",
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+      ])
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
@@ -77,11 +109,8 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    // `?? null` because the reporter writes null for a name the child did not
-    // see, and HOME is not set on every host — Windows carries the home
-    // directory in USERPROFILE. The assertion is "whatever the parent has, the
-    // child got", which is what the allowlist promises either way.
-    expect(env.HOME).toBe(process.env.HOME ?? null);
+    expect(env.HOME).toBe(ws.dir);
+    expect(env.USERPROFILE).toBe(ws.dir);
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {
@@ -227,6 +256,36 @@ describe("flow script executor — the environment allowlist", () => {
     expect(result.failure?.message).toContain("Electron_Run_As_Node");
   }, 30_000);
 
+  it("drops the host's spelling of a name a Windows override claims", async () => {
+    // On Windows the override and the host's own name are one variable, so
+    // handing both to the fork left Node to dedupe them and keep whichever
+    // sorted first: the host's value could be the one the script read, in place
+    // of the flow's. LANG is on the allowlist, so without this branch the host
+    // entry survives beside the override.
+    //
+    // Counted by folding case rather than read under one spelling, because a
+    // real Windows child answers to either spelling while a POSIX child answers
+    // only to the one it was handed - the count is the part that means the same
+    // thing on both.
+    withEnv("LANG", "en_US.UTF-8");
+    const ws = workspace();
+    const script = ws.write(
+      "lang.mjs",
+      `output.lang = Object.entries(process.env)
+        .filter(([name]) => name.toLowerCase() === "lang")
+        .map(([, value]) => value);`
+    );
+    const result = await asWindows(() =>
+      executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { Lang: "pl_PL.UTF-8" },
+      })
+    );
+
+    expect(result.output?.lang).toEqual(["pl_PL.UTF-8"]);
+  }, 30_000);
+
   it("does not set the Electron flag when the server's environment lacks it", async () => {
     // A developer running the suite from an Electron-hosted shell has the flag
     // exported already.
@@ -236,6 +295,66 @@ describe("flow script executor — the environment allowlist", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect((result.output?.env as Record<string, string | null>).ELECTRON_RUN_AS_NODE).toBeNull();
+  });
+});
+
+describe("an env map holding two names that differ only in case", () => {
+  // Reached through `parseFlow` or a tool everywhere else in the suite, and
+  // neither channel can put the pair in front of these two functions on a host
+  // whose platform decides the answer. Called directly here so both sides of
+  // each rule are asserted wherever the suite runs.
+
+  it("is a usable map on POSIX, where the two names are two variables", async () => {
+    // The refusal below is a platform rule, not a rule about the map: a flow
+    // authored on macOS that argent began refusing everywhere would break files
+    // that were never wrong on the host they run on.
+    const problem = await asPosix(async () =>
+      describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
+    );
+
+    expect(problem).toBeNull();
+  });
+
+  it("is refused on Windows, in a clause naming both spellings", async () => {
+    // Windows carries one variable per name however it is spelled, and the two
+    // entries are one layer, so there is no precedence between them to appeal
+    // to: whichever was written last would take the other's place with nothing
+    // said. The author is reading a map where nothing marks the pair as a pair,
+    // so the clause has to name both spellings to be actionable.
+    const problem = await asWindows(async () =>
+      describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
+    );
+
+    expect(problem).toContain("holds API_URL and api_url, which Windows reads as one variable");
+    expect(problem).toContain("Give them one spelling, or names of their own");
+  });
+
+  it("merges to one variable per spelling on POSIX", async () => {
+    // Two variables on a case-sensitive host, so folding them here would drop a
+    // value the script asked for and that nothing refused on the way in.
+    const merged = await asPosix(async () =>
+      mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
+    );
+
+    expect(merged).toEqual({ API_URL: "flow", api_url: "step" });
+  });
+
+  it("merges to the later layer's value on Windows, whichever way round the spellings fall", async () => {
+    // Two layers spelling one variable differently are two layers setting the
+    // same thing, so the documented precedence has to decide here. Keeping both
+    // left the child environment to dedupe them, and Node keeps whichever sorts
+    // first - which is why the first pair is the one that tells the two rules
+    // apart: "API_URL" sorts before "api_url", so precedence answers "step"
+    // while ASCII order answers "flow".
+    const upperFirst = await asWindows(async () =>
+      mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
+    );
+    const lowerFirst = await asWindows(async () =>
+      mergeScriptEnv({ api_url: "flow" }, { API_URL: "step" })
+    );
+
+    expect(upperFirst).toEqual({ api_url: "step" });
+    expect(lowerFirst).toEqual({ API_URL: "step" });
   });
 });
 
