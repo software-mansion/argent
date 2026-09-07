@@ -261,10 +261,19 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  * path, or wraps a build that failed on its own carries the words with nothing
  * missing — line-anchoring alone made a quoted shell line the best possible
  * match, and the note then ended that verdict with a confident instruction
- * pointing at the wrong subsystem. What the two do not share is the tail: the
- * shell's own line is the last thing a failed `execSync` folds in, while a
- * quoted one has the script's own transcript after it. A missed note is the
- * safe direction, so the tail is what is asked.
+ * pointing at the wrong subsystem.
+ *
+ * The tail anchor is what the note is bought with, and it buys less than it
+ * looks like it does. What it rules out is a transcript that CONTINUES after
+ * the shell line — a step that greps an install log and reports the lines
+ * around the one it was looking for. It does not rule out a script sentence in
+ * FRONT of one, which is the commoner shape: the script says what it was doing
+ * and the captured stderr is appended last, so
+ * `could not parse the captured log as JSON at position 0\nsh: 1: adb: command
+ * not found` still earns the note. That is a shape where the note is usually
+ * right — the command really was not found, and it is why the parse failed —
+ * so it is left alone rather than tightened against. A missed note is the safe
+ * direction, which is what the tail anchor picks when it is wrong.
  *
  * A shell line has a shape a sentence does not, and it is the shape that is
  * matched, not a length: the writer, then optionally a line number, then the
