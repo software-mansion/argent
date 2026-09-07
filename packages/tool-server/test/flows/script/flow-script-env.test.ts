@@ -525,6 +525,30 @@ describe("the host allowlist extension", () => {
     // answer rather than one stating a rule it plainly meets.
     expect(reason).toContain("__proto__, which argent cannot carry");
   });
+  it("says a note once per run, not once per step", async () => {
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: ["ARGENT_PORT"] } } })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow(
+      "once",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/noop.mjs }\n" +
+        "  - script: { path: ../../scripts/noop.mjs }\n"
+    );
+
+    const { result } = await runFlow("once");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].reason).toContain("ARGENT_PORT");
+    // The configuration is the same for every step of the run.
+    expect(result.steps[1].reason).toBeUndefined();
+
+    // A LATER run says it again: the set is run-scoped, not module-scoped.
+    const second = (await runFlow("once")).result;
+    expect(second.steps[0].reason).toContain("ARGENT_PORT");
+  });
 });
 
 describe("a bash step's environment", () => {
