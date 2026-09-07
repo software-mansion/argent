@@ -39,5 +39,12 @@ jobs:
       - name: Build workspace dependencies
         run: npm run build
 
+      # Type-aware linting holds the whole program graph in memory, and the
+      # repo already peaks just under Node's default ~4 GiB old-space cap on a
+      # 16 GB runner - main itself needs more than 3584 MiB. Without headroom
+      # the job dies with "Ineffective mark-compacts near heap limit" (exit
+      # 134) the first time an ordinary PR adds a few files.
       - name: Lint
         run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
