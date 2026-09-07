@@ -1097,6 +1097,63 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  it("stops a directory run on a refusal about the call, not about the file", async () => {
+    // `--env` is a property of the RUN. Classified as an ordinary validation
+    // rejection it was treated as this-flow-only, so one bad name printed the
+    // identical refusal once per flow and ended the batch `0 passed, N failed`
+    // — nothing to say the fault was one argument rather than N files.
+    const batchRoot = path.join(tempRoot, "batch-run-env");
+    const flowsDir = path.join(batchRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "a.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "b.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "c.yaml"), "steps: []\n"),
+    ]);
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("This run's `env` holds NODE_OPTIONS, which steers the runner", {
+        errorCode: "TOOL_INPUT_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--env", "NODE_OPTIONS=x"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs.join("\n").match(/This run's `env`/g)).toHaveLength(1);
+    expect(logs.join("\n")).toContain("0 passed, 1 failed, 2 skipped");
+  });
+
+  it("keeps a directory run going when one FILE is refused", async () => {
+    // The other half: a refusal the server tied to this flow leaves the rest of
+    // the batch to run, which is what the classification is for.
+    const batchRoot = path.join(tempRoot, "batch-bad-file");
+    const flowsDir = path.join(batchRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "a.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "b.yaml"), "steps: []\n"),
+    ]);
+    let call = 0;
+    toolsClientMock.callTool.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        throw new ToolInvocationError("Unrecognized flow entry (script `env` holds a number)", {
+          errorCode: "FLOW_ENTRY_UNRECOGNIZED",
+          errorKind: "validation",
+        });
+      }
+      return { data: report() };
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(logs.join("\n")).toContain("1 passed, 1 failed, 0 skipped");
+  });
+
   it("lists nested flows at any depth — paths `flow run` accepts", async () => {
     // run's name contract binds the filename only, so a YAML under an
     // intermediate directory is just as runnable as a top-level one — a

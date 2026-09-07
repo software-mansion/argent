@@ -1177,7 +1177,16 @@ async function runFlowDirectory(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
-      const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
+      // A refusal about the CALL is not a refusal about this file. Every flow
+      // in a batch is invoked with the same arguments apart from its own path
+      // — `--env` most of all — so a tool-input refusal repeats verbatim for
+      // each of them: `--env NODE_OPTIONS=x` over eleven flows printed one
+      // message eleven times and ended `0 passed, 11 failed`, with nothing to
+      // say the fault was one argument rather than eleven files. That stops the
+      // batch, like every other failure the server did not tie to this flow.
+      const rejectedThisFlowOnly =
+        toolErr?.errorKind === "validation" &&
+        toolErr.errorCode !== FAILURE_CODES.TOOL_INPUT_INVALID;
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
       // already carries. The detail goes to stderr, so without this line a
       // redirected stdout log shows this flow's header followed by the next
