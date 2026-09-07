@@ -251,7 +251,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // not hold this step yet. Re-raised as caller input, like the name rule
     // above it: this is the same argument that rule judges.
     try {
-      assertNoEnvOutputReferences(step.env, "This call's", "flow_add_script_env");
+      assertNoEnvOutputReferences(step.env, "This call's");
     } catch (err) {
       throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
         failure_stage: "flow_add_script_env",

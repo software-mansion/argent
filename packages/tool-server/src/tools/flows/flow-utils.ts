@@ -3662,11 +3662,7 @@ export function serializeFlow(flow: FlowFile): string {
  * change behaviour under it without a word. `whose` names the map — "The flow's",
  * "This run's" — so the author knows which one to edit.
  */
-export function assertNoEnvOutputReferences(
-  env: ScriptEnv | undefined,
-  whose: string,
-  failureStage = "flow_output_reference"
-): void {
+export function assertNoEnvOutputReferences(env: ScriptEnv | undefined, whose: string): void {
   for (const [name, value] of Object.entries(env ?? {})) {
     if (!value.includes(OUTPUT_REFERENCE_MARKER)) continue;
     throw new FailureError(
@@ -3674,7 +3670,7 @@ export function assertNoEnvOutputReferences(
         `Replace it with the literal value the script needs: ${JSON.stringify(renderedValue(value))}`,
       {
         error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
-        failure_stage: failureStage,
+        failure_stage: "flow_output_reference",
         failure_area: "tool_server",
         error_kind: "validation",
       }

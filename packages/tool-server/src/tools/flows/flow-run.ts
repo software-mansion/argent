@@ -1281,7 +1281,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // the shared refusal is worded for a flow FILE and classified as one, and
       // this is the same parameter.
       try {
-        assertNoEnvOutputReferences(params.env, "This run's", "flow_run_env");
+        assertNoEnvOutputReferences(params.env, "This run's");
       } catch (err) {
         throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
           failure_stage: "flow_run_env",
