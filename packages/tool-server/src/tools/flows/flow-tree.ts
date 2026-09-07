@@ -1,7 +1,7 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
 import { fetchTree } from "../../utils/ui-tree-match";
 import type { FlowTreeTarget } from "./flow-actions";
-import { queryFullHierarchyTree } from "./flow-ios-tree";
+import { queryFullHierarchyTree, queryIosDeviceFlowTree } from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
@@ -44,9 +44,12 @@ const FLOW_TREE_SOURCES: Partial<
     (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
   >
 > = {
-  // Only iOS consumes the target: the platforms below resolve their tree
-  // source per-device and never auto-resolve.
-  ios: (registry, device, target) => queryFullHierarchyTree(registry, device, target),
+  // Simulator iOS uses the injected hierarchy and an optional target.
+  // Physical devices use the XCUITest runner tree.
+  ios: (registry, device, target) =>
+    device.kind === "device"
+      ? queryIosDeviceFlowTree(registry, device)
+      : queryFullHierarchyTree(registry, device, target),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
   chromium: (registry, device) => queryChromiumTree(registry, device),
   vega: (_registry, device) => queryVegaTree(device),

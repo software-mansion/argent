@@ -50,7 +50,11 @@ async function startServer(): Promise<{
   const addr = wss.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
-    api: { apiUrl: `http://127.0.0.1:${port}`, streamUrl: "", pressKey: () => {} },
+    api: {
+      apiUrl: `http://127.0.0.1:${port}`,
+      streamUrl: "",
+      pressKey: () => Promise.resolve(),
+    },
     received,
     setReply: (r) => {
       reply = r;

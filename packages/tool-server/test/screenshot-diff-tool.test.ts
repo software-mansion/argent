@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -309,6 +310,75 @@ describe("screenshotDiffTool", () => {
     await expect(fs.stat(path.join(outputDir, "current-diff.png"))).resolves.toBeTruthy();
   });
 
+  const PHYSICAL_UDID = "00008110-000978540290401E";
+
+  it("declares the runner service only for live captures on a physical iPhone", () => {
+    // A pure file-vs-file diff must not spin up the runner.
+    expect(
+      screenshotDiffTool.services({
+        baselinePath: "/tmp/baseline.png",
+        currentPath: "/tmp/current.png",
+        udid: PHYSICAL_UDID,
+      })
+    ).toEqual({});
+
+    expect(
+      screenshotDiffTool.services({
+        baselinePath: "/tmp/baseline.png",
+        captureCurrent: true,
+        udid: PHYSICAL_UDID,
+      })
+    ).toEqual({
+      iosDeviceRunner: {
+        urn: `IosDeviceRunner:${PHYSICAL_UDID}`,
+        options: { device: { id: PHYSICAL_UDID, platform: "ios", kind: "device" } },
+      },
+    });
+  });
+
+  it("captures the live side through the runner on a physical iPhone and ignores rotation", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-device-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    const run = vi.fn(async () => ({
+      imageBase64: pngBytes(2, 2, { r: 10, g: 20, b: 30 }).toString("base64"),
+    }));
+
+    const result = await executeScreenshotDiffTool(
+      { iosDeviceRunner: { run, udid: PHYSICAL_UDID } },
+      {
+        baselinePath,
+        captureCurrent: true,
+        udid: PHYSICAL_UDID,
+        rotation: "LandscapeLeft",
+        outputDir: dir,
+      },
+      { artifacts: new ArtifactStore() }
+    );
+
+    // The rotation parameter is not forwarded. Hardware captures always follow
+    // the device's real orientation, the same behaviour as the screenshot tool.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(
+      { command: "screenshot" },
+      { readOnly: true, timeoutMs: RUNNER_COMMAND_TIMEOUT_MS }
+    );
+    const liveCaptures = (await fs.readdir(dir)).filter((name) =>
+      /^current-[a-f0-9]{8}\.live\.png$/.test(name)
+    );
+    expect(liveCaptures).toHaveLength(1);
+    expect(result.summary).toContain("Screenshot diff summary");
+  });
+
+  it("demands the runner service when a direct caller requests a device live capture", async () => {
+    await expect(
+      executeScreenshotDiffTool(
+        {},
+        { baselinePath: "/tmp/baseline.png", captureCurrent: true, udid: PHYSICAL_UDID }
+      )
+    ).rejects.toThrow("requires an iosDeviceRunner service");
+  });
+
   // The remote case must still fall back: a client-side path whose parent does
   // not exist here cannot be created, so diffs go to a temp dir as before.
   it("falls back to a temp dir when outputDir is not creatable on this host", async () => {
@@ -338,12 +408,11 @@ describe("screenshotDiffTool", () => {
   });
 });
 
-async function writePng(
-  filePath: string,
+function pngBytes(
   width: number,
   height: number,
   fill: { r: number; g: number; b: number }
-): Promise<void> {
+): Buffer {
   const png = new PNG({ width, height });
 
   for (let y = 0; y < height; y++) {
@@ -356,5 +425,14 @@ async function writePng(
     }
   }
 
-  await fs.writeFile(filePath, PNG.sync.write(png));
+  return PNG.sync.write(png);
+}
+
+async function writePng(
+  filePath: string,
+  width: number,
+  height: number,
+  fill: { r: number; g: number; b: number }
+): Promise<void> {
+  await fs.writeFile(filePath, pngBytes(width, height, fill));
 }

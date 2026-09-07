@@ -73,6 +73,9 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/project.pbxproj
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/xcshareddata/xcschemes/ArgentRunner.xcscheme
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunnerUITests/ArgentRunnerSession.swift
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json

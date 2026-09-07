@@ -43,6 +43,7 @@ import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
+import { writeCliRecord } from "./cli-record.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
@@ -627,6 +628,20 @@ export async function update(args: string[]): Promise<void> {
         outcomes.push("failed");
       } else {
         outcomes.push(outcome);
+        /**
+         * Re-point the provider CLI record at this install. Also on "noop":
+         * nothing was bumped, but the record may be stale or missing, and an
+         * update is the natural moment to repair it. Last writer wins when
+         * both targets are present — see `cli-record.ts`.
+         */
+        if (outcome === "updated" || outcome === "noop") {
+          const installedVersion =
+            mode === "local"
+              ? (readLocalPackageVersionUncached(projectRoot) ??
+                getLocallyInstalledVersion(projectRoot))
+              : getGloballyInstalledVersion();
+          writeCliRecord({ mode, projectRoot, version: installedVersion ?? "unknown" });
+        }
       }
     }
 

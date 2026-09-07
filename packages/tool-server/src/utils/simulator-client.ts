@@ -14,6 +14,7 @@ import {
   type TouchActionName,
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
+import { assertAllowedSimServerEndpoint } from "./external-devices";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -123,6 +124,12 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ) {
     return existing;
   }
+  /**
+   * `ws:` unconditionally, because `apiUrl` is `http:` unconditionally.
+   * Argent's own spawn path reads it off the binary's `api_ready` line and the
+   * provider contract refuses any other scheme, so there is no `https:` apiUrl
+   * to mistake for a `wss:` endpoint that nothing serves.
+   */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
   const conn: Connection = { ws, pending: new Map() };
@@ -300,6 +307,7 @@ async function pointerPost(
   // Remote (MoQ) sims are gated out of recording and expose no HTTP pointer
   // endpoint; their stubbed apiUrl simply makes this fetch fail and return false.
   try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/pointer");
     const res = await fetch(`${api.apiUrl}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -323,14 +331,17 @@ async function pointerPost(
  * device pasteboard holds the text, so a paste keystroke sent afterwards cannot
  * race the fill.
  *
- * A simulator-server built without clipboard support answers the route with a
- * bare 404, reported as "unsupported" rather than as a network fault.
+ * A simulator-server built without clipboard support — an older build, or a
+ * provider's — answers the route with a bare 404, reported as "unsupported"
+ * rather than as a network fault.
  */
 export async function setSimulatorClipboardText(
   api: SimulatorServerApi,
   text: string,
   signal?: AbortSignal
 ): Promise<void> {
+  if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
@@ -343,10 +354,17 @@ export async function setSimulatorClipboardText(
     throw toSimulatorNetworkError("Paste", err, api.apiUrl);
   }
   if (res.status === 404) {
+    /**
+     * A provider's binary is not argent's, so "update argent" would be the
+     * wrong advice there.
+     */
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a build with " +
+        "clipboard support. Type the text with the keyboard tool instead."
+      : "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.";
     throw new FailureError(
-      "Paste failed: this simulator-server build has no clipboard endpoint. " +
-        "Update argent so its bundled simulator-server includes clipboard support, " +
-        "or type the text with the keyboard tool instead.",
+      "Paste failed: this simulator-server build has no clipboard endpoint. " + fix,
       {
         error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
         failure_stage: "simulator_clipboard_endpoint_missing",
@@ -383,6 +401,12 @@ async function simulatorPost<T>(
   signal?: AbortSignal,
   fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
+  /**
+   * Parity rule: on a server Argent did not spawn, use only the endpoints its
+   * own build serves.
+   */
+  if (api.external) assertAllowedSimServerEndpoint(endpoint);
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}${endpoint}`, {
@@ -538,6 +562,9 @@ function routeViaTransport(
       return;
     case "rotate":
       transport.rotate(cmd.direction as RotationName);
+      return;
+    case "key":
+      transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
       return;
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);

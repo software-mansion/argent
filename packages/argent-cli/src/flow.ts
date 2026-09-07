@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -107,10 +107,13 @@ chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
-A directory run prints only failing steps plus a final flow summary;
---recursive walks subdirectories too (dot-directories and node_modules are
-skipped). An invalid flow file fails alone and the batch continues; an infra
-error stops the batch and counts the remaining flows skipped.
+A directory run prints each flow's failing steps and warnings, then its outcome,
+then a final flow summary; --recursive walks subdirectories too (dot-directories
+and node_modules are skipped). A flow that fails its steps keeps the batch
+running, as does one the server rejects up front — an invalid file, or a device
+it cannot resolve. A transport failure, a rejection the server does not mark as
+validation, or a reply that is not a report stops the batch and counts the
+remaining flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -133,8 +136,10 @@ Options (run):
                          instead (with a warning), so no flow's evidence is
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
-  --json                 Print the raw JSON report
-  --json-stream          Print progress and the final report as NDJSON (single flow only)
+  --json                 Print the flow's JSON report, or a directory run's JSON
+                         aggregate
+  --json-stream          Print each step and the final report as NDJSON (single
+                         flow only, never with --json)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -920,15 +925,19 @@ function writeJsonStreamRecord(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
 
+/** A failure's machine-readable half, under the names JSON output carries it by. */
+function failureSignal(err: unknown): { error_code?: string; error_kind?: string } {
+  if (!(err instanceof ToolInvocationError)) return {};
+  return {
+    ...(err.errorCode ? { error_code: err.errorCode } : {}),
+    ...(err.errorKind ? { error_kind: err.errorKind } : {}),
+  };
+}
+
 /** Mirror a tool invocation failure without putting human text on stdout. */
 function writeJsonStreamError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  writeJsonStreamRecord({
-    event: "error",
-    error: message,
-    ...(err instanceof ToolInvocationError && err.errorCode ? { error_code: err.errorCode } : {}),
-    ...(err instanceof ToolInvocationError && err.errorKind ? { error_kind: err.errorKind } : {}),
-  });
+  writeJsonStreamRecord({ event: "error", error: message, ...failureSignal(err) });
 }
 
 /**
@@ -951,20 +960,66 @@ async function exportAndResolveArtifacts(
   resolveArtifactDisplayPaths(report);
 }
 
-/** One flow's outcome in a directory run — also the --json aggregate entry. */
+/**
+ * Why a flow the server rejected never ran, for the stdout ledger either
+ * runner keeps. `error_kind: "validation"` marks any rejection scoped to the
+ * one call, so it says nothing about the flow file — device resolution rejects
+ * that way too (nothing matched the run, or several did and none was singled
+ * out), and blaming perfectly good YAML on a simulator nobody started sends the
+ * reader to the wrong file. Only a code whose subject IS the file licenses
+ * "invalid flow"; an unrecognized one stays neutral and leaves the reason to
+ * the stderr line beside it.
+ */
+function rejectionVerdict(code: string | undefined): string {
+  switch (code) {
+    case FAILURE_CODES.FLOW_FILE_INVALID:
+    case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
+    case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
+      return "not run (invalid flow)";
+    case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
+      return "not run (no device resolved)";
+    default:
+      return "not run (rejected)";
+  }
+}
+
+/**
+ * Whether a wire value is a report the renderers can walk. They run past the
+ * try on both runners, so a value this admits and they then throw on takes
+ * down the whole ledger rather than one line of it — hence the elements are
+ * checked too. A non-array `steps` throws on `for (… of report.steps)` and a
+ * nullish element on the first field read off it; a primitive element throws
+ * nowhere, which is worse — the verdict is the report's own `ok`, so `ok: true`
+ * exits 0 over steps no renderer can read: renderReport prints a line of
+ * `undefined` fields for each, and the batch's renderFailedSteps prints none.
+ */
+function isFlowReport(data: unknown): data is FlowReport {
+  const steps = (data as FlowReport | undefined)?.steps;
+  return Array.isArray(steps) && steps.every((step) => !!step && typeof step === "object");
+}
+
+/**
+ * One flow's outcome in a directory run — also the --json aggregate entry. The
+ * failure signal keeps --json-stream's spelling, so one consumer reads both;
+ * `error` is prose assembled per failure, never a classification.
+ */
 interface BatchFlowResult {
   path: string;
   status: "pass" | "fail" | "skip";
   report?: FlowReport;
   error?: string;
+  error_code?: string;
+  error_kind?: string;
 }
 
 /**
- * Run every discovered flow in `dir` sequentially. Reports failures only (no
- * live step lines), then a flow-level summary. A flow failing its steps — or
- * one the tool-server rejects as invalid — lets the batch continue, while an
- * infra error (transport throw, unclassified failure, non-report result) stops
- * it and counts the remaining flows skipped.
+ * Run every discovered flow in `dir` sequentially. Prints each flow's failing
+ * steps and warnings, then its outcome (no live step lines), then a flow-level
+ * summary; a flow failing its steps — or one the tool-server rejects up front
+ * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
+ * batch continue, while a transport throw, a rejection the server does not mark
+ * as validation, or a reply that is not a report stops it and counts the
+ * remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -994,10 +1049,10 @@ async function runFlowDirectory(
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
-  // A validation rejection is specific to one flow file, so the batch keeps
-  // going. Anything else — transport death, or a failure the server didn't
-  // classify — could make every remaining flow burn a device run against the
-  // same wall, so stop.
+  // A validation rejection is scoped to the one call, so the batch keeps
+  // going. Anything the server does not mark that way — another kind, or none
+  // at all — stops it, as does a transport throw: each remaining flow would
+  // burn a run against the same wall.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
@@ -1013,21 +1068,33 @@ async function runFlowDirectory(
         "flow-execute",
         buildRunPayload(path.join(dir, rel), projectRoot, args)
       );
-      const data = resp.data as FlowReport;
-      // typeof guard: `in` throws on a primitive wire value, and that must
-      // classify as "no report", not as an infra throw.
-      if (data && typeof data === "object" && "steps" in data) report = data;
+      if (isFlowReport(resp.data)) report = resp.data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const toolErr = err instanceof ToolInvocationError ? err : undefined;
+      const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
+      // A verdict on stdout for every entry, next to the `[i/n]` header stdout
+      // already carries. The detail goes to stderr, so without this line a
+      // redirected stdout log shows this flow's header followed by the next
+      // flow's — an entry that reads as if it never ran, while the final tally
+      // still counts it failed and names nothing. Verdict before detail, as the
+      // single-flow runner prints them, so a merged log reads the same way.
+      if (!args.json) {
+        console.log(
+          `  ${STATUS_GLYPH.error} ` +
+            (rejectedThisFlowOnly
+              ? rejectionVerdict(toolErr?.errorCode)
+              : "did not finish (run error)")
+        );
+      }
       console.error(message);
-      results.push({ path: rel, status: "fail", error: message });
-      const rejectedThisFlowOnly =
-        err instanceof ToolInvocationError && err.errorKind === "validation";
+      results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
       if (!rejectedThisFlowOnly) stopped = true;
       continue;
     }
     if (!report) {
       const message = `"${rel}" did not produce a run report.`;
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
       console.error(message);
       results.push({ path: rel, status: "fail", error: message });
       stopped = true;
@@ -1380,10 +1447,29 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // show a path. Only what --output copies is fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
+    // The same stdout verdict a directory run gives every entry. Live step
+    // lines make the gap worse here: the last thing a redirected log holds is
+    // a passing step, so a run that died reads as one that passed and got cut
+    // off. The header is the flow's name, printed by the first step event or
+    // here when the run failed before any of them. Streaming mode owns stdout,
+    // so no prose verdict there either.
+    if (!args.json && !args.jsonStream) {
+      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      console.log(
+        `  ${STATUS_GLYPH.error} ` +
+          (err instanceof ToolInvocationError && err.errorKind === "validation"
+            ? rejectionVerdict(err.errorCode)
+            : "did not finish (run error)")
+      );
+    }
     return fail(err instanceof Error ? err.message : String(err), 1, err);
   }
 
-  if (!report || typeof report !== "object" || !("steps" in report)) {
+  if (!isFlowReport(report)) {
+    if (!args.json && !args.jsonStream) {
+      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
+    }
     return fail(`"${flowName}" did not produce a run report.`, 2);
   }
 

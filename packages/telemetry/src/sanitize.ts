@@ -86,6 +86,16 @@ const FAILURE_SIGNAL_NAME = oneOf(FAILURE_SIGNAL_NAMES);
 const FAILURE_SPAWN_CODE = oneOf(FAILURE_SPAWN_CODES);
 const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
 
+/**
+ * The vendor label of an external device provider, never the instance-unique
+ * provider id. The id is a fresh value per provider window, which would make
+ * adoption and failure rates unaggregatable without telling us anything the
+ * vendor label doesn't.
+ *
+ * @see [`externalProviderLabel`](../../tool-server/src/utils/external-devices.ts)
+ */
+const DEVICE_PROVIDER = matches(/^[a-z0-9][a-z0-9-]{0,31}$/, 32);
+
 const AI_CLIENT = oneOf(AI_CLIENTS);
 
 const INSTALL_MODE = oneOf(["global", "local"] as const);
@@ -210,12 +220,14 @@ export const ALLOWED: ValidatorMap = {
     ...FAILURE_SIGNAL,
   },
   "tool:invoke": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
     ...AI_TELEMETRY,
   },
   "tool:complete": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
@@ -223,6 +235,7 @@ export const ALLOWED: ValidatorMap = {
     ...AI_TELEMETRY,
   },
   "tool:fail": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
