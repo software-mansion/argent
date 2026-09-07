@@ -431,6 +431,8 @@ The map is a plain map. A YAML tag that builds something else — `!!omap` in it
 
 Argent refuses a value that holds a NUL character or an unpaired surrogate, because an environment carries neither. Argent applies the same rule to the value a `{{secret:NAME}}` resolves to.
 
+The top-level `env:` survives a re-record. `flow-start-recording` resets the file to an empty flow and keeps that map, so the defaults a project checks in still apply to the steps you record, and `flow-add-script` runs the live script under them.
+
 On Windows, Argent refuses two names of one map that differ only in case. Windows reads them as one variable, so a flow file that parses on macOS is refused there.
 
 `BASH_ENV`, `SHELLOPTS` and the other names that steer bash are **not** refused. They steer the interpreter of the script, not the runner, and an author who sets one meant to.
