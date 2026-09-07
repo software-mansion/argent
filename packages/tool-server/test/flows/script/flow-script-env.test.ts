@@ -3,11 +3,12 @@ import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../../src/tools/flows/flow-insert-echo";
 import { flowAddScriptTool } from "../../../src/tools/flows/flow-add-script";
+import { createFlowAddStepTool } from "../../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../../src/tools/flows/flow-finish-recording";
 import { parseFlow, serializeFlow } from "../../../src/tools/flows/flow-utils";
 import { resolveHostBash } from "../../helpers/host-bash";
@@ -387,8 +388,15 @@ describe("environment shape rules", () => {
     await expect(runFlow("step-env")).rejects.toThrow(/ARGENT_REASON/);
 
     await flow("ok", "steps:\n  - echo: hi\n");
-    await expect(runFlow("ok", { env: { ARGENT_OUTPUT: "/tmp/z" } })).rejects.toThrow(
-      /ARGENT_OUTPUT/
+    const runTime = runFlow("ok", { env: { ARGENT_OUTPUT: "/tmp/z" } });
+    await expect(runTime).rejects.toThrow(/ARGENT_OUTPUT/);
+    // The CODE, not just the sentence. A run-time refusal is about the CALL,
+    // not about the file, and `argent flow run <dir>` keys on exactly this to
+    // stop the batch instead of failing each flow in turn — but the CLI's own
+    // case hand-builds the rejection it expects, so nothing joined that check
+    // to the server that emits it. This is that join, from the server's side.
+    expect(getFailureSignal(await runTime.catch((e: unknown) => e))?.error_code).toBe(
+      FAILURE_CODES.TOOL_INPUT_INVALID
     );
 
     await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
@@ -403,6 +411,30 @@ describe("environment shape rules", () => {
         }
       )
     ).rejects.toThrow(/ARGENT_OUTPUT/);
+  });
+
+  it("refuses a reserved name in a nested fragment's own env, mid-run", async () => {
+    // Every refusal above is decided BEFORE the run starts, off the file the
+    // caller named. A fragment is parsed when the `run:` step reaches it, with
+    // steps already executed behind it — a different path, and the one an
+    // author meets when the reserved name is in a shared fragment rather than
+    // in the flow they invoked.
+    await write("scripts/probe.mjs", "");
+    await flow("outer-reserved", "steps:\n  - echo: before\n  - run: inner-reserved.yaml\n");
+    await flow(
+      "inner-reserved",
+      "env: { ARGENT_REASON: /tmp/x }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/probe.mjs }\n"
+    );
+
+    const { result } = await runFlow("outer-reserved", {}, { booted: true });
+
+    // The run does not throw: it fails the step that composed the fragment, so
+    // the steps in front of it keep their verdicts.
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("pass");
+    expect(JSON.stringify(result.steps)).toContain("ARGENT_REASON");
   });
 
   it("refuses a non-string value and an illegal name", async () => {
@@ -523,6 +555,40 @@ describe("serialization", () => {
       env: { USER_TYPE: "premium" },
     });
     expect(after.steps[1]).toEqual({ kind: "echo", message: "appended" });
+  });
+
+  it("keeps `env` through a flow-add-step append", async () => {
+    // §6 names THIS tool, and the case above appends with `flow-insert-echo`
+    // instead — so the one recorder with a pre-append re-parse wrapper around
+    // `appendStep` was the one never asserted to preserve `env`. Both maps are
+    // checked: the file's own and the script step's, since they are separate
+    // keys and a rebuild can lose either.
+    await flowStartRecordingTool.execute({}, { name: "addstep", project_root: root });
+    const filePath = path.join(root, ".argent/flows/addstep.yaml");
+    await fs.writeFile(
+      filePath,
+      "env: { API_URL: https://example.com }\n" +
+        "steps:\n" +
+        "  - script: { path: seed.mjs, env: { USER_TYPE: premium } }\n",
+      "utf8"
+    );
+
+    const { registry } = mockRegistry({ booted: true });
+    await createFlowAddStepTool(registry).execute({}, {
+      name: "addstep",
+      project_root: root,
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.5 }),
+    } as never);
+
+    const after = parseFlow(await fs.readFile(filePath, "utf8"));
+    expect(after.env).toEqual({ API_URL: "https://example.com" });
+    expect(after.steps[0]).toEqual({
+      kind: "script",
+      path: "seed.mjs",
+      env: { USER_TYPE: "premium" },
+    });
+    expect(after.steps).toHaveLength(2);
   });
 
   it("keeps `env` through a serialize round trip", async () => {
@@ -764,6 +830,46 @@ describe("a bash step's environment", () => {
     expect(readMark("flow")).toBe("from-flow\n");
     expect(readMark("run")).toBe("from-run\n");
     expect(readMark("step")).toBe("from-step\n");
+  });
+
+  it("observes a fragment's layer through printenv too", async (ctx) => {
+    skipWithoutBash(ctx);
+    // The case above probes three of the four scopes a `.sh` can be handed a
+    // value from and skips the FRAGMENT, which is the layer with the only
+    // non-trivial lifetime: it is pushed on the way into a `run:` and popped on
+    // the way out. A `.sh` reads its environment through the same merge a
+    // `.mjs` does, but only the `.mjs` side was ever asserted to see it.
+    await write(
+      "scripts/frag.sh",
+      `printenv PROBE_FRAGMENT > "${shellMarkPath("sh-fragment")}"\n` +
+        `printenv PROBE_FLOW > "${shellMarkPath("sh-inherited")}"\n`
+    );
+    await write("scripts/after.sh", `printenv PROBE_FRAGMENT > "${shellMarkPath("sh-after")}"\n`);
+    await flow(
+      "sh-parent",
+      "env:\n" +
+        "  PROBE_FLOW: from-flow\n" +
+        "  PROBE_FRAGMENT: from-flow\n" +
+        "steps:\n" +
+        "  - run: sh-fragment.yaml\n" +
+        "  - script: { path: ../../scripts/after.sh }\n"
+    );
+    await flow(
+      "sh-fragment",
+      "env: { PROBE_FRAGMENT: from-fragment }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/frag.sh }\n"
+    );
+
+    const { result } = await runFlow("sh-parent", {}, { booted: true });
+
+    expect(result.ok).toBe(true);
+    // Inside: the fragment's own value wins, and the parent's other key is
+    // still inherited.
+    expect(readMark("sh-fragment")).toBe("from-fragment\n");
+    expect(readMark("sh-inherited")).toBe("from-flow\n");
+    // After: the parent's value is restored rather than left overridden.
+    expect(readMark("sh-after")).toBe("from-flow\n");
   });
 
   it("carries a run-time value holding a space, whole, to both languages", async (ctx) => {
@@ -1686,6 +1792,27 @@ describe("recording a script step with env", () => {
     expect(finished.flowFile).toContain("https://api.example.com");
   });
 
+  it("proceeds when a run-time env value equals a secret's value", async () => {
+    // The fourth channel of §4.4, and the one where a comparison would be
+    // cheapest to reach for: the value arrives at run time, next to the secret
+    // chain the run has just built. It is still not compared — a plaintext
+    // value is flow data whatever a secrets file happens to hold, and the run
+    // must not start redacting a URL the author typed themselves.
+    await write(".argent/secrets.env", "SHARED=https://api.example.com\n");
+    await write("scripts/runplain.mjs", reporter("runplain", ["API_URL"]));
+    await flow("runplain", "steps:\n  - script: { path: ../../scripts/runplain.mjs }\n");
+
+    const { result } = await runFlow("runplain", {
+      env: { API_URL: "https://api.example.com" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seen("runplain")).toEqual({ API_URL: "https://api.example.com" });
+    // Reported as written, not rewritten to a placeholder for a name the
+    // author never referenced.
+    expect(JSON.stringify(result.steps[0])).not.toContain("{{secret:");
+  });
+
   it("returns a recorded env map verbatim, plaintext and placeholder alike", async () => {
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write("scripts/seed.mjs", "output.ok = true;");
@@ -1715,6 +1842,12 @@ describe("recording a script step with env", () => {
     expect(finished.flowFile).toContain("https://example.com");
     expect(finished.flowFile).toContain("{{secret:API_KEY}}");
     expect(finished.summary.join("\n")).toContain("https://example.com");
+    // The placeholder, positively. `not.toContain("…")` alone cannot fail here:
+    // nothing on this path emits an ellipsis, so it passed whether or not the
+    // summary carried the placeholder at all — including if it carried the
+    // RESOLVED value instead, which is the thing this test exists to rule out.
+    expect(finished.summary.join("\n")).toContain("{{secret:API_KEY}}");
+    expect(finished.summary.join("\n")).not.toContain("sk-live-9d3f0a1b");
     expect(finished.summary.join("\n")).not.toContain("…");
   });
 });

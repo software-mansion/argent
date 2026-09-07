@@ -56,6 +56,12 @@ on:
       # widens the host allowlist.
       - "packages/tool-server/src/utils/secrets.ts"
       - "packages/configuration-core/src/config-schema.ts"
+      # The source chain that finds a project's `.argent/secrets.env`, which the
+      # env tests below write and assert resolution from. It reaches HOME
+      # through `resolveHomeDir` and the project root through `findProjectRoot`
+      # — the USERPROFILE resolution this job exists to catch — so the sibling
+      # above is not enough on its own.
+      - "packages/configuration-core/src/secrets.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
       # The unit tests this job runs — editing one must re-run it here, and so
@@ -81,6 +87,11 @@ on:
       # through Git for Windows rather than through a POSIX spawn.
       - "packages/tool-server/test/flows/script/flow-script-env.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-environment.test.ts"
+      # The redaction cases. A stack frame is a `file://` URL that the reason
+      # decodes back into a path, and a Windows path is where the two spellings
+      # differ most — a drive letter and backslashes, percent-encoded on the way
+      # in. The bash cases here are guarded the same way the file above them is.
+      - "packages/tool-server/test/flows/script/flow-script-redaction.test.ts"
       # The tools `flow-script-env.test.ts` drives, for the same reason as the
       # helpers below: editing one changes what this job asserts without
       # touching any file listed above it. The env cases there record through
@@ -175,6 +186,7 @@ jobs:
           test/flows/script/flow-script-bash-sweep.test.ts
           test/flows/script/flow-script-env.test.ts
           test/flows/script/flow-script-environment.test.ts
+          test/flows/script/flow-script-redaction.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios
