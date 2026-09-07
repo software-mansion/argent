@@ -702,6 +702,29 @@ describe("a bash step's environment", () => {
     expect(readMark("run")).toBe("from-run\n");
     expect(readMark("step")).toBe("from-step\n");
   });
+
+  it("carries a run-time value holding a space, whole, to both languages", async (ctx) => {
+    skipWithoutBash(ctx);
+    // The design brief's `--env "AUTH=Bearer abc"` case. The CLI's parse of the
+    // joined argument is pinned in `argent-cli`, and the runner's layering is
+    // pinned above, but nothing joined the two: a value with a space in it
+    // reaching the SCRIPT is what the case is about, and a `.sh` is where a
+    // split would show first.
+    await write("scripts/space.mjs", reporter("space-mjs", ["AUTH"]));
+    await write("scripts/space.sh", `printenv AUTH > "${shellMarkPath("space-sh")}"\n`);
+    await flow(
+      "space",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/space.mjs }\n" +
+        "  - script: { path: ../../scripts/space.sh }\n"
+    );
+
+    const { result } = await runFlow("space", { env: { AUTH: "Bearer abc" } });
+
+    expect(result.ok).toBe(true);
+    expect(seen("space-mjs")).toEqual({ AUTH: "Bearer abc" });
+    expect(readMark("space-sh")).toBe("Bearer abc\n");
+  });
 });
 
 describe("secret placeholders in an env value", () => {
@@ -1369,6 +1392,65 @@ describe("recording a script step with env", () => {
 
     expect(added.status).toBe("pass");
     expect(added.message).toBe('Added script step to "shadow" flow.');
+  });
+
+  it("replays a recorded step under a run-time env, over the file's own default", async () => {
+    // The recorder→replay round trip was only tested with no run-time layer —
+    // exactly the case that happens to match. A real replay puts `--env`
+    // BETWEEN the two layers this call took: above the file's `env:`, still
+    // under the step's own map. That is what the tool description claims and
+    // nothing read it back.
+    await write("scripts/probe.mjs", reporter("replayed", ["FROM_FILE", "FROM_STEP"]));
+    await flow("roundtrip", "env: { FROM_FILE: file-default }\nsteps: []\n");
+    await flowStartRecordingTool.execute({}, { name: "roundtrip", project_root: root });
+
+    await flowAddScriptTool.execute(
+      {},
+      {
+        name: "roundtrip",
+        project_root: root,
+        path: "../../scripts/probe.mjs",
+        env: { FROM_STEP: "step-value" },
+      }
+    );
+    expect(seen("replayed")).toEqual({ FROM_FILE: "file-default", FROM_STEP: "step-value" });
+    await flowFinishRecordingTool.execute({}, { name: "roundtrip", project_root: root });
+
+    const { result } = await runFlow("roundtrip", {
+      env: { FROM_FILE: "from-run", FROM_STEP: "from-run" },
+    });
+
+    expect(result.ok).toBe(true);
+    // The run replaces the file's default and loses to the step's own map.
+    expect(seen("replayed")).toEqual({ FROM_FILE: "from-run", FROM_STEP: "step-value" });
+  });
+
+  it("proceeds when flow-add-script is given a plaintext value equal to a secret", async () => {
+    // §4.4: argent does not compare env values against secret values on ANY
+    // channel. The other three are pinned; the recorder was not.
+    await write(".argent/secrets.env", "SHARED=https://api.example.com\n");
+    await write("scripts/plain.mjs", reporter("recplain", ["API_URL"]));
+    await flowStartRecordingTool.execute({}, { name: "recplain", project_root: root });
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "recplain",
+        project_root: root,
+        path: "../../scripts/plain.mjs",
+        env: { API_URL: "https://api.example.com" },
+      }
+    )) as { status: string; message: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.message).toBe('Added script step to "recplain" flow.');
+    expect(seen("recplain")).toEqual({ API_URL: "https://api.example.com" });
+
+    const finished = (await flowFinishRecordingTool.execute(
+      {},
+      { name: "recplain", project_root: root }
+    )) as { flowFile: string };
+    expect(finished.flowFile).toContain("https://api.example.com");
   });
 
   it("returns a recorded env map verbatim, plaintext and placeholder alike", async () => {
