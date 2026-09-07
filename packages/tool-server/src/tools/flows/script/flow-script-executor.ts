@@ -1309,12 +1309,42 @@ function memberPath(key: string): string {
 }
 
 /**
+ * A value whose own edge whitespace the child ATE, as spellings to replace
+ * beside the value itself.
+ *
+ * `readReasonFile` in `flow-script-runner.mjs` trims the reason a `.sh` wrote,
+ * and a whole-value replacement then finds nothing: a secret sitting at the
+ * edge of `$ARGENT_REASON` arrives with its own leading or trailing whitespace
+ * gone, which is one character short of the value the scrub looks for. A PEM
+ * key and a service-account blob both end in a newline, and
+ * `echo "…$KEY" > "$ARGENT_REASON"` is the idiomatic way to write that file —
+ * so the shape the redaction promise exists for was the shape that missed it.
+ *
+ * Each spelling is still the value minus whitespace only, so a hit is the
+ * credential and nothing else. An all-whitespace value trims to "", which
+ * `scrubSecretValues` skips.
+ */
+function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
+  const spellings: FlowScriptSecret[] = [];
+  for (const secret of secrets) {
+    spellings.push(secret);
+    for (const value of [secret.value.trimEnd(), secret.value.trimStart(), secret.value.trim()]) {
+      if (value.length === 0 || value === secret.value) continue;
+      if (spellings.some((seen) => seen.value === value)) continue;
+      spellings.push({ name: secret.name, value });
+    }
+  }
+  return spellings;
+}
+
+/**
  * A failure message is clamped by the child, the only side that can bound what
  * crosses the channel, and the child has no secret list — so a value straddling
  * the cut leaves a prefix that a whole-value replacement never matches. That
  * tail is dropped and counted, and only on text whose marker says it was cut.
  */
-function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
+function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
+  const secrets = withTrimmedSpellings(raw);
   const scrubbed = scrubSecretValues(text, secrets);
   const omission = OMISSION_RE.exec(scrubbed);
   if (!omission) return scrubbed;

@@ -129,6 +129,38 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("the call to {{secret:API_KEY}} failed");
   }, 30_000);
 
+  // The runner TRIMS the reason it read, so a secret whose own value ends in
+  // whitespace — a PEM key, a service-account blob — arrives one character
+  // short of itself when it sits at the edge of the file, and a whole-value
+  // replacement finds nothing. `echo "…$KEY" > "$ARGENT_REASON"` is the
+  // idiomatic way to write that file, so this is the shape the promise exists
+  // for. The other reason case here pads AFTER the secret, which is the control
+  // that always passed.
+  it("replaces a secret whose own trailing newline the reason trim ate", async () => {
+    const multiline: FlowScriptSecret = {
+      name: "PEM",
+      value: "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0\n-----END PRIVATE KEY-----\n",
+    };
+    const ws = workspace();
+    const script = ws.write(
+      "edge-reason.sh",
+      `echo "signing failed with key: $PEM" > "$ARGENT_REASON"
+       exit 1`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { PEM: multiline.value },
+      secrets: [multiline],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(message).not.toContain("MIIBVQIBADANBgkqhkiG9w0");
+    expect(message).toContain("{{secret:PEM}}");
+  }, 30_000);
+
   // The document is the script's ANSWER, read by later steps for the id or the
   // derived value the flow needs. Replacing a resolved secret inside it would
   // hand those steps `{{secret:NAME}}` — a string nothing downstream can use —
