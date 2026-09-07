@@ -1386,10 +1386,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // the verdict to whatever inherits that number (see
       // {@link RecordedStepWarning}).
       //
-      // Only this warning is carried. The finish summary already shows the
-      // other two by rendering what was written: kept coordinates read as
-      // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
-      // A step that breaks on conversion renders like one that does not.
+      // Two kinds are carried: the wait verdict above, and — on a call
+      // rewritten to a `run:` step — the `env` the recording could not keep.
+      // The finish summary already shows the other two by rendering what was
+      // written: kept coordinates read as `N. tap: (x, y)`, and a kept raw step
+      // reads as `N. tool: flow-execute`. A step that breaks on conversion
+      // renders like one that does not.
       const carried = waitWarning ?? runEnvWarning(step, warning);
       if (carried) {
         (session.stepWarnings ??= new Map()).set(stepCount, {

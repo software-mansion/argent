@@ -1125,8 +1125,8 @@ interface BatchFlowResult {
  * summary; a flow failing its steps — or one the tool-server rejects up front
  * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
  * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
+ * as validation, a reply that is not a report, or a refusal about the CALL
+ * rather than the file stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1156,8 +1156,9 @@ async function runFlowDirectory(
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
-  // A validation rejection is scoped to the one call, so the batch keeps
-  // going. Anything the server does not mark that way — another kind, or none
+  // A validation rejection about the FILE is scoped to one flow, so the batch keeps
+  // going. Anything else — a refusal about the call (see below), another kind,
+  // or none
   // at all — stops it, as does a transport throw: each remaining flow would
   // burn a run against the same wall.
   let stopped = false;

@@ -115,8 +115,8 @@ export function asPositiveInteger(raw: unknown): number | undefined {
 /**
  * What the operating system will carry as an environment NAME, and the one rule
  * every channel that supplies one is held to: a flow file's own `env:`, a
- * `script` step's, a `flow-execute` argument, `argent flow run --env`, and a
- * `scripts.env.allow` entry.
+ * `script` step's, a `flow-execute` argument, a `flow-add-script` one,
+ * `argent flow run --env`, and a `scripts.env.allow` entry.
  *
  * Here rather than in the tool server because the CLI is one of those channels
  * and cannot import from it — the same reason the script bounds below live

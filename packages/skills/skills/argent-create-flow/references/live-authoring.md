@@ -166,7 +166,7 @@ The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree
 
 A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
 
-Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
+Do not edit YAML before finishing because edits can drop recorded verdicts. A dropped verdict can be about any recorded step, not only a wait. If the finish reports drops, record those steps again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
 
 ### Wrong turns
 

@@ -1847,8 +1847,9 @@ interface RunStackEntry {
 }
 
 /**
- * Where a list of steps executes: the `run:` chain (cycle/depth guards) plus
- * the display nesting depth. Attribution and anchor directory derive from the
+ * Where a list of steps executes: the `run:` chain (cycle/depth guards), the
+ * display nesting depth, and the flow-level `env` defaults in force here.
+ * Attribution and anchor directory derive from the
  * chain's top entry ({@link scopeFlow} / {@link scopeFlowDir}), so no second
  * field can drift out of lockstep with the stack.
  */

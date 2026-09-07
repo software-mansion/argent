@@ -80,7 +80,14 @@ export interface SecretSource {
   needsPrefix?: boolean;
 }
 
-/** Options for locating the scopes; `cwd`/`homeDir` let tests sandbox them. */
+/**
+ * Options for locating the scopes.
+ *
+ * `homeDir` is a test seam. `cwd` is not: every flow `script` step passes the
+ * RUN's own project root through it, which is the only reason a project's
+ * `.argent/secrets.env` is found on a host whose tool-server was spawned from
+ * `/` or `$HOME`. See the module comment above.
+ */
 export interface SecretSourceOptions extends ConfigPathOptions {
   /** Process environment to read `ARGENT_SECRET_*` from. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;

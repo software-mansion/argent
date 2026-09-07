@@ -319,9 +319,10 @@ function runBash(request) {
     announceStarted();
     child = spawn(request.interpreterPath, [request.scriptPath], {
       // The parent chose it, and it built this process's environment: the
-      // allowlist, minus the activation flag this file deleted before anything
-      // else ran, minus the `NODE_CHANNEL_FD` Node removes at its own startup.
-      // The exchange name is all this side adds.
+      // allowlist and whatever `scripts.env.allow` adds to it, then the flow's
+      // merged `env` layered on top, minus the activation flag this file
+      // deleted before anything else ran, minus the `NODE_CHANNEL_FD` Node
+      // removes at its own startup. The exchange name is all this side adds.
       cwd: process.cwd(),
       env: {
         ...process.env,

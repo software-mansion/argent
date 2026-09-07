@@ -1973,11 +1973,13 @@ function describeEnvNameProblem(name: string): string | null {
   // `__proto__` is an accessor rather than an entry, so the value would vanish
   // between here and the child with the step passing anyway.
   //
-  // Nothing reaches it today — `describeScriptEnvProblem` refuses the name on
-  // both YAML channels, and `mergeScriptEnv` and `resolveScriptEnvSecrets` both
-  // copy through a plain object, so the two tool channels lose it earlier. It is
-  // the last line, not the live one, and it is kept because the hazard belongs
-  // to THIS function's own copy.
+  // Nothing reaches it today. `describeScriptEnvProblem` refuses the name on
+  // both YAML channels — a flow file's own `env:` and a `script` step's — and
+  // `scriptEnvParameter` refuses it on the two tool channels, `flow-execute`'s
+  // `env` and `flow-add-script`'s, where it has to be caught before `z.record`
+  // rebuilds the map without it. Four call sites, not two, and the tool
+  // channels refuse rather than drop. It is the last line, not the live one,
+  // and it is kept because the hazard belongs to THIS function's own copy.
   if (name === PROTO_ENV_NAME) {
     return (
       "names an accessor on a plain object rather than an entry, so the value would be dropped " +

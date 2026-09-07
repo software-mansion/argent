@@ -245,7 +245,7 @@ export interface RecordedStepWarning {
   /** The warning text `flow-add-step` raised on that step's `message`. */
   warning: string;
   /**
-   * WHICH question the warning answers, because the two are not the same news.
+   * WHICH question the warning answers, because the kinds are not the same news.
    *
    * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
    *   verdict on converting the step to `await:`/`assert:`. A polish-time
@@ -286,10 +286,12 @@ export interface RecordingSession {
   /** In-memory flow content — authoritative in "client" mode. */
   flow: FlowFile;
   /**
-   * Cross-tree probe verdicts, by 1-based step number.
+   * Recorded step verdicts, by 1-based step number.
    *
-   * The verdict answers a POLISH-time question, and polish begins after
-   * `flow-finish-recording`. The warning is raised on one step's `message`, so
+   * Most answer a POLISH-time question, and polish begins after
+   * `flow-finish-recording`; an `env` one answers nothing polish can act on and
+   * is carried for the same reason. The warning is raised on one step's
+   * `message`, so
    * without this it has scrolled out of every artifact by the time it is
    * actionable. Accumulate it here and let the finish payload carry it.
    */
