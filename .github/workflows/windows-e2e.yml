@@ -105,6 +105,10 @@ on:
       - "packages/tool-server/src/utils/format-error.ts"
       - "packages/tool-server/src/utils/secrets.ts"
       - "packages/tool-server/src/utils/timing.ts"
+      # `scopeTempHome` sets HOME and USERPROFILE, which is the difference this
+      # job exists to catch: `flow-script-env.test.ts` imports it, and Windows
+      # is the platform where the two names are not interchangeable.
+      - "packages/tool-server/test/helpers/temp-home.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
