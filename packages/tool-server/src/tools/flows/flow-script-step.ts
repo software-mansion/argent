@@ -358,8 +358,20 @@ const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+
  * is code 127, which is bash's own name for exactly this. Matched on the
  * sentence the runner composes rather than on a bare `127`, which is also an
  * ordinary exit code for a script that chose it.
+ *
+ * And a script may choose it while EXPLAINING itself: `echo "no such tenant"
+ * >"$ARGENT_REASON"; exit 127` is a step that said what went wrong, and the
+ * exit code alone cannot tell that apart from bash's own. What can is the
+ * reason: the runner appends it after its 127 hint, so a message ENDING with
+ * that hint is one where the script wrote nothing, and a message carrying more
+ * is one where it explained itself and the explanation is the diagnosis. The
+ * hint's own tail is quoted here, in step with `exitCodeHint` in
+ * `flow-script-runner.mjs`, which this file cannot import — a wording that
+ * drifts apart stops matching and the note is dropped, which is the safe
+ * direction.
  */
-const BASH_COMMAND_NOT_FOUND = /^The script exited with code 127 \(bash: /m;
+const BASH_COMMAND_NOT_FOUND =
+  /^The script exited with code 127 \(bash: [^\n]*CRLF line endings\.[ \t\r]*$(?![\s\S]*\S)/m;
 
 /**
  * The note a `command not found` earns, or null when the failure was something

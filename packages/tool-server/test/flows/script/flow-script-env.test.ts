@@ -764,6 +764,22 @@ describe("the shell-environment note", () => {
     expect(reason).toContain("The tool server keeps the environment it started with");
     expect(reason).not.toContain("A command was not found.");
   });
+
+  it("leaves a .sh that chose 127 and explained itself alone", async (ctx) => {
+    skipWithoutBash(ctx);
+    // 127 is bash's own name for a missing command AND an ordinary exit code a
+    // script may choose. A script that wrote `$ARGENT_REASON` said what went
+    // wrong, and the note would answer it with a paragraph about the tool
+    // server's `PATH` — a confident instruction pointing somewhere else.
+    await write("scripts/own-127.sh", `echo "no such tenant" > "$ARGENT_REASON"\nexit 127\n`);
+    await flow("sh-own-127", "steps:\n  - script: { path: ../../scripts/own-127.sh }\n");
+
+    const { result } = await runFlow("sh-own-127");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("no such tenant");
+    expect(reason).not.toContain("The tool server keeps the environment it started with");
+  });
 });
 
 describe("what is NOT hidden", () => {
