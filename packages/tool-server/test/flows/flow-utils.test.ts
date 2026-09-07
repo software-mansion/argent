@@ -836,6 +836,46 @@ describe("parseFlow", () => {
     }
   });
 
+  // `String.prototype.trim` strips the whole Unicode whitespace class; YAML's
+  // plain scalars strip only the ASCII one. So a value ending in one of these
+  // was intact in the file and gone from the parse, whenever it was the LAST
+  // scalar — which is where the serializer puts a recorded script step's `env`
+  // value. A token pasted out of a web UI or a chat client with a trailing
+  // U+00A0 is the ordinary way in, and nothing said the character was lost.
+  it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
+    // Written as escapes: the characters are invisible in a source file, and
+    // one of them silently reformatted is a test that stops testing anything.
+    const spaces = [
+      "\u00a0", // no-break space — what a paste out of a web UI carries
+      "\u1680",
+      "\u2000",
+      "\u200a",
+      "\u2028", // line separator
+      "\u2029", // paragraph separator
+      "\u202f",
+      "\u205f",
+      "\u3000", // ideographic space
+      "\ufeff", // zero-width no-break space
+    ];
+    for (const space of spaces) {
+      const flow: FlowFile = {
+        executionPrerequisite: "",
+        env: { HEADER: `abc${space}` },
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: `abc${space}` } }],
+      };
+      expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+      // A value that is NOTHING BUT the character is the same loss one step
+      // further: it re-parsed as an empty scalar, i.e. null, and the step then
+      // failed the `strings only` rule — so the recorded flow could no longer
+      // be finished or run at all.
+      const lone: FlowFile = {
+        executionPrerequisite: "",
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: space } }],
+      };
+      expect(parseFlow(serializeFlow(lone))).toEqual(lone);
+    }
+  });
+
   it("never serializes a whitespace-only-line value as a block scalar", async () => {
     const steps = [{ kind: "echo", message: "step one \n \ndone" }] as FlowFile["steps"];
     const yaml = serializeFlow({ executionPrerequisite: "", steps });
