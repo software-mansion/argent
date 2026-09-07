@@ -1027,6 +1027,36 @@ describe("recording a script step with env", () => {
     expect(added.message).toContain("would append a SECOND one");
   });
 
+  it("shows the recorded env in the step summary", async () => {
+    // `recorded` is the only view of the appended step the recorder returns,
+    // and the summary is also what `flow-finish-recording` lists. A step
+    // carrying nineteen values summarized identically to a bare one, while a
+    // raw `tool:` step renders its whole args map.
+    await write("scripts/seed.mjs", "output.ok = true;");
+    await flowStartRecordingTool.execute({}, { name: "summary", project_root: root });
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "summary",
+        project_root: root,
+        path: "../../scripts/seed.mjs",
+        env: { USER_TYPE: "premium" },
+      }
+    )) as { recorded: string };
+
+    expect(added.recorded).toBe('1. script: ../../scripts/seed.mjs env {"USER_TYPE":"premium"}');
+
+    const finished = (await flowFinishRecordingTool.execute(
+      {},
+      { name: "summary", project_root: root }
+    )) as { summary: string[] };
+
+    expect(finished.summary).toEqual([
+      '1. script: ../../scripts/seed.mjs env {"USER_TYPE":"premium"}',
+    ]);
+  });
+
   it("stays quiet when the step's own env provably shadows the change", async () => {
     // The drift check exists to withdraw a promise about the environment the
     // script RAN under. A step's own map sits over the flow-level one, so an

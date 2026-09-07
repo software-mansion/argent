@@ -411,8 +411,15 @@ const FLOW_STEP_DEFINITIONS: {
     // author would open. `timeout` rides the summary alone: it changes what
     // replays, the way tap's `times` does, while a report target names only
     // what the step acts on.
+    // The `env` too: it is part of what the step DOES, the way a `tool:`
+    // step's args are — a script carrying nineteen values summarized
+    // identically to a bare one, and this line is the only view of the
+    // appended step the recorder returns. Values as written, like every
+    // other field of the file.
     summary: (step) =>
-      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+      `${step.path}` +
+      `${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}` +
+      `${step.env ? ` env ${renderToolArgs(step.env)}` : ""}`,
     target: (step) => step.path,
   },
   "snapshot": {
