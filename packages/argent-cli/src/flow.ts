@@ -3,6 +3,11 @@ import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
+// The env-name rule and the one name it admits that nothing can carry, from
+// the package both this CLI and the tool server already read their shared
+// script bounds out of — so a `--env` argument is refused here against the
+// same rule the server holds it to, rather than against a copy of it.
+import { PROTO_ENV_NAME, SCRIPT_ENV_NAME_PATTERN } from "@argent/configuration-core";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -177,26 +182,6 @@ const RUN_OPTIONS = {
 } as const satisfies OptionSpecs;
 
 /**
- * What every operating system carries as a name, and what the tool server's own
- * authoring rule accepts (`SCRIPT_ENV_NAME_PATTERN`). Kept here as well, not to
- * own the rule — the server still decides what it takes — but so a malformed
- * `--env` argument is refused where the caller typed it, with the argument
- * quoted the way every other CLI refusal quotes one. The CLI cannot import from
- * the tool server; until that rule is loosened this copy only ever refuses
- * early what the server refuses late.
- */
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/**
- * The one name {@link ENV_NAME_PATTERN} accepts that no channel can carry.
- *
- * It starts with "_", so the shape rule passes it, and the payload's own
- * `z.record` then builds a fresh object and loses the key before any rule of
- * argent runs — the run would pass with the value simply absent.
- */
-const PROTO_NAME = "__proto__";
-
-/**
  * `--env NAME=value`, collected into the map `flow-execute` takes.
  *
  * Everything after the FIRST `=` is the value, so a value holding one needs no
@@ -216,7 +201,7 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
       );
     }
     const name = assignment.slice(0, eq);
-    if (!ENV_NAME_PATTERN.test(name)) {
+    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
       throw new FlagParseException(
         `--env expects NAME=value, got ${JSON.stringify(assignment)} — ${JSON.stringify(name)} ` +
           'is not an environment variable name: a name starts with a letter or "_" and ' +
@@ -227,10 +212,10 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
     // it reads as a name, and then `z.record` builds its own object and loses
     // the key before any rule of argent sees it — the run would pass with the
     // variable simply missing and not a word said.
-    if (name === PROTO_NAME) {
+    if (name === PROTO_ENV_NAME) {
       throw new FlagParseException(
-        `--env cannot set ${PROTO_NAME}: every map on the way to the script copies it through ` +
-          `a plain object, where ${PROTO_NAME} is an accessor rather than an entry — the value ` +
+        `--env cannot set ${PROTO_ENV_NAME}: every map on the way to the script copies it through ` +
+          `a plain object, where ${PROTO_ENV_NAME} is an accessor rather than an entry — the value ` +
           `would be dropped and the script would run without it, silently. Use a name of your own`
       );
     }

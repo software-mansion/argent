@@ -112,6 +112,27 @@ export function asPositiveInteger(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
 }
 
+/**
+ * What the operating system will carry as an environment NAME, and the one rule
+ * every channel that supplies one is held to: a flow file's own `env:`, a
+ * `script` step's, a `flow-execute` argument, `argent flow run --env`, and a
+ * `scripts.env.allow` entry.
+ *
+ * Here rather than in the tool server because the CLI is one of those channels
+ * and cannot import from it — the same reason the script bounds below live
+ * here. A name outside this rule can never match one the tool server carries,
+ * so honouring it silently is honouring nothing.
+ */
+export const SCRIPT_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * The one name {@link SCRIPT_ENV_NAME_PATTERN} accepts that no channel can
+ * carry: the operating system takes it, but every merge on the way to the child
+ * copies the map through a plain object, where it is an accessor rather than an
+ * entry — so the value is dropped and the script runs without it, silently.
+ */
+export const PROTO_ENV_NAME = "__proto__";
+
 export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
 
 /**

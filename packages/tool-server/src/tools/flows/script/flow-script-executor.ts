@@ -29,6 +29,8 @@ import {
   getConfigValue,
   MIN_SCRIPT_HEAP_LIMIT_MB,
   MIN_SCRIPT_TIMEOUT_MS,
+  PROTO_ENV_NAME,
+  SCRIPT_ENV_NAME_PATTERN,
   readConfigObject,
   type ConfigDefinition,
 } from "@argent/configuration-core";
@@ -305,26 +307,6 @@ function reservedNameFor(name: string, caseInsensitive: boolean): string | undef
 export function reservedScriptEnvName(name: string): string | undefined {
   return reservedNameFor(name, process.platform === "win32");
 }
-
-/**
- * The one name that matches the environment-name rule and still cannot survive
- * a merge: the operating system takes it, but every merge on the way to the
- * child copies the map through a plain object, where it is an accessor rather
- * than an entry.
- */
-export const PROTO_ENV_NAME = "__proto__";
-
-/**
- * What the operating system will carry as an environment NAME, and the one rule
- * every channel is held to: a flow file's own `env:`, a `script` step's, a
- * `flow-execute` argument, `--env`, and a `scripts.env.allow` entry.
- *
- * Exported because `flow-script-env.ts` — which owns the authoring rules and
- * imports from here — has to hold an author's map to the same rule an allowlist
- * entry is held to. A name outside it can never match one the tool server
- * carries, so honouring it silently is honouring nothing.
- */
-export const SCRIPT_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** One spelling of each reserved name, for the refusal to name them all. */
 export function reservedScriptEnvNamesForMessage(): string {
