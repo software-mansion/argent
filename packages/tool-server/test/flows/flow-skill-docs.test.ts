@@ -14,7 +14,18 @@ import {
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
+import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { reservedScriptEnvNamesForMessage } from "../../src/tools/flows/script/flow-script-executor";
+
+/** One tool's `env` parameter description, as the JSON schema publishes it. */
+function envParameterDescription(tool: { zodSchema?: unknown }): string {
+  const schema = zodObjectToJsonSchema(
+    (tool as { zodSchema: Parameters<typeof zodObjectToJsonSchema>[0] }).zodSchema
+  ) as { properties: Record<string, { description?: string }> };
+  const described = schema.properties.env?.description;
+  expect(described).toBeDefined();
+  return described!;
+}
 
 /**
  * Keep the core skill's scope routing concise while guarding the linked
@@ -281,6 +292,30 @@ describe("create-flow script docs", () => {
     for (const layer of ["scripts.env.allow", "--env", "not a default"]) {
       expect(section).toContain(layer);
     }
+  });
+
+  it("keeps the two tool descriptions agreeing about where --env sits", () => {
+    // The same discipline this file applies to the reference, applied to the
+    // strings an agent reads BEFORE recording. `flow-add-script`'s description
+    // and its `env` parameter said a real replay merges the run's own `--env`
+    // values "under" this call's `env` over the flow file's own — which is
+    // backwards: the run-time map is above the FILE's `env:` at every depth,
+    // and `flow-execute`'s own parameter says so in the same commit. An agent
+    // was told a recorded file-level value is what the replay takes, when
+    // `argent flow run checkout --env BUILD=1421` replaces it.
+    const runEnv = envParameterDescription(createRunFlowTool({} as unknown as Registry));
+    expect(runEnv).toContain("OVERRIDE the flow file's own `env` defaults at every depth");
+    expect(runEnv).toContain("a `script` step's own `env` still wins over them");
+
+    const addEnv = envParameterDescription(flowAddScriptTool);
+    for (const surface of [flowAddScriptTool.description, addEnv]) {
+      // Whatever the wording, it may not put the run-time layer under the
+      // file's own defaults.
+      expect(surface).toMatch(/--env\/flow-execute values/);
+      expect(surface).not.toMatch(/two (?:more|further) layers under those/);
+    }
+    expect(addEnv).toContain("BETWEEN the two layers here");
+    expect(flowAddScriptTool.description).toContain("which sit BETWEEN those two");
   });
 
   it("lists a script path among what a flow_path run re-anchors", () => {
