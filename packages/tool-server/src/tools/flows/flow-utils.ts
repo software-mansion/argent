@@ -3194,11 +3194,19 @@ export function holdsOutputReference(step: FlowStep): boolean {
   return blockSteps(step)?.some(holdsOutputReference) ?? false;
 }
 
-/** A refused value as its message quotes it, cut to the shared entry ceiling. */
+/**
+ * A refused value as its message quotes it, cut to the shared entry ceiling.
+ *
+ * Counted, the way {@link badEntry} counts its own cut. The refusals this
+ * serves name a MARKER inside the value — `{{output:` — and a value long
+ * enough to be cut is a value whose marker may be on the far side of the cut,
+ * so a bare `…` left the author reading two hundred characters that do not
+ * contain the thing the message is about, with nothing to say the rest exists.
+ */
 function renderedValue(value: string): string {
-  return value.length > MAX_ENTRY_RENDER_CHARS
-    ? `${value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
-    : value;
+  if (value.length <= MAX_ENTRY_RENDER_CHARS) return value;
+  const elided = value.length - MAX_ENTRY_RENDER_CHARS;
+  return `${value.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
 }
 
 function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {

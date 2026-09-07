@@ -1360,10 +1360,27 @@ describe("output references", () => {
     }
     const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
-    expect(quoted!.endsWith("…")).toBe(true);
-    // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
-    expect(quoted!.length).toBe(201);
+    // Counted, not a bare ellipsis: the refusal names a MARKER inside the
+    // value, and a cut long enough to hide it leaves the author reading two
+    // hundred characters that do not contain the thing complained about.
+    expect(quoted!.endsWith("…(+218 chars)")).toBe(true);
+    expect(quoted!.startsWith("{{output:user.id}}")).toBe(true);
     expect(message.length).toBeLessThan(1000);
+  });
+
+  it("says how much of a value it cut when the marker itself was past the cut", () => {
+    // The value the message is about opens with 400 ordinary characters and
+    // carries the marker after them, so the quote holds no marker at all. A
+    // bare `…` said nothing about the rest existing.
+    let message = "";
+    try {
+      parseFlow(`steps:\n  - echo: "${"x".repeat(400)}{{output:user.id}}"\n`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("uses unsupported template syntax");
+    expect(message).toContain("…(+218 chars)");
+    expect(message).not.toContain("{{output:user.id}}");
   });
 
   it("leaves a pattern alone, at both levels that spell one", () => {
