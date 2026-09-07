@@ -1,6 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
-import type { DescribeTreeData } from "../../contract";
+import type { DescribeNode, DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
 import { resolveDevice } from "../../../../utils/device-info";
 import {
@@ -50,7 +50,11 @@ export async function describeAndroid(
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
-      const tree = parseUiAutomatorDump(xml, size.width, size.height);
+      let tree = parseUiAutomatorDump(xml, size.width, size.height);
+      if (hasUnreadWebView(tree)) {
+        const again = await devtools.getHierarchy();
+        tree = parseUiAutomatorDump(again.xml, size.width, size.height);
+      }
       return { tree, source: "android-devtools", hint };
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
@@ -64,6 +68,13 @@ export async function describeAndroid(
     }
   }
 
+  const [size, raw] = await Promise.all([getAndroidScreenSize(serial), uiautomatorDump(serial)]);
+  let tree = parseDump(raw, size);
+  if (hasUnreadWebView(tree)) tree = parseDump(await uiautomatorDump(serial), size);
+  return { tree, source: "uiautomator", hint };
+}
+
+async function uiautomatorDump(serial: string): Promise<string> {
   // Per-call dump path so concurrent describes on the same serial don't cat each
   // other's half-written dump.
   const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
@@ -72,14 +83,11 @@ export async function describeAndroid(
   // wrappers, RN SVG sub-paths, bounds-less Compose containers) while keeping the
   // text, content-desc, clickable and resource-id the agent contract uses.
   // `;` rather than `&&` before `rm -f` so cleanup fires even when dump/cat fails.
-  const [size, rawBuf] = await Promise.all([
-    getAndroidScreenSize(serial),
-    adbExecOutBinary(
-      serial,
-      `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-      { timeoutMs: 20_000 }
-    ),
-  ]);
+  const rawBuf = await adbExecOutBinary(
+    serial,
+    `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+    { timeoutMs: 20_000 }
+  );
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
@@ -97,12 +105,27 @@ export async function describeAndroid(
       }
     );
   }
+  return raw;
+}
+
+function parseDump(raw: string, size: { width: number; height: number }): DescribeNode {
   // `wm size` is not rotation-aware, but the dump says which rotation it was
   // taken at. Orienting the divisor here is what keeps a rotated device's frames
   // in the same upright space the android-devtools path already produces — and
   // stops the right-hand half of a landscape screen being pruned away as
   // off-screen (#609).
   const oriented = orientScreenSize(size, parseDumpRotation(raw));
-  const tree = parseUiAutomatorDump(raw, oriented.width, oriented.height);
-  return { tree, source: "uiautomator", hint };
+  return parseUiAutomatorDump(raw, oriented.width, oriented.height);
+}
+
+/**
+ * Chromium builds a WebView's accessibility tree on the first request for it:
+ * the read that asks sees the WebView with nothing under it, the next read sees
+ * the page (measured on API 35 / WebView 124: a read 6 s after load is still
+ * empty, the read right after it is complete). One re-read covers it; a screen
+ * without a WebView never pays for it.
+ */
+export function hasUnreadWebView(node: DescribeNode): boolean {
+  if (node.role === "WebView" && node.children.length === 0) return true;
+  return node.children.some(hasUnreadWebView);
 }
