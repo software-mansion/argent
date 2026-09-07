@@ -21,7 +21,6 @@ import {
   parseFlow,
   type FlowStep,
 } from "../../../src/tools/flows/flow-utils";
-import { SCRIPT_STEP_LOG_LIMIT_BYTES } from "../../../src/tools/flows/script/flow-script-executor";
 
 /** Real child processes, so the budgets are generous. */
 vi.setConfig({ testTimeout: 30_000 });
@@ -130,7 +129,7 @@ describe("recording a script step", () => {
     const result = await addScript("checkout", "../../scripts/seed.mjs");
 
     expect(result.status).toBe("pass");
-    expect(result.log).toContain("seeded order 4711");
+    expect(JSON.stringify(result)).not.toContain("seeded order 4711");
     expect(result.outputJson).toBe('{"order":{"id":4711}}');
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.stepCount).toBe(1);
@@ -481,43 +480,24 @@ describe("recording a script step", () => {
     }
   });
 
-  it("returns the script's logs, and flags a log the step limit cut", async () => {
+  it("returns nothing a chatty script printed, and still records the step", async () => {
     await write(
       "scripts/chatty.mjs",
-      `console.log("x".repeat(${SCRIPT_STEP_LOG_LIMIT_BYTES + 1024}));\nconsole.error("and a warning");`
+      `console.log("psql://user:hunter2@db/prod ".repeat(200_000));\n` +
+        `console.error("and a warning");\n` +
+        `output.ok = true;`
     );
     await start("chatty");
 
     const result = await addScript("chatty", "../../scripts/chatty.mjs");
 
     expect(result.status).toBe("pass");
-    expect(result.logTruncated).toBe(true);
-    expect(result.log!.length).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
-    // The cut leaves nothing in the text, which is why the flag is the only
-    // signal and the tool description tells the caller to read it.
-    expect(result.log).not.toContain("truncated");
+    const whole = JSON.stringify(result);
+    expect(whole).not.toContain("hunter2");
+    expect(whole).not.toContain("and a warning");
+    expect(result).not.toHaveProperty("log");
+    expect(result).not.toHaveProperty("logTruncated");
     expect(await steps("chatty")).toHaveLength(1);
-  });
-
-  it("flags a log the frame collapser cut, far inside the step limit", async () => {
-    // The cap is not the only thing that raises the flag: the executor also
-    // raises it when its collapser drops a fatal error's frame dump, which
-    // reaches no limit at all. A description naming only the cap would send the
-    // author looking for a log too long to keep.
-    await write(
-      "scripts/framey.mjs",
-      `console.error("FATAL ERROR: build step failed");\n` +
-        `for (let i = 1; i <= 6; i++) console.error(\` \${i}: 0x1049\${i}1aec some symbol\`);\n` +
-        `output.ok = true;`
-    );
-    await start("framey");
-
-    const result = await addScript("framey", "../../scripts/framey.mjs");
-
-    expect(result.status).toBe("pass");
-    expect(result.logTruncated).toBe(true);
-    expect(result.log).toMatch(/\[6 V8 stack frames omitted]/);
-    expect(Buffer.byteLength(result.log!, "utf8")).toBeLessThan(SCRIPT_STEP_LOG_LIMIT_BYTES / 2);
   });
 });
 
@@ -537,7 +517,7 @@ describe("a script that did not pass records nothing", () => {
 
     expect(result.status).toBe("fail");
     expect(result.reason).toContain("the backend refused the third");
-    expect(result.log).toContain("created 2 of 3 records");
+    expect(JSON.stringify(result)).not.toContain("created 2 of 3 records");
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.stepCount).toBe(1);
     expect(result).not.toHaveProperty("recorded");

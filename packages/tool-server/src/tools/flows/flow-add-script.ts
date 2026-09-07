@@ -43,8 +43,6 @@ interface FlowAddScriptResult {
   message: string;
   status: "pass" | "fail" | "error";
   reason?: string;
-  log?: string;
-  logTruncated?: true;
   durationMs?: number;
   /**
    * The document the script returned, as JSON text. Present only on a pass.
@@ -181,9 +179,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // Run BEFORE taking the flow-file lock: a script may run for minutes, and
     // appendStepToFlow holds a per-key lock that would block every other call on
     // this recording for that whole duration.
-    //
-    // No `logBudget`: the run-scoped allowance would silently truncate a late
-    // script's logs during authoring. The per-step limit still applies.
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
@@ -194,8 +189,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const common = {
       status: outcome.status,
       ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
-      ...(outcome.scriptLog !== undefined ? { log: outcome.scriptLog } : {}),
-      ...(outcome.scriptLogTruncated ? { logTruncated: true as const } : {}),
       ...(result ? { durationMs: result.durationMs } : {}),
     };
 

@@ -637,8 +637,13 @@ function safeStringify(value) {
 
 /**
  * `process.stdout` is asynchronous when it is a pipe, so a bare `process.exit`
- * would discard buffered log output; the callback of an empty write on each
- * stream runs after every earlier write has flushed.
+ * would discard whatever is still buffered; the callback of an empty write on
+ * each stream runs after every earlier write has flushed.
+ *
+ * The parent keeps none of that text, but it still SCANS stderr — for V8's heap
+ * banner, and for a watchdog reporting that it never armed — so a write dropped
+ * at exit costs a signal rather than console output. The verdict itself is not
+ * at stake: `sendToParent` has already put it on IPC before this flush starts.
  *
  * The exit code is always 0 — the parent classifies on the terminal message.
  */
@@ -764,8 +769,10 @@ function omissionMarker(omitted) {
 
 /**
  * An empty write, so the callback runs after everything already buffered. A
- * script may have ended the stream itself, and writing to an ended stream
- * raises an unhandled `error` event that would land in the step's own log.
+ * script may have ended the stream itself, and an `error` event with no
+ * listener is an uncaught exception — so the early return and the one-shot
+ * listener are what keep a script that closed its own stdout on the passing
+ * path, which `passes a script that ends its own stdout mid-run` pins.
  */
 function flushStream(stream, done) {
   if (!stream || stream.writableEnded || stream.destroyed) {

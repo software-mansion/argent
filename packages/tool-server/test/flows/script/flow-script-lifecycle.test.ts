@@ -7,7 +7,11 @@ import {
   type FlowScriptExecutorOptions,
   type FlowScriptFailureKind,
 } from "../../../src/tools/flows/script/flow-script-executor";
-import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import {
+  createScriptWorkspace,
+  SOURCE_RUNNER_DIR,
+  type ScriptWorkspace,
+} from "../../helpers/flow-script-workspace";
 
 const workspaces: ScriptWorkspace[] = [];
 
@@ -187,7 +191,7 @@ describe("flow script executor — time limits and cancellation", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
-  it("keeps the logs a timed-out script already wrote", async () => {
+  it("reports nothing a timed-out script printed on its way to the limit", async () => {
     const ws = workspace();
     const script = ws.write(
       "noisy-hang.mjs",
@@ -200,7 +204,7 @@ describe("flow script executor — time limits and cancellation", () => {
     });
 
     expect(result.failure?.kind).toBe("timeout");
-    expect(result.log).toContain("started the seed");
+    expect(JSON.stringify(result)).not.toContain("started the seed");
   });
 
   it("cancels a running script when the signal aborts", async () => {
@@ -225,10 +229,12 @@ describe("flow script executor — time limits and cancellation", () => {
 
   it("honours an abort raised in the same tick as the call", async () => {
     const ws = workspace();
+    const finished = ws.resolve("finished.txt");
     const script = ws.write(
       "slow.mjs",
-      `await new Promise((r) => setTimeout(r, 2000));
-       console.log("finished work");
+      `import fs from "node:fs";
+       await new Promise((r) => setTimeout(r, 2000));
+       fs.writeFileSync(${JSON.stringify(finished)}, "done");
        output.done = true;`
     );
     const controller = new AbortController();
@@ -242,7 +248,7 @@ describe("flow script executor — time limits and cancellation", () => {
     const result = await pending;
 
     expect(result.failure?.kind).toBe("cancelled");
-    expect(result.log).not.toContain("finished work");
+    expect(fs.existsSync(finished)).toBe(false);
     expect(result.durationMs).toBeLessThan(1_000);
     expect(result.failure?.beforeFork).toBe(true);
   });
@@ -289,27 +295,29 @@ describe("flow script executor — time limits and cancellation", () => {
     expect(result.failure?.kind).toBe("cancelled");
   }, 30_000);
 
-  const GRACEFUL_SIGTERM = `import { setTimeout as delay } from "node:timers/promises";
+  const gracefulSigterm = (mark: string) => `import fs from "node:fs";
+     import { setTimeout as delay } from "node:timers/promises";
      output.phase = "seeding";
      const ac = new AbortController();
      process.on("SIGTERM", () => ac.abort());
      async function main() {
        try { await delay(60000, undefined, { signal: ac.signal }); }
-       catch { console.log("work aborted"); return; }
+       catch { fs.writeFileSync(${JSON.stringify(mark)}, "aborted"); return; }
        output.phase = "done";
      }
      main();`;
 
   it("fails a timed-out script that shuts down gracefully on SIGTERM", async () => {
     const ws = workspace();
-    const script = ws.write("graceful.mjs", GRACEFUL_SIGTERM);
+    const aborted = ws.resolve("aborted.txt");
+    const script = ws.write("graceful.mjs", gracefulSigterm(aborted));
     const result = await executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
       timeoutMs: 700,
     });
 
-    expect(result.log).toContain("work aborted");
+    expect(fs.existsSync(aborted)).toBe(true);
     expect(result.failure?.kind).toBe(TIMEOUT);
     expect(result.ok).toBe(false);
     expect(result.output).toBeUndefined();
@@ -317,7 +325,8 @@ describe("flow script executor — time limits and cancellation", () => {
 
   it("keeps a cancellation a cancellation when the script shuts down gracefully", async () => {
     const ws = workspace();
-    const script = ws.write("graceful.mjs", GRACEFUL_SIGTERM);
+    const aborted = ws.resolve("aborted.txt");
+    const script = ws.write("graceful.mjs", gracefulSigterm(aborted));
     const controller = new AbortController();
     const pending = executor().execute({
       scriptPath: script,
@@ -329,7 +338,7 @@ describe("flow script executor — time limits and cancellation", () => {
     controller.abort();
     const result = await pending;
 
-    expect(result.log).toContain("work aborted");
+    expect(fs.existsSync(aborted)).toBe(true);
     expect(result.failure?.kind).toBe("cancelled");
     expect(result.ok).toBe(false);
     expect(result.output).toBeUndefined();
@@ -352,18 +361,20 @@ describe("flow script executor — time limits and cancellation", () => {
     };
   }
 
-  const EXITS_ON_SIGTERM = `output.phase = "half-written";
+  const exitsOnSigterm = (mark: string) => `import fs from "node:fs";
+     output.phase = "half-written";
      const held = setInterval(() => {}, 1000);
      process.on("SIGTERM", () => {
        clearInterval(held);
        output.phase = "cleaned-up";
-       console.log("work aborted");
+       fs.writeFileSync(${JSON.stringify(mark)}, "aborted");
        process.exit(0);
      });`;
 
   it("fails a timed-out script that exits zero from its SIGTERM handler while the server stalls", async () => {
     const ws = workspace();
-    const script = ws.write("graceful-exit.mjs", EXITS_ON_SIGTERM);
+    const aborted = ws.resolve("aborted.txt");
+    const script = ws.write("graceful-exit.mjs", exitsOnSigterm(aborted));
     const pending = executor().execute({
       scriptPath: script,
       projectRoot: ws.dir,
@@ -373,7 +384,7 @@ describe("flow script executor — time limits and cancellation", () => {
     const result = await pending;
     endStall();
 
-    expect(result.log).toContain("work aborted");
+    expect(fs.existsSync(aborted)).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.failure?.kind).toBe(TIMEOUT);
     expect(result.output).toBeUndefined();
@@ -381,7 +392,8 @@ describe("flow script executor — time limits and cancellation", () => {
 
   it("keeps a cancellation a cancellation when the server stalls across the stop", async () => {
     const ws = workspace();
-    const script = ws.write("graceful-exit.mjs", EXITS_ON_SIGTERM);
+    const aborted = ws.resolve("aborted.txt");
+    const script = ws.write("graceful-exit.mjs", exitsOnSigterm(aborted));
     const controller = new AbortController();
     const pending = executor().execute({
       scriptPath: script,
@@ -395,7 +407,7 @@ describe("flow script executor — time limits and cancellation", () => {
     clearTimeout(abort);
     endStall();
 
-    expect(result.log).toContain("work aborted");
+    expect(fs.existsSync(aborted)).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.failure?.kind).toBe("cancelled");
     expect(result.output).toBeUndefined();
@@ -469,14 +481,13 @@ describe("flow script executor — exit classification", () => {
     const ws = workspace();
     const script = ws.write(
       "exits.mjs",
-      `async function main() { output.orderId = "ord_1"; console.log("seeded"); }
+      `async function main() { output.orderId = "ord_1"; }
        main().then(() => process.exit(0));`
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure).toBeUndefined();
     expect(result.output).toEqual({ orderId: "ord_1" });
-    expect(result.log).toContain("seeded");
   });
 
   it("keeps an output too large for the pipe buffer when the script exits zero", async () => {
@@ -542,12 +553,13 @@ describe("flow script executor — exit classification", () => {
 
   it("names the exit code when the script stops its own process", async () => {
     const ws = workspace();
-    const script = ws.write("bye.mjs", `console.log("leaving"); process.exit(3);`);
+    const script = ws.write("bye.mjs", `process.exit(3);`);
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.failure?.kind).toBe("exit");
     expect(result.failure?.message).toContain("exit code 3");
-    expect(result.log).toContain("leaving");
+    expect(result.failure?.message).toContain("left no output document behind");
+    expect(result.failure?.message).toContain("throw the reason instead of exiting on it");
   });
 
   it("fails a step whose script set a non-zero process.exitCode", async () => {
@@ -565,7 +577,7 @@ describe("flow script executor — exit classification", () => {
     expect(result.failure?.message).toBe(
       "The script set process.exitCode to 1, which means it failed."
     );
-    expect(result.log).toContain("validation failed");
+    expect(JSON.stringify(result)).not.toContain("validation failed");
   });
 
   it("reports a signal death as a runner error naming the signal", async () => {
@@ -582,7 +594,7 @@ describe("flow script executor — exit classification", () => {
     expect(result.failure?.message).toContain("did not stop itself");
   });
 
-  it("reports heap exhaustion as a heap limit, collapses the frame dump and keeps the script's own logs", async () => {
+  it("reports heap exhaustion as a heap limit and nothing V8 printed getting there", async () => {
     const ws = workspace();
     const script = ws.write(
       "hungry.mjs",
@@ -598,12 +610,13 @@ describe("flow script executor — exit classification", () => {
 
     expect(result.failure?.kind).toBe("heap");
     expect(result.failure?.message).toBe("The script exceeded its 64 MiB heap limit.");
-    expect(result.log).toContain("allocating");
-    expect(result.log).toMatch(/\[\d+ V8 stack frames omitted]/);
-    expect(result.log).not.toMatch(/^\s*\d+: 0x[0-9a-f]{6}/m);
+    const whole = JSON.stringify(result);
+    expect(whole).not.toContain("allocating");
+    expect(whole).not.toContain("FATAL ERROR");
+    expect(whole).not.toMatch(/\d+: 0x[0-9a-f]{6}/);
   }, 60_000);
 
-  it("still reports a heap limit when the script logged past its log budget first", async () => {
+  it("still reports a heap limit when the script printed a flood first", async () => {
     const ws = workspace();
     const script = ws.write(
       "chatty-hungry.mjs",
@@ -617,9 +630,9 @@ describe("flow script executor — exit classification", () => {
       timeoutMs: 30_000,
     });
 
-    expect(result.logTruncated).toBe(true);
     expect(result.failure?.kind).toBe("heap");
     expect(result.failure?.message).toBe("The script exceeded its 64 MiB heap limit.");
+    expect(JSON.stringify(result)).not.toContain("progress line");
   }, 60_000);
 
   it("does not call an abort with no heap banner a heap limit", async () => {
@@ -633,7 +646,7 @@ describe("flow script executor — exit classification", () => {
 
     expect(result.failure?.kind).toBe("signal");
     expect(result.failure?.message).toContain("SIGABRT");
-    expect(result.log).toContain("about to abort");
+    expect(JSON.stringify(result)).not.toContain("about to abort");
   }, 30_000);
 
   it("does not call a forwarded 134 exit status a heap limit", async () => {
@@ -934,6 +947,101 @@ describe("flow script watchdogs", () => {
     // so a descendant the tool server can no longer reap goes with it.
     expect(pastMargin).toBe(false);
     expect(result.failure?.kind).toBe(TIMEOUT);
+  }, 60_000);
+
+  /**
+   * The runner resolves both watchdogs against its own module URL, so a
+   * directory holding only the runner is what makes BOTH `Worker` constructions
+   * fail for real. Everything asserted past here is written by the first-party
+   * reporters themselves rather than by a fixture imitating them.
+   */
+  function runnerWithoutWatchdogs(ws: ScriptWorkspace): string {
+    const runnerDir = ws.resolve("runner-only");
+    fs.mkdirSync(runnerDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(SOURCE_RUNNER_DIR, "flow-script-runner.mjs"),
+      path.join(runnerDir, "flow-script-runner.mjs")
+    );
+    return runnerDir;
+  }
+
+  it("report one that never armed, on a script that otherwise passed", async () => {
+    const ws = workspace();
+    // `new Worker` on a missing file rejects through an `error` EVENT, not a
+    // throw, so the report is only as available as the script is long: a script
+    // that returns immediately exits before the event fires and the note is
+    // genuinely missed (measured — at 0ms it is absent, from ~200ms it is not).
+    // This fix restores the line wherever it is emitted; it does not make the
+    // emission itself deterministic, which the runner could only do by awaiting
+    // both worker spawns before every script.
+    const script = ws.write(
+      "quiet.mjs",
+      `await new Promise((r) => setTimeout(r, 400));\noutput.ok = true;`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      runnerDir: runnerWithoutWatchdogs(ws),
+      timeoutMs: 20_000,
+    });
+
+    // A pass, because nothing went wrong inside the script. What the step lost
+    // is the group kill, and the only account of that loss was a stderr line
+    // this executor drains — so without the note the run comes back
+    // byte-identical to a healthy one.
+    expect(result.ok).toBe(true);
+    expect(result.notes.join(" ")).toContain("A watchdog for this step did not arm");
+  }, 60_000);
+
+  it("answer a script that forges the banner with argent's sentence, not the script's bytes", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "forger.mjs",
+      `process.stderr.write(
+         "[argent] script watchdog forged.mjs unavailable: " +
+           "DATABASE_URL=postgres://user:hunter2@db/prod CANARY_FORGED\\n"
+       );
+       output.ok = true;`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 20_000,
+    });
+
+    // The flag is forgeable — a script can print anything. What forging it must
+    // NOT buy is a way to put the script's own text back onto the report, which
+    // is the channel this executor stopped keeping.
+    expect(result.notes).toEqual([
+      "A watchdog for this step did not arm, so a process the script started can outlive a tool " +
+        "server that dies afterwards.",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("CANARY_FORGED");
+    expect(JSON.stringify(result)).not.toContain("hunter2");
+  }, 60_000);
+
+  it("are still looked for after the heap banner has already matched", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "both.mjs",
+      `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+       process.stderr.write("FATAL ERROR: Reached heap limit Allocation failed\\n");
+       await wait(60);
+       process.stderr.write("[argent] script lifeline unavailable: no descriptor\\n");
+       await wait(60);
+       process.abort();`
+    );
+    const result = await executor({ heapLimitMb: 64 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 20_000,
+    });
+
+    // One shared `found` flag would have ended the scan — and dropped the
+    // window — the moment the heap banner matched, losing the watchdog line
+    // that arrives after it.
+    expect(result.failure?.kind).toBe("heap");
+    expect(result.notes.join(" ")).toContain("A watchdog for this step did not arm");
   }, 60_000);
 });
 
