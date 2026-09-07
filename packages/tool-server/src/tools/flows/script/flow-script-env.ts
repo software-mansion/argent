@@ -10,14 +10,16 @@
  * in {@link mergeScriptEnv}, rather than at each site that layers a map.
  */
 
-import type { SecretSourceOptions } from "@argent/configuration-core";
-import { resolveSecretPlaceholders } from "../../../utils/secrets";
 import {
   PROTO_ENV_NAME,
+  SCRIPT_ENV_NAME_PATTERN,
+  type SecretSourceOptions,
+} from "@argent/configuration-core";
+import { resolveSecretPlaceholders } from "../../../utils/secrets";
+import {
   reservedScriptEnvName,
   reservedScriptEnvNamesForMessage,
   reservedScriptEnvReason,
-  SCRIPT_ENV_NAME_PATTERN,
   type FlowScriptSecret,
 } from "./flow-script-executor";
 
@@ -123,7 +125,7 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
  * the RESOLVED one by {@link resolveScriptEnvSecrets}, because a
  * `{{secret:NAME}}` puts a value in the map that no rule of the file ever saw.
  */
-export function describeUnusableEnvValue(value: string): string | null {
+function describeUnusableEnvValue(value: string): string | null {
   // The operating system carries an environment as NUL-terminated strings, so
   // this one cannot survive the trip: Node refuses the whole `fork` over it,
   // and the step then errors on a message about the spawn rather than about the
