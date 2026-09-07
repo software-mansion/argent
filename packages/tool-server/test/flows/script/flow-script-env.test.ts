@@ -459,6 +459,72 @@ describe("the host allowlist extension", () => {
       delete process.env.ARGENT_AUTH_TOKEN;
     }
   });
+
+  it("answers a reserved entry and an ARGENT_ one differently", async () => {
+    // The two are dropped for different reasons and have different remedies. A
+    // name argent keeps out of its own copy can be passed under a name of the
+    // project's own; `NODE_OPTIONS` steers the RUNNER, so it never reaches a
+    // script whatever it is called and there is no such remedy. Said as one
+    // sentence, each was told the other's story.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({
+        scripts: { env: { allow: ["NODE_OPTIONS", "npm_config_userconfig", "ARGENT_PORT"] } },
+      })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("buckets", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("buckets");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.ok).toBe(true);
+    expect(reason).toContain(
+      "names ARGENT_PORT, which argent keeps out of the copy it takes from its own environment"
+    );
+    expect(reason).toContain(
+      "names NODE_OPTIONS, npm_config_userconfig, which steer the runner's own process"
+    );
+    // The remedy that exists for one of the two and not the other.
+    expect(reason).toMatch(/ARGENT_PORT[\s\S]*under a name of your own/);
+    expect(reason).not.toMatch(/steer the runner's own process[\s\S]*under a name of your own/);
+  });
+
+  it("says so when scripts.env.allow is not a list", async () => {
+    // A value the key's parser cannot read comes back the way an UNSET key
+    // does, so every script ran without the names and nothing said why.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: "DATABASE_URL" } } })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("notalist", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("notalist");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].reason).toContain("is not a list");
+    expect(result.steps[0].reason).toContain('e.g. ["DATABASE_URL"]');
+  });
+
+  it("names a malformed entry and a __proto__ one apart", async () => {
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: ["9LIVES", "__proto__"] } } })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("badnames", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("badnames");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.ok).toBe(true);
+    expect(reason).toContain('"9LIVES"');
+    expect(reason).toContain("is not an environment variable name");
+    // `__proto__` satisfies the name rule to the letter, so it gets its own
+    // answer rather than one stating a rule it plainly meets.
+    expect(reason).toContain("__proto__, which argent cannot carry");
+  });
 });
 
 describe("a bash step's environment", () => {

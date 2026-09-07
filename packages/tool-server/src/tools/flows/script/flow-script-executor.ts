@@ -1991,7 +1991,15 @@ function configuredEnvAllowNames(
   const configured = projectAnchoredConfigValue<string[]>(SCRIPT_ENV_ALLOW_KEY, projectRoot);
   if (!Array.isArray(configured) || configured.length === 0) return [];
   const kept: string[] = [];
-  const refused: string[] = [];
+  // Two buckets, because the two answers differ. An `ARGENT_*` name is one
+  // argent keeps out of the copy it takes from its OWN environment, and the
+  // value the script wanted can be passed under a name of the project's own. A
+  // reserved name steers the RUNNER — `NODE_OPTIONS`, `npm_config_userconfig` —
+  // so it never reaches the script whatever it is called, and there is no name
+  // of your own to pass it under. Said as one sentence, each was told the
+  // other's story.
+  const owned: string[] = [];
+  const reserved: string[] = [];
   const malformed: string[] = [];
   // Its own bucket. It satisfies the name rule to the letter — starts with `_`,
   // continues with letters and `_` — so the malformed note would state a rule
@@ -2001,15 +2009,25 @@ function configuredEnvAllowNames(
   for (const name of configured) {
     if (name === PROTO_ENV_NAME) unusable.push(name);
     else if (!SCRIPT_ENV_NAME_PATTERN.test(name)) malformed.push(name);
-    else if (reservedScriptEnvName(name) || argentOwnedEnvName(name)) refused.push(name);
+    else if (argentOwnedEnvName(name)) owned.push(name);
+    else if (reservedScriptEnvName(name)) reserved.push(name);
     else kept.push(name);
   }
-  if (refused.length > 0) {
+  if (owned.length > 0) {
     say(
-      `${SCRIPT_ENV_ALLOW_KEY} names ${refused.join(", ")}, which argent keeps out of the copy ` +
+      `${SCRIPT_ENV_ALLOW_KEY} names ${owned.join(", ")}, which argent keeps out of the copy ` +
         `it takes from its own environment; ` +
-        `${refused.length > 1 ? "those entries were" : "that entry was"} ` +
+        `${owned.length > 1 ? "those entries were" : "that entry was"} ` +
         `ignored. Pass the value the script needs under a name of your own instead.`
+    );
+  }
+  if (reserved.length > 0) {
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} names ${reserved.join(", ")}, which ` +
+        `${reserved.length > 1 ? "steer" : "steers"} the runner's own process rather than ` +
+        `reaching the script, so no allowlist entry can pass ` +
+        `${reserved.length > 1 ? "them" : "it"} through; ` +
+        `${reserved.length > 1 ? "those entries were" : "that entry was"} ignored.`
     );
   }
   if (unusable.length > 0) {
