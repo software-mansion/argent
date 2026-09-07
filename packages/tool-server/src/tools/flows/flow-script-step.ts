@@ -309,11 +309,13 @@ const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
   /^[^\n:]+: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^(?:[^\n:]*[/\\])?(?:[A-Za-z0-9_.+-]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^[^\n:]+:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
-  // Anchored at the quote cmd.exe opens the line with. Without that anchor any
-  // sentence QUOTING the message matched — `AssertionError: 'foo' is not
-  // recognized as an internal or external command` — which is the same false
-  // positive the two signatures above were tightened for.
-  /^'[^\n']+' is not recognized as an internal or external command/im,
+  // cmd.exe writes TWO lines, and both are asked for, ending the failure text
+  // the way the three signatures above do. The opening quote alone let any
+  // sentence QUOTING the message match — `AssertionError: 'foo' is not
+  // recognized as an internal or external command`, or a step that parsed a
+  // Windows build log and reported what it read — because `/m` anchors `^` at
+  // every line start and nothing guarded the other end.
+  /^'[^\n']+' is not recognized as an internal or external command,\r?\noperable program or batch file\.[ \t\r]*$(?![\s\S]*\S)/im,
 ];
 
 /**
