@@ -2036,6 +2036,12 @@ function configuredEnvAllowNames(
     );
   }
   if (reserved.length > 0) {
+    // One clause for the whole list, and it is the one
+    // {@link reservedScriptEnvReason} gives each of these names: the bash
+    // exchange pair is the only reserved name with a different reason, and both
+    // spellings start with `ARGENT_`, so they were taken by the bucket above.
+    // A reserved name added later WITHOUT that prefix and with a reason of its
+    // own belongs there too, or this sentence will speak for it wrongly.
     say(
       `${SCRIPT_ENV_ALLOW_KEY} names ${reserved.join(", ")}, which ` +
         `${reserved.length > 1 ? "steer" : "steers"} the runner's own process rather than ` +
