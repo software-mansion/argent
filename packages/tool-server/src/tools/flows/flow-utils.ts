@@ -3640,9 +3640,10 @@ export function serializeFlow(flow: FlowFile): string {
   // long line whatever form it chose. A fold placed between an escaped space
   // and an escaped newline eats the space: a value ending `…aaa  a \n…` comes
   // back `…aaa  a\n…`, one character shorter than the author wrote and with
-  // nothing to say so. Rare — about 10 in 40,000 random values built from
-  // runs of `a`, spaces and newlines — and silent, which is the combination
-  // this rule exists for. Zero disables folding, so every scalar stays on one
+  // nothing to say so. Rare and silent, which is the combination this rule
+  // exists for; `flow-script-env.test.ts` pins a minimized value that
+  // reproduces it, and states the rate its own generator found. Zero disables
+  // folding, so every scalar stays on one
   // physical line and every break is an escape. The cost is document-wide and
   // cosmetic: a long `echo` message or `executionPrerequisite` is no longer
   // wrapped at 80 columns.
