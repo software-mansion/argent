@@ -4,7 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
-import { parseFlow, serializeFlow, type FlowStep } from "../../../src/tools/flows/flow-utils";
+import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
+import {
+  parseFlow,
+  scriptInterpreter,
+  serializeFlow,
+  type FlowStep,
+} from "../../../src/tools/flows/flow-utils";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../../src/tools/flows/flow-finish-recording";
@@ -164,19 +170,31 @@ describe("script path rules, shared with a run: target", () => {
 
   it("refuses an uppercase extension, saying which spelling it wants", () => {
     expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase .mjs extension/);
+    expect(() => step("{ path: scripts/seed.SH }")).toThrow(/lowercase .sh extension/);
   });
 
   it("refuses any other extension, and never completes a bare name", () => {
-    for (const body of ["{ path: seed }", "{ path: seed.js }", "{ path: seed.cjs }"]) {
-      expect(() => step(body), body).toThrow(/must end in .mjs/);
+    for (const body of [
+      "{ path: seed }",
+      "{ path: seed.js }",
+      "{ path: seed.cjs }",
+      // One spelling per language: `.bash` would be a second name for `.sh`,
+      // as `.js` would be for `.mjs`.
+      "{ path: seed.bash }",
+      "{ path: seed.zsh }",
+    ]) {
+      expect(() => step(body), body).toThrow(/must end in .mjs or .sh/);
     }
   });
 
-  it("refuses a basename outside the charset", () => {
+  it("refuses a basename outside the charset, before it looks at the extension", () => {
     for (const body of [
       "{ path: 'my seed.mjs' }",
       "{ path: seed.step.mjs }",
       "{ path: 'sc/.mjs' }",
+      "{ path: 'my seed.sh' }",
+      "{ path: seed.step.sh }",
+      "{ path: 'sc/.sh' }",
     ]) {
       expect(() => step(body), body).toThrow(/filename must match/);
     }
@@ -186,6 +204,69 @@ describe("script path rules, shared with a run: target", () => {
     expect(step("{ path: ../../shared/seed.mjs }")).toEqual([
       { kind: "script", path: "../../shared/seed.mjs" },
     ]);
+  });
+});
+
+describe("the second language reads exactly like the first", () => {
+  it("parses a .sh path, with and without a time limit", () => {
+    expect(step("{ path: scripts/seed.sh }")).toEqual([
+      { kind: "script", path: "scripts/seed.sh" },
+    ]);
+    expect(step("{ path: ../../scripts/seed-order.sh, timeout: 45000 }")).toEqual([
+      { kind: "script", path: "../../scripts/seed-order.sh", timeout: 45000 },
+    ]);
+  });
+
+  it("round-trips a .sh step and summarizes it the same way", () => {
+    const steps: FlowStep[] = [{ kind: "script", path: "scripts/seed.sh", timeout: 5000 }];
+    expect(parseFlow(serializeFlow({ executionPrerequisite: "", steps })).steps).toEqual(steps);
+    expect(summarizeStep(steps[0]!, 1)).toBe("1. script: scripts/seed.sh (timeout 5000ms)");
+  });
+
+  // The pattern is what every route enforces and the function is what picks the
+  // interpreter, so widening one without the other has to fail here rather than
+  // reach a flow as "bash ran my .mjs".
+  it("maps every basename the pattern accepts to an interpreter", () => {
+    const cases: Array<[string, "node" | "bash"]> = [
+      ["seed.mjs", "node"],
+      ["seed-order_2.mjs", "node"],
+      ["seed.sh", "bash"],
+      ["seed-order_2.sh", "bash"],
+    ];
+    for (const [name, interpreter] of cases) {
+      expect(SCRIPT_FILE_NAME_PATTERN.test(name), name).toBe(true);
+      expect(scriptInterpreter(`scripts/${name}`), name).toBe(interpreter);
+    }
+    // Nothing else the pattern would accept, asked of the extensions rather
+    // than of the source: an alternation added OUTSIDE the group would leave
+    // the source reading `(mjs|sh)` while handing a `.bash` file to node.
+    for (const extension of [
+      "mjs",
+      "sh",
+      "js",
+      "cjs",
+      "mts",
+      "bash",
+      "zsh",
+      "ksh",
+      "fish",
+      "py",
+      "SH",
+      "MJS",
+      "Sh",
+    ]) {
+      const name = `seed.${extension}`;
+      const accepted = SCRIPT_FILE_NAME_PATTERN.test(name);
+      expect(accepted, name).toBe(extension === "mjs" || extension === "sh");
+      if (accepted) {
+        expect(scriptInterpreter(name), name).toBe(extension === "sh" ? "bash" : "node");
+      }
+    }
+  });
+
+  it("reads the interpreter off the path, not off the file", () => {
+    expect(scriptInterpreter("a/b/seed.sh")).toBe("bash");
+    expect(scriptInterpreter("a/b/seed.mjs")).toBe("node");
   });
 });
 

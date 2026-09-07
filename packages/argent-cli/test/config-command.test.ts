@@ -273,6 +273,18 @@ describe("argent config — a rejected value says what to type instead", () => {
     expect(err).toContain("Example: argent config set lens.agent claude");
   });
 
+  // The confidence test runs through `validateWrite` where a key has one.
+  // `scripts.bash` keeps whatever it is GIVEN so its own resolver can name a
+  // wrong value, so `parse` accepts `["bin/bash"]` and would have "confirmed"
+  // a wrapping the write gate then refuses — a suggested command that fails.
+  it("suggests no wrapping for a key whose reader keeps a value its writer refuses", () => {
+    expect(() => config(["set", "scripts.bash", "bin/bash"])).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected an absolute path to a bash executable");
+    expect(err).not.toContain("Did you mean");
+  });
+
   it("keeps the global default out of the suggestion when no scope was given", () => {
     expect(() => config(["set", "ios.additionalDeviceSets", "/a"])).toThrow(ExitError);
 

@@ -33,19 +33,22 @@ argent config get ios.additionalDeviceSets
 
 ### Available keys
 
-| Key                        | Scopes          | Merge            | Description                                                                                                                                                 |
-| -------------------------- | --------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file)                     |
-| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                                        |
-| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                              |
-| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                       |
-| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                           |
-| `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100` |
-| `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to each flow `script` process. Default `512`. Argent refuses a value below `32`                                   |
+| Key                        | Scopes          | Merge            | Description                                                                                                                                                                        |
+| -------------------------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file)                                            |
+| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                                                               |
+| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                                                     |
+| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                                              |
+| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                                                  |
+| `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100`                        |
+| `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to the Node process of a flow `script` step. Default `512`. Argent refuses a value below `32`. The limit does not apply to a bash script |
+| `scripts.bash`             | project, global | project wins     | The absolute path of the bash that runs a `.sh` script step. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)                                                            |
 
 Argent reads `scripts.maxTimeoutMs` and `scripts.heapLimitMb` from the global file only. A project file cannot raise the limits that one script step runs under.
 
-A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
+A `scripts.bash` value that is set but wrong **errors** the `.sh` step. Argent does not fall back to the PATH.
+
+A path value is absolute, starts with `~`, or is relative. The exception is `scripts.bash`: Argent accepts only an absolute path there. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
 
 `allowlist.enabled` only affects `argent update`. When it is `false`, an update leaves editor auto-approve allowlists entirely alone — rules already written stay, and `argent init` still asks its auto-approve question as before. When the key is unset (the default), nothing changes: update keeps refreshing the rules for editors that already have Argent configured. `false` in either scope wins, so a committed project file opts out a whole team.
 

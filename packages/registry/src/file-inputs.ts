@@ -155,15 +155,19 @@ export const FLOW_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}$`);
 export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`);
 
 /**
- * `<name>.mjs` filename check for a flow `script:` target. Shares the charset of
- * the flow-name patterns above, so a name legal in a `run:` target stays legal
- * in a `script:` path.
+ * `<name>.mjs` / `<name>.sh` filename check for a flow `script:` target. Shares
+ * the charset of the flow-name patterns above, so a name legal in a `run:`
+ * target stays legal in a `script:` path.
  *
- * `.mjs` and only `.mjs` pins the module type against a project's
- * `package.json` `type` field, so one script file behaves the same way in every
- * project it is copied into.
+ * The extension is the only thing that says which interpreter runs the file, so
+ * one spelling per language and no synonyms: `.mjs` pins the module type against
+ * a project's `package.json` `type` field, and `.sh` names bash — `.js` and
+ * `.bash` are refused so a reader never has to ask which of two spellings a
+ * project uses. `scriptInterpreter` in the tool-server's `flow-utils.ts` maps
+ * each accepted extension to its interpreter; widening one without the other
+ * fails a test.
  */
-export const SCRIPT_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.mjs$`);
+export const SCRIPT_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.(mjs|sh)$`);
 
 /** Discriminant key identifying a client-write directive inside a tool result. */
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;

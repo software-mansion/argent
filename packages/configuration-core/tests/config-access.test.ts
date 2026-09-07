@@ -358,7 +358,10 @@ describe("every schema entry can describe itself", () => {
     // reproducing the error it exists to fix.
     for (const def of CONFIG_SCHEMA) {
       if (!def.example) continue;
-      expect(def.parse(coerceCliValue(def.example)), `key: ${def.key}`).not.toBeUndefined();
+      expect(
+        (def.validateWrite ?? def.parse)(coerceCliValue(def.example)),
+        `key: ${def.key}`
+      ).not.toBeUndefined();
     }
   });
 });
@@ -449,4 +452,61 @@ describe("flow script host bounds", () => {
       expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
     }
   );
+});
+
+describe("scripts.bash — schema entry", () => {
+  const configured = path.join(path.sep, "opt", "homebrew", "bin", "bash");
+
+  // The read path deliberately keeps whatever is PRESENT: a value `parse`
+  // rejected is handed back as `undefined`, which is indistinguishable from an
+  // absent key — so a wrong value in a hand-edited file would fall through to
+  // PATH and run the step under a bash that happens to exist on this machine.
+  it("keeps a wrong hand-edited value so the resolver can name it", () => {
+    const file = configFilePath("global", opts());
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ scripts: { bash: "bin/bash" } }));
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBe("bin/bash");
+  });
+
+  it.each([
+    ["a value that is not a string", 42],
+    ["a value that is not text at all", { a: 1 }],
+    ["a boolean", true],
+    ["an empty value", ""],
+    ["a whitespace-only value", "   "],
+    ["a relative path", path.join("bin", "bash")],
+  ])("refuses %s being typed in, though the reader would keep it", (_label, value) => {
+    expect(() => setConfigValue("scripts.bash", value, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(readConfigObject("global", opts())).toEqual({});
+  });
+
+  it("accepts an absolute path, trimmed", () => {
+    expect(setConfigValue("scripts.bash", `  ${configured}  `, "global", opts())).toBe(configured);
+    expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: configured } });
+  });
+
+  // Not a bound on the host, unlike its two siblings: which bash a project's
+  // own `.sh` files were written for is the project's own fact.
+  it("takes both scopes, with the project's own value winning", () => {
+    const def = getConfigDefinition("scripts.bash")!;
+    expect(def.scopes).toEqual(["global", "project"]);
+    const projectBash = path.join(path.sep, "usr", "bin", "bash");
+    setConfigValue("scripts.bash", configured, "global", opts());
+    setConfigValue("scripts.bash", projectBash, "project", opts());
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBe(projectBash);
+  });
+
+  // The refusal says WHICH host the shape is judged against, because the write
+  // gate and the resolver both apply the running platform's rules and the key
+  // lands in a project file a mixed-OS team shares.
+  it("says what it wants when it refuses one", () => {
+    const expected = describeExpectedValue(getConfigDefinition("scripts.bash")!);
+    expect(expected).toContain("an absolute path to a bash executable");
+    expect(expected).toContain("the host running the tool server");
+    expect(expected).toContain("on Windows");
+  });
 });

@@ -14,6 +14,7 @@
 // before leaving — so with a blocking read every exit path hangs until the
 // parent's time limit, including a passing script's own exit.
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import { workerData } from "node:worker_threads";
@@ -37,6 +38,22 @@ const stop = () => {
     process.kill(-process.pid, "SIGKILL");
   } catch {
     // No process group to name (Windows, or a runner that never led one).
+  }
+  // Windows has no group for the line above to name, so the self-kill below
+  // used to be the whole reach — leaving bash, and a `.mjs` script's own
+  // subprocesses, running under a tool server that had died. `taskkill /t`
+  // walks the live tree from this process down instead. `child_process` is
+  // available in a worker thread, and this call not returning is the outcome
+  // wanted; `taskkill.exe` is itself a descendant of the pid it is aimed at.
+  if (process.platform === "win32") {
+    try {
+      spawnSync("taskkill", ["/pid", String(process.pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+    } catch {
+      // taskkill is absent or could not be launched; the self-kill is what is left.
+    }
   }
   process.kill(process.pid, "SIGKILL");
 };

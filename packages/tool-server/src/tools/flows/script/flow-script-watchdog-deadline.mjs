@@ -9,6 +9,7 @@
 // "timed out and was stopped" says more than a child that kills its own group
 // and leaves the parent describing an unexplained SIGKILL.
 
+import { spawnSync } from "node:child_process";
 import { workerData } from "node:worker_threads";
 
 const deadlineMs = workerData && workerData.deadlineMs;
@@ -21,6 +22,22 @@ if (Number.isFinite(deadlineMs) && deadlineMs > 0) {
     process.kill(-process.pid, "SIGKILL");
   } catch {
     // No process group to name (Windows, or a runner that never led one).
+  }
+  // Windows has no group for the line above to name, so the self-kill below
+  // used to be the whole reach — leaving bash, and a `.mjs` script's own
+  // subprocesses, running. `taskkill /t` walks the live tree from this process
+  // down instead. `child_process` is available in a worker thread, and this
+  // call not returning is the outcome wanted; `taskkill.exe` is itself a
+  // descendant of the pid it is aimed at.
+  if (process.platform === "win32") {
+    try {
+      spawnSync("taskkill", ["/pid", String(process.pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+    } catch {
+      // taskkill is absent or could not be launched; the self-kill is what is left.
+    }
   }
   process.kill(process.pid, "SIGKILL");
 }

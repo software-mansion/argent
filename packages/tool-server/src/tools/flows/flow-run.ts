@@ -1161,7 +1161,7 @@ function retiredArgReason(use: RetiredArgUse): string {
  * mid-run or guard-gated error cannot execute half the flow first. All three
  * anchor at the flow file's real directory, which an uploaded flow does not
  * have: a run: step's referenced files stayed on the client, a script step's
- * `.mjs` (and whatever it imports) stayed there too, and against a per-call temp
+ * own file (and whatever it imports) stayed there too, and against a per-call temp
  * materialization a plain snapshot can only fail (no baseline) while
  * updateBaselines writes PNGs no later run can find.
  */
@@ -1182,7 +1182,7 @@ function assertUploadSelfContained(flow: FlowFile): void {
     }
     if (step.kind === "script") {
       throw new FailureError(
-        `This flow uses a script step ("script: { path: ${step.path} }"), whose .mjs file lives ` +
+        `This flow uses a script step ("script: { path: ${step.path} }"), whose script file lives ` +
           `beside the flow's file on the CLIENT — an uploaded flow carries only its own YAML, so ` +
           `the script is not on this host and never could be. Use name + project_root with a ` +
           `co-located client and tool server for flows that run scripts.`,
