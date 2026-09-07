@@ -2085,6 +2085,11 @@ describe("recording a flow-execute step while several projects are in play", () 
     expect(res.message).toContain("a run: step takes no env");
     expect(res.message).toContain("BUILD, AUTH");
     expect(res.message).not.toContain("Bearer abc");
+    // The remedy that writes them into THIS recording's `env:` makes them a
+    // parent default, and `execRunStep` layers the fragment's own `env:` over
+    // the parent — so it reproduces the fragment's value, not the one the
+    // recorded call ran with, for any name the fragment declares.
+    expect(res.message).toContain("only for a name that fragment does not itself declare");
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
       { kind: "run", flow: "helper.yaml" },
     ]);

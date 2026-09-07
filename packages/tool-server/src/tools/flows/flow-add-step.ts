@@ -1116,8 +1116,10 @@ async function captureRunTarget(
               `call passed (${dropped.join(", ")}) ${dropped.length > 1 ? "are" : "is"} NOT part ` +
               `of the recorded step and the replay runs without ` +
               `${dropped.length > 1 ? "them" : "it"}. Write ${dropped.length > 1 ? "them" : "it"} ` +
-              `into ${name}.yaml's own env:, or into this recording's, or keep the raw ` +
-              `flow-execute step instead (recording the call with a delayMs does that)`,
+              `into ${name}.yaml's own env:, or — only for a name that fragment does not ` +
+              `itself declare, since a fragment's env: layers OVER the flow that runs it — ` +
+              `into this recording's, or keep the raw flow-execute step instead (recording ` +
+              `the call with a delayMs does that)`,
           }
         : {}),
     };
