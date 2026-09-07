@@ -3203,7 +3203,7 @@ export function holdsOutputReference(step: FlowStep): boolean {
  * so a bare `…` left the author reading two hundred characters that do not
  * contain the thing the message is about, with nothing to say the rest exists.
  */
-function renderedValue(value: string): string {
+export function renderedValue(value: string): string {
   if (value.length <= MAX_ENTRY_RENDER_CHARS) return value;
   const elided = value.length - MAX_ENTRY_RENDER_CHARS;
   return `${value.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
@@ -3698,8 +3698,17 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-/** Parse a YAML flow file into a FlowFile. */
-export function parseFlow(content: string): FlowFile {
+/**
+ * A flow file's document and its top-level shape, with the steps untouched.
+ *
+ * The half of {@link parseFlow} that answers questions about the FILE rather
+ * than about its steps: the trims, the YAML parse, the top-level key rule and
+ * the `env` rule. {@link parseFlowEnv} reads the header through this so a
+ * defect in a step cannot take the header down; `parseFlow` goes on to the
+ * steps from the same result, so the two can never disagree about what a file's
+ * head means. `undefined` for a file holding nothing.
+ */
+function readFlowHead(content: string): YamlFlowFile | undefined {
   // Trimmed at the START, and at the trailing edge only back to the last line
   // break. What is left of the trim is what nothing can be part of a value.
   //
@@ -3723,15 +3732,25 @@ export function parseFlow(content: string): FlowFile {
   // always covered: a file whose first line opens with a TAB, which YAML refuses
   // as indentation and this accepted before.
   const body = content.replace(/^\s+/, "").replace(/\n\s+$/, "\n");
-  if (body.length === 0) {
-    return { executionPrerequisite: "", steps: [] };
-  }
+  if (body.length === 0) return undefined;
 
   // A raw YAMLParseError carries no failure signal, so a syntax error would
   // abort a whole batch run instead of failing this file alone.
+  //
+  // `stringKeys` keeps a KEY the name the author wrote. YAML's core schema
+  // resolves `TRUE`, `False` and `NULL` in key position the way it resolves
+  // them in value position, so `env: { TRUE: on }` reached the guards as the
+  // string `"true"` — which satisfies the name rule — and the script was handed
+  // `process.env.true`, with the next recorder append rewriting the author's
+  // file to `"true":`. `NULL` resolved to nothing at all and was refused as
+  // `` `env` holds "" ``, naming no key a reader can find. That is the same
+  // fault the `__proto__` and tagged-map guards beside it exist for — the name
+  // argent carries is not the name the author wrote — and it cannot be repaired
+  // downstream, because the authored spelling is gone before any guard runs.
+  // `yes`/`on`/`off` are YAML 1.1 resolvers and were never affected.
   let parsed: YamlFlowFile;
   try {
-    parsed = yamlParse(body) as YamlFlowFile;
+    parsed = yamlParse(body, { stringKeys: true }) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
@@ -3790,6 +3809,16 @@ export function parseFlow(content: string): FlowFile {
     }
   }
 
+  return parsed;
+}
+
+/** Parse a YAML flow file into a FlowFile. */
+export function parseFlow(content: string): FlowFile {
+  const parsed = readFlowHead(content);
+  if (parsed === undefined) {
+    return { executionPrerequisite: "", steps: [] };
+  }
+
   const steps = parsed.steps.map((raw) => {
     if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
     return badEntry(raw, "step must be an object");
@@ -3802,6 +3831,35 @@ export function parseFlow(content: string): FlowFile {
   };
   validateFlow(flow);
   return flow;
+}
+
+/**
+ * A flow file's own `env:`, read without reading its steps.
+ *
+ * `flow-start-recording` keeps this header across the reset it writes, and read
+ * it through {@link parseFlow} — which ends in the steps and in
+ * {@link validateFlow}, so a defect ANYWHERE in the file took the header down
+ * with it. A bogus key on one `echo` step, a leading `launch` beside an
+ * `executionPrerequisite`, a misspelled top-level key: each one silently reset
+ * a file whose `env:` was perfectly good, and the message was byte-identical to
+ * the one for a file that never had an `env:` at all.
+ *
+ * The steps are exactly what that caller is about to discard, so not reading
+ * them is not a shortcut — it is the question it meant to ask. Everything the
+ * `env` itself must survive is still applied: the same parse, the same
+ * top-level key rule, the same {@link describeScriptEnvProblem}, and the same
+ * {@link validateFlow} against a stepless flow, which is what refuses a
+ * `{{output:}}` template in it.
+ *
+ * Throws exactly what `parseFlow` throws, so a caller that wants the old
+ * silence still writes the `catch`; the difference is which faults reach it.
+ */
+export function parseFlowEnv(content: string): ScriptEnv | undefined {
+  const head = readFlowHead(content);
+  if (head?.env === undefined) return undefined;
+  const env = { ...(head.env as ScriptEnv) };
+  validateFlow({ executionPrerequisite: "", env, steps: [] });
+  return env;
 }
 
 /**

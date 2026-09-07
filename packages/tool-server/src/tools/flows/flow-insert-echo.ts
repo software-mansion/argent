@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  wrapFailure,
+  type ToolDefinition,
+} from "@argent/registry";
 import { requireRecordingSession, appendStepToFlow, type FlowSavedTo } from "./flow-utils";
 
 const zodSchema = z.object({
@@ -34,10 +39,36 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);
 
-    const { savedTo, stepCount } = await appendStepToFlow(session, {
-      kind: "echo",
-      message: params.message,
-    });
+    // The append re-parses and re-validates the WHOLE file, so a fault already
+    // in it — a flow-level `env:` holding a template — refuses this call. The
+    // bare validator sentence names that value and nothing else: it does not
+    // say the echo went unrecorded, and it reads as if this call supplied the
+    // offending value. `flow-add-script` and `flow-add-step` were both given
+    // that wording when the file-level `env:` refusal was added; this recorder
+    // was the one left behind. No "check what ran" clause here, because an echo
+    // runs nothing.
+    let savedTo: FlowSavedTo;
+    let stepCount: number;
+    try {
+      ({ savedTo, stepCount } = await appendStepToFlow(session, {
+        kind: "echo",
+        message: params.message,
+      }));
+    } catch (err) {
+      if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+      throw wrapFailure(
+        err,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
+          failure_stage: "flow_insert_echo_append",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        },
+        `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
+          `already in the file, not in this call. ` +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
 
     return {
       message: `Echo added to "${params.name}" flow`,

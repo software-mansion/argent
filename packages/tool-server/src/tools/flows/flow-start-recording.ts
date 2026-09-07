@@ -5,7 +5,7 @@ import {
   countStepsOnDisk,
   getFlowPath,
   getRecordingSession,
-  parseFlow,
+  parseFlowEnv,
   startRecordingSession,
   withFlowFileLock,
   writeNewFlowFile,
@@ -35,10 +35,13 @@ import {
  */
 async function keptFlowEnv(filePath: string): Promise<ScriptEnv | undefined> {
   try {
-    const { env } = parseFlow(await fs.readFile(filePath, "utf8"));
-    if (!env) return undefined;
-    validateFlow({ executionPrerequisite: "", env, steps: [] });
-    return env;
+    // The header only. Read through `parseFlow`, which ends in the steps and in
+    // `validateFlow`, this swallowed a defect ANYWHERE in the file and reset a
+    // perfectly good `env:` — a bogus key on one `echo` step was enough — with
+    // a message byte-identical to the one for a file that never had an `env:`.
+    // The steps are what this reset is about to discard, so not reading them is
+    // the question rather than a shortcut.
+    return parseFlowEnv(await fs.readFile(filePath, "utf8"));
   } catch {
     return undefined;
   }

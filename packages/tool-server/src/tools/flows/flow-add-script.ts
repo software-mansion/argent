@@ -27,6 +27,7 @@ import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
 import {
+  envNameKey,
   describeScriptEnvProblem,
   mergeScriptEnv,
   scriptEnvParameter,
@@ -126,13 +127,22 @@ const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehin
   },
 };
 
-/** Whether two environments are the same map. */
+/**
+ * Whether two environments are the same map, as the CHILD would see them.
+ *
+ * Keyed through {@link envNameKey}, because that is what the merge above these
+ * two maps folds by: on Windows a case-only rename is one variable with one
+ * value to the script, and comparing the raw names reported drift the script
+ * never saw — then told the author to delete the step and run a side-effecting
+ * script again.
+ */
 function sameEnv(before: ScriptEnv | undefined, after: ScriptEnv | undefined): boolean {
   const a = before ?? {};
   const b = after ?? {};
   const names = Object.keys(a);
   if (names.length !== Object.keys(b).length) return false;
-  return names.every((name) => Object.hasOwn(b, name) && a[name] === b[name]);
+  const byKey = new Map(Object.entries(b).map(([name, value]) => [envNameKey(name), value]));
+  return names.every((name) => byKey.get(envNameKey(name)) === a[name]);
 }
 
 /** The flow-level names in force, for a message that reports a change. */

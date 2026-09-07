@@ -120,7 +120,9 @@ are skipped). A flow that fails its steps keeps the batch running, as does one
 the server rejects up front — an invalid file, or a device it cannot resolve. A
 transport failure, a rejection the server does not mark as validation, or a
 reply that is not a report stops the batch and counts the remaining flows
-skipped.
+skipped. So does a refusal about the CALL rather than the file — every flow in
+a batch runs with the same arguments apart from its own path, so a bad --env
+name is one fault, not one per file.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.

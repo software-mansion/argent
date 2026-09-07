@@ -942,6 +942,29 @@ describe("parseFlow", () => {
     expect(parseFlow(`${serializeFlow(flow)}\u00a0`)).toEqual(flow);
   });
 
+  it("keeps an env name YAML's core schema would resolve", async () => {
+    // `TRUE`, `False` and `NULL` are resolved in KEY position the way they are
+    // in value position, so `env: { TRUE: on }` reached the guards as the string
+    // "true" — which satisfies the name rule — and the script was handed
+    // `process.env.true`. `NULL` resolved to nothing and was refused as
+    // `env` holds "", naming no key a reader can find. Same class as the
+    // `__proto__` guard beside it: the name argent carries is not the name the
+    // author wrote.
+    for (const name of ["TRUE", "True", "FALSE", "NULL", "Null"]) {
+      const flow = parseFlow(
+        `env: { ${name}: v }\nsteps:\n  - script: { path: seed.mjs, env: { ${name}: v } }\n`
+      );
+      expect(Object.keys(flow.env ?? {})).toEqual([name]);
+      expect(Object.keys(flow.steps[0].kind === "script" ? (flow.steps[0].env ?? {}) : {})).toEqual(
+        [name]
+      );
+    }
+    // The YAML 1.1 resolvers were never affected, and still are not.
+    for (const name of ["YES", "ON", "NO", "OFF"]) {
+      expect(Object.keys(parseFlow(`env: { ${name}: v }\nsteps: []\n`).env ?? {})).toEqual([name]);
+    }
+  });
+
   it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
     // Written as escapes: the characters are invisible in a source file, and
     // one of them silently reformatted is a test that stops testing anything.

@@ -557,6 +557,73 @@ describe("serialization", () => {
     expect(after.steps[1]).toEqual({ kind: "echo", message: "appended" });
   });
 
+  it("says an echo went unrecorded when the FILE's env is what refused it", async () => {
+    // The append re-validates the whole file, so a flow-level `env:` holding a
+    // template refuses this call. `flow-add-script` and `flow-add-step` were
+    // both given "it is already in the file, not in this call" wording when
+    // that refusal was added; this recorder returned the bare validator
+    // sentence, which names the value and never says the echo was not recorded.
+    await flowStartRecordingTool.execute({}, { name: "echorefuse", project_root: root });
+    await fs.writeFile(
+      path.join(root, ".argent/flows/echorefuse.yaml"),
+      'env:\n  TOKEN: "{{output:1.token}}"\nsteps: []\n',
+      "utf8"
+    );
+
+    const rejection = flowInsertEchoTool.execute(
+      {},
+      { name: "echorefuse", project_root: root, message: "note" }
+    );
+
+    await expect(rejection).rejects.toThrow(/The echo was not recorded/);
+    await expect(rejection).rejects.toThrow(/already in the file, not in this call/);
+    // The validator's own sentence is still carried, so the offending value is
+    // still named.
+    await expect(rejection).rejects.toThrow(/unsupported template syntax/);
+  });
+
+  it("keeps a checked-in `env:` when a STEP in the file is malformed", async () => {
+    // The header was read through `parseFlow`, which ends in the steps and in
+    // `validateFlow`, so a bogus key on one `echo` step took a perfectly good
+    // `env:` down with it — and the message was byte-identical to the one for a
+    // file that never had an `env:`, so the loss was silent as well.
+    await write(
+      ".argent/flows/badstep.yaml",
+      'env:\n  API_URL: https://example.com\n  BUILD: "42"\n' +
+        "steps:\n  - echo: hello\n    bogusKey: 1\n"
+    );
+
+    const started = (await flowStartRecordingTool.execute(
+      {},
+      { name: "badstep", project_root: root }
+    )) as { message: string; flowFile: string };
+
+    expect(started.message).toContain("API_URL, BUILD");
+    expect(started.flowFile).toContain("API_URL");
+    expect(parseFlow(started.flowFile).env).toEqual({
+      API_URL: "https://example.com",
+      BUILD: "42",
+    });
+  });
+
+  it("still drops an `env:` the header rule itself refuses", async () => {
+    // The narrowing is about the STEPS. Everything the `env` must survive on
+    // its own — the top-level key rule, the name rule, the `{{output:}}` rule —
+    // still applies, and a header that fails one of those is still not kept.
+    await write(
+      ".argent/flows/badenv.yaml",
+      'env:\n  API_URL: "{{output:1.url}}"\nsteps:\n  - echo: hello\n'
+    );
+
+    const started = (await flowStartRecordingTool.execute(
+      {},
+      { name: "badenv", project_root: root }
+    )) as { message: string; flowFile: string };
+
+    expect(started.message).not.toContain("is kept");
+    expect(started.flowFile).toBe("steps: []\n");
+  });
+
   it("keeps `env` through a flow-add-step append", async () => {
     // §6 names THIS tool, and the case above appends with `flow-insert-echo`
     // instead — so the one recorder with a pre-append re-parse wrapper around
@@ -710,6 +777,64 @@ describe("the host allowlist extension", () => {
       delete process.env.FROM_GLOBAL_CFG;
       delete process.env.FROM_PROJECT_CFG;
     }
+  });
+
+  it("says which file lists a dropped name when two are configured", async () => {
+    // With a project list AND a global one, "scripts.env.allow names X, which
+    // was ignored" left the reader to guess which of the two files holds X. The
+    // "is not a list" note beside these already named its file; these four
+    // named none.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: ["PROJECT_OK"] } } })
+    );
+    await fs.mkdir(path.join(os.homedir(), ".argent"), { recursive: true });
+    const globalFile = path.join(os.homedir(), ".argent", "config.json");
+    await fs.writeFile(
+      globalFile,
+      JSON.stringify({ scripts: { env: { allow: ["NODE_OPTIONS"] } } }),
+      "utf8"
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("whichfile", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("whichfile");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("NODE_OPTIONS");
+    expect(reason).toContain(`Listed in ${globalFile}.`);
+  });
+
+  it("stays silent about which file when only one is configured", async () => {
+    // Nothing to disambiguate, and a path after every note is noise.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: ["NODE_OPTIONS"] } } })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("onefile", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("onefile");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("NODE_OPTIONS");
+    expect(reason).not.toContain("Listed in");
+  });
+
+  it("says a config file that does not parse lost everything in it", async () => {
+    // `readConfigObject` answers `{}` for a document it could not parse AND for
+    // one that is absent, so a trailing comma dropped every name the file lists
+    // in exactly the silence this note was added to end.
+    await write(".argent/config.json", '{ "scripts": { "env": { "allow": ["DB_URL"] } } ,,, }');
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("badjson", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("badjson");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.ok).toBe(true);
+    expect(reason).toContain("is not valid JSON");
+    expect(reason).toContain("read nothing from it at all");
   });
 
   it("answers a reserved entry and an ARGENT_ one differently", async () => {
@@ -1631,6 +1756,42 @@ describe("recording a script step with env", () => {
     ]);
   });
 
+  it("reads a case-only rename as drift on POSIX and as no change on Windows", async () => {
+    // Windows carries one variable per name however it is spelled, and
+    // `mergeScriptEnv` folds by that rule — so `Pathy` renamed to `PATHY` is one
+    // variable with one value to the child there, and two different maps to a
+    // comparison keyed on the raw name. The author was told the file drifted and
+    // to delete a step whose script may already have had its effect. On POSIX
+    // the two ARE different variables and the warning is right.
+    const filePath = path.join(root, ".argent/flows/casedrift.yaml");
+    await write(
+      "scripts/recase.mjs",
+      `import fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(filePath)}, "env: { PATHY: /a }\\nsteps: []\\n");\n` +
+        `output.ok = true;`
+    );
+
+    const drift = async (platform: NodeJS.Platform): Promise<string> => {
+      const real = process.platform;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      try {
+        await flowStartRecordingTool.execute({}, { name: "casedrift", project_root: root });
+        await fs.writeFile(filePath, "env: { Pathy: /a }\nsteps: []\n", "utf8");
+        const added = (await flowAddScriptTool.execute(
+          {},
+          { name: "casedrift", project_root: root, path: "../../scripts/recase.mjs" }
+        )) as { message: string };
+        return added.message;
+      } finally {
+        Object.defineProperty(process, "platform", { value: real, configurable: true });
+        await flowFinishRecordingTool.execute({}, { name: "casedrift", project_root: root });
+      }
+    };
+
+    expect(await drift("linux")).toContain("changed while the script");
+    expect(await drift("win32")).not.toContain("changed while the script");
+  });
+
   it("says which way the drift went when the names did not change", async () => {
     // `sameEnv` compares VALUES and `envNames` renders NAMES, so an edit that
     // only changed a value would print the same text on both sides of the
@@ -1790,6 +1951,37 @@ describe("recording a script step with env", () => {
       { name: "recplain", project_root: root }
     )) as { flowFile: string };
     expect(finished.flowFile).toContain("https://api.example.com");
+  });
+
+  it("caps a long env value in what the recorder echoes back", async () => {
+    // This line is returned twice — as `flow-add-script`'s `recorded` and again
+    // in the finish `summary` — and `env` is the field documented as carrying a
+    // PEM key or a service-account blob. Uncapped, a 10 KB value became 20 KB of
+    // agent context for a one-line summary, while the same tool caps what the
+    // script RETURNS and the flow parser caps a rendered entry.
+    const huge = "s".repeat(10_054);
+    await write("scripts/big.mjs", "output.ok = true;");
+    await flowStartRecordingTool.execute({}, { name: "bigenv", project_root: root });
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "bigenv",
+        project_root: root,
+        path: "../../scripts/big.mjs",
+        env: { SERVICE_ACCOUNT_JSON: huge },
+      }
+    )) as { recorded: string };
+    const finished = (await flowFinishRecordingTool.execute(
+      {},
+      { name: "bigenv", project_root: root }
+    )) as { summary: string[]; flowFile: string };
+
+    expect(added.recorded.length).toBeLessThan(400);
+    expect(added.recorded).toContain("…(+9881 chars)");
+    expect(finished.summary.join("\n").length).toBeLessThan(400);
+    // The FILE still carries the value whole — only the echo is capped.
+    expect(finished.flowFile).toContain(huge);
   });
 
   it("proceeds when a run-time env value equals a secret's value", async () => {

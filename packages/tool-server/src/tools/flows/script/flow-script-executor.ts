@@ -31,7 +31,6 @@ import {
   MIN_SCRIPT_TIMEOUT_MS,
   PROTO_ENV_NAME,
   SCRIPT_ENV_NAME_PATTERN,
-  readConfigObject,
   type ConfigDefinition,
 } from "@argent/configuration-core";
 import { isElectronHostedEnv } from "../../../utils/electron-env";
@@ -1003,7 +1002,14 @@ export class FlowScriptExecutor {
     // A note rather than the verdict: this is a possible cause, not a diagnosis.
     // An ordinary environment is a few kilobytes, so the floor is well clear of
     // one and this stays silent for every other way the runner can die early.
-    if (!startedSeen && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
+    //
+    // `interrupted` is that sentence made true. A step cancelled or timed out
+    // inside the first few tens of milliseconds has not seen `started` either —
+    // the runner sends it from its preload, which is fast but not instant — and
+    // the classifier answers `cancelled` or `timeout` there, a verdict this note
+    // does not explain. Cancellation has no floor the way `timeoutMs` does, so
+    // an abort that arrives with the request reaches it every time.
+    if (!startedSeen && !interrupted && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
       notes.push(
         `The environment this step would carry is ${environmentBytes(env)} bytes. An ` +
           `environment near this operating system's limit for one process (ARG_MAX) is refused ` +
@@ -2085,27 +2091,92 @@ function configuredEnvAllowNames(
   alreadySaid: FlowScriptRunNotes | undefined
 ): string[] {
   // The configuration is the same for every step of a run, so each note is said
-  // once and not on each of them.
+  // once and not on each of them. `alreadySaid` is the RUN's set, and a caller
+  // that runs one script has no run — `flow-add-script` passes none — so the
+  // fallback is a set of this call's own. Without it a host where the project
+  // root IS the home directory resolves both scopes to one file and said every
+  // note about that file twice, in one `reason`.
+  const said = alreadySaid ?? new Set<string>();
   const say = (note: string): void => {
-    if (alreadySaid?.has(note)) return;
+    if (said.has(note)) return;
     notes.push(note);
-    alreadySaid?.add(note);
+    said.add(note);
   };
   const options = projectRoot ? { cwd: projectRoot } : {};
+  // Which file each name came from, for the notes below. The key is read
+  // per-scope here and merged as a union afterwards, so this loop is the last
+  // point that still knows: by the time a name is judged, the two lists are one.
+  const listedIn = new Map<string, string[]>();
   // A value the key's own parser cannot read comes back as `undefined`, which
   // is what an UNSET key comes back as — so `scripts.env.allow: "DATABASE_URL"`,
   // the string spelling of a one-name list, went unread and every script ran
   // without the name, with nothing said. The raw document is the only place
   // that still says which of the two this was.
   for (const scope of ["project", "global"] as const) {
-    const raw = getAtPath(readConfigObject(scope, options), SCRIPT_ENV_ALLOW_KEY);
-    if (raw === undefined || Array.isArray(raw)) continue;
+    const file = configFilePath(scope, options);
+    // Read here rather than through `readConfigObject`, which answers `{}` for
+    // a document it could not parse AND for one that is absent — the same
+    // silence this note exists to end. A file that does not open is absent and
+    // says nothing; one that opens and does not parse loses EVERY key it holds,
+    // this one included, and that is worth a sentence.
+    let text: string;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    let document: unknown;
+    try {
+      document = JSON.parse(text);
+    } catch {
+      say(
+        `${file} is not valid JSON, so argent read nothing from it at all — ` +
+          `${SCRIPT_ENV_ALLOW_KEY} included — and the script ran without every name it lists. ` +
+          `Repair the file.`
+      );
+      continue;
+    }
+    const raw =
+      typeof document === "object" && document !== null && !Array.isArray(document)
+        ? getAtPath(document as Record<string, unknown>, SCRIPT_ENV_ALLOW_KEY)
+        : undefined;
+    if (Array.isArray(raw)) {
+      // Trimmed, because `asStringArray` trims before the names are judged, so
+      // an untrimmed key would never be found again.
+      for (const entry of raw) {
+        if (typeof entry !== "string" || entry.trim() === "") continue;
+        const files = listedIn.get(entry.trim()) ?? [];
+        files.push(file);
+        listedIn.set(entry.trim(), files);
+      }
+      continue;
+    }
+    if (raw === undefined) continue;
     say(
-      `${SCRIPT_ENV_ALLOW_KEY} in ${configFilePath(scope, options)} is not a list, so argent ` +
+      `${SCRIPT_ENV_ALLOW_KEY} in ${file} is not a list, so argent ` +
         `read no names from it and the script ran without them. Write it as an array of names, ` +
         `e.g. ["DATABASE_URL"].`
     );
   }
+  /**
+   * Where the names a note drops are listed, as a closing sentence.
+   *
+   * The "is not a list" note beside these already names its file; these four
+   * named none, so with a project list AND a global one configured the reader
+   * was told a name was dropped and left to guess which of the two files holds
+   * it. Once per note rather than once per name: every name in one note usually
+   * comes from one file, and repeating a path after each of three names buries
+   * the sentence that says what was wrong.
+   *
+   * Silent when only one file is configured — there is nothing to disambiguate
+   * — and when the union merged the two lists into names this loop never saw.
+   */
+  const configuredFiles = new Set([...listedIn.values()].flat());
+  const listedInClause = (names: readonly string[]): string => {
+    if (configuredFiles.size < 2) return "";
+    const files = [...new Set(names.flatMap((name) => listedIn.get(name) ?? []))];
+    return files.length === 0 ? "" : ` Listed in ${files.join(" and ")}.`;
+  };
   // Anchored on the flow's project: this is the one script key the project
   // scope is read for, and the tool server's own working directory is another
   // project's, or none.
@@ -2139,7 +2210,7 @@ function configuredEnvAllowNames(
       `${SCRIPT_ENV_ALLOW_KEY} names ${owned.join(", ")}, which argent keeps out of the copy ` +
         `it takes from its own environment; ` +
         `${owned.length > 1 ? "those entries were" : "that entry was"} ` +
-        `ignored. Pass the value the script needs under a name of your own instead.`
+        `ignored. Pass the value the script needs under a name of your own instead.${listedInClause(owned)}`
     );
   }
   if (reserved.length > 0) {
@@ -2154,7 +2225,8 @@ function configuredEnvAllowNames(
         `${reserved.length > 1 ? "steer" : "steers"} the runner's own process rather than ` +
         `reaching the script, so no allowlist entry can pass ` +
         `${reserved.length > 1 ? "them" : "it"} through; ` +
-        `${reserved.length > 1 ? "those entries were" : "that entry was"} ignored.`
+        `${reserved.length > 1 ? "those entries were" : "that entry was"} ignored.` +
+        listedInClause(reserved)
     );
   }
   if (unusable.length > 0) {
@@ -2162,7 +2234,8 @@ function configuredEnvAllowNames(
       `${SCRIPT_ENV_ALLOW_KEY} names ${PROTO_ENV_NAME}, which argent cannot carry: the ` +
         `operating system takes the name, but every merge on the way to the child copies the ` +
         `map through a plain object, where ${PROTO_ENV_NAME} is an accessor rather than an ` +
-        `entry. That entry was ignored. Use a name of your own.`
+        `entry. That entry was ignored. Use a name of your own.` +
+        listedInClause(unusable)
     );
   }
   if (malformed.length > 0) {
@@ -2170,7 +2243,8 @@ function configuredEnvAllowNames(
       `${SCRIPT_ENV_ALLOW_KEY} names ${malformed.map((name) => JSON.stringify(name)).join(", ")}, ` +
         `which ${malformed.length > 1 ? "are not environment variable names" : "is not an environment variable name"} ` +
         `— a name starts with a letter or "_" and continues with letters, digits or "_". ` +
-        `${malformed.length > 1 ? "Those entries were" : "That entry was"} ignored.`
+        `${malformed.length > 1 ? "Those entries were" : "That entry was"} ignored.` +
+        listedInClause(malformed)
     );
   }
   return kept;

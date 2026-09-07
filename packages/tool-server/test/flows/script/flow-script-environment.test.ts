@@ -653,8 +653,10 @@ describe("an environment near the operating system's limit", () => {
 
   it("says nothing about the environment when an ordinary one dies early", async () => {
     const ws = workspace();
-    // Exits before the runner reports a start: the protocol verdict this note
-    // must stay off.
+    // The runner sends `started` from its preload, BEFORE the entry script
+    // loads, so this exits after the handshake and earns an `exit` verdict
+    // rather than the protocol one the note is for. It pins the shape; the case
+    // below is what makes the size term load-bearing.
     const script = ws.write("early.mjs", "process.exit(7);");
     const result = await executor().execute({
       scriptPath: script,
@@ -663,6 +665,30 @@ describe("an environment near the operating system's limit", () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result.notes.join(" ")).not.toContain("ARG_MAX");
+  }, 30_000);
+
+  it("stays off a step that was cancelled before the runner started", async () => {
+    // A cancellation lands before `started` does — the preload is fast but not
+    // instant — and the verdict is `cancelled`, which the note does not explain.
+    // The condition consulted only `!startedSeen`, so a large environment was
+    // named as the likely cause of an abort the caller raised itself. Unlike a
+    // timeout, cancellation has no floor, so an abort that arrives with the
+    // request reaches this every time.
+    const ws = workspace();
+    const script = ws.write("slow.mjs", "await new Promise((r) => setTimeout(r, 5000));");
+    const controller = new AbortController();
+    const pending = executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(400 * 1024) },
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("cancelled");
     expect(result.notes.join(" ")).not.toContain("ARG_MAX");
   }, 30_000);
 });

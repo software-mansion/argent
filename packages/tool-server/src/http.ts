@@ -131,6 +131,13 @@ function streamErrorMessage(err: unknown): string {
   if (err instanceof ToolNotFoundError) return err.message;
   const depErr = findDependencyMissing(err);
   if (depErr) return depErr.message;
+  // The same rung the buffered path answers 400 from. Without it a refusal
+  // about the CALL — a bad `--env` name is the only one that reaches a streamed
+  // tool — kept `ToolExecutionError`'s `[Tool:flow-execute]` prefix here and
+  // arrived bare through `--json`, so one command described one fault two ways,
+  // and the prefix named a tool for a fault in a command-line flag.
+  const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
+  if (invalidInputErr) return invalidInputErr.message;
   const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
   if (unsupportedErr) return unsupportedErr.message;
   const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

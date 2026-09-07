@@ -218,6 +218,24 @@ function describeValueType(value: unknown): string {
  * outranks even the innermost fragment's. A step-level map is not a default: it
  * is part of that one invocation, so nothing outside it wins.
  */
+/**
+ * The key one environment NAME is the same variable under.
+ *
+ * Windows carries one variable per name however it is spelled, so `Path` and
+ * `PATH` are one name there and two everywhere else. {@link mergeScriptEnv}
+ * folds by that rule and keeps the LAST spelling, which is what a comparison of
+ * two merged maps has to fold by as well: a case-only rename of a flow-level
+ * name is one variable with one value to the child, and was two different maps
+ * to a comparison keyed on the raw name — so the author was told the file
+ * drifted and to delete a step whose script may already have had its effect.
+ *
+ * Read at call time, like the four other copies of this rule in this module
+ * family, so a test can fake the platform around it.
+ */
+export function envNameKey(name: string): string {
+  return process.platform === "win32" ? name.toLowerCase() : name;
+}
+
 export function mergeScriptEnv(
   ...maps: Array<Readonly<Record<string, string>> | undefined>
 ): Record<string, string> {

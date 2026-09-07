@@ -2,6 +2,7 @@ import {
   describeSelector,
   describeTextExpectation,
   escapeInline,
+  renderedValue,
   selectorToYaml,
   SELECTOR_RELATIONS,
   swipeByLabel,
@@ -419,7 +420,17 @@ const FLOW_STEP_DEFINITIONS: {
     summary: (step) =>
       `${step.path}` +
       `${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}` +
-      `${step.env ? ` env ${renderToolArgs(step.env)}` : ""}`,
+      //
+      // Through the flow parser's own entry ceiling, though. This line is
+      // returned twice — as `flow-add-script`'s `recorded` and again in the
+      // finish `summary` — and `env` is the field documented as carrying a PEM
+      // key or a service-account blob, so a 10 KB value became 20 KB of agent
+      // context for a one-line summary. 200 characters still shows a real env
+      // map whole; the same ceiling, for the same reason, that `renderedValue`
+      // already applies to a rendered flow entry. Only the `script` arm: a
+      // `tool:` step's args render doubles as the warning anchor, where two
+      // truncated maps sharing a prefix would collide.
+      `${step.env ? ` env ${renderedValue(renderToolArgs(step.env))}` : ""}`,
     target: (step) => step.path,
   },
   "snapshot": {
