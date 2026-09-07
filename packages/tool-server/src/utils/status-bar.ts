@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DeviceInfo } from "@argent/registry";
 import { adbShell } from "./adb";
+import { isIosPhysicalDevice } from "./device-info";
 import { simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
@@ -16,6 +17,10 @@ const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
  * undone here, so the teardown restore gets another chance.
  */
 export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
+  // `simctl status_bar` speaks the simulator namespace only; it cannot address
+  // a hardware UDID, so the bar stays live; its diff noise is already absorbed
+  // by the settle's top-band mask (`statusBarMaskFraction` in flow-pixels).
+  if (isIosPhysicalDevice(device)) return false;
   try {
     if (device.platform === "ios") {
       await execFileAsync(

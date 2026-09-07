@@ -8,6 +8,10 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/device-providers/src/index.ts"
+);
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
@@ -50,6 +54,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry. An unset ARGENT_OTEL_INGEST_TOKEN
@@ -164,6 +169,12 @@ const FLOW_SCRIPT_FILES = [
   "flow-script-watchdog-lifeline.mjs",
   "flow-script-watchdog-deadline.mjs",
 ];
+const IOS_RUNNER_SRC = path.resolve(WORKSPACE_ROOT, "packages/ios-device-runner/ArgentRunner");
+const IOS_RUNNER_DEST = path.resolve(__dirname, "../dist/ios-device-runner/ArgentRunner");
+// Local Xcode state that must never ship: per-user schemes/breakpoints and
+// SwiftPM build output. Everything else in the project tree is source the
+// user-side xcodebuild needs.
+const IOS_RUNNER_SKIP_DIRS = new Set(["xcuserdata", ".build", ".swiftpm"]);
 
 // Declarative copy plan for copyAsset() below.
 //
@@ -188,6 +199,8 @@ const FLOW_SCRIPT_FILES = [
  * @property {string} [countExt]
  * @property {(src: string) => number} [count]
  * @property {string} [hint]
+ * @property {(src: string) => boolean} [filter] dir-only: cpSync filter, false skips the entry
+ * @property {boolean} [clean] dir-only: rm the dest first, so a re-bundle never merges stale files
  */
 /** @type {Asset[]} */
 const ASSETS = [
@@ -256,6 +269,26 @@ const ASSETS = [
     copiedLabel: "native dylib(s)",
     missLabel: "Native devtools dylibs",
     countExt: ".dylib",
+  },
+  // The physical-iOS runner's Xcode project, SOURCES not binaries: the runner
+  // must be signed with each user's own Apple team on each user's own Mac
+  // (a development profile whitelists device UDIDs, so no prebuilt can exist),
+  // and runner-artifact.ts resolves this exact dest relative to the bundled
+  // tool-server. Cleaned first so a re-bundle never merges a stale tree.
+  {
+    kind: "dir",
+    src: IOS_RUNNER_SRC,
+    dest: IOS_RUNNER_DEST,
+    required: true,
+    clean: true,
+    filter: (src) => !IOS_RUNNER_SKIP_DIRS.has(path.basename(src)),
+    copiedLabel: "iOS device-runner source file(s)",
+    missLabel: "iOS device-runner Xcode project",
+    // countExt reads one directory level; the Swift files sit two deep.
+    count: (src) =>
+      fs
+        .readdirSync(src, { recursive: true })
+        .filter((f) => typeof f === "string" && f.endsWith(".swift")).length,
   },
   // Android helper manifest.json: helperManifest()/bundledHelperApkPath() read it
   // at runtime, and the version-stamped APK filename comes from its versionName
@@ -422,7 +455,8 @@ function copyAsset(a) {
   }
 
   if (a.kind === "dir") {
-    fs.cpSync(a.src, a.dest, { recursive: true });
+    if (a.clean) fs.rmSync(a.dest, { recursive: true, force: true });
+    fs.cpSync(a.src, a.dest, { recursive: true, filter: a.filter });
   } else {
     fs.mkdirSync(path.dirname(a.dest), { recursive: true });
     fs.copyFileSync(a.src, a.dest);

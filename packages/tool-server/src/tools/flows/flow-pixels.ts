@@ -1,13 +1,18 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { PNG } from "pngjs";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isAndroidTv } from "../../utils/adb";
+import { isIosPhysicalDevice } from "../../utils/device-info";
+import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { FIRST_FRAME_WAIT_MS, httpScreenshot } from "../../utils/simulator-client";
 import { settleWithin } from "../../utils/timing";
-import { tvScreenshot } from "../screenshot";
+import { downscalePngInPlace, tvScreenshot } from "../screenshot";
 import type { ActionEnv } from "./flow-actions";
 
 /**
@@ -150,6 +155,8 @@ export async function statusBarMaskFraction(device: ActionEnv["device"]): Promis
   }
   if (device.platform === "ios-remote") return STATUS_BAR_MASK_FRACTION;
   if (device.platform !== "ios") return 0;
+  // Physical devices always have a status bar. Do not ask simctl. The UDID is not a simulator UUID.
+  if (device.kind === "device") return STATUS_BAR_MASK_FRACTION;
   return (await isTvOsSimulator(device.id)) ? 0 : STATUS_BAR_MASK_FRACTION;
 }
 
@@ -162,6 +169,11 @@ export const FIRST_PIXEL_CAPTURE_TIMEOUT_MS =
 export const PIXEL_CAPTURE_TIMEOUT_MS = 2_000;
 
 /**
+ * Ceiling for a physical-iOS settle capture. The runner PNG path is slower than the other routes.
+ */
+const IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
+
+/**
  * Per-capture bound — a ceiling, not a wait, so granting more than a route needs
  * costs nothing until it is actually spent.
  *
@@ -172,6 +184,9 @@ export const PIXEL_CAPTURE_TIMEOUT_MS = 2_000;
  * an async runtime probe, so it keeps the wider ceiling it will not use.
  */
 export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture: boolean): number {
+  if (isIosPhysicalDevice(device)) {
+    return IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS;
+  }
   const warmFromTheStart = device.platform === "chromium" || device.platform === "vega";
   return firstCapture && !warmFromTheStart
     ? FIRST_PIXEL_CAPTURE_TIMEOUT_MS
@@ -270,6 +285,9 @@ async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
   if (env.device.platform === "vega") {
     return captureVegaScreenshotPng({ scale: CAPTURE_SCALE });
   }
+  if (isIosPhysicalDevice(env.device)) {
+    return captureIosDeviceFile(env, budgetMs);
+  }
   // Shape alone cannot tell tvOS from iOS — both are 8-4-4-4-12 UUIDs tagged
   // `platform: "ios"` — so ask the runtime, which is memoized per UDID.
   if (env.device.platform === "ios" && (await isTvOsSimulator(env.device.id))) {
@@ -292,6 +310,24 @@ async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
   // file.
   const { path } = await httpScreenshot(api, undefined, undefined, CAPTURE_SCALE);
   return path;
+}
+
+/**
+ * Physical-iOS settle capture through the on-device runner.
+ */
+async function captureIosDeviceFile(env: ActionEnv, budgetMs: number): Promise<string> {
+  // The runner is already up mid-flow.
+  const ref = iosDeviceRunnerRef(env.device);
+  const runner = (await env.registry.resolveService(ref.urn, ref.options)) as IosDeviceRunnerApi;
+  const png = await captureRunnerScreenshotPng(runner, budgetMs);
+  const file = path.join(
+    os.tmpdir(),
+    `argent-ios-device-settle-${env.device.id.slice(0, 8)}-${process.hrtime.bigint()}.png`
+  );
+  await fs.writeFile(file, png);
+  // Same best-effort sips path as the screenshot tool.
+  await downscalePngInPlace(file, CAPTURE_SCALE, captureAbortSignal(env, budgetMs));
+  return file;
 }
 
 /**

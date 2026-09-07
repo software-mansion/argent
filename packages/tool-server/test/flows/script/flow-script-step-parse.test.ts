@@ -8,7 +8,7 @@ import { parseFlow, serializeFlow, type FlowStep } from "../../../src/tools/flow
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../../src/tools/flows/flow-finish-recording";
-import { summarizeStep } from "../../../src/tools/flows/flow-finish-recording";
+import { summarizeStep } from "../../../src/tools/flows/flow-step-definitions";
 
 const parse = (yaml: string): FlowStep[] => parseFlow(yaml).steps;
 const step = (body: string): FlowStep[] => parse(`steps:\n  - script: ${body}\n`);

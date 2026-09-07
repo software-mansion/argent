@@ -69,13 +69,19 @@ describe("execLeafStep's exhaustiveness guard", () => {
   });
 });
 
-describe("the other five switches over a step kind", () => {
+/**
+ * `stepTarget` and `summarizeStep` are absent here on purpose. #744 moved both
+ * into `FLOW_STEP_DEFINITIONS` (flow-step-definitions.ts), a record keyed by
+ * `FlowStep["kind"]`: a new kind is a compile error at the table itself, which
+ * is stronger than the `never` default arm this file scans for — there is no
+ * arm left to fall through. Their per-kind coverage lives in
+ * flow-step-definitions.test.ts, whose `CaseTable` is keyed the same way.
+ */
+describe("the other three switches over a step kind", () => {
   it.each([
     ["flow-device.ts", "export function stepRequiresDevice("],
-    ["flow-run.ts", "function stepTarget("],
     ["flow-utils.ts", "function toYamlStep("],
     ["flow-utils.ts", "export function precedesLeadingLaunch("],
-    ["flow-finish-recording.ts", "export function summarizeStep("],
   ])("%s %s binds `never` in its default arm", (file, signature) => {
     expect(functionBody(read(file), signature)).toMatch(
       /default: ?\{[\s\S]*?const \w+: never = (?:step|kind);/
@@ -84,10 +90,8 @@ describe("the other five switches over a step kind", () => {
 
   it.each([
     ["flow-device.ts", "export function stepRequiresDevice("],
-    ["flow-run.ts", "function stepTarget("],
     ["flow-utils.ts", "function toYamlStep("],
     ["flow-utils.ts", "export function precedesLeadingLaunch("],
-    ["flow-finish-recording.ts", "export function summarizeStep("],
   ])("%s %s has an arm for every step kind", (file, signature) => {
     const handled = handledKinds(functionBody(read(file), signature));
     for (const kind of Object.keys(ALL_STEP_KINDS)) {
