@@ -216,7 +216,11 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // is built into.
     const envProblem = describeScriptEnvProblem(params.env ?? {});
     if (envProblem) {
-      throw new InvalidToolInputError(`\`env\` ${envProblem}`, {
+      // Named after the channel, like the sibling refusal in `flow-run.ts` and
+      // like the two `assertNoEnvOutputReferences` raises: this recording's
+      // file can carry a top-level `env:` of its own, and a bare `env` does not
+      // say which of the two the author must edit.
+      throw new InvalidToolInputError(`This call's \`env\` ${envProblem}`, {
         failure_stage: "flow_add_script_env",
       });
     }

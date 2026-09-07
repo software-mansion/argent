@@ -1265,7 +1265,12 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // rule — the same one a flow file's own `env:` is held to.
       const envProblem = describeScriptEnvProblem(params.env ?? {});
       if (envProblem) {
-        throw new InvalidToolInputError(`\`env\` ${envProblem}`, {
+        // Named after the channel it came from, as the other two are — the flow
+        // file says `Invalid flow file: \`env\`` and a step says
+        // `script \`env\``. A bare \`env\` on a flow that also declares a
+        // top-level one sends the author to the YAML for a name they typed on
+        // the command line.
+        throw new InvalidToolInputError(`This run's \`env\` ${envProblem}`, {
           failure_stage: "flow_run_env",
         });
       }
