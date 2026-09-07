@@ -50,11 +50,11 @@ export async function describeAndroid(
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
-      let tree = parseUiAutomatorDump(xml, size.width, size.height);
-      if (hasUnreadWebView(tree)) {
-        const again = await devtools.getHierarchy();
-        tree = parseUiAutomatorDump(again.xml, size.width, size.height);
-      }
+      const tree = await awaitWebViewPublished(
+        parseUiAutomatorDump(xml, size.width, size.height),
+        async () =>
+          parseUiAutomatorDump((await devtools.getHierarchy()).xml, size.width, size.height)
+      );
       return { tree, source: "android-devtools", hint };
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
@@ -69,9 +69,34 @@ export async function describeAndroid(
   }
 
   const [size, raw] = await Promise.all([getAndroidScreenSize(serial), uiautomatorDump(serial)]);
-  let tree = parseDump(raw, size);
-  if (hasUnreadWebView(tree)) tree = parseDump(await uiautomatorDump(serial), size);
+  const tree = await awaitWebViewPublished(parseDump(raw, size), async () =>
+    parseDump(await uiautomatorDump(serial), size)
+  );
   return { tree, source: "uiautomator", hint };
+}
+
+/**
+ * Chromium builds a WebView's accessibility tree on the first request for it,
+ * so the read that asks sees the WebView with nothing under it. Re-read until
+ * the page is there, within a bound: a small page is complete on the next read
+ * (measured 10–400 ms on API 35 / WebView 124), a Chrome tab over a long
+ * article needs ~600 ms. A screen without a WebView returns at once; a WebView
+ * that never publishes costs at most the bound.
+ */
+const WEBVIEW_PUBLISH_STEP_MS = 250;
+const WEBVIEW_PUBLISH_BUDGET_MS = 1_500;
+
+async function awaitWebViewPublished(
+  first: DescribeNode,
+  read: () => Promise<DescribeNode>
+): Promise<DescribeNode> {
+  let tree = first;
+  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree); ) {
+    await new Promise((r) => setTimeout(r, WEBVIEW_PUBLISH_STEP_MS));
+    waited += WEBVIEW_PUBLISH_STEP_MS;
+    tree = await read();
+  }
+  return tree;
 }
 
 async function uiautomatorDump(serial: string): Promise<string> {
@@ -119,13 +144,18 @@ function parseDump(raw: string, size: { width: number; height: number }): Descri
 }
 
 /**
- * Chromium builds a WebView's accessibility tree on the first request for it:
- * the read that asks sees the WebView with nothing under it, the next read sees
- * the page (measured on API 35 / WebView 124: a read 6 s after load is still
- * empty, the read right after it is complete). One re-read covers it; a screen
- * without a WebView never pays for it.
+ * The shape a WebView has before Chromium publishes its page: the WebView
+ * node with nothing under it (a read 6 s after load, with no earlier read, is
+ * still this shape — the tree is built on request, not on load).
+ *
+ * A browser tab has no `android.webkit.WebView` view of its own: before the
+ * page is published, Chrome's content view is a childless FrameLayout whose
+ * content-desc is "Web View" (English UI only — other locales miss the
+ * re-read and see the tab the way they do today).
  */
 export function hasUnreadWebView(node: DescribeNode): boolean {
-  if (node.role === "WebView" && node.children.length === 0) return true;
+  if (node.children.length === 0 && (node.role === "WebView" || node.label === "Web View")) {
+    return true;
+  }
   return node.children.some(hasUnreadWebView);
 }

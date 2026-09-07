@@ -66,7 +66,10 @@ describe("parseUiAutomatorDump — WebView captures", () => {
 
 describe("describeAndroid — re-read on an unread WebView", () => {
   function fakeRegistry(hierarchies: string[]) {
-    const getHierarchy = vi.fn(async () => ({ xml: hierarchies.shift() ?? hierarchies[0]! }));
+    // Serve the captures in order and repeat the last one.
+    const getHierarchy = vi.fn(async () => ({
+      xml: hierarchies.length > 1 ? hierarchies.shift()! : hierarchies[0]!,
+    }));
     const resolveService = vi.fn(async () => ({
       isReady: () => true,
       getHierarchy,
@@ -83,6 +86,19 @@ describe("describeAndroid — re-read on an unread WebView", () => {
     expect(flatten(tree).some((n) => n.label === "Pay now")).toBe(true);
   });
 
+  it("reads once more on Chrome's unpublished content view", async () => {
+    // A browser tab before the page is published: no `android.webkit.WebView`
+    // node yet, just Chrome's childless content view.
+    const cold = `<?xml version='1.0'?><hierarchy rotation="0">
+      <node class="android.widget.FrameLayout" content-desc="Web View" bounds="[0,142][1080,2361]"/>
+      <node class="android.widget.EditText" resource-id="com.android.chrome:id/url_bar" text="example.org" clickable="true" bounds="[210,150][690,280]"/>
+    </hierarchy>`;
+    const { registry, getHierarchy } = fakeRegistry([cold, fixture("chrome")]);
+    const { tree } = await describeAndroid(registry, "emulator-5554", undefined, false);
+    expect(getHierarchy).toHaveBeenCalledTimes(2);
+    expect(flatten(tree).find((n) => n.role === "WebView")?.label).toMatch(/Wikipedia/);
+  });
+
   it("reads exactly once on a screen without a WebView", async () => {
     const native = `<?xml version='1.0'?><hierarchy rotation="0">
       <node class="android.widget.Button" text="Settings" clickable="true" bounds="[0,0][200,100]"/>
@@ -92,10 +108,13 @@ describe("describeAndroid — re-read on an unread WebView", () => {
     expect(getHierarchy).toHaveBeenCalledTimes(1);
   });
 
-  it("stops after one re-read when the WebView stays empty", async () => {
-    const { registry, getHierarchy } = fakeRegistry([fixture("cold"), fixture("cold")]);
+  it("gives up within the budget when the WebView never publishes", async () => {
+    const { registry, getHierarchy } = fakeRegistry([fixture("cold")]);
+    const started = Date.now();
     const { tree } = await describeAndroid(registry, "emulator-5554", undefined, false);
-    expect(getHierarchy).toHaveBeenCalledTimes(2);
+    // 1.5 s budget in 250 ms steps: the first read plus six re-reads.
+    expect(getHierarchy).toHaveBeenCalledTimes(7);
+    expect(Date.now() - started).toBeLessThan(3_000);
     expect(flatten(tree).find((n) => n.role === "WebView")?.label).toBe("(no web content exposed)");
   });
 });
