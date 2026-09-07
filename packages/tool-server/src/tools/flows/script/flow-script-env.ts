@@ -129,8 +129,18 @@ export function describeUnusableEnvValue(value: string): string | null {
   // and the step then errors on a message about the spawn rather than about the
   // map that caused it. Refused here, naming the key.
   if (value.includes("\0")) return "holds a NUL character";
+  // The same rule, one character class further out. An environment crosses to
+  // the child as UTF-8 (as UTF-16 on Windows, which is no kinder to a half
+  // pair), and a code unit with no partner has no encoding — so the child reads
+  // U+FFFD where the file spells the character, and the file and the script
+  // disagree with nothing said. A flow file round-trips one exactly, which is
+  // what makes it invisible.
+  if (LONE_SURROGATE.test(value)) return "holds an unpaired surrogate";
   return null;
 }
+
+/** A high surrogate with no low after it, or a low with no high before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /**
  * Whether the entry walk can read this map. A prototype-less object is one the

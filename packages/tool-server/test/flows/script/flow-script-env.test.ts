@@ -696,6 +696,25 @@ describe("secret placeholders in an env value", () => {
     expect(result.steps[0].reason).toContain("KNOWN");
   });
 
+  it("refuses an unpaired surrogate in an env value", async () => {
+    // `describeScriptEnvProblem` refuses a NUL because an environment cannot
+    // carry one; a lone surrogate is the same rule one character class further
+    // out, and it was accepted. The flow file round-trips it exactly and the
+    // child reads U+FFFD, so the file and the script disagreed with nothing
+    // said.
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow(
+      "lone",
+      "steps:\n" + '  - script: { path: ../../scripts/noop.mjs, env: { LONE: "\\uD800abc" } }\n'
+    );
+
+    // Refused where the map is read, like every other shape rule — the file is
+    // not a flow argent can run.
+    await expect(runFlow("lone")).rejects.toThrow(
+      /script `env` holds an unpaired surrogate in the value of LONE/
+    );
+  });
+
   it("refuses a resolved value an environment cannot carry, without quoting it", async () => {
     // The NUL rule runs on the AUTHORED value, which is `{{secret:NULKEY}}` —
     // nothing of the secret's own shape. A NUL inside the resolved credential
