@@ -3619,9 +3619,12 @@ export function serializeFlow(flow: FlowFile): string {
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
-  // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
-  // document tail exposes its raw last line to parseFlow's content.trim(), so
-  // parseFlow(serializeFlow(x)) was not the identity. Disabling it emits
+  // stripped on re-parse (" \n" comes back as "\n"), and a block scalar's own
+  // chomping decides what its last line keeps, so a value at the document tail
+  // came back changed. Either way parseFlow(serializeFlow(x)) was not the
+  // identity. (The second half used to name `parseFlow`'s `content.trim()`;
+  // that call now trims the LEADING edge only, and the block scalar's chomping
+  // is the whole of it.) Disabling it emits
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
   // scalars still parse.

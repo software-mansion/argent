@@ -1360,9 +1360,15 @@ function memberPath(key: string): string {
  * `echo "…$KEY" > "$ARGENT_REASON"` is the idiomatic way to write that file —
  * so the shape the redaction promise exists for was the shape that missed it.
  *
- * Each spelling is still the value minus whitespace only, so a hit is the
- * credential and nothing else. An all-whitespace value trims to "", which
- * `scrubSecretValues` skips.
+ * Each spelling is the value minus whitespace only. That is not a promise that
+ * a hit is always the credential: a secret stored with padding around a short
+ * core — `" 3 "` — contributes `"3"`, and an unrelated `exited with code 3`
+ * is then rewritten. A value of `"3"` with no padding already behaves that way,
+ * because the design has no minimum secret length by decision, so this follows
+ * the rule rather than adding to it — and over-redacting a step's own text is
+ * the lesser fault against reporting a credential in the clear.
+ *
+ * An all-whitespace value trims to "", which `scrubSecretValues` skips.
  */
 function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
   const spellings: FlowScriptSecret[] = [];
