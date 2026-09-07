@@ -26,4 +26,3 @@ Both are per-origin / active-tab. Handy for seeding auth before a flow or assert
 ## Other differences
 
 - `paste` is **rejected** on Chromium — use `keyboard`.
-- `keyboard`'s `delayMs` between keystrokes is honoured (as on the iOS simulator).
