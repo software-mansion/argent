@@ -16,10 +16,7 @@ export type { TelemetryPlatform };
  * before a describe/interaction path warms the runtime-kind cache report the base
  * platform.
  */
-function refineTvPlatform(
-  basePlatform: DevicePlatform,
-  deviceId: string
-): TelemetryPlatform {
+function refineTvPlatform(basePlatform: DevicePlatform, deviceId: string): TelemetryPlatform {
   if (basePlatform === "ios" && getCachedSimulatorRuntimeKind(deviceId) === "tv") {
     return "tvos";
   }
