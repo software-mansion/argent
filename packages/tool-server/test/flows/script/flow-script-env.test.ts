@@ -865,6 +865,61 @@ describe("recording a script step with env", () => {
     expect(seen("kept")).toEqual({ PLAIN: "checked-in-default" });
   });
 
+  // The pre-run read has three failure states and they ask for opposite things.
+  // Neither branch had a test, and one of them told the author the flow "may
+  // not parse, or it may parse and break a rule" about a file argent never got
+  // to look at.
+  it("tells a gone, an unreadable and a malformed flow file apart", async () => {
+    await write("scripts/dump.mjs", reporter("branches", ["A"]));
+    await flowStartRecordingTool.execute({}, { name: "gone", project_root: root });
+    const gonePath = path.join(root, ".argent/flows/gone.yaml");
+    await fs.rm(gonePath);
+
+    await expect(
+      flowAddScriptTool.execute(
+        {},
+        { name: "gone", project_root: root, path: "../../scripts/dump.mjs" }
+      )
+    ).rejects.toThrow(/is gone\..*Start the recording again/s);
+
+    await flowStartRecordingTool.execute({}, { name: "broken", project_root: root });
+    const brokenPath = path.join(root, ".argent/flows/broken.yaml");
+    await fs.writeFile(brokenPath, "steps:\n  - script: { path: x.mjs, env: { A: 3 } }\n", "utf8");
+
+    await expect(
+      flowAddScriptTool.execute(
+        {},
+        { name: "broken", project_root: root, path: "../../scripts/dump.mjs" }
+      )
+    ).rejects.toThrow(/is not a flow argent can use as it stands/);
+  });
+
+  // chmod is a POSIX rule and root ignores it, so the unreadable branch is
+  // asked for only where the host can actually refuse a read.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports an unreadable flow file as unreadable, not as malformed",
+    async () => {
+      await write("scripts/dump.mjs", reporter("locked", ["A"]));
+      await flowStartRecordingTool.execute({}, { name: "locked", project_root: root });
+      const lockedPath = path.join(root, ".argent/flows/locked.yaml");
+      await fs.chmod(lockedPath, 0o000);
+      try {
+        await expect(
+          flowAddScriptTool.execute(
+            {},
+            {
+              name: "locked",
+              project_root: root,
+              path: "../../scripts/dump.mjs",
+            }
+          )
+        ).rejects.toThrow(/could not be read\..*Make the file readable/s);
+      } finally {
+        await fs.chmod(lockedPath, 0o644);
+      }
+    }
+  );
+
   it("layers the file's env under the call's, and records the call's map", async () => {
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write(

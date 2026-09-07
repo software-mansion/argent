@@ -271,11 +271,17 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     try {
       flowEnv = await flowEnvOnDisk(session);
     } catch (err) {
-      // A file that is GONE and a file that is malformed ask for opposite
-      // things. "Repair it and call this again" cannot be followed when there
-      // is nothing to repair, and this tool cannot re-create the file: only
-      // flow-start-recording establishes the key.
-      const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+      // Three states, three different things to do. A file that is GONE cannot
+      // be repaired and this tool cannot re-create it — only
+      // flow-start-recording establishes the key. A file that could not be READ
+      // is a permission or a device problem, and "it may not parse, or it may
+      // parse and break a rule" sends the author to look for a fault in content
+      // argent never saw. Only the third is a flow to repair. The read failure
+      // is what carries an errno; a parse refusal is a FailureError and carries
+      // none.
+      const errno = (err as NodeJS.ErrnoException).code;
+      const missing = errno === "ENOENT";
+      const unreadable = typeof errno === "string" && !missing;
       throw wrapFailure(
         err,
         {
@@ -290,13 +296,19 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
               `the append after the run reads that file before it writes one, so it would fail ` +
               `on the same missing path and the script would have run for nothing. Start the ` +
               `recording again with flow-start-recording and re-walk it. `
-            : `${session.filePath} is not a flow argent can use as it stands — it may not ` +
-              `parse, or it may parse and break a rule. The append after the run re-reads ` +
-              `that file and would refuse it then, with the script already run and nothing ` +
-              `rolled back — and the flow-level \`env\` this run has to share with the replay ` +
-              `is read off it too, so running now would give the script an environment the ` +
-              `recorded step will not take. The reason below is about the FILE, not about this ` +
-              `script. Repair it and call this again. `) +
+            : unreadable
+              ? `${session.filePath} could not be read. Nothing is wrong with the flow itself, ` +
+                `as far as argent got: the append after the run reads the same file and would ` +
+                `fail the same way, with the script already run and nothing rolled back — and ` +
+                `the flow-level \`env\` this run has to share with the replay is read off it ` +
+                `too. Make the file readable and call this again. `
+              : `${session.filePath} is not a flow argent can use as it stands — it may not ` +
+                `parse, or it may parse and break a rule. The append after the run re-reads ` +
+                `that file and would refuse it then, with the script already run and nothing ` +
+                `rolled back — and the flow-level \`env\` this run has to share with the replay ` +
+                `is read off it too, so running now would give the script an environment the ` +
+                `recorded step will not take. The reason below is about the FILE, not about ` +
+                `this script. Repair it and call this again. `) +
           `${err instanceof Error ? err.message : String(err)}`
       );
     }
