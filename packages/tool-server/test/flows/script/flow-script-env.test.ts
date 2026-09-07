@@ -1364,6 +1364,78 @@ describe("recording a script step with env", () => {
     ]);
   });
 
+  it("says which way the drift went when the names did not change", async () => {
+    // `sameEnv` compares VALUES and `envNames` renders NAMES, so an edit that
+    // only changed a value would print the same text on both sides of the
+    // sentence — a difference the message announces and then does not show.
+    // That branch had no case.
+    const filePath = path.join(root, ".argent/flows/valuedrift.yaml");
+    await write(
+      "scripts/edit.mjs",
+      `import fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(filePath)}, "env: { A: after }\\nsteps: []\\n");\n` +
+        `output.ok = true;`
+    );
+    await flowStartRecordingTool.execute({}, { name: "valuedrift", project_root: root });
+    await fs.writeFile(filePath, "env: { A: before }\nsteps: []\n", "utf8");
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      { name: "valuedrift", project_root: root, path: "../../scripts/edit.mjs" }
+    )) as { status: string; message: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.message).toContain("it ran with env A and the recorded step will replay with");
+    expect(added.message).toContain("those same names, at least one of them carrying a different");
+  });
+
+  it("treats an empty env map and no env key as the same environment", async () => {
+    // Neither carries a value, so neither changes what the script read. A drift
+    // message here would withdraw a promise that still holds, and send the
+    // author to delete a step and run a side-effecting script again.
+    const filePath = path.join(root, ".argent/flows/emptyenv.yaml");
+    await write(
+      "scripts/edit.mjs",
+      `import fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(filePath)}, "steps: []\\n");\n` +
+        `output.ok = true;`
+    );
+    await flowStartRecordingTool.execute({}, { name: "emptyenv", project_root: root });
+    await fs.writeFile(filePath, "env: {}\nsteps: []\n", "utf8");
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      { name: "emptyenv", project_root: root, path: "../../scripts/edit.mjs" }
+    )) as { status: string; message: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.message).toBe('Added script step to "emptyenv" flow.');
+  });
+
+  it("stays quiet when a concurrent edit touched everything but env", async () => {
+    // The one false positive the drift check exists to avoid. The file is
+    // re-read after a run that may take minutes, and an edit landing in that
+    // window is ordinary — only an `env` change makes the recorded step replay
+    // under an environment this run never took.
+    const filePath = path.join(root, ".argent/flows/otheredit.yaml");
+    await write(
+      "scripts/edit.mjs",
+      `import fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(filePath)}, "env: { A: same }\\nexecutionPrerequisite: Settings open\\nsteps: []\\n");\n` +
+        `output.ok = true;`
+    );
+    await flowStartRecordingTool.execute({}, { name: "otheredit", project_root: root });
+    await fs.writeFile(filePath, "env: { A: same }\nsteps: []\n", "utf8");
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      { name: "otheredit", project_root: root, path: "../../scripts/edit.mjs" }
+    )) as { status: string; message: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.message).toBe('Added script step to "otheredit" flow.');
+  });
+
   it("stays quiet when the step's own env provably shadows the change", async () => {
     // The drift check exists to withdraw a promise about the environment the
     // script RAN under. A step's own map sits over the flow-level one, so an
