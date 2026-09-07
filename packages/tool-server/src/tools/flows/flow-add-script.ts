@@ -123,7 +123,7 @@ const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehin
   },
 };
 
-/** Whether the recording's flow-level `env` is still the map the run took. */
+/** Whether two environments are the same map. */
 function sameEnv(before: ScriptEnv | undefined, after: ScriptEnv | undefined): boolean {
   const a = before ?? {};
   const b = after ?? {};
@@ -411,7 +411,16 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // the append re-read it afterwards. An edit landing in that window is
     // recorded and replays under an environment this run never took, so the
     // promise the message makes has to be withdrawn when it no longer holds.
-    const envDrifted = !sameEnv(flowEnv, appendedEnv);
+    //
+    // Compared as the STEP will see them, not as the file spells them: the
+    // step's own map sits over both, so an edit to a name it already overrides
+    // changes nothing the script reads. Comparing the flow-level maps alone
+    // withdrew the promise for an environment that had not moved, and told the
+    // author to delete the step and run a side-effecting script again.
+    const envDrifted = !sameEnv(
+      mergeScriptEnv(flowEnv, step.env),
+      mergeScriptEnv(appendedEnv, step.env)
+    );
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,

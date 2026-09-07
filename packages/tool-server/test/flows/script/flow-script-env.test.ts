@@ -1027,6 +1027,36 @@ describe("recording a script step with env", () => {
     expect(added.message).toContain("would append a SECOND one");
   });
 
+  it("stays quiet when the step's own env provably shadows the change", async () => {
+    // The drift check exists to withdraw a promise about the environment the
+    // script RAN under. A step's own map sits over the flow-level one, so an
+    // edit to a name the step already overrides changes nothing the script
+    // reads — and the warning told the author to delete the step and run a
+    // side-effecting script again for an environment that had not moved.
+    const filePath = path.join(root, ".argent/flows/shadow.yaml");
+    await write(
+      "scripts/edit.mjs",
+      `import fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(filePath)}, "env: { A: flow-two }\\nsteps: []\\n");\n` +
+        `output.ok = true;`
+    );
+    await flowStartRecordingTool.execute({}, { name: "shadow", project_root: root });
+    await fs.writeFile(filePath, "env: { A: flow-one }\nsteps: []\n", "utf8");
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "shadow",
+        project_root: root,
+        path: "../../scripts/edit.mjs",
+        env: { A: "step-wins" },
+      }
+    )) as { status: string; message: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.message).toBe('Added script step to "shadow" flow.');
+  });
+
   it("returns a recorded env map verbatim, plaintext and placeholder alike", async () => {
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write("scripts/seed.mjs", "output.ok = true;");
