@@ -84,8 +84,10 @@ const MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 const MAX_FAILURE_STACK_CHARS = 16 * 1024;
 
 /**
- * What a bash step's `$ARGENT_REASON` may take of the message it rides in, with
- * the rest left for the exit line, the exit-code hint and the marker itself.
+ * The MOST a bash step's `$ARGENT_REASON` may take of the message it rides in,
+ * leaving the rest for the exit line, the exit-code hint and the marker itself.
+ * An exit line longer than that remainder cuts the reason further still — see
+ * `readReasonFile`, which takes what the line leaves as its budget.
  */
 const MAX_REASON_CHARS = MAX_FAILURE_MESSAGE_CHARS - 1024;
 
@@ -462,14 +464,17 @@ function bashOutcome(request, code, signal) {
   }
   const status = code ?? 0;
   if (status !== 0) {
-    const reason = readReasonFile(request.reasonFile);
+    const line =
+      `The script exited with code ${status} (bash: ${request.interpreterPath}).` +
+      exitCodeHint(status);
+    // What the reason may take is what this line leaves, not a fixed share:
+    // `interpreterPath` is the one term here nothing bounds, and a bash far
+    // enough down a directory tree spends the room `MAX_REASON_CHARS` reserves.
+    const reason = readReasonFile(request.reasonFile, MAX_FAILURE_MESSAGE_CHARS - line.length - 1);
     return {
       type: "failure",
       failureType: "exit",
-      message:
-        `The script exited with code ${status} (bash: ${request.interpreterPath}).` +
-        exitCodeHint(status) +
-        (reason ? ` ${reason}` : ""),
+      message: line + (reason ? ` ${reason}` : ""),
     };
   }
   const read = readOutputFile(request.outputFile, request.maxOutputBytes);
@@ -592,15 +597,23 @@ function readOutputFile(file, maxOutputBytes) {
  * the widest the ceiling can be, and the cut lands on a UTF-8 boundary so a
  * character split by the bound does not arrive as a replacement.
  *
- * The reason is clamped HERE, below the ceiling `finish` applies to the whole
- * message, so that the exit line in front of it is not what pays for a long
- * one — and so that `clampText` never fires on this path. Its marker counts the
- * characters of the string it was handed, and a bounded read is not the file:
- * a script writing five million characters was told 24,671 had been omitted.
- * The size of the file is knowable, so that is what the marker says.
+ * The reason is clamped HERE, at whichever is smaller of `MAX_REASON_CHARS` and
+ * the `budget` the exit line in front of it leaves — so that the exit line is
+ * not what pays for a long reason, AND so that `clampText` never fires on a
+ * message that carries reason text. Its marker counts the characters of the
+ * string it was handed, and a bounded read is not the file: a script writing
+ * five million characters was told 24,671 had been omitted. The size of the
+ * file is knowable, so that is what the marker says.
+ *
+ * The budget matters because that marker is load-bearing downstream:
+ * `redactTruncated` in the parent reads it to find where the reason was cut,
+ * and drops the half of a secret left at that cut. `clampText` firing over the
+ * top would take the marker off the end and leave the half behind — which an
+ * interpreter path of some 900 characters was enough to do, since the path is
+ * the one term in the exit line that nothing bounds.
  */
-function readReasonFile(file) {
-  if (irregularFileKind(file)) return "";
+function readReasonFile(file, budget) {
+  if (budget <= 0 || irregularFileKind(file)) return "";
   let fd;
   try {
     fd = fs.openSync(file, READ_FLAGS);
@@ -610,20 +623,47 @@ function readReasonFile(file) {
     return "";
   }
   try {
-    const keep = MAX_REASON_CHARS * 4;
-    const buffer = Buffer.alloc(keep + 4);
+    const maxChars = Math.min(MAX_REASON_CHARS, budget);
+    const maxBytes = maxChars * 4;
+    const buffer = Buffer.alloc(maxBytes + 4);
     const read = readInto(fd, buffer, buffer.length);
     const text = buffer
-      .subarray(0, utf8SafeCut(buffer, Math.min(read, keep)))
+      .subarray(0, utf8SafeCut(buffer, Math.min(read, maxBytes)))
       .toString("utf8")
       .trim();
-    if (text.length <= MAX_REASON_CHARS && read <= keep) return text;
-    return `${text.slice(0, MAX_REASON_CHARS)}… [${reasonSize(fd)}; this report keeps the first ${MAX_REASON_CHARS} characters]`;
+    if (text.length <= maxChars && read <= maxBytes) return text;
+    return markReason(text, maxChars, budget, reasonSize(fd));
   } catch {
     return "";
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * The kept head and the marker that says so, together inside `budget`. The
+ * marker counts against it — as it does in `clampText` — because the parent
+ * re-applies the same whole-message ceiling and a marker left outside would be
+ * the first thing cut.
+ *
+ * Two passes at most: the marker only shrinks by the digits a smaller count
+ * drops. A budget narrower than the marker itself drives the kept head to
+ * nothing, which is the outcome wanted — the marker alone still says a reason
+ * was written, and no reason text means no half of a secret to leave behind.
+ */
+function markReason(text, maxChars, budget, size) {
+  let cut = maxChars;
+  let marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
+  while (marked.length > budget && cut > 0) {
+    cut = Math.max(0, cut - (marked.length - budget));
+    marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
+  }
+  return marked;
+}
+
+/** In step with `REASON_KEPT_RE` in `flow-script-executor.ts`, which reads it. */
+function reasonKeptMarker(size, kept) {
+  return `… [${size}; this report keeps the first ${kept} characters]`;
 }
 
 function reasonSize(fd) {

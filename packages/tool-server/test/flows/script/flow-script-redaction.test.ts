@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   FlowScriptExecutor,
@@ -16,9 +19,40 @@ function workspace(): ScriptWorkspace {
   return ws;
 }
 
+const longRoots: string[] = [];
+
 afterEach(() => {
   while (workspaces.length) workspaces.pop()!.cleanup();
+  while (longRoots.length) fs.rmSync(longRoots.pop()!, { recursive: true, force: true });
 });
+
+/**
+ * A second name for the host's bash, of a chosen length. The resolver reports
+ * `scripts.bash` verbatim, so the length of the configured value is the length
+ * of what rides in the exit line of every failure message. Nested directories
+ * rather than one long name, because a single path component is capped at 255
+ * bytes.
+ */
+function bashAtPathOfLength(bash: string, chars: number): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "argent-long-bash-"));
+  longRoots.push(root);
+  let dir = root;
+  while (chars - dir.length - 1 > 255) dir = path.join(dir, "d".repeat(200));
+  const link = path.join(dir, "b".repeat(chars - dir.length - 1));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.symlinkSync(bash, link);
+  return link;
+}
+
+/** `scripts.bash` for one workspace, read against the flow's own project. */
+function pinBash(dir: string, bash: string): void {
+  fs.mkdirSync(path.join(dir, ".argent"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, ".argent", "config.json"),
+    JSON.stringify({ scripts: { bash } }),
+    "utf8"
+  );
+}
 
 function executor(options: FlowScriptExecutorOptions = {}) {
   return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000, ...options });
@@ -34,10 +68,12 @@ describe("flow script executor — redaction of a bash step", () => {
   const SECRET: FlowScriptSecret = { name: "API_KEY", value: "s3cr3t-token-value" };
 
   let noBash: string | undefined;
+  let hostBash = "";
 
   beforeAll(async () => {
     const found = await resolveHostBash();
-    if (!("path" in found)) noBash = found.problem;
+    if ("path" in found) hostBash = found.path;
+    else noBash = found.problem;
   });
 
   beforeEach((ctx) => {
@@ -124,6 +160,60 @@ describe("flow script executor — redaction of a bash step", () => {
     }
     expect(message).toMatch(/this report keeps the first \d+ characters]$/);
   }, 30_000);
+
+  /**
+   * The reason ceiling leaves 1024 characters for the exit line the reason
+   * rides behind, and the interpreter path inside that line is the one term
+   * nothing bounds. A bash far enough down a directory tree spends that room,
+   * the whole message passes `SCRIPT_MAX_FAILURE_MESSAGE_CHARS`, and the clamp
+   * that answers takes the reason's own marker off the end — the marker the
+   * parent reads to find where the reason was cut, and so where half a secret
+   * may be left. So the reason is cut to what the exit line leaves, and this is
+   * the case that proves it: the same straddling secret as above, under a bash
+   * whose path is long enough to have moved the cut.
+   *
+   * POSIX only. The path is a symlink of over 900 characters, and Windows
+   * refuses both without a per-machine opt-in.
+   */
+  it.skipIf(process.platform === "win32")(
+    "keeps the reason's own marker when the interpreter path is long",
+    async () => {
+      const ws = workspace();
+      const reasonCeiling = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - 1024;
+      // `The script exited with code 5 (bash: <path>).` and the space in front
+      // of the reason, less the path itself.
+      const exitLine = "The script exited with code 5 (bash: ). ".length;
+      // Enough to pass the ceiling by a few dozen characters, which puts the
+      // clamp inside the reason's marker rather than in front of it.
+      const pathChars = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - exitLine - reasonCeiling - 50;
+      pinBash(ws.dir, bashAtPathOfLength(hostBash, pathChars));
+
+      const pad = reasonCeiling - 10;
+      const script = ws.write(
+        "long-reason-long-bash.sh",
+        `printf '%${pad}s' '' | tr ' ' 'x' > "$ARGENT_REASON"
+         printf '%s' "$API_KEY" >> "$ARGENT_REASON"
+         printf '%${reasonCeiling}s' '' | tr ' ' 'y' >> "$ARGENT_REASON"
+         exit 5`
+      );
+      const result = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        env: { API_KEY: SECRET.value },
+        secrets: [SECRET],
+      });
+
+      const message = result.failure?.message ?? "";
+      expect(result.failure?.kind).toBe("exit");
+      expect(message.length).toBeLessThanOrEqual(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
+      expect(message).toMatch(/this report keeps the first \d+ characters]$/);
+      for (let n = SECRET.value.length; n > 3; n -= 1) {
+        expect(message).not.toContain(SECRET.value.slice(0, n));
+      }
+    },
+    30_000
+  );
 });
 
 describe("flow script executor — the heap verdict", () => {
