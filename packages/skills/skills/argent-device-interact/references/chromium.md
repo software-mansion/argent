@@ -1,10 +1,6 @@
 # Chromium (CDP) Targets
 
-Read this when your target is a Chromium device — `list-devices` tags it `platform: chromium` and its id is shaped `chromium-cdp-<port>`. Everything in SKILL.md still applies; this page covers what differs.
-
-## What counts as a Chromium target
-
-A **Chromium (CDP) app** = any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app (boot it with `boot-device` + `electronAppPath`), or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`. The latter is auto-discovered by `list-devices` on port `9222` plus anything in `ARGENT_CHROMIUM_PORTS` — already-running browsers show up directly, no `boot-device` needed. The same describe/tap/swipe/keyboard/screenshot surface drives all of them.
+Everything in the related SKILL.md still applies; this page covers what differs.
 
 ## Multi-tab / windows
 
