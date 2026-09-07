@@ -14,22 +14,24 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
 /**
- * Ask the `android-devtools` helper for the hierarchy the legacy clear needs to
- * size its delete run — but only while that helper is ALREADY up.
+ * Ask the `android-devtools` helper for the hierarchy the clear reads — the
+ * legacy path to size its delete run, the modern one to check what the
+ * select-all left behind — but only while that helper is ALREADY up.
  *
  * The device serves one UiAutomation connection, and this helper is its usual
  * holder: `describe` prefers it, and it keeps the connection for ~60s per call
  * (measured 61.2s on API 30). Every `uiautomator dump` inside that window comes
- * back `Killed`, so the clear's measurement fails and it falls to a fixed blind
- * count that truncates a long field — with `describe` → tap → `keyboard` being
- * the ordinary call order, not an edge case. Reading from the holder instead of
- * racing it is what makes the measurement work at all there.
+ * back `Killed`, so both readings fail — the legacy one falls to a fixed blind
+ * count that truncates a long field, the modern one skips the repair and leaves
+ * a swallowed chord's field one character short — with `describe` → tap →
+ * `keyboard` being the ordinary call order, not an edge case. Reading from the
+ * holder instead of racing it is what makes either work there.
  *
  * Gated on the service already being live so a clear never pays for spawning
  * (or installing) the helper: with it down there is no contention, and the dump
- * this falls back to is exactly what ran before.
+ * this falls back to is the one the read would have issued anyway.
  *
- * What this costs OTHER tools, which is new with this reader: `keyboard` becomes
+ * What this costs OTHER tools: `keyboard` becomes
  * a client of the same `AndroidDevtools:<serial>` service `describe` uses, and
  * `utils/android-devtools-client.ts` serialises every RPC onto one host-side
  * chain. `readHierarchy` gives up on this read after PREFERRED_READ_BUDGET_MS
@@ -89,9 +91,11 @@ function typeAndroidPhone(
 ): Promise<KeyboardResult> {
   // Serialized per device, because the clear holds a SELECTION across awaits:
   // the modern path issues `input keycombination` and `input keyevent` as two
-  // separate adb invocations, so between them the field is fully selected, and
-  // the text that follows is a third. A concurrent call landing anywhere in
-  // there types over that selection. See `serializePerDevice`, where the
+  // separate adb invocations, so between them the field is fully selected and a
+  // concurrent call types over that selection, destroying the value. The DEL
+  // consumes the selection, but the read-back and the rescue run that follow it
+  // still precede the text, and a character landing in THAT window is read back
+  // as residue and backspaced away. See `serializePerDevice`, where the
   // measurements are — 4 of 4 corrupt on API 36 with both calls reporting 200.
   return serializePerDevice(deviceChainKey(device.id), () => {
     // Checked HERE, as this call's turn comes round, so a request the client has

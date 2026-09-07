@@ -13,8 +13,10 @@
  *     character; Command is the modifier that makes it destructive.
  *   - Android's modern clear issues the select-all (`input keycombination`) and
  *     the delete (`input keyevent`) as two separate adb invocations, leaving the
- *     field fully SELECTED in between, and its text goes out as a third. A
- *     character arriving in that window replaces the whole selection.
+ *     field fully SELECTED in between: a character arriving there replaces the
+ *     whole value. The DEL consumes that selection, but a read-back and the
+ *     rescue run it can call for still precede the text, and a character landing
+ *     in that second window is measured as residue and backspaced away.
  *   - Chromium runs the clear and then the typing loop as many separate CDP
  *     round trips.
  *
