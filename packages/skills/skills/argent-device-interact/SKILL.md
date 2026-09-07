@@ -366,7 +366,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### Chromium
 
-See `references/chromium.md` — tabs, cookies/storage, `gesture-scroll` / `gesture-drag`, and the `paste` restriction.
+See `references/chromium.md` — tabs, cookies/storage.
 
 ### iOS
 
