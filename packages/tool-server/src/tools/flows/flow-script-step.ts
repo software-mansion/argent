@@ -6,6 +6,7 @@ import { hasScriptExtension, scriptInterpreter, type FlowStep, type ScriptEnv } 
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
+  scrubScriptText,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
   type FlowScriptResult,
@@ -160,10 +161,11 @@ export async function runFlowScriptStep(
   );
   const frames = result.ok
     ? ""
-    : scriptFrames(result.failure?.stack, [
-        request.projectRoot,
-        await canonicalFlowPath(request.projectRoot),
-      ]);
+    : scriptFrames(
+        result.failure?.stack,
+        [request.projectRoot, await canonicalFlowPath(request.projectRoot)],
+        secrets
+      );
   return {
     outcome: {
       ...verdict,
@@ -234,8 +236,20 @@ function readableFrame(frame: string, roots: readonly string[]): string {
  * `\n    at …` on the step's own line and a reader can still tell one frame
  * from the next. The stack's first line is dropped — it only repeats the
  * message the reason already opens with.
+ *
+ * Scrubbed AGAIN at the end, because this function decodes. The stack arrives
+ * already scrubbed, but V8 writes a frame's file as a `file://` URL and
+ * `readableFrame` turns each one back into a path — so a resolved value that
+ * stood in a path reached the scrub percent-encoded, matched nothing, and was
+ * handed back raw in the text the reader gets. A script that writes and imports
+ * a file named after the value is one line, and `Bearer sk-live-…` needs only
+ * the space. Whatever decodes after a scrub has to scrub again.
  */
-function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
+function scriptFrames(
+  stack: string | undefined,
+  roots: readonly string[],
+  secrets: readonly FlowScriptSecret[]
+): string {
   if (!stack) return "";
   const frames: string[] = [];
   let dropped = 0;
@@ -250,7 +264,7 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
   }
   if (frames.length === 0) return "";
   if (dropped > 0) frames.push(`    … ${dropped} more frame${dropped === 1 ? "" : "s"}`);
-  return `\n${frames.join("\n")}`;
+  return scrubScriptText(`\n${frames.join("\n")}`, secrets);
 }
 
 /**

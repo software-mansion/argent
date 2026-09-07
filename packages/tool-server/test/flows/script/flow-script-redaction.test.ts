@@ -217,6 +217,31 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.output).toEqual({ auth: `Bearer ${SECRET.value}` });
   }, 30_000);
 
+  // The document is not redacted, and the parse VERDICT on it must not quote it
+  // either. One of V8's parse messages — and only one, the rest name a position
+  // — hands back a window of the text: `Unexpected token 's', "s3cr3t-tok"… is
+  // not valid JSON`. A window is a cut, so what it holds of a value is a
+  // fragment, and a fragment matches no spelling a whole-value scrub looks for.
+  it("quotes no window of the output document back", async () => {
+    const ws = workspace();
+    const script = ws.write("bad-output.sh", `printf '%s' "$API_KEY" > "$ARGENT_OUTPUT"`);
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { API_KEY: SECRET.value },
+      secrets: [SECRET],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(message).toContain("did not parse");
+    expect(message).toContain("is not valid JSON");
+    // The reason V8 gave and the character it stopped on both stay; the window
+    // is the only thing that goes.
+    expect(message).toContain("Unexpected token 's'");
+    expect(message).not.toContain(SECRET.value.slice(0, 6));
+  }, 30_000);
+
   // A secret cut in half by a truncation is not a secret any scrub can find:
   // what is left is a PREFIX of one, which matches nothing. The parent drops
   // that tail wherever an omission marker ends the text, and the cut that keeps
@@ -640,4 +665,104 @@ describe("flow script executor — redaction", () => {
 
     expect(result.failure?.message).toBe("{{secret:EARLY}} then {{secret:LATE}}");
   });
+});
+
+/**
+ * The scrub searches for a value's RAW bytes, so every re-encoding between the
+ * child and the report defeated it — and the encoders are the ones a
+ * verification script reaches for in one line. The values below are the shapes
+ * the feature is documented for: a PEM key, a value holding a quote and a
+ * backslash, and one holding nothing but a SPACE, which is the brief's own
+ * worked run-time value (`--env "AUTH=Bearer abc"`).
+ *
+ * Each case runs beside `FLAT`, whose value no encoder touches: that control
+ * redacted correctly before the fix and is what isolates the encoding as the
+ * cause rather than the scrub being off altogether.
+ */
+describe("flow script executor — redaction through an encoder", () => {
+  const FLAT: FlowScriptSecret = { name: "FLAT", value: "sk-live-9d3f-topvalue" };
+  const PEM: FlowScriptSecret = {
+    name: "PEM",
+    value:
+      "-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8AgEAAkEA1234\n-----END PRIVATE KEY-----",
+  };
+  const QUOTED: FlowScriptSecret = { name: "QUOTED", value: 'pa"ss\\word' };
+  const SPACED: FlowScriptSecret = { name: "SPACED", value: "Bearer sk-live-9d3f" };
+  const ALL = [FLAT, PEM, QUOTED, SPACED];
+
+  /** The characters that identify the credential, apart from a PEM's public armour. */
+  const material: Record<string, string> = {
+    FLAT: FLAT.value,
+    PEM: "MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8AgEAAkEA1234",
+    QUOTED: QUOTED.value,
+    SPACED: "sk-live-9d3f",
+  };
+
+  function expectNoValue(text: string, secret: FlowScriptSecret): void {
+    expect(text).toContain(`{{secret:${secret.name}}}`);
+    // Every fragment of the credential down to six characters, because the
+    // escaping an encoder applies is trivially reversible: leaving it is
+    // disclosure, not obfuscation.
+    const part = material[secret.name]!;
+    for (let n = part.length; n >= 6; n -= 1) {
+      for (let i = 0; i + n <= part.length; i += 1) {
+        expect(text).not.toContain(part.slice(i, i + n));
+      }
+    }
+  }
+
+  async function failWith(source: string, secret: FlowScriptSecret): Promise<string> {
+    const ws = workspace();
+    const script = ws.write("encoded.mjs", source);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: secret.value },
+      secrets: ALL,
+    });
+    expect(result.ok).toBe(false);
+    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+  }
+
+  it("replaces a value util.inspect quoted, escaped and split by line", async () => {
+    // `assert.strictEqual(process.env.K, …)` is one line, and the most likely
+    // line in a verification script. Node renders its diff with `util.inspect`,
+    // which escapes — and writes a multi-line value as one quoted chunk PER
+    // LINE, joined by `' +`, so no whole-value match survives the glue.
+    for (const secret of ALL) {
+      const text = await failWith(
+        `import assert from "node:assert";
+         assert.strictEqual(process.env.K, "expected-value");`,
+        secret
+      );
+      expectNoValue(text, secret);
+    }
+  }, 60_000);
+
+  it("replaces a value the runner's own JSON encoder wrote", async () => {
+    // Anything thrown that is not an `Error` message goes through the runner's
+    // `describeThrown`, so an object `cause` — the idiomatic way to carry a
+    // failed request's detail — arrives JSON-escaped.
+    for (const secret of ALL) {
+      const text = await failWith(
+        `throw new Error("request failed", { cause: { status: 401, key: process.env.K } });`,
+        secret
+      );
+      expectNoValue(text, secret);
+    }
+  }, 60_000);
+
+  it("replaces a value a URL percent-encoded, and one it wrote a space of as +", async () => {
+    // A plain space is enough here, which is what puts this well past
+    // "special characters": `URLSearchParams` writes one as `+`.
+    for (const secret of ALL) {
+      const text = await failWith(
+        `const u = new URL("https://api.example.com/x");
+         u.searchParams.set("t", process.env.K);
+         throw new Error("call failed: " + u.toString());`,
+        secret
+      );
+      expectNoValue(text, secret);
+    }
+  }, 60_000);
 });

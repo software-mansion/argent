@@ -1384,6 +1384,98 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
 }
 
 /**
+ * What an ENCODER between the child and this report wrote the value as.
+ *
+ * The scrub searches for the value's raw bytes, so every re-encoding on the way
+ * here defeats it — and the encoders in the path are ordinary ones a
+ * verification script reaches for in one line. Each of these was reproduced end
+ * to end, against a control with a value holding nothing an encoder touches:
+ *
+ *   - `assert.strictEqual(process.env.K, …)` renders its diff with
+ *     `util.inspect`, which quotes and escapes;
+ *   - the runner's own `describeThrown` JSON-encodes anything thrown that is
+ *     not an `Error` message, so `throw { key }` and an object `cause` arrive
+ *     escaped;
+ *   - `new URL(…).searchParams.set("t", value)` percent-encodes, and writes a
+ *     PLAIN SPACE as `+` — which is why this is not a special-characters case:
+ *     the brief's own worked run-time value is `--env "AUTH=Bearer abc"`.
+ *
+ * The escaping is trivially reversible, so leaving it is disclosure rather than
+ * obfuscation. The reasoning already existed for one character: the `env`
+ * resolver refuses a value holding a NUL because Node quotes it back escaped
+ * "so the scrub — which searches for the raw bytes — finds nothing". It was
+ * never carried past NUL to `\n`, `"`, `\`, a tab, or a space.
+ *
+ * Every spelling is derived by the REAL encoder wherever there is one, so a
+ * rule that differs from a hand-written table — `URLSearchParams` writing `+`
+ * for a space and `%27` for an apostrophe where `encodeURIComponent` writes
+ * neither — cannot drift apart from it.
+ *
+ * The LINES of a multi-line value are spellings of their own, because
+ * `util.inspect` writes a long one as one quoted chunk per line joined by
+ * `' +`, and no whole-value match survives the glue between them. A PEM key and
+ * a service-account blob are the shapes this feature is documented for. It is
+ * also what puts a short line of such a value into the scrub — the same
+ * over-redaction {@link withTrimmedSpellings} accepts, and the same answer:
+ * over-redacting a step's own text is the lesser fault against reporting a
+ * credential in the clear. A single-line value, which is nearly all of them,
+ * gains no line spelling at all.
+ *
+ * A value the URI encoders refuse — a lone surrogate is the one way in — simply
+ * contributes no spelling for them. Throwing here would take down the verdict
+ * the redaction exists to make safe.
+ */
+function encodedSpellings(value: string): string[] {
+  const spellings: string[] = [];
+  // The body a JSON encoder writes, which is also `util.inspect`'s
+  // double-quoted form; then its single-quoted form, which is what inspect
+  // prefers and differs in exactly the two quotes.
+  const json = JSON.stringify(value).slice(1, -1);
+  spellings.push(json, json.replace(/\\"/g, '"').replace(/'/g, "\\'"));
+  try {
+    spellings.push(encodeURIComponent(value));
+    spellings.push(new URLSearchParams([["", value]]).toString().slice(1));
+  } catch {
+    // A lone surrogate. The raw value and every other spelling still stand.
+  }
+  if (value.includes("\n")) spellings.push(...value.split("\n"));
+  return spellings;
+}
+
+/**
+ * Every spelling of every resolved value this report may hold, for one scrub.
+ *
+ * {@link scrubSecretValues} takes them as one list and orders it longest first,
+ * so a value that contains another — or a spelling that contains the value it
+ * came from — is still taken whole.
+ */
+function scriptSecretSpellings(raw: readonly FlowScriptSecret[]): FlowScriptSecret[] {
+  const spellings = withTrimmedSpellings(raw);
+  for (const secret of raw) {
+    for (const value of encodedSpellings(secret.value)) {
+      if (value.length === 0 || spellings.some((seen) => seen.value === value)) continue;
+      spellings.push({ name: secret.name, value });
+    }
+  }
+  return spellings;
+}
+
+/**
+ * One text of a failed script step with every resolved value replaced, in every
+ * spelling this report can hold one in.
+ *
+ * Exported for the one caller that DECODES after the scrub has run:
+ * `scriptFrames` reads the already-scrubbed stack and turns each `file://…`
+ * frame back into a path, so a value that stood in a path reached the scrub
+ * percent-encoded and reached the reader raw. Whatever decodes has to scrub
+ * again, and this is that scrub.
+ */
+export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
+  if (secrets.length === 0) return text;
+  return scrubSecretValues(text, scriptSecretSpellings(secrets));
+}
+
+/**
  * A failure message is clamped by the child, the only side that can bound what
  * crosses the channel, and the child has no secret list — so a value straddling
  * the cut leaves a prefix that a whole-value replacement never matches. That
@@ -1401,7 +1493,7 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
  * leaving it out of the scrub is also what stops a count reading `2{{secret:…}}43`.
  */
 function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
-  const secrets = withTrimmedSpellings(raw);
+  const secrets = scriptSecretSpellings(raw);
   const omission = OMISSION_RE.exec(text);
   if (!omission) return scrubSecretValues(text, secrets);
   const head = scrubSecretValues(text.slice(0, omission.index), secrets);

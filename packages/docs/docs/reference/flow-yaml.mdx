@@ -445,9 +445,11 @@ The spelling is exact: lowercase `secret`, a colon, a name, no spaces. `{{ secre
 
 When a `script` step fails, Argent replaces each value that a `{{secret:NAME}}` resolved to with that same placeholder, in the message and the stack of the failure. So a script that throws `"401 from " + process.env.API_URL + " for key " + process.env.API_KEY` under the map above reports `401 from https://api.example.com for key {{secret:API_KEY}}`. `API_URL` is not a secret and reads as written.
 
+A value that an encoder rewrote on the way into that text is replaced too. `node:assert` prints its diff through `util.inspect`, a thrown object goes through a JSON encoder, and a URL percent-encodes what you put in a query — each writes the value differently, and each is still replaced. A multi-line value, such as a PEM key, is replaced line by line, because `util.inspect` writes one quoted chunk per line.
+
 Every other `env` value is flow data. It appears as written in the report, in the file that `flow-finish-recording` returns and in `echo` output. Argent does not check whether a plaintext value is a credential, and does not compare an `env` value against the secrets it can resolve. Write a credential as `{{secret:NAME}}`.
 
-The document a script returns is **not** redacted. Do not put a credential or another sensitive value in it. Hand a later step a derived value instead.
+The document a script returns is **not** redacted. Do not put a credential or another sensitive value in it. Hand a later step a derived value instead. A document that does not parse is reported by its reason and the character it stopped on; Argent does not quote the text back.
 
 ### The environment of the tool-server
 
