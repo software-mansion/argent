@@ -2044,14 +2044,21 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // No `ios-remote` arm: a remote sim never reaches the probe, assertSupported
-  // throws first. If appleRemote is added, both tables need that arm.
-  it("cannot be reached on ios-remote: await-ui-element refuses the device", () => {
+  // The wait tool itself now accepts a remote sim: it polls the same AX tree
+  // through describeIos, which the ax-service blueprint routes over the
+  // sim-remote tunnel. The recorder's tables still have no `ios-remote` arm
+  // (FLOW_TREE_SOURCES in flow-tree.ts, REPLAY_TREE_SOURCES in flow-add-step.ts),
+  // so the re-probe now REACHES them — the flow tools declare no capability at
+  // all, so nothing gates a remote udid out. `fetchTree` throws its
+  // not-supported error there, the recorder catches it, and the step records
+  // with the UNKNOWN-verdict warning rather than a known-bad one. Giving both
+  // tables an `ios-remote` arm is what would let the re-probe actually verify.
+  it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
-    expect(tool.capability?.appleRemote).toBeUndefined();
+    expect(tool.capability?.appleRemote).toEqual({ simulator: true });
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
-    ).toThrow(/not supported on ios-remote/);
+    ).not.toThrow();
   });
 });
 
