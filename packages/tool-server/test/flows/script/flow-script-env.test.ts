@@ -325,6 +325,35 @@ describe("environment shape rules", () => {
     await expect(runFlow("bad")).rejects.toThrow(/NODE_OPTIONS/);
   });
 
+  it("refuses a YAML tag that builds something the entry walk cannot read", async () => {
+    // `!!omap`, `!!set` and `!!timestamp` resolve to a Map, a Set and a Date:
+    // an object, not an array, and holding no entries `Object.entries` can see.
+    // Left to the walk each reports zero problems, the script runs with none of
+    // the author's values, and the next recorded step serializes it back as
+    // `env: {}` — deleting them from the file. None of the three had a case.
+    await flow("omap", "env: !!omap\n  - A: one\nsteps:\n  - echo: hi\n");
+    await expect(runFlow("omap")).rejects.toThrow(/a Map \(`!!omap`\).*plain map/s);
+
+    await flow("set", "env: !!set\n  ? A\nsteps:\n  - echo: hi\n");
+    await expect(runFlow("set")).rejects.toThrow(/a Set \(`!!set`\).*plain map/s);
+
+    await flow("stamp", "env: !!timestamp 2020-01-01\nsteps:\n  - echo: hi\n");
+    await expect(runFlow("stamp")).rejects.toThrow(/a Date \(`!!timestamp`\).*plain map/s);
+  });
+
+  it("refuses a NUL character in an authored value, naming the key", async () => {
+    // The operating system carries an environment as NUL-terminated strings, so
+    // Node refuses the whole fork over one and the step would then error on a
+    // message about the spawn rather than about the map that caused it.
+    await write("scripts/probe.mjs", "");
+    await flow(
+      "nul",
+      'steps:\n  - script: { path: ../../scripts/probe.mjs, env: { TOK: "a\\0b" } }\n'
+    );
+
+    await expect(runFlow("nul")).rejects.toThrow(/holds a NUL character in the value of TOK/);
+  });
+
   it("refuses a reserved name in a step's env", async () => {
     await write("scripts/probe.mjs", "");
     await flow(
@@ -580,6 +609,40 @@ describe("the host allowlist extension", () => {
     } finally {
       delete process.env.PROJECT_DB_URL;
       delete process.env.ARGENT_AUTH_TOKEN;
+    }
+  });
+
+  it("reads the list from the global scope as well, and takes the union", async () => {
+    // The key is read from BOTH scopes because it names a project input rather
+    // than a limit on the host, and the two are merged by union. `scopeTempHome`
+    // puts the global file under a home of this test's own, so neither is the
+    // developer's. Nothing pinned either half.
+    process.env.FROM_GLOBAL_CFG = "global-value";
+    process.env.FROM_PROJECT_CFG = "project-value";
+    try {
+      await write(
+        ".argent/config.json",
+        JSON.stringify({ scripts: { env: { allow: ["FROM_PROJECT_CFG"] } } })
+      );
+      await fs.mkdir(path.join(os.homedir(), ".argent"), { recursive: true });
+      await fs.writeFile(
+        path.join(os.homedir(), ".argent", "config.json"),
+        JSON.stringify({ scripts: { env: { allow: ["FROM_GLOBAL_CFG"] } } }),
+        "utf8"
+      );
+      await write("scripts/probe.mjs", reporter("scopes", ["FROM_GLOBAL_CFG", "FROM_PROJECT_CFG"]));
+      await flow("scopes", "steps:\n  - script: { path: ../../scripts/probe.mjs }\n");
+
+      const { result } = await runFlow("scopes");
+
+      expect(result.ok).toBe(true);
+      expect(seen("scopes")).toEqual({
+        FROM_GLOBAL_CFG: "global-value",
+        FROM_PROJECT_CFG: "project-value",
+      });
+    } finally {
+      delete process.env.FROM_GLOBAL_CFG;
+      delete process.env.FROM_PROJECT_CFG;
     }
   });
 
