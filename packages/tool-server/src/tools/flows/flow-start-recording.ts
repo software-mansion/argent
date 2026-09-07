@@ -182,12 +182,12 @@ costs the finish the cross-tree verdicts anchored to them.`,
         // executionPrerequisite documents a fragment. Built here, inside the
         // lock, because the `env:` it keeps is read off the file this section
         // is about to replace. Client mode has no file on this host to read.
+        const kept = persist === "host" ? await keptFlowEnv(filePath) : undefined;
         const flow: FlowFile = {
           executionPrerequisite: params.executionPrerequisite ?? "",
-          ...(persist === "host" ? { env: await keptFlowEnv(filePath) } : {}),
+          ...(kept ? { env: kept } : {}),
           steps: [],
         };
-        if (flow.env === undefined) delete flow.env;
         validateFlow(flow);
         const flowFile = serializeFlow(flow);
 
