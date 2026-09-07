@@ -345,6 +345,28 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value);
   });
 
+  // A replacement is not a shortening. The child applies the ceiling — it is
+  // the only side that can bound what crosses the channel — and it has no
+  // secret list, so the scrub runs after the bound. A value SHORTER than its
+  // own placeholder therefore grows the text: a one-character PIN turned a
+  // message already clamped to 8 KB into a 114 KB step reason, which is what
+  // the JSON report holds and what an agent reads.
+  it("keeps a message the scrub grew inside the ceiling the child applied", async () => {
+    const pin: FlowScriptSecret = { name: "PIN", value: "7" };
+    const ws = workspace();
+    const script = ws.write("blowup.mjs", `throw new Error("7".repeat(20000) + " tail");`);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { PIN: pin.value },
+      secrets: [pin],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(message).toContain("{{secret:PIN}}");
+    expect(message.length).toBeLessThanOrEqual(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
+  }, 30_000);
+
   // The failure text is the only place a resolved value is replaced. A passing
   // step's document is the script's answer, and a later step reads it for the
   // value it holds — `{{secret:NAME}}` in its place is a dead string. The docs

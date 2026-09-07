@@ -835,7 +835,11 @@ export class FlowScriptExecutor {
       return emptyResult(
         {
           kind: "spawn",
-          message: redactTruncated(spawnFailureMessage(err, env), request.secrets ?? []),
+          message: redactBounded(
+            spawnFailureMessage(err, env),
+            request.secrets ?? [],
+            SCRIPT_MAX_FAILURE_MESSAGE_CHARS
+          ),
         },
         { notes, durationMs: Date.now() - startedAt }
       );
@@ -1111,8 +1115,10 @@ function redactSecrets(
     ...verdict,
     failure: {
       ...failure,
-      message: redactTruncated(failure.message, secrets),
-      ...(failure.stack ? { stack: redactTruncated(failure.stack, secrets) } : {}),
+      message: redactBounded(failure.message, secrets, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
+      ...(failure.stack
+        ? { stack: redactBounded(failure.stack, secrets, SCRIPT_MAX_FAILURE_STACK_CHARS) }
+        : {}),
     },
   };
 }
@@ -1135,6 +1141,26 @@ function withStderrLine(
       message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
+}
+
+/**
+ * The scrub, then the ceiling AGAIN.
+ *
+ * A replacement is not a shortening: every occurrence of a value becomes a
+ * `{{secret:NAME}}` marker, so a value shorter than its own placeholder GROWS
+ * the text. The child applies the ceiling, because it is the only side that can
+ * bound what crosses the channel, and it has no secret list — so the scrub runs
+ * after the bound and can carry the result far past it. A one-character PIN in
+ * a message clamped to 8 KB came back as a 114 KB step reason, which is what
+ * the JSON report holds and what an agent reads.
+ *
+ * Re-applying the ceiling can only cut text that has already been scrubbed, so
+ * nothing a cut leaves behind is a secret; a marker cut in half is a
+ * placeholder, not a value. The count the second marker carries is of the
+ * scrubbed text, which is the text this report is a report of.
+ */
+function redactBounded(text: string, secrets: readonly FlowScriptSecret[], max: number): string {
+  return clampText(redactTruncated(text, secrets), max);
 }
 
 function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
