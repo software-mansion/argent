@@ -5,7 +5,7 @@ description: Interact with an iOS simulator (NOT physical iPhones), Android emul
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch on its shape, so you use the same tool names on every platform. A known prefix wins first — `chromium-cdp-` → Chromium (CDP) app, `remote:` → remote iOS simulator — otherwise a bare UUID → local iOS simulator and anything else → Android adb serial.
+All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
 
 **Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
 
