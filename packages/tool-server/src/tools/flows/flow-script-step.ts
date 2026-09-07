@@ -305,9 +305,12 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  * What dash writes there is the shell it is, or the script it is running: the
  * name ends in `sh`, either as the whole name (`sh`, `bash`, `dash`, `ksh`,
  * `zsh`, `ash`) or as the extension a `.sh` file carries. That is what the
- * pattern asks for, and it is the fact a fixture path does not have. A script
- * named without an extension — `/usr/local/bin/seed: 3: adb: not found` — is
- * missed by it, and a missed note is the safe direction.
+ * pattern asks for, and it is the fact a fixture path does not have. What comes
+ * BEFORE the extension is not restricted — a script may be named
+ * `run tests.sh`, `seed(1).sh` or in a script other than Latin, and each of
+ * those is an ordinary name. A script named with no extension at all —
+ * `/usr/local/bin/seed: 3: adb: not found` — is missed, and a missed note is
+ * the safe direction.
  *
  * The end anchor is what makes the phrase safe to accept at all: `for: command
  * not found never appeared in it` has the words but keeps going. Nothing caps
@@ -316,7 +319,7 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  */
 const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
   /^[^\n:]+: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
-  /^(?:[^\n:]*[/\\])?(?:[A-Za-z0-9_.+-]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^[^\n:]+:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
   // cmd.exe writes TWO lines, and both are asked for, ending the failure text
   // the way the three signatures above do. The opening quote alone let any
@@ -340,11 +343,17 @@ const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
  * is still not matched at all: that is also how a missing data file reads.
  *
  * What stands between the two words is what Node writes there: ONE token with
- * no spaces in it, or a PATH, which may hold spaces and is recognised by the
- * character it opens with. Anything else is a sentence — `could not spawn the
- * seeder because the fixture directory is missing ENOENT` — and a sentence is
- * not what Node writes. Excluding `:`, `;` and `,` is not enough on its own,
- * since a sentence carries none of them either.
+ * no spaces in it, or a path that OPENS with a separator — `/`, `\`, `~`, `.`
+ * or a drive letter — which may then hold spaces. Anything else is a sentence
+ * — `could not spawn the seeder because the fixture directory is missing
+ * ENOENT` — and a sentence is not what Node writes. Excluding `:`, `;` and `,`
+ * is not enough on its own, since a sentence carries none of them either.
+ *
+ * The opening character is what separates the two, so what is missed is a name
+ * holding a space that does NOT open with one: a bare `spawn Android Studio
+ * ENOENT`, or a relative path whose first segment has a space in it. There is
+ * nothing in either to tell it from a sentence, and a missed note is the safe
+ * direction.
  */
 const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+) ENOENT/;
 

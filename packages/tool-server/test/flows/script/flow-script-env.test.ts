@@ -1020,15 +1020,21 @@ describe("the shell-environment note", () => {
       "scripts/http-part.mjs",
       `throw new Error("seed failed for api/v1/users: 404: user: not found");`
     );
+    // What comes before the `.sh` is not restricted: a script may be named with
+    // a space in it, and that is an ordinary name rather than a sentence.
+    await write("scripts/named.mjs", `throw new Error("/tmp/run tests.sh: 3: adb: not found");`);
     await flow("dash-line", "steps:\n  - script: { path: ../../scripts/dash.mjs }\n");
+    await flow("dash-named", "steps:\n  - script: { path: ../../scripts/named.mjs }\n");
     await flow("three-part", "steps:\n  - script: { path: ../../scripts/three-part.mjs }\n");
     await flow("http-part", "steps:\n  - script: { path: ../../scripts/http-part.mjs }\n");
 
     const dash = (await runFlow("dash-line")).result;
+    const named = (await runFlow("dash-named")).result;
     const threePart = (await runFlow("three-part")).result;
     const httpPart = (await runFlow("http-part")).result;
 
     expect(dash.steps[0].reason).toContain("A command was not found.");
+    expect(named.steps[0].reason).toContain("A command was not found.");
     expect(threePart.steps[0].reason).toContain("fixtures/orders.json");
     expect(threePart.steps[0].reason).not.toContain("A command was not found");
     expect(threePart.steps[0].reason).not.toContain("tool server");
