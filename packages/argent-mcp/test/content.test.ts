@@ -162,8 +162,17 @@ describe("toMcpContent", () => {
 });
 
 describe("screenshotDiffToMcpContent", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it("returns a context image followed by the summary text", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
@@ -323,13 +332,21 @@ describe("toMcpContent with artifact ctx", () => {
 
 describe("flowRunToMcpContent", () => {
   let originalFetch: typeof globalThis.fetch;
+  // The failure cases below drive the real materializeArtifacts, which writes
+  // under artifactsRoot() — tmpdir()/argent-artifacts unless pinned, a path no
+  // test would then own or remove.
+  let root: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalFetch = globalThis.fetch;
+    root = await mkdtemp(join(tmpdir(), "content-flow-artifacts-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
   });
 
   it("produces header and footer text blocks", async () => {
