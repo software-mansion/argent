@@ -808,6 +808,48 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to reach the emitter's FOLD path, which none of the values
+      // above do: every one of them is under 40 characters, so the two rules
+      // `serializeFlow` sets against folding — `doubleQuotedMinMultiLineLength`
+      // and `lineWidth: 0` — were guarded by the `env` cases in
+      // `flow-script-env.test.ts` alone. The serializer change is
+      // document-wide, and these fields are the rest of the document.
+      //
+      // Both values were FOUND by searching for one the folding emitter
+      // corrupts at these column positions and the non-folding one does not:
+      // a fold placed between an escaped space and an escaped newline ate the
+      // space, and where the fold lands depends on the key it sits under. Each
+      // fails at one of the two positions this case writes them to, so neither
+      // is redundant.
+      "\n".repeat(10) +
+        "a".repeat(13) +
+        "\n".repeat(8) +
+        " ".repeat(15) +
+        "a " +
+        "\n".repeat(23) +
+        "a".repeat(12) +
+        " " +
+        "\n".repeat(43) +
+        "a".repeat(27) +
+        " ".repeat(4) +
+        "a".repeat(14) +
+        " ".repeat(11) +
+        "a".repeat(12),
+      " ".repeat(11) +
+        "\n".repeat(24) +
+        " ".repeat(21) +
+        "a " +
+        "\n".repeat(50) +
+        " ".repeat(3) +
+        "\n" +
+        " ".repeat(5) +
+        "a".repeat(8) +
+        " ".repeat(13) +
+        "a".repeat(9) +
+        " ".repeat(10) +
+        "\n".repeat(14) +
+        " ".repeat(20) +
+        "\n".repeat(5),
     ];
     for (const value of values) {
       const flow: FlowFile = {
