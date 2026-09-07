@@ -1254,6 +1254,16 @@ describe("recording a script step with env", () => {
     expect(started.flowFile).toContain("steps: []");
     expect(started.message).toContain("PLAIN");
 
+    // An `env:` with nothing under it is kept the same way, and the message
+    // does not announce a list of no names.
+    await flow("empty", "env: {}\nsteps:\n  - echo: hi\n");
+    const emptyStart = (await flowStartRecordingTool.execute(
+      {},
+      { name: "empty", project_root: root }
+    )) as { message: string; flowFile: string };
+    expect(emptyStart.flowFile).toContain("env: {}");
+    expect(emptyStart.message).toBe('Started recording "empty" flow.');
+
     const added = (await flowAddScriptTool.execute(
       {},
       { name: "qa", project_root: root, path: "../../scripts/dump.mjs" }
