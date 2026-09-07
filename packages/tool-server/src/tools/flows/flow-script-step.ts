@@ -339,12 +339,14 @@ const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
  * looking for one that was there all along, at an absolute path. Bare `ENOENT`
  * is still not matched at all: that is also how a missing data file reads.
  *
- * One token between the two words, so `spawn of the seeder finished; reading
- * fixtures/orders.json failed: ENOENT` — a missing data file, the very shape
- * the paragraph above promises is not matched — no longer is. Node writes a
- * path there and never sentence punctuation.
+ * What stands between the two words is what Node writes there: ONE token with
+ * no spaces in it, or a PATH, which may hold spaces and is recognised by the
+ * character it opens with. Anything else is a sentence — `could not spawn the
+ * seeder because the fixture directory is missing ENOENT` — and a sentence is
+ * not what Node writes. Excluding `:`, `;` and `,` is not enough on its own,
+ * since a sentence carries none of them either.
  */
-const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?[^\n:;,]+ ENOENT/;
+const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+) ENOENT/;
 
 /**
  * A `.sh` says it in an exit code, not in words.

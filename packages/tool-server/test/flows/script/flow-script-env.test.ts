@@ -694,6 +694,32 @@ describe("the shell-environment note", () => {
     expect(httpPart.steps[0].reason).not.toContain("tool server");
   });
 
+  it("reads Node's own ENOENT spelling without reading a sentence holding the word", async () => {
+    // Node writes ONE token, or a path that may hold spaces, between `spawn`
+    // and `ENOENT` — never a sentence. Excluding `:`, `;` and `,` does not say
+    // that on its own, since a sentence carries none of them either.
+    await write("scripts/spawn-enoent.mjs", `throw new Error("spawnSync adb ENOENT");`);
+    await write(
+      "scripts/sentence-enoent.mjs",
+      `throw new Error("could not spawn the seeder because the fixture directory is missing ENOENT");`
+    );
+    await flow("spawn-enoent", "steps:\n  - script: { path: ../../scripts/spawn-enoent.mjs }\n");
+    await flow(
+      "sentence-enoent",
+      "steps:\n  - script: { path: ../../scripts/sentence-enoent.mjs }\n"
+    );
+
+    const spawned = (await runFlow("spawn-enoent")).result;
+    const sentence = (await runFlow("sentence-enoent")).result;
+
+    // Node raises this for a missing COMMAND and for a `cwd` that does not
+    // exist alike, so the note says both.
+    expect(spawned.steps[0].reason).toContain("A command was not found — or the working directory");
+    expect(sentence.steps[0].reason).toContain("fixture directory is missing");
+    expect(sentence.steps[0].reason).not.toContain("A command was not found");
+    expect(sentence.steps[0].reason).not.toContain("tool server");
+  });
+
   it("names the run's own PATH when the run is what set it", async () => {
     // This feature gives a flow four ways to set `PATH`. When a command then
     // fails because THAT value is wrong, the snapshot note asserts the
