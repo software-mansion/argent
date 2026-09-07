@@ -893,6 +893,55 @@ describe("parseFlow", () => {
     expect(parseFlow("\tsteps:\n  - echo: hi\n").steps).toEqual([{ kind: "echo", message: "hi" }]);
   });
 
+  it("still parses a file whose last line holds nothing but a stray whitespace character", async () => {
+    // The other half of the same edge. A character past the last line break is
+    // on a line of its own, so it is part of no value — and YAML accepts only
+    // space and tab there, reading anything else as a second top-level node at
+    // column 1. The file then failed to parse AT ALL, for every caller of
+    // parseFlow, naming a character nobody can see.
+    //
+    // A bare carriage return is the everyday way in — a CRLF file that lost one
+    // LF, or a half-applied line-ending conversion — and the trailing U+00A0 is
+    // the same paste artefact the round-trip below exists for, landing one line
+    // lower.
+    //
+    // Written as escapes, like the round trip below: the characters are
+    // invisible in a source file, and one silently reformatted is a test that
+    // stops testing anything.
+    const strays = [
+      "\r", // lone CR: a CRLF file that lost its LF
+      "\v", // vertical tab
+      "\f", // form feed
+      "\u00a0", // no-break space — what a paste out of a web UI carries
+      "\u1680",
+      "\u2028", // line separator
+      "\u202f",
+      "\u3000", // ideographic space
+      "\ufeff", // zero-width no-break space
+    ];
+    for (const stray of strays) {
+      expect(parseFlow(`steps:\n  - echo: hi\n${stray}`).steps).toEqual([
+        { kind: "echo", message: "hi" },
+      ]);
+      // Beside a space or tab, which YAML reads as indentation and which was
+      // never the failing half.
+      expect(parseFlow(`steps:\n  - echo: hi\n \t${stray}`).steps).toEqual([
+        { kind: "echo", message: "hi" },
+      ]);
+    }
+  });
+
+  it("keeps a trailing non-ASCII space in the last scalar when a stray line follows it", async () => {
+    // The two edges at once, and the case that says the trailing trim stops at
+    // the line break rather than eating everything whitespace: the value keeps
+    // the U+00A0 it was written with AND the stray line below it is dropped.
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: "abc\u00a0" } }],
+    };
+    expect(parseFlow(`${serializeFlow(flow)}\u00a0`)).toEqual(flow);
+  });
+
   it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
     // Written as escapes: the characters are invisible in a source file, and
     // one of them silently reformatted is a test that stops testing anything.

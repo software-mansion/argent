@@ -3700,18 +3700,29 @@ export function validateFlow(flow: FlowFile): void {
 
 /** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
-  // Trimmed only at the START, and only to ask whether the file holds anything.
+  // Trimmed at the START, and at the trailing edge only back to the last line
+  // break. What is left of the trim is what nothing can be part of a value.
   //
-  // The TRAILING edge is where the loss was: `String.prototype.trim` strips the
+  // The trailing edge is where the loss was: `String.prototype.trim` strips the
   // whole Unicode whitespace class and YAML's plain scalars strip only the ASCII
   // one, so a value ending in U+00A0 — the shape a token pasted out of a web UI
   // has — lost that character whenever it was the last scalar in the file, which
-  // is where the serializer puts a recorded step's `env` value. Nothing at the
-  // leading edge can be part of a value, because the top level of a flow file is
-  // a map, so the leading trim costs nothing and keeps what it always covered:
-  // a file whose first line opens with a TAB, which YAML refuses as indentation
-  // and this accepted before.
-  const body = content.replace(/^\s+/, "");
+  // is where the serializer puts a recorded step's `env` value. That value sits
+  // on the last CONTENT line, so stopping at the line break keeps it.
+  //
+  // What is past that break is a line holding nothing but whitespace, and YAML
+  // accepts only space and tab there — so a lone U+00A0, a stray carriage return
+  // from a half-applied line-ending conversion, a vertical tab or a BOM read as
+  // a second top-level node at column 1 and the file stopped parsing AT ALL:
+  // not the `env:` block, the whole thing, for every caller of this function.
+  // The paste artefact the line above exists for is the same artefact that
+  // lands there.
+  //
+  // Nothing at the leading edge can be part of a value either, because the top
+  // level of a flow file is a map, so that trim costs nothing and keeps what it
+  // always covered: a file whose first line opens with a TAB, which YAML refuses
+  // as indentation and this accepted before.
+  const body = content.replace(/^\s+/, "").replace(/\n\s+$/, "\n");
   if (body.length === 0) {
     return { executionPrerequisite: "", steps: [] };
   }
