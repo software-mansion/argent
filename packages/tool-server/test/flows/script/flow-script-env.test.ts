@@ -953,7 +953,7 @@ describe("the shell-environment note", () => {
 });
 
 describe("what is NOT hidden", () => {
-  it("leaves a passing step's report and its output document untouched", async () => {
+  it("leaves a passing step's report untouched", async () => {
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write("scripts/pass.mjs", `output.token = process.env.API_KEY;`);
     await flow(
@@ -971,6 +971,34 @@ describe("what is NOT hidden", () => {
     // compare an echo message, a selector or a tool argument against env values.
     expect(result.steps[1].message).toBe("Calling https://api.example.com");
     expect(JSON.stringify(result.steps[0])).not.toContain("…");
+  });
+
+  it("returns the output document as the script wrote it, resolved secret and all", async () => {
+    // The document is the script's ANSWER, and a later step reads it for the
+    // value it holds — `{{secret:NAME}}` in its place is a dead string. The
+    // reference and the flow-authoring skill say not to put a credential there
+    // instead.
+    //
+    // Asked through `flow-add-script`, because that is the only channel that
+    // hands a document back: a run's `StepReport` carries none for a script
+    // step, so a case that writes `output.token` inside a RUN and then reads
+    // the report asserts nothing either way.
+    await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
+    await write("scripts/doc.mjs", `output.token = process.env.API_KEY;`);
+    await flowStartRecordingTool.execute({}, { name: "document", project_root: root });
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "document",
+        project_root: root,
+        path: "../../scripts/doc.mjs",
+        env: { API_KEY: "{{secret:API_KEY}}" },
+      }
+    )) as { status: string; outputJson?: string };
+
+    expect(added.status).toBe("pass");
+    expect(added.outputJson).toBe(JSON.stringify({ token: "sk-live-9d3f0a1b" }));
   });
 
   it("proceeds when a plaintext env value equals a value in the secret chain", async () => {
