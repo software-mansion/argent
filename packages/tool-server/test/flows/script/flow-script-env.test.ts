@@ -1042,6 +1042,64 @@ describe("the shell-environment note", () => {
     expect(httpPart.steps[0].reason).not.toContain("tool server");
   });
 
+  it("asks for a shell writer in the longer wording too, not only in dash's", async () => {
+    // `command not found` reads as an English sentence, which made it look like
+    // it carried its own proof. It does not: `<a>: <b>: command not found` is a
+    // two-part application error just as readily as `not found` is, and a
+    // seeder naming the tenant it could not find a seed for earned the note and
+    // a confident instruction to restart a shared tool server with it.
+    await write("scripts/tenant.mjs", `throw new Error("tenant acme: seed: command not found");`);
+    // zsh's wording puts the phrase first and had no writer constraint either.
+    await write("scripts/first.mjs", `throw new Error("tenant acme: command not found: seed");`);
+    // The shells themselves, with and without the line number bash omits when
+    // it is not running a file — which is what a bare `execSync` gives it.
+    await write("scripts/bare.mjs", `throw new Error("sh: adb: command not found");`);
+    await write(
+      "scripts/lined.mjs",
+      `throw new Error("/tmp/run.sh: line 3: adb: command not found");`
+    );
+    await write("scripts/zsh.mjs", `throw new Error("zsh:1: command not found: adb");`);
+    for (const name of ["tenant", "first", "bare", "lined", "zsh"]) {
+      await flow(name, `steps:\n  - script: { path: ../../scripts/${name}.mjs }\n`);
+    }
+
+    const reason = async (name: string) => (await runFlow(name)).result.steps[0].reason ?? "";
+
+    expect(await reason("tenant")).not.toContain("A command was not found");
+    expect(await reason("tenant")).not.toContain("tool server");
+    expect(await reason("first")).not.toContain("A command was not found");
+    expect(await reason("first")).not.toContain("tool server");
+    expect(await reason("bare")).toContain("A command was not found.");
+    expect(await reason("lined")).toContain("A command was not found.");
+    expect(await reason("zsh")).toContain("A command was not found.");
+  });
+
+  it("says a shell's words may be the far end's, and does not say it of Node's", async () => {
+    // `adb shell` and `ssh` hand back the far end's own line unchanged, so a
+    // seeding or deploy step reports a command missing on a DEVICE or a build
+    // host in the exact words a local shell uses. Every remedy the note carries
+    // is about this machine, and restarting a shared tool server is the most
+    // disruptive of them. Nothing in the text separates the two, so the note
+    // names the other end rather than picking.
+    await write(
+      "scripts/relayed.mjs",
+      `throw new Error("Command failed: adb shell pm list packages\\n/system/bin/sh: pm: command not found\\n");`
+    );
+    // Node's own spelling cannot have been relayed: Node raised it here, for a
+    // child it was spawning here.
+    await write("scripts/local-enoent.mjs", `throw new Error("spawnSync adb ENOENT");`);
+    await flow("relayed", "steps:\n  - script: { path: ../../scripts/relayed.mjs }\n");
+    await flow("local-enoent", "steps:\n  - script: { path: ../../scripts/local-enoent.mjs }\n");
+
+    const relayed = (await runFlow("relayed")).result.steps[0].reason ?? "";
+    const local = (await runFlow("local-enoent")).result.steps[0].reason ?? "";
+
+    expect(relayed).toContain("A command was not found.");
+    expect(relayed).toContain("on the OTHER end in these same words");
+    expect(local).toContain("A command was not found — or the working directory");
+    expect(local).not.toContain("OTHER end");
+  });
+
   it("reads Node's own ENOENT spelling without reading a sentence holding the word", async () => {
     // Node writes ONE token, or a path that may hold spaces, between `spawn`
     // and `ENOENT` — never a sentence. Excluding `:`, `;` and `,` does not say

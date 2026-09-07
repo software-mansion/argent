@@ -312,15 +312,25 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  * `/usr/local/bin/seed: 3: adb: not found` — is missed, and a missed note is
  * the safe direction.
  *
+ * EVERY signature asks for that writer, not only dash's. The longer phrase
+ * reads as an English sentence, which made it look like it carried its own
+ * proof — but `command not found` is a two-part application error just as
+ * readily as `not found` is: `tenant acme: seed: command not found` is a seeder
+ * naming the tenant it could not find a seed for, and it earned the note and
+ * the instruction with it. The line number does not save the `command not
+ * found` wordings either, because bash omits it whenever it is not running a
+ * file, which is what a bare `execSync` gives it. The writer is the one field
+ * that separates a shell from an application in all three.
+ *
  * The end anchor is what makes the phrase safe to accept at all: `for: command
  * not found never appeared in it` has the words but keeps going. Nothing caps
  * how long the line may be, either — bash prefixes the failing script's own
  * path, and a deep enough checkout would push a genuine miss past a fixed cap.
  */
 const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
-  /^[^\n:]+: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
-  /^[^\n:]+:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
   // cmd.exe writes TWO lines, and both are asked for, ending the failure text
   // the way the three signatures above do. The opening quote alone let any
   // sentence QUOTING the message match — `AssertionError: 'foo' is not
@@ -444,6 +454,22 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
             "which Node reports the same way. "
           : null;
   if (what === null) return null;
+  // Which machine's shell said it is not something the wording answers. `adb
+  // shell` and `ssh` hand back the far end's own line unchanged, so a seeding
+  // or deploy step reports a command missing on a device or a build host in the
+  // exact words a local shell uses — and every remedy below is about THIS
+  // machine, with restarting a shared tool server the most disruptive of them.
+  // Nothing in the text separates the two, so the note says so rather than
+  // picking; a reader who ran the command locally reads past one clause.
+  //
+  // Only where a shell is what wrote the words. Node's `spawn … ENOENT` is
+  // Node's own, raised here for a child it was spawning here, and a bare exit
+  // 127 with no reason is this run's own bash — neither can have been relayed.
+  const relayed = bash127 !== null ? saysCommandNotFound(wrote ?? "") : saysCommandNotFound(text);
+  const whose = relayed
+    ? " A shell reached through `adb shell` or `ssh` reports a command missing on the OTHER " +
+      "end in these same words; nothing here changes that one."
+    : "";
   const ownPath = pathEnvName(env);
   if (ownPath !== undefined) {
     // The NAME, never the value. This map is the RESOLVED one, so a
@@ -457,7 +483,7 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
     return (
       `${what}This run sets \`${ownPath}\` itself, through an \`env\` value, and that value — ` +
       "not the tool server's environment — is the whole search path the command was looked up " +
-      "in. Widen it, or pass an absolute path."
+      `in. Widen it, or pass an absolute path.${whose}`
     );
   }
   return (
@@ -465,7 +491,7 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
     "`export` made later never reaches a script. `PATH` is already copied from that snapshot, " +
     "so `scripts.env.allow` cannot widen it — that key only adds NAMES to copy. Restart the " +
     "tool server to take your current environment, or pass an absolute path through the " +
-    "step's `env`."
+    `step's \`env\`.${whose}`
   );
 }
 
