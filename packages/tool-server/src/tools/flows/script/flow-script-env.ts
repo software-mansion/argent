@@ -13,10 +13,10 @@
 import type { SecretSourceOptions } from "@argent/configuration-core";
 import { resolveSecretPlaceholders } from "../../../utils/secrets";
 import {
-  BASH_EXCHANGE_ENV_NAMES,
   PROTO_ENV_NAME,
   reservedScriptEnvName,
   reservedScriptEnvNamesForMessage,
+  reservedScriptEnvReason,
   SCRIPT_ENV_NAME_PATTERN,
   type FlowScriptSecret,
 } from "./flow-script-executor";
@@ -73,16 +73,8 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
     }
     const reserved = reservedScriptEnvName(name);
     if (reserved) {
-      // The two bash exchange names are named apart from the rest, because
-      // "steers the runner's own process" is true of them in a way an author
-      // cannot see: they are FILES a `.sh` reads and writes, refused whichever
-      // language this step runs, since a flow-level map applies to every step.
-      const why = BASH_EXCHANGE_ENV_NAMES.includes(reserved)
-        ? "names the file a `.sh` step exchanges its output document or its failure reason " +
-          "through, so argent sets it and a script may not"
-        : "steers the runner's own process";
       return (
-        `holds ${reserved}, which ${why} and cannot be set for a ` +
+        `holds ${reserved}, which ${reservedScriptEnvReason(reserved)} and cannot be set for a ` +
         `script (reserved names: ${reservedScriptEnvNamesForMessage()})`
       );
     }

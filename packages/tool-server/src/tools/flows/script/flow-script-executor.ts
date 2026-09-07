@@ -92,10 +92,21 @@ const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
 const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
 
 /**
- * The two reserved names that are a bash FILE rather than a runner control, so
- * a refusal can say which kind of thing the author just tried to set.
+ * Why a reserved name is reserved, as a clause reading after it — `holds
+ * ARGENT_OUTPUT, which ${reason} and cannot be set for a script`.
+ *
+ * The answer rather than the table it is read off: the two bash exchange names
+ * are a FILE the runner reads and writes, not a control over its own process,
+ * and an author cannot see the difference from the name. Deciding it here keeps
+ * the reason beside the list that fixes it — a name added to
+ * `RESERVED_ENV_NAMES` is a name this function already answers for.
  */
-export const BASH_EXCHANGE_ENV_NAMES: readonly string[] = [BASH_OUTPUT_ENV, BASH_REASON_ENV];
+export function reservedScriptEnvReason(name: string): string {
+  return name === BASH_OUTPUT_ENV || name === BASH_REASON_ENV
+    ? "names the file a `.sh` step exchanges its output document or its failure reason " +
+        "through, so argent sets it and a script may not"
+    : "steers the runner's own process";
+}
 
 /**
  * One private directory per bash step, under `os.tmpdir()` — 0700 on POSIX
