@@ -81,6 +81,16 @@ on:
       # through Git for Windows rather than through a POSIX spawn.
       - "packages/tool-server/test/flows/script/flow-script-env.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-environment.test.ts"
+      # The tools `flow-script-env.test.ts` drives, for the same reason as the
+      # helpers below: editing one changes what this job asserts without
+      # touching any file listed above it. The env cases there record through
+      # all three.
+      - "packages/tool-server/src/tools/flows/flow-start-recording.ts"
+      - "packages/tool-server/src/tools/flows/flow-finish-recording.ts"
+      - "packages/tool-server/src/tools/flows/flow-insert-echo.ts"
+      # The barrel `flow-script-environment.test.ts` reads the script bounds and
+      # the env-name rule through.
+      - "packages/configuration-core/src/index.ts"
       # The helpers the test files above import: editing one changes what this
       # job runs without touching any file listed above it.
       - "packages/tool-server/test/helpers/host-bash.ts"
