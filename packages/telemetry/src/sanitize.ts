@@ -9,6 +9,7 @@ import {
 } from "@argent/registry";
 import {
   DEBUGGER_TOOL_OUTCOMES,
+  DEVICE_KINDS,
   PLATFORMS,
   type EventName,
   type EventPropertyMap,
@@ -53,6 +54,7 @@ const arrayOf =
 
 const TOOL_NAME = matches(/^[a-z][a-z0-9_-]{0,63}$/, 64);
 const PLATFORM = oneOf(PLATFORMS);
+const DEVICE_KIND = oneOf(DEVICE_KINDS);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   36
@@ -224,6 +226,7 @@ export const ALLOWED: ValidatorMap = {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     ...AI_TELEMETRY,
   },
   "tool:complete": {
@@ -231,6 +234,7 @@ export const ALLOWED: ValidatorMap = {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     duration_ms: DURATION_MS,
     ...AI_TELEMETRY,
   },
@@ -239,6 +243,7 @@ export const ALLOWED: ValidatorMap = {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     duration_ms: DURATION_MS,
     // Emit side sends only names declared in the tool's zod shape, capped at 16
     // because arrayOf voids the whole array once it is longer.

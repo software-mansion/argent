@@ -382,6 +382,7 @@ export function start(): void {
         tool: toolId,
         ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
         ...(meta.platform ? { platform: meta.platform } : {}),
+        ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
         ...(meta.invalid_params?.length ? { invalid_params: meta.invalid_params } : {}),
         duration_ms: durationMs,
         ...signal,

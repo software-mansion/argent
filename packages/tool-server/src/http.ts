@@ -19,6 +19,7 @@ import {
   AI_CLIENTS,
   type AiTelemetryProps,
   type Platform as TelemetryPlatform,
+  type TelemetryDeviceKind,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -47,8 +48,8 @@ import {
   externalSupportHint,
   isExternalId,
 } from "./utils/external-devices";
-import { canonicalDeviceId } from "./utils/debugger/device-alias";
-import { refineTvPlatform } from "./utils/telemetry-platform";
+import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
 import {
@@ -182,6 +183,7 @@ type InvocationMeta = {
   /** Coarse vendor label only — see {@link externalProviderLabel}. */
   device_provider?: string;
   platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
 } & AiTelemetryProps;
 // Coarse context only: the raw device id (UDID / serial) infers a platform and is
 // never stored or forwarded; invalid_params carries schema-declared parameter
@@ -189,10 +191,11 @@ type InvocationMeta = {
 type HttpFailureMeta = {
   device_provider?: string;
   platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
   invalid_params?: string[];
 } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
+function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | null {
   if (!deviceId) return null;
   try {
     // Telemetry-only: rewrite a forwarded Metro logicalDeviceId back to the id
@@ -200,7 +203,14 @@ function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
     // the same platform for one invocation — the opaque hex handle would
     // otherwise shape-classify as android. Unaliased ids pass through unchanged.
     const canonical = canonicalDeviceId(deviceId) ?? deviceId;
-    return refineTvPlatform(resolveDevice(canonical).platform, canonical);
+    const attribution = attributeDeviceForTelemetry(canonical);
+    // A session addressable only by its logicalDeviceId has no device id to
+    // derive a kind from. The handle's shape already fails the hardware-serial
+    // gate today, but Metro ids are opaque and their shape is not contractual.
+    if (attribution.device_kind && isLogicalKeyedDevice(canonical)) {
+      return { platform: attribution.platform };
+    }
+    return attribution;
   } catch {
     return null;
   }
@@ -230,8 +240,8 @@ function extractInvocationMeta(
 ): InvocationMeta | null {
   const meta: InvocationMeta = { ...aiMeta };
   if (hasCapability && data && typeof data === "object") {
-    const platform = platformFromArgs(data);
-    if (platform) meta.platform = platform;
+    const attribution = deviceAttributionFromArgs(data);
+    if (attribution) Object.assign(meta, attribution);
   }
   const deviceArg = extractDeviceArg(data);
   const provider = deviceArg ? externalProviderLabel(deviceArg) : undefined;
@@ -240,42 +250,54 @@ function extractInvocationMeta(
 }
 
 /**
- * Telemetry platform from a tool call's device arg, or null when it carries none.
- * A device id refines to `tvos` / `android-tv` once the runtime-kind cache is warm
- * (coarse `ios` / `android` until then); the `avdName`-only fallback is always
- * coarse.
+ * Telemetry platform and device kind from a tool call's device arg, or null when
+ * it carries none. A device id refines to `tvos` / `android-tv` once the
+ * runtime-kind cache is warm (coarse `ios` / `android` until then); the
+ * `avdName`-only fallback is always coarse and carries no kind.
  * Exported for tests (http-platform-alias.test.ts).
  */
-export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
-  if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  if (deviceArg) return inferDeviceAttribution(deviceArg);
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
-  if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  if (typeof (data as Record<string, unknown>).avdName === "string") {
+    return { platform: "android" };
+  }
   return null;
+}
+
+/** Platform half of {@link deviceAttributionFromArgs}. */
+export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+  return deviceAttributionFromArgs(data)?.platform ?? null;
 }
 
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the AI client is
- * inherited, but the platform is re-derived from the child's OWN device arg.
- * Orchestrators like flow-execute carry no platform (and a flow can span several
- * devices), so the parent's platform is only the fallback.
+ * inherited, but platform, device kind and provider label are re-derived from
+ * the child's OWN device arg. Orchestrators like flow-execute carry no platform
+ * (and a flow can span several devices), so the parent's trio is the fallback
+ * only when the child names no device.
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
-  const childPlatform = platformFromArgs(childArgs);
+  const childAttribution = deviceAttributionFromArgs(childArgs);
+  if (!childAttribution) return parentMeta;
   const childDeviceArg = extractDeviceArg(childArgs);
   /**
    * Re-derived like the platform. A flow can dispatch across several devices,
    * so inheriting the parent's label would misattribute them.
    */
   const childProvider = childDeviceArg ? externalProviderLabel(childDeviceArg) : undefined;
-  if (!childPlatform && !childProvider) return parentMeta;
+  // The child named its own device, so its attribution replaces the parent's
+  // wholesale: an `avdName`-only child must not report the parent's kind next
+  // to its own platform, nor an `ext:` parent's label next to a native device.
+  const { platform: _p, device_kind: _k, device_provider: _d, ...inherited } = parentMeta;
   return {
-    ...parentMeta,
+    ...inherited,
     ...(childProvider ? { device_provider: childProvider } : {}),
-    ...(childPlatform ? { platform: childPlatform } : {}),
+    ...childAttribution,
   };
 }
 
@@ -671,12 +693,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
         const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
-        const platform = inferPlatform(failedDeviceArg);
+        const attribution = inferDeviceAttribution(failedDeviceArg);
         options.recordFailure(
           name,
           {
             ...(provider ? { device_provider: provider } : {}),
-            ...(platform ? { platform } : {}),
+            ...attribution,
             ...(extraMeta?.invalid_params?.length
               ? { invalid_params: extraMeta.invalid_params }
               : {}),
