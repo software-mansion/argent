@@ -154,7 +154,7 @@ export async function runFlowScriptStep(
   // Added to the executor's own notes rather than appended after the verdict:
   // this IS a note about the host, and `scriptVerdict` is where a note joins
   // the script's own message.
-  const shellLimit = describeShellEnvironmentLimit(result);
+  const shellLimit = describeShellEnvironmentLimit(result, env);
   const verdict = scriptVerdict(
     shellLimit ? { ...result, notes: [...result.notes, shellLimit] } : result
   );
@@ -354,8 +354,15 @@ const BASH_COMMAND_NOT_FOUND = /^The script exited with code 127 \(bash: /m;
  * widens which names are copied out of that snapshot, and `PATH` is on the
  * built-in allowlist already, so naming it there does nothing. Restarting the
  * server is what replaces the snapshot.
+ *
+ * None of that holds when the RUN set `PATH` itself, and this feature gives it
+ * four ways to — the flow's `env:`, a fragment's, `--env`, the step's own. That
+ * value replaces the snapshot outright, so the snapshot is not what the command
+ * was looked up in, restarting the server changes nothing, and the one place
+ * the author has to look is the one the paragraph above excludes. `env` names
+ * the cause in that case instead.
  */
-function describeShellEnvironmentLimit(result: FlowScriptResult): string | null {
+function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv): string | null {
   if (result.ok) return null;
   // The FAILURE only. Nothing a script prints is reported, and a script that
   // greps an install log, asserts on an error path, or echoes a CI transcript
@@ -378,6 +385,14 @@ function describeShellEnvironmentLimit(result: FlowScriptResult): string | null 
           "which Node reports the same way. "
         : null;
   if (what === null) return null;
+  const ownPath = pathEnvName(env);
+  if (ownPath !== undefined) {
+    return (
+      `${what}This run sets \`${ownPath}\` itself, through an \`env\` value, and that value — ` +
+      "not the tool server's environment — is the whole search path the command was looked " +
+      `up in: ${JSON.stringify(env[ownPath])}. Widen it, or pass an absolute path.`
+    );
+  }
   return (
     `${what}The tool server keeps the environment it started with, so an ` +
     "`export` made later never reaches a script. `PATH` is already copied from that snapshot, " +
@@ -385,6 +400,19 @@ function describeShellEnvironmentLimit(result: FlowScriptResult): string | null 
     "tool server to take your current environment, or pass an absolute path through the " +
     "step's `env`."
   );
+}
+
+/**
+ * The name this environment spells `PATH` under, or undefined when it sets none.
+ *
+ * Case-folded on Windows only, which reads one variable however it is spelled —
+ * the same rule `mergeScriptEnv` and `buildChildEnv` follow, and for the same
+ * reason: a `Path` there IS the search path.
+ */
+function pathEnvName(env: ScriptEnv): string | undefined {
+  if (env.PATH !== undefined) return "PATH";
+  if (process.platform !== "win32") return undefined;
+  return Object.keys(env).find((name) => name.toLowerCase() === "path");
 }
 
 export type ScriptRan = "yes" | "no" | "unknown";

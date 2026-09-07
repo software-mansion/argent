@@ -658,6 +658,35 @@ describe("the shell-environment note", () => {
     expect(unrelated.steps[0].reason).not.toContain("snapshot");
   });
 
+  it("names the run's own PATH when the run is what set it", async () => {
+    // This feature gives a flow four ways to set `PATH`. When a command then
+    // fails because THAT value is wrong, the snapshot note asserts the
+    // opposite: it blames the tool server's start-time environment, tells the
+    // author to restart the server — which changes nothing — and recommends
+    // passing a path through `env`, which is what broke it.
+    await write(
+      "scripts/own-path.mjs",
+      `import { execSync } from "node:child_process";\n` + `execSync("git --version");`
+    );
+    await flow(
+      "own-path",
+      "env: { PATH: /nonexistent/bin }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/own-path.mjs }\n"
+    );
+
+    const { result } = await runFlow("own-path");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("A command was not found.");
+    expect(reason).toContain("This run sets `PATH` itself");
+    expect(reason).toContain("/nonexistent/bin");
+    // The remedies that do not apply: the server's environment is not what the
+    // command was looked up in, so restarting it changes nothing.
+    expect(reason).not.toContain("Restart the tool server");
+    expect(reason).not.toContain("snapshot");
+  });
+
   it("reads exit 127 from a .sh without repeating the runner's own hint", async (ctx) => {
     skipWithoutBash(ctx);
     // A `.sh` says it in an exit code, not in words: its output is drained and
