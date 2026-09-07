@@ -1084,7 +1084,10 @@ describe("the shell-environment note", () => {
     const reason = result.steps[0].reason ?? "";
     expect(reason).toContain("A command was not found.");
     expect(reason).toContain("This run sets `PATH` itself");
-    expect(reason).toContain("/nonexistent/bin");
+    // The NAME, never the value: this map is the resolved one, and a note is
+    // not failure text, so a `{{secret:}}` value quoted here would reach the
+    // report in the clear.
+    expect(reason).not.toContain("/nonexistent/bin");
     // The remedies that do not apply: the server's environment is not what the
     // command was looked up in, so restarting it changes nothing.
     expect(reason).not.toContain("Restart the tool server");

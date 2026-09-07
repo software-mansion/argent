@@ -421,10 +421,18 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
   if (what === null) return null;
   const ownPath = pathEnvName(env);
   if (ownPath !== undefined) {
+    // The NAME, never the value. This map is the RESOLVED one, so a
+    // `{{secret:NAME}}` has already become its credential here — and a note is
+    // not failure text: `redactSecrets` scrubs `failure.message` and
+    // `failure.stack` and nothing else, so a value quoted into a note would
+    // reach the step reason, the JSON report and ~/.argent/mcp-calls.log in the
+    // clear, through the one message the redaction exists for. The author has
+    // the value in front of them; what they do not have is the fact that it,
+    // rather than the tool server, is what the command was looked up in.
     return (
       `${what}This run sets \`${ownPath}\` itself, through an \`env\` value, and that value — ` +
-      "not the tool server's environment — is the whole search path the command was looked " +
-      `up in: ${JSON.stringify(env[ownPath])}. Widen it, or pass an absolute path.`
+      "not the tool server's environment — is the whole search path the command was looked up " +
+      "in. Widen it, or pass an absolute path."
     );
   }
   return (
