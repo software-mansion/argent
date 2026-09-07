@@ -161,6 +161,38 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(message).toContain("{{secret:PEM}}");
   }, 30_000);
 
+  // The runner's marker counts what it KEPT of the reason; `partialSecretTail`
+  // measures a suffix of the WHOLE message. A value long enough to be a prefix
+  // of the reason and of argent's own exit line in front of it therefore takes
+  // off more than the reason ever held, and the subtraction went below zero:
+  // `… [$ARGENT_REASON holds 20000 bytes; this report keeps the first -2
+  // characters]` is a count no reader can use.
+  it("never reports a negative kept-count for the reason it cut", async () => {
+    const reasonCeiling = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - 1024;
+    const ws = workspace();
+    // A secret that opens with the exit line the runner composes, so the whole
+    // message head is a prefix of it.
+    const spanning: FlowScriptSecret = {
+      name: "SPAN",
+      value: `The script exited with code 1 (bash: ${hostBash}). ${"z".repeat(reasonCeiling + 64)}`,
+    };
+    const script = ws.write(
+      "spanning.sh",
+      `printf '%${reasonCeiling * 2}s' '' | tr ' ' 'z' > "$ARGENT_REASON"
+       exit 1`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      secrets: [spanning],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(message).toMatch(/this report keeps the first \d+ characters]$/);
+    expect(message).not.toMatch(/keeps the first -/);
+  }, 30_000);
+
   // The document is the script's ANSWER, read by later steps for the id or the
   // derived value the flow needs. Replacing a resolved secret inside it would
   // hand those steps `{{secret:NAME}}` — a string nothing downstream can use —
