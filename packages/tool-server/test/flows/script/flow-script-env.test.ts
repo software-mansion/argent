@@ -787,6 +787,42 @@ describe("what is NOT hidden", () => {
 });
 
 describe("recording a script step with env", () => {
+  it("keeps a checked-in flow-level env across the reset, and says it did", async () => {
+    // The reset discards STEPS. `env:` is the header a checked-in flow declares
+    // its script defaults in, no recording tool writes one, and the reference
+    // forbids editing the YAML during a recording — so truncating it left the
+    // documented order with no way to record a step under the environment the
+    // replay takes. The step ran under nothing and replayed under the file's
+    // map, silently.
+    await write("scripts/dump.mjs", reporter("kept", ["PLAIN"]));
+    await flow(
+      "qa",
+      "env:\n" +
+        "  PLAIN: checked-in-default\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/dump.mjs }\n"
+    );
+
+    const started = (await flowStartRecordingTool.execute(
+      {},
+      { name: "qa", project_root: root }
+    )) as { message: string; flowFile: string };
+
+    expect(started.flowFile).toContain("PLAIN: checked-in-default");
+    expect(started.flowFile).toContain("steps: []");
+    expect(started.message).toContain("PLAIN");
+
+    const added = (await flowAddScriptTool.execute(
+      {},
+      { name: "qa", project_root: root, path: "../../scripts/dump.mjs" }
+    )) as { status: string };
+
+    expect(added.status).toBe("pass");
+    // The live run took the checked-in default, which is what a replay of the
+    // recorded file takes too.
+    expect(seen("kept")).toEqual({ PLAIN: "checked-in-default" });
+  });
+
   it("layers the file's env under the call's, and records the call's map", async () => {
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write(
