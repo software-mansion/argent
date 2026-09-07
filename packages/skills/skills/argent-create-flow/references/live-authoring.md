@@ -133,8 +133,8 @@ For every retained raw gesture, add an echo and a recorded result check.
 
 Record `await-ui-element` through `flow-add-step`. The recorder writes the step even when `toolResult.success` is false. Read `success` and `cause` after each check:
 
-- `unmet`: The tree was readable, but the condition was false. Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `flow-finish-recording`.
-- `unreadable`: The wait ended without a trustworthy read. Restore the tree source and record the check again. Keep the failed step: the condition is unknown, not false.
+- `unmet`: The tree was readable, but the condition was false at the deadline. Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `flow-finish-recording`.
+- `unreadable`: The wait ended with no read that speaks for the screen at the deadline — the source never answered, it went dark at the end, or the last good read is further behind the deadline than a poll excuses, which a wide `pollIntervalMs` does on a source whose every read succeeded, when its last read still lands more than ~2s before the deadline. Read `note`: restore the tree source where it names an error, lower `pollIntervalMs` where it says how far back the last read sits, and raise `timeoutMs` where it says one read was all the budget allowed. Record the check again. Keep the failed step: the condition is unknown, not false.
 - `cancelled`: The caller stopped the wait. Record the check again. Keep the failed step: the condition is unknown, not false.
 
 Only `unmet` disproves the condition. Never delete a step during the recording.
@@ -147,7 +147,7 @@ The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree
 
 - No warning: The condition holds on both trees.
 - Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, use a runner-tree selector and replay.
-- Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source or re-record before conversion.
+- Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source, or poll more often if `note` says the verdict rested on a single sample, then re-record before conversion.
 
 A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
 

@@ -26,9 +26,20 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
 ]);
 
 /**
- * Per-tool cap (ms) on the `await-screen-idle` wait before capturing; the poll
- * usually returns well under it. Doubles as a blind sleep when the tool-server
- * offers no `await-screen-idle`.
+ * Per-tool cap (ms) on the `await-screen-idle` wait before capturing. The poll
+ * returns well under it wherever a tree read is cheap; an Android read is not —
+ * it bypasses the helper's node cache at roughly 0.3-0.8 ms per node — so on a
+ * screen of a few thousand nodes the smaller caps here buy a screenshot taken
+ * before the wait could confirm anything. The two smallest caps cannot confirm
+ * anything on such a screen at all: `describe`'s 100 ms is below the wait's 250 ms
+ * default minStableMs, so it never settles whatever the tree costs, and
+ * `keyboard`/`paste`'s 300 ms leaves no room for two coherent reads on a large
+ * one. There the only effect is the uncached walk the wait starts and abandons,
+ * which keeps the helper's single request slot until it finishes, so the next
+ * tree read waits it out (the device-side cancellation that would cut it short is
+ * tracked in #1003). Raising a cap past the walk would trade the same time for a
+ * wait that actually answers.
+ * Doubles as a blind sleep when the tool-server offers no `await-screen-idle`.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "launch-app": 3000,
