@@ -183,6 +183,92 @@ describe("environment precedence", () => {
     });
   });
 
+  it("layers three nesting levels and restores each parent on the way out", async () => {
+    // Depth 1 is the only nesting any case reached, and one level cannot tell
+    // "the parent's map is restored" apart from "the child never had one of its
+    // own". Each level here overrides the SAME name and probes it again after
+    // the return, so a scope that leaked would be read.
+    for (const mark of ["d0-before", "d1-before", "d2", "d1-after", "d0-after"]) {
+      await write(`scripts/${mark}.mjs`, reporter(mark, ["LEVEL"]));
+    }
+    await flow(
+      "d0",
+      "env: { LEVEL: outer }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/d0-before.mjs }\n" +
+        "  - run: d1.yaml\n" +
+        "  - script: { path: ../../scripts/d0-after.mjs }\n"
+    );
+    await flow(
+      "d1",
+      "env: { LEVEL: mid }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/d1-before.mjs }\n" +
+        "  - run: d2.yaml\n" +
+        "  - script: { path: ../../scripts/d1-after.mjs }\n"
+    );
+    await flow("d2", "env: { LEVEL: inner }\nsteps:\n  - script: { path: ../../scripts/d2.mjs }\n");
+
+    const { result } = await runFlow("d0", {}, { booted: true });
+
+    expect(result.ok).toBe(true);
+    expect(seen("d0-before")).toEqual({ LEVEL: "outer" });
+    expect(seen("d1-before")).toEqual({ LEVEL: "mid" });
+    expect(seen("d2")).toEqual({ LEVEL: "inner" });
+    expect(seen("d1-after")).toEqual({ LEVEL: "mid" });
+    expect(seen("d0-after")).toEqual({ LEVEL: "outer" });
+  });
+
+  it("gives a script inside a when: block the environment in force", async () => {
+    // `execSteps` runs a guarded block's children under `childScope`, and the
+    // environment survives that hop only by the spread inside it. No case put a
+    // script in a `when:` block, so nothing read what the block's children get.
+    await write("scripts/guarded.mjs", reporter("guarded", ["FROM_FLOW", "FROM_STEP"]));
+    await flow(
+      "guarded",
+      "env: { FROM_FLOW: flow-value, FROM_STEP: flow-value }\n" +
+        "steps:\n" +
+        "  - when:\n" +
+        "      platform: ios\n" +
+        "    steps:\n" +
+        "      - script:\n" +
+        "          path: ../../scripts/guarded.mjs\n" +
+        "          env: { FROM_STEP: step-value }\n"
+    );
+
+    const { result } = await runFlow("guarded", {}, { booted: true });
+
+    expect(result.ok).toBe(true);
+    expect(seen("guarded")).toEqual({ FROM_FLOW: "flow-value", FROM_STEP: "step-value" });
+  });
+
+  it("lets a fragment's own env beat the parent's default for a recorded step", async () => {
+    // The half of `flow-add-script`'s description that says a parent flow's
+    // `env:` is another DEFAULT: a fragment composed by a parent overrides it
+    // inside itself, so the recorded step runs under the fragment's value.
+    await write("scripts/frag.mjs", reporter("fragment", ["SHARED", "ONLY_PARENT"]));
+    await flow(
+      "parent",
+      "env: { SHARED: parent-value, ONLY_PARENT: parent-only }\n" +
+        "steps:\n" +
+        "  - run: fragment.yaml\n"
+    );
+    await flow(
+      "fragment",
+      "env: { SHARED: fragment-value }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/frag.mjs }\n"
+    );
+
+    const { result } = await runFlow("parent", {}, { booted: true });
+
+    expect(result.ok).toBe(true);
+    expect(seen("fragment")).toEqual({
+      SHARED: "fragment-value",
+      ONLY_PARENT: "parent-only",
+    });
+  });
+
   it("restores the parent's values after a nested flow that overrode them", async () => {
     await write("scripts/probe.mjs", reporter("before", ["PROBE"]));
     await write("scripts/after.mjs", reporter("after", ["PROBE"]));
