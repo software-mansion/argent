@@ -696,6 +696,30 @@ describe("secret placeholders in an env value", () => {
     expect(result.steps[0].reason).toContain("KNOWN");
   });
 
+  it("refuses a resolved value an environment cannot carry, without quoting it", async () => {
+    // The NUL rule runs on the AUTHORED value, which is `{{secret:NULKEY}}` —
+    // nothing of the secret's own shape. A NUL inside the resolved credential
+    // reached Node, which refuses the fork and quotes the value back ESCAPED
+    // (`Received 'sec\x00ret-9d3f'`); the scrub searches for the raw bytes, so
+    // it found nothing and the credential was reported in the clear through the
+    // very message the redaction exists for.
+    await write(".argent/secrets.env", 'NULKEY="sec\u0000ret-9d3f"\n');
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow(
+      "nulsec",
+      "steps:\n" +
+        '  - script: { path: ../../scripts/noop.mjs, env: { TOK: "{{secret:NULKEY}}" } }\n'
+    );
+
+    const { result } = await runFlow("nulsec");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.steps[0].status).toBe("error");
+    expect(reason).toContain("env value TOK");
+    expect(reason).toContain("holds a NUL character");
+    expect(reason).not.toContain("ret-9d3f");
+  });
+
   it("hands a near-spelling to the script as literal text, unresolved", async () => {
     // Only `{{secret:NAME}}` is a placeholder. Argent does not detect a near
     // spelling of it; a typo is the author's to find.

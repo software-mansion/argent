@@ -84,13 +84,8 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
         `so quote the value`
       );
     }
-    // The operating system carries an environment as NUL-terminated strings, so
-    // this one cannot survive the trip either: Node refuses the whole `fork`
-    // over it, and the step then errors on a message about the spawn rather
-    // than about the map that caused it. Refused here, naming the key.
-    if (value.includes("\0")) {
-      return `holds a NUL character in the value of ${name}, which an environment cannot carry`;
-    }
+    const unusable = describeUnusableEnvValue(value);
+    if (unusable) return `${unusable} in the value of ${name}`;
   }
   // Windows carries ONE variable per name however it is spelled, so two entries
   // of one map that differ only in case are two spellings of one variable —
@@ -117,6 +112,23 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
       byFold.set(folded, name);
     }
   }
+  return null;
+}
+
+/**
+ * Why an environment cannot carry this value, as a clause reading before "in
+ * the value of NAME". Null when it can.
+ *
+ * Asked of the AUTHORED value by {@link describeScriptEnvProblem} and again of
+ * the RESOLVED one by {@link resolveScriptEnvSecrets}, because a
+ * `{{secret:NAME}}` puts a value in the map that no rule of the file ever saw.
+ */
+export function describeUnusableEnvValue(value: string): string | null {
+  // The operating system carries an environment as NUL-terminated strings, so
+  // this one cannot survive the trip: Node refuses the whole `fork` over it,
+  // and the step then errors on a message about the spawn rather than about the
+  // map that caused it. Refused here, naming the key.
+  if (value.includes("\0")) return "holds a NUL character";
   return null;
 }
 
@@ -218,6 +230,20 @@ export function resolveScriptEnvSecrets(
       throw new Error(
         `env value ${name}: ${err instanceof Error ? err.message : String(err)}`,
         err instanceof Error ? { cause: err } : undefined
+      );
+    }
+    // Asked again of what the placeholder RESOLVED to. The rule above ran on
+    // the authored value, which is `{{secret:NAME}}` — nothing of the secret's
+    // own shape. A NUL inside a resolved credential reaches Node, which refuses
+    // the fork and quotes the value back ESCAPED
+    // (`Received 'sec\x00ret-9d3f'`), so the scrub — which searches for the raw
+    // bytes — finds nothing and the credential is reported in the clear through
+    // the very message the redaction exists for. The value is not quoted here.
+    const unusable = describeUnusableEnvValue(substituted.text);
+    if (unusable) {
+      throw new Error(
+        `env value ${name}: the value its \`{{secret:}}\` placeholder resolved to ${unusable}, ` +
+          `which an environment cannot carry`
       );
     }
     resolved[name] = substituted.text;
