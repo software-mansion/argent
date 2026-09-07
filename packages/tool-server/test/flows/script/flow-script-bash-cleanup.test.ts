@@ -128,3 +128,45 @@ describe("an exchange directory that could not be filled", () => {
     }
   }, 30_000);
 });
+
+describe("an exchange directory when the step is cancelled", () => {
+  // Every OTHER outcome of a bash step is covered by the two describes above,
+  // which reach the removal through a refusal. A cancellation takes a different
+  // exit out of `runChild` — the process is stopped rather than waited for —
+  // and nothing asserted that the directory the step exchanges its document and
+  // its reason through is taken with it. A leaked one accumulates under the
+  // temporary directory for every cancelled run.
+  it("removes it", async () => {
+    const ws = createScriptWorkspace("bash-cancel");
+    try {
+      const script = ws.write("sleep.sh", "sleep 30\n");
+      const controller = new AbortController();
+      const executor = new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 });
+      const run = executor.execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: controller.signal,
+      });
+      // Long enough for the fork and the exchange directory, short against the
+      // script's own 30 seconds.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const during = fs
+        .readdirSync(os.tmpdir())
+        .filter((entry) => entry.startsWith(exchangeDirPrefix()));
+      controller.abort();
+      const result = await run;
+
+      // Not vacuous: the loop below asserts nothing unless the running step
+      // really had a directory of its own to lose.
+      expect(during.length).toBeGreaterThan(0);
+      expect(result.failure?.kind).toBe("cancelled");
+      const after = fs
+        .readdirSync(os.tmpdir())
+        .filter((entry) => entry.startsWith(exchangeDirPrefix()));
+      for (const dir of during) expect(after).not.toContain(dir);
+    } finally {
+      ws.cleanup();
+    }
+  }, 30_000);
+});

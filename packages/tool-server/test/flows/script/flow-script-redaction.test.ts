@@ -377,6 +377,34 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value);
   });
 
+  // The list is per REQUEST, and two runs of one executor share a queue, a
+  // process pool and this module. Nothing drove two at once with different
+  // lists, so a scrub that reached for anything module-scoped — a compiled set,
+  // a memo — would have passed CI while replacing one run's marker in the
+  // other's failure.
+  it("keeps two concurrent runs' secret lists apart", async () => {
+    const ws = workspace();
+    const first: FlowScriptSecret = { name: "FIRST", value: "value-of-the-first-run" };
+    const second: FlowScriptSecret = { name: "SECOND", value: "value-of-the-second-run" };
+    const script = ws.write(
+      "both.mjs",
+      `await new Promise((r) => setTimeout(r, 300));
+       throw new Error("saw " + process.env.MINE);`
+    );
+    const run = (secret: FlowScriptSecret) =>
+      executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { MINE: secret.value },
+        secrets: [secret],
+      });
+
+    const [a, b] = await Promise.all([run(first), run(second)]);
+
+    expect(a.failure?.message).toBe("saw {{secret:FIRST}}");
+    expect(b.failure?.message).toBe("saw {{secret:SECOND}}");
+  }, 30_000);
+
   // A replacement is not a shortening. The child applies the ceiling — it is
   // the only side that can bound what crosses the channel — and it has no
   // secret list, so the scrub runs after the bound. A value SHORTER than its
