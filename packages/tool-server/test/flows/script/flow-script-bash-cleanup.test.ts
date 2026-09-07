@@ -138,10 +138,21 @@ describe("an exchange directory when the step is cancelled", () => {
   // temporary directory for every cancelled run.
   it("removes it", async () => {
     const ws = createScriptWorkspace("bash-cancel");
+    // Its OWN exchange root, not `os.tmpdir()`: every other file in this
+    // directory makes exchange directories there too, and vitest runs them
+    // together — a listing of the shared temp directory answers about their
+    // steps as much as this one's.
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-cancel-root-"));
+    const listing = (): string[] =>
+      fs.readdirSync(exchangeRoot).filter((entry) => entry.startsWith(exchangeDirPrefix()));
     try {
       const script = ws.write("sleep.sh", "sleep 30\n");
       const controller = new AbortController();
-      const executor = new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 });
+      const executor = new FlowScriptExecutor({
+        concurrency: 4,
+        maxTimeoutMs: 60_000,
+        exchangeRoot,
+      });
       const run = executor.execute({
         scriptPath: script,
         interpreter: "bash",
@@ -151,22 +162,18 @@ describe("an exchange directory when the step is cancelled", () => {
       // Long enough for the fork and the exchange directory, short against the
       // script's own 30 seconds.
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      const during = fs
-        .readdirSync(os.tmpdir())
-        .filter((entry) => entry.startsWith(exchangeDirPrefix()));
+      const during = listing();
       controller.abort();
       const result = await run;
 
-      // Not vacuous: the loop below asserts nothing unless the running step
+      // Not vacuous: the assertion below says nothing unless the running step
       // really had a directory of its own to lose.
-      expect(during.length).toBeGreaterThan(0);
+      expect(during).toHaveLength(1);
       expect(result.failure?.kind).toBe("cancelled");
-      const after = fs
-        .readdirSync(os.tmpdir())
-        .filter((entry) => entry.startsWith(exchangeDirPrefix()));
-      for (const dir of during) expect(after).not.toContain(dir);
+      expect(listing()).toEqual([]);
     } finally {
       ws.cleanup();
+      fs.rmSync(exchangeRoot, { recursive: true, force: true });
     }
   }, 30_000);
 });

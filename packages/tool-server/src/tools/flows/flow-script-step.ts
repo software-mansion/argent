@@ -362,16 +362,25 @@ const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+
  * And a script may choose it while EXPLAINING itself: `echo "no such tenant"
  * >"$ARGENT_REASON"; exit 127` is a step that said what went wrong, and the
  * exit code alone cannot tell that apart from bash's own. What can is the
- * reason: the runner appends it after its 127 hint, so a message ENDING with
- * that hint is one where the script wrote nothing, and a message carrying more
- * is one where it explained itself and the explanation is the diagnosis. The
- * hint's own tail is quoted here, in step with `exitCodeHint` in
+ * reason, which the runner appends after its 127 hint — so this captures
+ * whatever follows the hint and {@link describeShellEnvironmentLimit} reads it:
+ * nothing at all is a script that wrote no reason, and the shell's OWN wording
+ * is a script that redirected stderr into `$ARGENT_REASON`, which is how a
+ * `.sh` is told to explain itself. Anything else is the script explaining
+ * something the remedy does not answer.
+ *
+ * The hint's own tail is quoted here, in step with `exitCodeHint` in
  * `flow-script-runner.mjs`, which this file cannot import — a wording that
  * drifts apart stops matching and the note is dropped, which is the safe
  * direction.
  */
-const BASH_COMMAND_NOT_FOUND =
-  /^The script exited with code 127 \(bash: [^\n]*CRLF line endings\.[ \t\r]*$(?![\s\S]*\S)/m;
+const BASH_EXIT_127 =
+  /^The script exited with code 127 \(bash: [^\n]*CRLF line endings\.[ \t\r]*([\s\S]*)$/m;
+
+/** Whether any shell's `command not found` wording is what this text ends on. */
+function saysCommandNotFound(text: string): boolean {
+  return COMMAND_NOT_FOUND_SIGNATURES.some((signature) => signature.test(text));
+}
 
 /**
  * The note a `command not found` earns, or null when the failure was something
@@ -408,16 +417,23 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
   // into the same message as the runner's own 127 hint. Tested the other way
   // round, such a step matched the `.mjs` branch and earned a prefix on top of
   // a hint that had already named the cause.
-  const what = BASH_COMMAND_NOT_FOUND.test(text)
-    ? // Nothing: the runner's own 127 hint sits immediately before this note
-      // and has already said what the code means.
-      ""
-    : COMMAND_NOT_FOUND_SIGNATURES.some((signature) => signature.test(text))
-      ? "A command was not found. "
-      : SPAWN_ENOENT.test(text)
-        ? "A command was not found — or the working directory it was given does not exist, " +
-          "which Node reports the same way. "
-        : null;
+  const bash127 = BASH_EXIT_127.exec(text);
+  // The reason the script wrote, if it wrote one. Judged on its OWN, so the
+  // line-anchored signatures can read it: the runner joins it to the hint with
+  // a space, which leaves the shell's line with no line start of its own.
+  const wrote = bash127?.[1].trim();
+  if (wrote !== undefined && wrote !== "" && !saysCommandNotFound(wrote)) return null;
+  const what =
+    bash127 !== null
+      ? // Nothing: the runner's own 127 hint sits immediately before this note
+        // and has already said what the code means.
+        ""
+      : saysCommandNotFound(text)
+        ? "A command was not found. "
+        : SPAWN_ENOENT.test(text)
+          ? "A command was not found — or the working directory it was given does not exist, " +
+            "which Node reports the same way. "
+          : null;
   if (what === null) return null;
   const ownPath = pathEnvName(env);
   if (ownPath !== undefined) {

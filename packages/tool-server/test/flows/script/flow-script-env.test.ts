@@ -1110,6 +1110,27 @@ describe("the shell-environment note", () => {
     expect(reason).not.toContain("A command was not found.");
   });
 
+  it("keeps the note for a .sh that captured the shell's own wording", async (ctx) => {
+    skipWithoutBash(ctx);
+    // Redirecting stderr into `$ARGENT_REASON` is how a `.sh` is told to
+    // explain itself, and for a missing command what it captures IS bash's
+    // `command not found`. That reason must not be read as "the script
+    // explained something else": the note is exactly what that step needs.
+    // The runner joins the reason to its hint with a space, so the shell's line
+    // has no line start of its own — the reason is judged on its own instead.
+    await write("scripts/captured.sh", `argent-no-such-command-xyz 2>"$ARGENT_REASON"\n`);
+    await flow("sh-captured", "steps:\n  - script: { path: ../../scripts/captured.sh }\n");
+
+    const { result } = await runFlow("sh-captured");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("command not found");
+    expect(reason).toContain("The tool server keeps the environment it started with");
+    // The runner's own 127 hint already named the code; the note adds the
+    // remedy and not a second diagnosis.
+    expect(reason).not.toContain("A command was not found.");
+  });
+
   it("leaves a .sh that chose 127 and explained itself alone", async (ctx) => {
     skipWithoutBash(ctx);
     // 127 is bash's own name for a missing command AND an ordinary exit code a
