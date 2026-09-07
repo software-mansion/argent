@@ -575,6 +575,49 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value.slice(0, 8));
   });
 
+  it("repairs the straddling cut even when another secret's value is in the marker", async () => {
+    const ws = workspace();
+    // The repair reads the marker to know the text was cut. Read off the
+    // SCRUBBED text, any secret whose value occurs inside the marker defeats it
+    // — and the marker is argent's own sentence around a character COUNT, so a
+    // value of `0` is enough. `PIN` is stored with the padding a secrets file
+    // carries every day, and the trimmed spelling the scrub adds for it is that
+    // bare digit. The marker was rewritten, neither pattern matched it, the
+    // repair was skipped, and the half of API_KEY the cut left stayed in the
+    // step reason, the --json report and the MCP call log.
+    const PIN: FlowScriptSecret = { name: "PIN", value: " 0 " };
+    const script = ws.write(
+      "long-throw-pin.mjs",
+      `throw new Error(
+         "p".repeat(${SCRIPT_MAX_FAILURE_MESSAGE_CHARS} - 41) + process.env.API_KEY + "t".repeat(1000)
+       );`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { API_KEY: SECRET.value, PIN: PIN.value },
+      secrets: [SECRET, PIN],
+    });
+    const control = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { API_KEY: SECRET.value },
+      secrets: [SECRET],
+    });
+
+    const message = result.failure?.message ?? "";
+    // Every prefix of the value that is still the secret's own.
+    for (let n = SECRET.value.length; n > 3; n -= 1) {
+      expect(message).not.toContain(SECRET.value.slice(0, n));
+    }
+    // The marker is argent's own text, so it is left out of the scrub whole:
+    // intact, and counting exactly what the run with no PIN counts.
+    expect(message).toMatch(/… \[\d+ more characters omitted]$/);
+    expect(message.slice(message.lastIndexOf("… ["))).toBe(
+      (control.failure?.message ?? "").slice((control.failure?.message ?? "").lastIndexOf("… ["))
+    );
+  });
+
   it("reads the secret set live, so a value added mid-run still redacts", async () => {
     const ws = workspace();
     const script = ws.write(

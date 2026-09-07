@@ -1388,15 +1388,24 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
  * crosses the channel, and the child has no secret list — so a value straddling
  * the cut leaves a prefix that a whole-value replacement never matches. That
  * tail is dropped and counted, and only on text whose marker says it was cut.
+ *
+ * The marker is read off the RAW text, and the scrub runs on the head alone.
+ * Read off the scrubbed text instead, the repair was defeated by any secret
+ * whose value occurs inside the marker — which is argent's own sentence around
+ * a character COUNT, so a value of `"0"` is enough, and `withTrimmedSpellings`
+ * hands one over for a secret stored as `" 0 "`. The marker was then rewritten,
+ * neither pattern matched it, the repair was skipped, and the OTHER secret's
+ * partial half stayed in the step reason, the `--json` report and the MCP call
+ * log. Every character of the marker is written by argent — the runner's own
+ * wording and a number it counted — so nothing in it is a value to find, and
+ * leaving it out of the scrub is also what stops a count reading `2{{secret:…}}43`.
  */
 function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
   const secrets = withTrimmedSpellings(raw);
-  const scrubbed = scrubSecretValues(text, secrets);
-  const omission = OMISSION_RE.exec(scrubbed);
-  if (!omission) return scrubbed;
-  const head = scrubbed.slice(0, omission.index);
+  const omission = OMISSION_RE.exec(text);
+  if (!omission) return scrubSecretValues(text, secrets);
+  const head = scrubSecretValues(text.slice(0, omission.index), secrets);
   const partial = partialSecretTail(head, secrets);
-  if (partial === 0) return scrubbed;
   return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
 }
 
