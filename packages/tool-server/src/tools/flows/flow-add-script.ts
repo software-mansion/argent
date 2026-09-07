@@ -287,8 +287,9 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
         `The script "${step.path}" was NOT run and nothing was recorded in "${params.name}": ` +
           (missing
             ? `${session.filePath} is gone. Everything recorded into it is gone with it, and ` +
-              `the append after the run would only recreate a file holding this one step. Start ` +
-              `the recording again with flow-start-recording and re-walk it. `
+              `the append after the run reads that file before it writes one, so it would fail ` +
+              `on the same missing path and the script would have run for nothing. Start the ` +
+              `recording again with flow-start-recording and re-walk it. `
             : `${session.filePath} is not a flow argent can use as it stands — it may not ` +
               `parse, or it may parse and break a rule. The append after the run re-reads ` +
               `that file and would refuse it then, with the script already run and nothing ` +
