@@ -433,6 +433,43 @@ describe("serialization", () => {
   });
 });
 
+describe("a tool env parameter that carries __proto__", () => {
+  // `JSON.parse` puts `__proto__` on the object as an OWN property without
+  // invoking the accessor, and `z.record` then rebuilds the map without it —
+  // so the call passed with the entry silently gone, while
+  // `argent flow run --env __proto__=v` refused the same name with a
+  // paragraph. One CLI disagreeing with itself about one name.
+  const withProto = (): Record<string, string> =>
+    JSON.parse('{"__proto__":"x","A":"y"}') as Record<string, string>;
+
+  it("refuses it on the run-time parameter", async () => {
+    await flow("proto", "steps:\n  - echo: hi\n");
+    const { registry } = mockRegistry();
+
+    await expect(
+      createRunFlowTool(registry).execute({}, {
+        project_root: root,
+        name: "proto",
+        env: withProto(),
+      } as never)
+    ).rejects.toThrow(/`env` holds __proto__/);
+  });
+
+  it("refuses it on flow-add-script", async () => {
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flowStartRecordingTool.execute({}, { name: "proto-rec", project_root: root });
+
+    await expect(
+      flowAddScriptTool.execute({}, {
+        name: "proto-rec",
+        project_root: root,
+        path: "../../scripts/noop.mjs",
+        env: withProto(),
+      } as never)
+    ).rejects.toThrow(/`env` holds __proto__/);
+  });
+});
+
 describe("the host allowlist extension", () => {
   it("adds a configured name and drops an ARGENT_ one, naming it in a note", async () => {
     process.env.PROJECT_DB_URL = "postgres://fixture";

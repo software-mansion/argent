@@ -26,7 +26,11 @@ import { canonicalFlowPath } from "./flow-file-refs";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
-import { describeScriptEnvProblem, mergeScriptEnv } from "./script/flow-script-env";
+import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+  scriptEnvParameter,
+} from "./script/flow-script-env";
 import { InvalidToolInputError } from "../../utils/capability";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
@@ -43,11 +47,10 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Optional time limit in milliseconds. The default is 30000 and the minimum is 100."),
-  env: z
-    .record(z.string(), z.string())
+  env: scriptEnvParameter("This call's")
     .optional()
     .describe(
-      "Environment values this script reads from its environment (`process.env` in a `.mjs`, `$NAME` in a `.sh`), for this script only. Recorded verbatim as the step's `env`, and the flow file's own top-level `env` defaults are layered UNDER it here and at replay alike — so the run here matches a replay OF THIS FILE; a real replay can merge two further layers under those, the run's own --env/flow-execute values and each parent flow's `env:` when a `run:` step composes this one. Values are strings; quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, ARGENT_OUTPUT, ARGENT_REASON, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig. Do not use __proto__ either: this parameter's schema DROPS that name before any rule of argent runs, so the call passes with the entry silently gone and the flow file is written without it. " +
+      "Environment values this script reads from its environment (`process.env` in a `.mjs`, `$NAME` in a `.sh`), for this script only. Recorded verbatim as the step's `env`, and the flow file's own top-level `env` defaults are layered UNDER it here and at replay alike — so the run here matches a replay OF THIS FILE; a real replay can merge two further layers under those, the run's own --env/flow-execute values and each parent flow's `env:` when a `run:` step composes this one. Values are strings; quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, ARGENT_OUTPUT, ARGENT_REASON, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig. Do not use __proto__ either: it is an accessor rather than an entry, so `z.record` would rebuild the map without it and the step would be recorded with the entry silently gone — this parameter refuses the name instead. " +
         "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: this map is written into the flow file, so a plaintext value gets committed, and it also enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from `ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, the `ARGENT_SECRET_` keys of its `.env.local`/`.env`, then `~/.argent/secrets.env`. " +
         "A shell `export` does NOT reach a script: the tool server's environment is a snapshot from its first start. Pass the value here, or name it in `scripts.env.allow`."
     ),

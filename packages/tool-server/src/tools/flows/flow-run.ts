@@ -43,7 +43,11 @@ import { assertNoEnvOutputReferences } from "./flow-utils";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
-import { describeScriptEnvProblem, mergeScriptEnv } from "./script/flow-script-env";
+import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+  scriptEnvParameter,
+} from "./script/flow-script-env";
 import { createScriptRunNotes, type FlowScriptRunNotes } from "./script/flow-script-executor";
 import { sleepOrAbort } from "../../utils/timing";
 import { InvalidToolInputError } from "../../utils/capability";
@@ -140,11 +144,10 @@ const zodSchema = z
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
       ),
-    env: z
-      .record(z.string(), z.string())
+    env: scriptEnvParameter("This run's")
       .optional()
       .describe(
-        "Environment values every `script` step in this run reads from its environment — `process.env` in a `.mjs`, `$NAME` in a `.sh` — through nested `run:` flows. This is what makes a flow reusable: the file holds the defaults a project checks in, and this map holds what changes per run (a build number, a staging URL, a per-run account), so no CI job has to edit the YAML. Values are strings — quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig — each steers the runner's own process. ARGENT_OUTPUT and ARGENT_REASON are refused too: they name the files a `.sh` step exchanges its output document and its failure reason through, and this map reaches every step whatever its language. Do not send __proto__ either: it is an accessor rather than an entry, and this parameter's own schema DROPS it before any rule of argent runs, so the call would pass with that one value missing and no refusal. These OVERRIDE the flow file's own `env` defaults at every depth; a `script` step's own `env` still wins over them. " +
+        "Environment values every `script` step in this run reads from its environment — `process.env` in a `.mjs`, `$NAME` in a `.sh` — through nested `run:` flows. This is what makes a flow reusable: the file holds the defaults a project checks in, and this map holds what changes per run (a build number, a staging URL, a per-run account), so no CI job has to edit the YAML. Values are strings — quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig — each steers the runner's own process. ARGENT_OUTPUT and ARGENT_REASON are refused too: they name the files a `.sh` step exchanges its output document and its failure reason through, and this map reaches every step whatever its language. Do not send __proto__ either: it is an accessor rather than an entry, so `z.record` would rebuild the map without it and the call would pass with that one value silently missing — this parameter refuses the name instead. These OVERRIDE the flow file's own `env` defaults at every depth; a `script` step's own `env` still wins over them. " +
           "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: a plaintext value in a tool call enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from the same sources `keyboard` uses (`ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, its `.env.local`/`.env` ARGENT_SECRET_-prefixed keys, then `~/.argent/secrets.env`). " +
           "A shell `export` does NOT reach a script: the tool server's environment is a snapshot from its first start. Pass the value here, in the flow's `env`, or name it in `scripts.env.allow`."
       ),

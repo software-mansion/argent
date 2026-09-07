@@ -10,6 +10,7 @@
  * in {@link mergeScriptEnv}, rather than at each site that layers a map.
  */
 
+import { z } from "zod";
 import {
   PROTO_ENV_NAME,
   SCRIPT_ENV_NAME_PATTERN,
@@ -65,14 +66,7 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
         `starts with a letter or "_" and continues with letters, digits or "_"`
       );
     }
-    if (name === PROTO_ENV_NAME) {
-      return (
-        `holds ${PROTO_ENV_NAME}, which argent cannot carry: the operating system takes the ` +
-        `name, but every merge on the way to the child copies the map through a plain object, ` +
-        `where ${PROTO_ENV_NAME} is an accessor rather than an entry — the value would be ` +
-        `dropped and the script would run without it, silently. Use a name of your own`
-      );
-    }
+    if (name === PROTO_ENV_NAME) return protoEnvNameProblem();
     const reserved = reservedScriptEnvName(name);
     if (reserved) {
       return (
@@ -115,6 +109,48 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+/** The clause `__proto__` earns, wherever an `env` map is judged. */
+function protoEnvNameProblem(): string {
+  return (
+    `holds ${PROTO_ENV_NAME}, which argent cannot carry: the operating system takes the ` +
+    `name, but every merge on the way to the child copies the map through a plain object, ` +
+    `where ${PROTO_ENV_NAME} is an accessor rather than an entry — the value would be ` +
+    `dropped and the script would run without it, silently. Use a name of your own`
+  );
+}
+
+/**
+ * The zod shape of a tool's `env` parameter.
+ *
+ * `z.record` REBUILDS the map, and a JSON body can carry `__proto__` as an own
+ * property — `JSON.parse` puts it there without invoking the accessor — so the
+ * rebuild dropped it before any rule of argent ran and the call passed with
+ * that entry silently gone. Both descriptions said so, and one CLI channel
+ * refused the same name outright: `argent flow run --env __proto__=v` exits 2
+ * with a paragraph, while `--env-json` reached this schema and exited 0
+ * without a word.
+ *
+ * Refused where it is still visible, which is before the record is built. The
+ * JSON Schema this parameter publishes is unchanged — `whose` names the map,
+ * as every other `env` refusal does.
+ */
+export function scriptEnvParameter(whose: string) {
+  return z.preprocess(
+    (raw, ctx) => {
+      if (
+        raw !== null &&
+        typeof raw === "object" &&
+        Object.getOwnPropertyNames(raw).includes(PROTO_ENV_NAME)
+      ) {
+        ctx.addIssue({ code: "custom", message: `${whose} \`env\` ${protoEnvNameProblem()}` });
+        return z.NEVER;
+      }
+      return raw;
+    },
+    z.record(z.string(), z.string())
+  );
 }
 
 /**
