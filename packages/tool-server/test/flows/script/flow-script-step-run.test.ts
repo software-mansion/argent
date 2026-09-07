@@ -326,9 +326,9 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("gone");
 
     expect(result.steps[0]).toMatchObject({ status: "fail", kind: "script" });
-    expect(result.steps[0]!.reason).toContain('script "../../scripts/gone.mjs" does not exist');
+    expect(result.steps[0]!.reason).toContain('Script "../../scripts/gone.mjs" does not exist');
     expect(result.steps[0]!.reason).toMatch(
-      /resolved to \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\)$/
+      /Resolved path: \S*[/\\]\.argent[/\\]flows[/\\]\.\.[/\\]\.\.[/\\]scripts[/\\]gone\.mjs\.$/
     );
   });
 
@@ -405,9 +405,9 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/CreateUser.mjs"'
+      'Script path "../../scripts/CreateUser.mjs" has the wrong letter case'
     );
-    expect(result.steps[0]!.reason).toContain('write it as "../../scripts/createUser.mjs"');
+    expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.mjs"');
   });
 
   it("refuses a mis-cased spelling of a script reached through a cross-directory symlink", async () => {
@@ -424,7 +424,7 @@ describe("a script path is checked at its own step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toContain(
-      'mis-cased script path "../../scripts/createUser.mjs"'
+      'Script path "../../scripts/createUser.mjs" has the wrong letter case'
     );
   });
 
@@ -435,8 +435,8 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("noncase");
 
     expect(result.steps[0]).toMatchObject({ status: "error" });
-    expect(result.steps[0]!.reason).toContain('rename "ALT.MJS" to "alt.mjs" to run it');
-    expect(result.steps[0]!.reason).not.toContain("write it as");
+    expect(result.steps[0]!.reason).toContain('Rename "ALT.MJS" to "alt.mjs"');
+    expect(result.steps[0]!.reason).not.toContain("Use");
   });
 
   it("treats a hyphen difference as an ordinary missing file, not a casing problem", async () => {
@@ -446,7 +446,7 @@ describe("a script path is checked at its own step", () => {
     const { result } = await runFlow("hyphen");
 
     expect(result.steps[0]!.reason).toContain("does not exist");
-    expect(result.steps[0]!.reason).not.toContain("mis-cased");
+    expect(result.steps[0]!.reason).not.toContain("wrong letter case");
   });
 });
 
@@ -552,6 +552,55 @@ describe("where a script path resolves", () => {
     const reported = fsSync.realpathSync(result.steps[0]!.scriptLog!.trim());
     expect(reported).toBe(fsSync.realpathSync(root));
     expect(reported).not.toBe(fsSync.realpathSync(path.join(root, "elsewhere")));
+  });
+});
+
+describe("which project root a script runs from", () => {
+  /**
+   * `flow-add-script` runs the script with the RECORDING's `project_root`; the
+   * runner uses the ROOT run's. A fragment recorded in one project and composed
+   * by a flow in another therefore runs its script somewhere else than where it
+   * was recorded — which is what the tool's "it ran here as a replay of this
+   * flow will" is qualified against.
+   */
+  it("gives a composed fragment's script the ROOT run's project root", async () => {
+    const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));
+    try {
+      await write(
+        "scripts/where.mjs",
+        `import { writeFileSync } from "node:fs";\n` +
+          `writeFileSync("./where.txt", process.cwd());`
+      );
+      await flow("frag", "steps:\n  - script: { path: ../../scripts/where.mjs }\n");
+      const composed = path.join(composer, ".argent", "flows", "main.yaml");
+      await fs.mkdir(path.dirname(composed), { recursive: true });
+      // `run:` is always relative to the flow file that names it.
+      const target = path
+        .relative(path.dirname(composed), path.join(root, ".argent", "flows", "frag.yaml"))
+        .split(path.sep)
+        .join("/");
+      await fs.writeFile(composed, `steps:\n  - run: ${target}\n`, "utf8");
+
+      const direct = await runFlow("frag");
+      expect(direct.result.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(true);
+      await fs.rm(path.join(root, "where.txt"));
+
+      // A flow that uses `run:` resolves a device even when every leaf is a
+      // script — see "still resolves a device when the same flow uses run:".
+      const { registry } = mockRegistry({ booted: [DEVICE] });
+      const composedRun = await run(registry, {
+        project_root: composer,
+        name: "main",
+        device: DEVICE,
+      });
+
+      expect(composedRun.ok).toBe(true);
+      expect(fsSync.existsSync(path.join(composer, "where.txt"))).toBe(true);
+      expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(false);
+    } finally {
+      await fs.rm(composer, { recursive: true, force: true });
+    }
   });
 });
 

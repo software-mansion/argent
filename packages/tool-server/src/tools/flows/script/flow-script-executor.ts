@@ -238,6 +238,15 @@ export interface FlowScriptFailure {
   kind: FlowScriptFailureKind;
   message: string;
   stack?: string;
+  /**
+   * Set when this failure was raised with no child process in existence, so no
+   * line of the author's script can have run. Most kinds answer that on their
+   * own — a `queue` never left the queue, a `spawn` never started — but
+   * `cancelled` reaches a caller from both sides of the fork, and a caller
+   * telling its author there is nothing to clean up needs the answer proved
+   * rather than guessed.
+   */
+  beforeFork?: true;
 }
 
 export interface FlowScriptResult {
@@ -1457,7 +1466,7 @@ function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): 
   return keep;
 }
 
-function utf8SafeCut(buffer: Buffer, max: number): number {
+export function utf8SafeCut(buffer: Buffer, max: number): number {
   let cut = Math.min(max, buffer.length);
   while (cut > 0 && (buffer[cut] & 0xc0) === 0x80) cut -= 1;
   return cut;
@@ -1534,13 +1543,20 @@ class V8FrameCollapser {
   }
 }
 
+/**
+ * The result for a failure raised before anything was forked. Every caller is
+ * on that side of the fork — a queue the step never left, a cancellation that
+ * beat the fork, a request that could not be prepared, and a `fork` that threw
+ * — which is what {@link FlowScriptFailure.beforeFork} reports to a caller
+ * that has to say whether there is state to clean up.
+ */
 function emptyResult(
   failure: FlowScriptFailure,
   extras: { notes?: string[]; queuedMs?: number; durationMs?: number } = {}
 ): FlowScriptResult {
   return {
     ok: false,
-    failure,
+    failure: { ...failure, beforeFork: true },
     log: "",
     logTruncated: false,
     durationMs: extras.durationMs ?? 0,

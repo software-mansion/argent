@@ -125,6 +125,8 @@ describe("flow script executor — concurrency", () => {
     const cancelled = await queued;
     const answeredAfterMs = Date.now() - abortedAt;
     expect(cancelled.failure?.kind).toBe("cancelled");
+    // It never left the queue, so no child of it exists to have done anything.
+    expect(cancelled.failure?.beforeFork).toBe(true);
     // The occupier keeps the only slot for another ~700ms. Without the queue's
     // own abort listener the waiter would take a slot later and `runOne`'s
     // guard would answer with the same kind, so the kind alone proves nothing.

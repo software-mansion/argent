@@ -32,6 +32,8 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
+When the user requests a script, call `flow-add-script` at the point where it must run. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
+
 Obey these lifecycle rules:
 
 1. Pass the same `name` and absolute `project_root` to every recording tool.
@@ -39,7 +41,7 @@ Obey these lifecycle rules:
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
 4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
+6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `flow-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
 7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
 
 ## Start in the correct order
@@ -47,7 +49,7 @@ Obey these lifecycle rules:
 ### iOS, Android, and Vega e2e flows
 
 1. Call `flow-start-recording` before launching or touching the app.
-2. Record a plain `restart-app` as the first non-echo action. Pass only the device id and app id. The recorder converts it to `launch:`.
+2. Record a plain `restart-app` as the first action that is neither an echo nor a script. Pass only the device id and app id. The recorder converts it to `launch:`.
 3. Record `await-ui-element` for the real first screen immediately after restart.
 
 Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment.
@@ -190,7 +192,6 @@ Only these unrecorded insertions are allowed, at states observed live:
 
 - A planned `snapshot:` for pixel-level evidence.
 - `await: { idle: true }` after a navigation identity check.
-- A `script:` step for setup or cleanup that no recorded step can do. See [Flow YAML](flow-yaml.md#local-scripts-script).
 - The Chromium launch that packages the live boot.
 
 Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, an edge swipe or one with exotic velocity control, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
@@ -265,7 +266,7 @@ Resolve every hit and confirm:
 
 Run `flow-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. `run:` targets and baselines resolve on the tool server's filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not. `name` still runs remotely, but the server receives only that one YAML in a fresh temp directory, so a `run:` target fails as a missing fragment and a `snapshot` fails for a missing baseline. A `script:` step is refused before the run starts, because its `.mjs` file stays on the client. Replay self-contained flows remotely; a composing, snapshotting, or script-bearing flow needs one shared filesystem.
+`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. `run:` targets and baselines resolve on the tool server's filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not. `name` still runs remotely, but the server receives only that one YAML in a fresh temp directory. It checks the whole flow first and refuses a `run:`, `script:`, or `snapshot:` step at any depth, naming the missing co-location rather than a missing fragment, script, or baseline. Replay self-contained flows remotely; a composing, scripting, or snapshotting flow needs one shared filesystem.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 

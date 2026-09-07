@@ -28,6 +28,18 @@ const LIVE_AUTHORING = path.resolve(
   __dirname,
   "../../../skills/skills/argent-create-flow/references/live-authoring.md"
 );
+const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
+/**
+ * How each insertion in {@link LIVE_AUTHORING}'s list is spelled in rule 5 of
+ * the core skill, which enumerates them rather than counting them. Kept in
+ * step with that list by the length assertion in the guard below, so a fourth
+ * bullet cannot be added while rule 5 still says "the only" three.
+ */
+const RULE_5_INSERTIONS = ["`snapshot:`", "`await: { idle: true }`", "Chromium"];
+const INSERTION_COUNT_CITATIONS = [
+  path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
+];
+
 /**
  * The three surfaces that quote the number of `idle` warnings instead of
  * listing them. They cite the reference rather than restating it, so a warning
@@ -122,15 +134,44 @@ describe("create-flow idle docs", () => {
     );
   });
 
+  it("every doc that quotes the number of permitted insertions quotes the number listed", () => {
+    const list = between(
+      LIVE_AUTHORING,
+      "Only these unrecorded insertions are allowed, at states observed live:",
+      "\nKeep raw forms only"
+    );
+    const listed = [...list.matchAll(/^- /gm)].length;
+    expect(listed).toBeGreaterThan(1);
+    const spelled = SPELLED[listed];
+    expect(spelled, `no spelling for ${listed} insertions`).toBeDefined();
+    for (const file of INSERTION_COUNT_CITATIONS) {
+      const quotes = [
+        ...readFileSync(file, "utf8").matchAll(/(\w+) (?:documented|permitted) polish insertions/g),
+      ];
+      expect(quotes.length, `${file} no longer cites the insertion count`).toBeGreaterThan(0);
+      for (const quote of quotes) expect(quote[1], file).toBe(spelled);
+    }
+    // Rule 5 cites no number — it ENUMERATES the insertions inline — so the
+    // spelled count above cannot police it. Hold it to the same list instead,
+    // and read only that sentence: `await: { idle: true }` is also in rule 4,
+    // so a file-wide search would pass with rule 5's copy of it deleted.
+    const rule5 = between(SKILL, "The only unrecorded insertions are", "\n");
+    expect(
+      RULE_5_INSERTIONS,
+      `rule 5 names ${RULE_5_INSERTIONS.length} insertions, the reference lists ${listed}`
+    ).toHaveLength(listed);
+    for (const token of RULE_5_INSERTIONS) {
+      expect(rule5, `rule 5 no longer names ${token} as an insertion`).toContain(token);
+    }
+  });
+
   it("every doc that quotes the number of idle warnings quotes the number the reference lists", () => {
     const warnings = between(FLOW_YAML, "It **never fails a run.**", "\nOnly a tree source");
     const listed = [...warnings.matchAll(/^- \*\*/gm)].length;
     // Guard the reader itself: a section that stopped matching would count 0
     // and then agree with nothing, which is not the failure we want reported.
     expect(listed).toBeGreaterThan(1);
-    const spelled = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"][
-      listed
-    ];
+    const spelled = SPELLED[listed];
     expect(spelled, `no spelling for ${listed} warnings`).toBeDefined();
     for (const file of WARNING_COUNT_CITATIONS) {
       // Anchored on the linked citation, not on any "… warnings" phrase: these
@@ -164,16 +205,6 @@ describe("create-flow idle docs", () => {
 
 describe("create-flow directive-answer docs", () => {
   const answered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) !== undefined);
-  const withoutRecordingTool = answered.filter((key) =>
-    directiveCommandHint(key)!.includes("records one")
-  );
-  const withRecordingTool = answered.filter((key) => !withoutRecordingTool.includes(key));
-
-  function sentenceWith(paragraph: string, marker: string): string {
-    const hit = paragraph.split(". ").find((s) => s.includes(marker));
-    expect(hit, `no sentence mentions "${marker}"`).toBeDefined();
-    return hit!;
-  }
 
   function commandParamDescription(): string {
     const schema = zodObjectToJsonSchema(createFlowAddStepTool({} as Registry).zodSchema!) as {
@@ -184,23 +215,22 @@ describe("create-flow directive-answer docs", () => {
     return described!;
   }
 
-  it("names every directive it answers, so a new one cannot go unmentioned", () => {
-    expect(answered.length).toBeGreaterThan(0);
-    const clause = sentenceWith(commandParamDescription(), "is answered with guidance");
-    for (const key of answered) expect(clause, key).toContain(`"${key}"`);
+  it("keeps directive guidance out of the command schema", () => {
+    const description = commandParamDescription();
+    expect(description).toContain("MCP tool to execute and record");
+    expect(description).toContain("Do not pass a flow directive or a recording tool");
+    expect(description).toContain("Call flow-add-script directly");
+    expect(description.split(/\s+/).length).toBeLessThan(40);
   });
 
-  it("names each directive that has no recording tool, on both surfaces", () => {
-    expect(withoutRecordingTool.length).toBeGreaterThan(0);
-    const { description } = createFlowAddStepTool({} as Registry);
-    expect(description, "flow-add-step no longer declares a description").toBeDefined();
-    for (const key of withoutRecordingTool) {
-      expect(sentenceWith(description!, "have no recording tool"), key).toContain(`\`${key}\``);
-      expect(commandParamDescription(), key).toContain(`"${key}"`);
+  it("returns guidance for each answered directive", () => {
+    expect(answered.length).toBeGreaterThan(0);
+    for (const key of answered) {
+      expect(directiveCommandHint(key), key).toContain(`"${key}"`);
     }
-    for (const key of withRecordingTool) {
-      expect(sentenceWith(description!, "have no recording tool"), key).not.toContain(`\`${key}\``);
-    }
+    expect(directiveCommandHint("script")).toBe(
+      '"script" is a flow directive. Call `flow-add-script` directly.'
+    );
   });
 });
 
