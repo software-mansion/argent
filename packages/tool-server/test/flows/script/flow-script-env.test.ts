@@ -658,6 +658,42 @@ describe("the shell-environment note", () => {
     expect(unrelated.steps[0].reason).not.toContain("snapshot");
   });
 
+  it("reads dash's wording without reading a three-part application error", async () => {
+    // dash writes `<writer>: <line>: <command>: not found`, and an application
+    // that puts a PATH in front of its own line number writes the same four
+    // fields — `fixtures/orders.json: 12: customerId: not found`. Script steps
+    // exist to seed databases and read fixtures, so that is exactly where the
+    // shape lives, and such a step must not end its verdict with a confident
+    // instruction to restart the tool server. What dash writes in the first
+    // field is the shell it is or the script it runs, so the name ends in `sh`.
+    await write(
+      "scripts/dash.mjs",
+      `throw new Error("Command failed: adb devices\\n/bin/sh: 1: adb: not found\\n");`
+    );
+    await write(
+      "scripts/three-part.mjs",
+      `throw new Error("fixtures/orders.json: 12: customerId: not found");`
+    );
+    await write(
+      "scripts/http-part.mjs",
+      `throw new Error("seed failed for api/v1/users: 404: user: not found");`
+    );
+    await flow("dash-line", "steps:\n  - script: { path: ../../scripts/dash.mjs }\n");
+    await flow("three-part", "steps:\n  - script: { path: ../../scripts/three-part.mjs }\n");
+    await flow("http-part", "steps:\n  - script: { path: ../../scripts/http-part.mjs }\n");
+
+    const dash = (await runFlow("dash-line")).result;
+    const threePart = (await runFlow("three-part")).result;
+    const httpPart = (await runFlow("http-part")).result;
+
+    expect(dash.steps[0].reason).toContain("A command was not found.");
+    expect(threePart.steps[0].reason).toContain("fixtures/orders.json");
+    expect(threePart.steps[0].reason).not.toContain("A command was not found");
+    expect(threePart.steps[0].reason).not.toContain("tool server");
+    expect(httpPart.steps[0].reason).not.toContain("A command was not found");
+    expect(httpPart.steps[0].reason).not.toContain("tool server");
+  });
+
   it("names the run's own PATH when the run is what set it", async () => {
     // This feature gives a flow four ways to set `PATH`. When a command then
     // fails because THAT value is wrong, the snapshot note asserts the

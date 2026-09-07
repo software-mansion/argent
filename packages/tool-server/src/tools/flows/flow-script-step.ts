@@ -288,8 +288,17 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  *
  * The line number alone does not separate the two: a THREE-part error with a
  * numeric second field has it as well (`request failed: 404: /api/users: not
- * found`). What dash writes in front of the number is a path or a bare shell
- * name and never a sentence, so that is what the pattern asks for.
+ * found`), and so does an application that writes a PATH in front of its own
+ * line number — `fixtures/orders.json: 12: customerId: not found` is the same
+ * missing-fixture shape one field longer. Asking merely for a path in front of
+ * the number therefore separates nothing.
+ *
+ * What dash writes there is the shell it is, or the script it is running: the
+ * name ends in `sh`, either as the whole name (`sh`, `bash`, `dash`, `ksh`,
+ * `zsh`, `ash`) or as the extension a `.sh` file carries. That is what the
+ * pattern asks for, and it is the fact a fixture path does not have. A script
+ * named without an extension — `/usr/local/bin/seed: 3: adb: not found` — is
+ * missed by it, and a missed note is the safe direction.
  *
  * The end anchor is what makes the phrase safe to accept at all: `for: command
  * not found never appeared in it` has the words but keeps going. Nothing caps
@@ -298,7 +307,7 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
  */
 const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
   /^[^\n:]+: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
-  /^(?:[^\n:]*[/\\][^\n:]*|(?:ba|da|k|z|a)?sh): (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[^\n:]*[/\\])?(?:[A-Za-z0-9_.+-]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^[^\n:]+:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
   // Anchored at the quote cmd.exe opens the line with. Without that anchor any
   // sentence QUOTING the message matched — `AssertionError: 'foo' is not
