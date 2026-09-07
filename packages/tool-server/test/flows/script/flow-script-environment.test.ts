@@ -498,3 +498,52 @@ describe("flow script executor — the working directory", () => {
     expect(result.output?.cwd).not.toBe(process.cwd());
   });
 });
+
+describe("an environment near the operating system's limit", () => {
+  // `ARG_MAX` bounds the block of arguments and environment a new process is
+  // handed. Above it the fork is refused outright; just below it the fork
+  // succeeds and Node dies inside its own startup, which arrives as a runner
+  // that exited before the script started — a verdict naming an exit code and
+  // nothing else. A flow could not set `env` at all before this branch, so
+  // both bands are newly reachable and neither had a test.
+  it("names the environment's size above the limit and just below it", async () => {
+    const ws = workspace();
+    const script = ws.write("noop.mjs", "output.ok = true;");
+
+    const refused = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(1_400_000) },
+    });
+    expect(refused.failure?.kind).toBe("spawn");
+    expect(refused.failure?.message).toContain("E2BIG");
+    expect(refused.failure?.message).toContain("ARG_MAX");
+
+    const died = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(1_000_000) },
+    });
+    // Whichever side of the line this host puts a megabyte on, the size is
+    // named: the refusal names it in the message, the early exit in a note.
+    const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
+    expect(died.ok).toBe(false);
+    expect(said).toMatch(/ARG_MAX/);
+    expect(said).toMatch(/100\d{4} bytes/);
+  }, 60_000);
+
+  it("says nothing about the environment when an ordinary one dies early", async () => {
+    const ws = workspace();
+    // Exits before the runner reports a start: the protocol verdict this note
+    // must stay off.
+    const script = ws.write("early.mjs", "process.exit(7);");
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { SMALL: "value" },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.notes.join(" ")).not.toContain("ARG_MAX");
+  }, 30_000);
+});

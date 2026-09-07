@@ -992,6 +992,27 @@ export class FlowScriptExecutor {
       request.secrets ?? []
     );
 
+    // The band the E2BIG refusal does not cover. Past `ARG_MAX` the operating
+    // system refuses the fork outright and `spawnFailureMessage` names the
+    // environment; just BELOW it the fork succeeds and Node dies inside its own
+    // startup, which arrives here as a runner that exited before it started the
+    // script — a verdict that names an exit code and nothing else. A flow could
+    // not set `env` at all before this branch, so this is the one shape of that
+    // failure an author can now cause, and the size is the lead they need.
+    //
+    // A note rather than the verdict: this is a possible cause, not a diagnosis.
+    // An ordinary environment is a few kilobytes, so the floor is well clear of
+    // one and this stays silent for every other way the runner can die early.
+    if (!startedSeen && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
+      notes.push(
+        `The environment this step would carry is ${environmentBytes(env)} bytes. An ` +
+          `environment near this operating system's limit for one process (ARG_MAX) is refused ` +
+          `outright above it and dies inside Node's own startup just below it, which is what a ` +
+          `runner that exits before the script starts looks like. Shorten the \`env\` values, or ` +
+          `write the payload to a file and pass its path.`
+      );
+    }
+
     return {
       ...verdict,
       log,
@@ -1799,6 +1820,17 @@ function spawnFailureMessage(err: unknown, env: NodeJS.ProcessEnv): string {
     `(ARG_MAX). Shorten the \`env\` values, or write the payload to a file and pass its path.`
   );
 }
+
+/**
+ * When an environment is big enough to be worth naming as a possible cause of a
+ * runner that died before it started the script.
+ *
+ * Well clear of an ordinary one — the host allowlist and a handful of flow
+ * values come to a few kilobytes — so the note stays off every other way that
+ * failure arrives. The smallest `ARG_MAX` argent runs on is an order of
+ * magnitude above this, which is the point: the note is a lead, not a bound.
+ */
+const LARGE_ENVIRONMENT_BYTES = 128 * 1024;
 
 /** What the environment costs against that limit: `NAME=value`, NUL-terminated. */
 function environmentBytes(env: NodeJS.ProcessEnv): number {
