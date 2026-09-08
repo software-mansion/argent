@@ -108,12 +108,12 @@ export async function resolveBashInterpreter(
   const configured = projectAnchoredConfigValue<string>(BASH_CONFIG_KEY, anchor);
   if (configured !== undefined) {
     const problem = interpreterProblem(configured) ?? (await notBashProblem(configured));
+    const source = configuredSource(configured, anchor);
     return problem
       ? {
           problem:
-            `The configured bash (${BASH_CONFIG_KEY} = ${configured}, from ` +
-            `${configuredIn(configured, anchor)}) ${problem}. Point ${BASH_CONFIG_KEY} at a bash ` +
-            `executable, or unset it to use the one on this host's PATH.`,
+            `The configured bash (${BASH_CONFIG_KEY} = ${configured}, from ${source.file}) ` +
+            `${problem}. Point ${BASH_CONFIG_KEY} at a bash executable, or ${unsetAdvice(source)}.`,
         }
       : { path: configured };
   }
@@ -262,16 +262,42 @@ function firstLine(err: unknown): string {
 }
 
 /**
- * Which file to edit. `getConfigValue` merges the two scopes, so a stale GLOBAL
- * value makes every `.sh` step in every project on the machine refuse with a
- * message about a file the project does not contain.
+ * Which file to edit, and what is behind it. `getConfigValue` merges the two
+ * scopes, so a stale GLOBAL value makes every `.sh` step in every project on the
+ * machine refuse with a message about a file the project does not contain.
+ *
+ * The other scope's value is read too, because the key takes both: unsetting
+ * the file named here falls through to that value, not to PATH.
  */
-function configuredIn(configured: string, anchor: string | undefined): string {
+function configuredSource(
+  configured: string,
+  anchor: string | undefined
+): { file: string; behindIt?: { value: string; file: string } } {
   const options = anchor ? { cwd: anchor } : {};
   const project = getConfigValueAtScope(BASH_CONFIG_KEY, "project", options);
-  return project === configured
-    ? configFilePath("project", options)
-    : configFilePath("global", options);
+  const inProject = project === configured;
+  const behind = inProject ? getConfigValueAtScope(BASH_CONFIG_KEY, "global", options) : undefined;
+  return {
+    file: configFilePath(inProject ? "project" : "global", options),
+    ...(typeof behind === "string"
+      ? { behindIt: { value: behind, file: configFilePath("global", options) } }
+      : {}),
+  };
+}
+
+/**
+ * What unsetting the file above really does. `scripts.bash` takes both scopes
+ * with `prioritize-local`, so "unset it to use the one on this host's PATH" was
+ * true only where one scope held a value: with a project value over a global
+ * one, following that advice silently swapped the interpreter to the global
+ * value instead - and the next failure no longer mentions `scripts.bash` at all,
+ * which is the situation this key exists to make visible.
+ */
+function unsetAdvice(source: { behindIt?: { value: string; file: string } }): string {
+  return source.behindIt
+    ? `unset it there to fall back to ${source.behindIt.value}, which ` +
+        `${source.behindIt.file} sets — unset it in both files to use the one on this host's PATH`
+    : "unset it to use the one on this host's PATH";
 }
 
 /**

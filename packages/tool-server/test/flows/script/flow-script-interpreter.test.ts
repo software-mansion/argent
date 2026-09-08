@@ -226,6 +226,25 @@ describe("scripts.bash, read against the flow's own project", () => {
   // a stale GLOBAL value refuses every `.sh` step in every project on the
   // machine — and a message naming a project file the value is not in sends the
   // author to the wrong file.
+  // The key takes both scopes with `prioritize-local`, so unsetting the file
+  // just named falls through to the OTHER scope's value, not to PATH. Following
+  // the old advice silently swapped the interpreter, and the next failure no
+  // longer mentioned `scripts.bash` at all.
+  it("says what unsetting the project value would fall back to", async () => {
+    const behind = path.join(home, ".argent");
+    fs.mkdirSync(behind, { recursive: true });
+    fs.writeFileSync(
+      path.join(behind, "config.json"),
+      JSON.stringify({ scripts: { bash: "/global/bin/bash" } })
+    );
+    const root = projectWith({ scripts: { bash: path.join("bin", "bash") } });
+
+    const problem = (await resolveBashInterpreter(root)) as { problem: string };
+
+    expect(problem.problem).toContain("fall back to /global/bin/bash");
+    expect(problem.problem).toContain("unset it in both files");
+  });
+
   it("names the global file when the value came from there", async () => {
     const root = projectWith(undefined);
     fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
