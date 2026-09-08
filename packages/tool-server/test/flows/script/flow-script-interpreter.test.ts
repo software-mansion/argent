@@ -603,6 +603,28 @@ describe("a candidate that will not answer", () => {
     30_000
   );
 
+  // The other way a probed candidate dies by a signal. It answers in
+  // milliseconds and nothing here stopped it, so the sentence about a
+  // five-second wait was false about it - and it sent an operator whose pinned
+  // bash is crashing looking for a slow one.
+  onPosix("says a candidate died on its own rather than blaming the wait", async () => {
+    const root = projectWith(undefined);
+    const crasher = nodeExecutable(root, "bash", 'process.kill(process.pid, "SIGSEGV");\n');
+    fs.writeFileSync(
+      path.join(root, ".argent", "config.json"),
+      JSON.stringify({ scripts: { bash: crasher } })
+    );
+
+    const startedAt = Date.now();
+    const found = await resolveBashInterpreter(root);
+    const elapsed = Date.now() - startedAt;
+
+    expect((found as { problem: string }).problem).toContain("died from SIGSEGV");
+    expect((found as { problem: string }).problem).not.toContain("seconds");
+    // The probe waits five seconds before it stops a candidate itself.
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   onPosix(
     "answers when the candidate exits, not when the last holder of its pipe does",
     async () => {

@@ -147,10 +147,16 @@ async function notBashProblem(candidate: string): Promise<string | null> {
   const answer = await askForBashVersion(candidate);
   if (BASH_PROBE_MARKER.test(answer.stdout)) return null;
   if (answer.signal) {
-    return (
-      `answered nothing when it was asked for its version, and was stopped by ${answer.signal} ` +
-      `(the check waits ${BASH_PROBE_TIMEOUT_MS / 1_000} seconds, then stops the candidate)`
-    );
+    // Which of the two happened, because the remedy is not the same one. A
+    // candidate this check stopped is a slow or hanging one; a candidate that
+    // died from a signal nothing here sent - a wrapper that segfaults, one the
+    // kernel killed for its memory, one that kills itself - answers in
+    // milliseconds, and a sentence about a five-second wait sends its operator
+    // looking for a slow candidate instead.
+    return answer.stoppedByCheck
+      ? `did not answer when it was asked for its version within ` +
+          `${BASH_PROBE_TIMEOUT_MS / 1_000} seconds, and was stopped with ${answer.signal}`
+      : `answered nothing when it was asked for its version, and died from ${answer.signal}`;
   }
   return (
     "is not a bash: running it printed no $BASH_VERSION, so a `.sh` step would report the " +
@@ -176,9 +182,12 @@ async function notBashProblem(candidate: string): Promise<string | null> {
  * behind it, rather than at the close of a pipe whatever it started still
  * holds.
  */
-function askForBashVersion(
-  candidate: string
-): Promise<{ stdout: string; signal: NodeJS.Signals | null; failure?: string }> {
+function askForBashVersion(candidate: string): Promise<{
+  stdout: string;
+  signal: NodeJS.Signals | null;
+  stoppedByCheck: boolean;
+  failure?: string;
+}> {
   return new Promise((resolve) => {
     let child: ChildProcess;
     try {
@@ -187,7 +196,7 @@ function askForBashVersion(
         windowsHide: true,
       });
     } catch (err) {
-      resolve({ stdout: "", signal: null, failure: firstLine(err) });
+      resolve({ stdout: "", signal: null, stoppedByCheck: false, failure: firstLine(err) });
       return;
     }
     let stdout = "";
@@ -197,13 +206,14 @@ function askForBashVersion(
     const answer = (signal: NodeJS.Signals | null, failure?: string) => {
       if (settled) return;
       settled = true;
+      const stoppedByCheck = killedWith !== null;
       for (const timer of timers) clearTimeout(timer);
       // This end of the pipe, and the handle behind it: a candidate that is
       // still running is one nothing waits for any more, and either would keep
       // the tool server's own loop alive for it.
       child.stdout?.destroy();
       child.unref();
-      resolve({ stdout, signal, ...(failure === undefined ? {} : { failure }) });
+      resolve({ stdout, signal, stoppedByCheck, ...(failure === undefined ? {} : { failure }) });
     };
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
