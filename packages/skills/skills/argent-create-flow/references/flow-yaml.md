@@ -264,7 +264,8 @@ If a script fails, check its changes before you retry.
 - `"$(dirname "${BASH_SOURCE[0]}")"` is the directory of the script file, which is not the working directory.
 - Commands resolve against the PATH of the tool-server, which it inherits from the program that started Argent, usually your editor. A command that is absent from that PATH exits 127. On Windows, the bash of Git for Windows puts its own directories first.
 - Check the file out with LF line endings, and add `*.sh text eol=lf` to `.gitattributes`. The usual CRLF symptom is `$'\r': command not found` and exit 127.
-- Argent stops the process group of the step when bash exits, so a background job dies with the step. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job: it runs on after the flow ends, and you must stop it yourself. `setsid` is absent on macOS.
+- On macOS and Linux, Argent stops the process group of the step when bash exits, so a background job dies with the step. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job: it runs on after the flow ends, and you must stop it yourself. `setsid` is absent on macOS.
+- On Windows there is no process group. A background job outlives a step that passed, so stop each job in the script.
 - Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` also kills bash, and the step fails. Signal the pid of the job.
 
 ## Snapshots and standalone runs
