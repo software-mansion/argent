@@ -4,12 +4,33 @@ import type { DeviceInfo } from "@argent/registry";
 import { adbShell } from "./adb";
 import { isIosPhysicalDevice } from "./device-info";
 import { simctlArgsForUdid } from "./ios-device-sets";
+import { simctlStatusBar } from "./sim-remote";
 
 const execFileAsync = promisify(execFile);
 
 /** Pins the status bar to fixed values so its clock / battery / signal never drive a screenshot diff. */
 
 const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
+
+/**
+ * The overridden values, shared by the local and remote iOS arms. A remote
+ * simulator shares its baselines with a local one of the same model, so the two
+ * must pin the bar to the same pixels — a second literal here would let them
+ * drift and fail every shared snapshot on the clock alone.
+ */
+const IOS_STATUS_BAR_OVERRIDE = [
+  "override",
+  "--time",
+  "9:37",
+  "--batteryState",
+  "charged",
+  "--batteryLevel",
+  "100",
+  "--wifiBars",
+  "3",
+  "--cellularBars",
+  "4",
+];
 
 /**
  * Returns whether the caller must schedule a run-end {@link restoreStatusBar}:
@@ -25,22 +46,15 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     if (device.platform === "ios") {
       await execFileAsync(
         "xcrun",
-        await simctlArgsForUdid(device.id, [
-          "status_bar",
-          device.id,
-          "override",
-          "--time",
-          "9:37",
-          "--batteryState",
-          "charged",
-          "--batteryLevel",
-          "100",
-          "--wifiBars",
-          "3",
-          "--cellularBars",
-          "4",
-        ])
+        await simctlArgsForUdid(device.id, ["status_bar", device.id, ...IOS_STATUS_BAR_OVERRIDE])
       );
+      return true;
+    }
+    // A remote simulator runs the same simctl verb on the other machine, so it
+    // needs the same pin — without it the clock ticks through a run and drives
+    // any diff whose region overlaps the bar (a `cropOn` there is not masked).
+    if (device.platform === "ios-remote") {
+      await simctlStatusBar(device.id, IOS_STATUS_BAR_OVERRIDE);
       return true;
     }
     if (device.platform === "android") {
@@ -78,6 +92,8 @@ export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
         "xcrun",
         await simctlArgsForUdid(device.id, ["status_bar", device.id, "clear"])
       );
+    } else if (device.platform === "ios-remote") {
+      await simctlStatusBar(device.id, ["clear"]);
     } else if (device.platform === "android") {
       try {
         await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
