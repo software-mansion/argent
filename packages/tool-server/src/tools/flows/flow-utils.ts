@@ -2218,11 +2218,6 @@ export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
  * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
  * `platform` run param) and service refs / transports all keep the real
  * platform.
- *
- * One caution where it IS applied: the recorder's advice in flow-add-step also
- * names a REPAIR, and a repair is a machine question — so it asks the real
- * platform whether a runner tree exists at all (`supportsFlowTree`) before
- * quoting the remedy for a source that is merely down.
  */
 export function authoringPlatform(platform: string): string {
   return platform === "ios-remote" ? "ios" : platform;
