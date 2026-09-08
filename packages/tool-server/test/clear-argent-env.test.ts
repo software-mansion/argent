@@ -16,14 +16,22 @@ const MIXED_CASE_PROBE = "Argent_Pin_Probe_Mixed";
 const LOOKALIKE = "ARGENTINA_REGION";
 
 // The probe is the setup file's job to delete, so dropping it is the correct end
-// state. The lookalike is not — it is planted here, and this file must leave the
-// ambient one exactly as it found it.
+// state. The other two are not: the lookalike is planted here, and the provider
+// guard is what a later setup file set — re-running the sweep deletes it, which
+// is the hazard the last test in this file is about.
 const AMBIENT_LOOKALIKE = process.env[LOOKALIKE];
+const PROVIDER_GUARD = "ARGENT_DISABLE_DEVICE_PROVIDERS";
+const AMBIENT_PROVIDER_GUARD = process.env[PROVIDER_GUARD];
 
 afterEach(() => {
   for (const name of [PROBE, MIXED_CASE_PROBE]) delete process.env[name];
-  if (AMBIENT_LOOKALIKE === undefined) delete process.env[LOOKALIKE];
-  else process.env[LOOKALIKE] = AMBIENT_LOOKALIKE;
+  for (const [name, value] of [
+    [LOOKALIKE, AMBIENT_LOOKALIKE],
+    [PROVIDER_GUARD, AMBIENT_PROVIDER_GUARD],
+  ] as const) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 describe("clear-argent-env suite guard", () => {

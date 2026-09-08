@@ -26,25 +26,39 @@ const LOOKALIKE = "ARGENTINA_REGION";
 // subdirectory is caught rather than silently dropped from the count.
 const UNSWEPT_SRC_FILES = ["ci-detect.ts"];
 
-// Which files the scan can see, not just which names it finds. Every pattern
-// below keys on the identifier `env`, so renaming a parameter takes its whole
-// file out of view — cloud-agent-detect.ts reads the environment only through
-// one — while the remaining files still supply DO_NOT_TRACK and the scan
-// reports full coverage of nothing.
+// Which files the scan can see, not just which names it finds: a file that
+// stops matching would otherwise be silently dropped from the count while the
+// rest still supply DO_NOT_TRACK.
 const SRC_FILES_READING_ENV = ["cloud-agent-detect.ts", "consent.ts", "debug.ts"];
 
-// Every form a read spelled through an `env` identifier takes. A read that
-// reaches the environment some other way — an alias, `Reflect.get`, a computed
-// name — is out of view; otel.ts is the real case, reading `process.env[name]`
-// over a list of the OTEL_* variables the setup file leaves alone on purpose.
-// SRC_FILES_READING_ENV below is what keeps a rename from emptying the scan.
-const ENV_DOTTED = /\benv\??\.([A-Z][A-Z0-9_]*)\b/g;
-const ENV_BRACKETED = /\benv(?:\?\.)?\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g;
-// `[^{}]` keeps the match inside the destructuring pattern. Without it the
+// The identifiers a file binds the environment to, so a read is found under
+// whatever name it was given rather than only under `env`. `noImplicitAny` is
+// what makes the annotation reliable: a parameter taking the environment cannot
+// be left untyped. A read that reaches it some other way — `Reflect.get`, a
+// computed name — is still out of view; otel.ts is the real case, reading
+// `process.env[name]` over a list of the OTEL_* variables the setup file leaves
+// alone on purpose.
+const ENV_ANNOTATED = /\b([A-Za-z_$][\w$]*)\s*\??\s*:\s*(?:NodeJS\.)?ProcessEnv\b/g;
+const ENV_ALIASED = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*process\.env\b/g;
+
+function envIdentifiers(source: string): string[] {
+  const names = new Set(["process\\.env"]);
+  for (const [, annotated] of source.matchAll(ENV_ANNOTATED)) names.add(annotated!);
+  for (const [, aliased] of source.matchAll(ENV_ALIASED)) names.add(aliased!);
+  return [...names];
+}
+
+// `[^{}]` keeps the destructure match inside the pattern. Without it the
 // leftmost match starts at the enclosing block's brace and harvests every
 // capitalised token in the body — `Number(` reads as an env name called `N`.
 // The optional `: Type` is the annotated form, `const { X }: ProcessEnv = env`.
-const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{([^{}]*)\}\s*(?::[^={}]*)?=\s*(?:process\.)?env\b/g;
+const accessForms = (id: string): RegExp[] => [
+  new RegExp(`\\b${id}\\??\\.([A-Z][A-Z0-9_]*)\\b`, "g"),
+  new RegExp(`\\b${id}(?:\\?\\.)?\\[\\s*["']([A-Z][A-Z0-9_]*)["']\\s*\\]`, "g"),
+];
+
+const destructureForm = (id: string): RegExp =>
+  new RegExp(`(?:const|let|var)\\s*\\{([^{}]*)\\}\\s*(?::[^={}]*)?=\\s*${id}\\b`, "g");
 
 // `{ FOO: local }` binds under a different name and `{ FOO = "x" }` gives one a
 // default; the env key is what precedes both, and it has to be the whole token
@@ -56,11 +70,10 @@ const destructuredNames = (pattern: string): string[] =>
     .filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name));
 
 function envNamesRead(source: string): string[] {
-  return [
-    ...[...source.matchAll(ENV_DOTTED)].map((m) => m[1]!),
-    ...[...source.matchAll(ENV_BRACKETED)].map((m) => m[1]!),
-    ...[...source.matchAll(ENV_DESTRUCTURED)].flatMap((m) => destructuredNames(m[1]!)),
-  ];
+  return envIdentifiers(source).flatMap((id) => [
+    ...accessForms(id).flatMap((form) => [...source.matchAll(form)].map((m) => m[1]!)),
+    ...[...source.matchAll(destructureForm(id))].flatMap((m) => destructuredNames(m[1]!)),
+  ]);
 }
 
 /** Every .ts file under `dir`, at any depth, minus the declared exemptions. */
@@ -144,18 +157,27 @@ describe("clear-telemetry-env suite guard", () => {
     // Only the dotted form appears in src today, so the branches handling the
     // rest are unexercised by the scan above and could be dropped unnoticed.
     const forms = [
-      `env.DOT_READ`,
-      `env?.CHAIN_READ`,
-      `env["BRACKET_READ"]`,
-      `env?.['CHAINED_BRACKET_READ']`,
-      `const { DESTRUCTURED_READ } = env;`,
-      `const { PROCESS_DESTRUCTURED } = process.env;`,
-      `const { RENAMED_READ: local } = env;`,
-      `const { ANNOTATED_READ }: NodeJS.ProcessEnv = env;`,
-      `const { DEFAULTED_READ = "fallback" } = env;`,
-      `const { RENAMED_DEFAULTED_READ: also = "fallback" } = env;`,
+      `function read(env: NodeJS.ProcessEnv) {`,
+      `  env.DOT_READ;`,
+      `  env?.CHAIN_READ;`,
+      `  env["BRACKET_READ"];`,
+      `  env?.['CHAINED_BRACKET_READ'];`,
+      `  const { DESTRUCTURED_READ } = env;`,
+      `  const { PROCESS_DESTRUCTURED } = process.env;`,
+      `  const { RENAMED_READ: local } = env;`,
+      `  const { ANNOTATED_READ }: NodeJS.ProcessEnv = env;`,
+      `  const { DEFAULTED_READ = "fallback" } = env;`,
+      `  const { RENAMED_DEFAULTED_READ: also = "fallback" } = env;`,
+      `}`,
+      // The binding does not have to be called `env`: a differently named
+      // parameter, and a local alias of process.env, are the two ways a read
+      // walks out of a name-keyed scan.
+      `function renamed(vars: NodeJS.ProcessEnv) { return vars.RENAMED_BINDING_READ; }`,
+      `const aliased = process.env;`,
+      `aliased.ALIASED_READ;`,
     ].join("\n");
-    expect(envNamesRead(forms).sort()).toEqual([
+    expect([...new Set(envNamesRead(forms))].sort()).toEqual([
+      "ALIASED_READ",
       "ANNOTATED_READ",
       "BRACKET_READ",
       "CHAINED_BRACKET_READ",
@@ -164,6 +186,7 @@ describe("clear-telemetry-env suite guard", () => {
       "DESTRUCTURED_READ",
       "DOT_READ",
       "PROCESS_DESTRUCTURED",
+      "RENAMED_BINDING_READ",
       "RENAMED_DEFAULTED_READ",
       "RENAMED_READ",
     ]);
@@ -177,7 +200,7 @@ describe("clear-telemetry-env suite guard", () => {
       `  return parsed || Number(OTHER_REAL_READ) || 1;`,
       `}`,
     ].join("\n");
-    expect(envNamesRead(enclosed).sort()).toEqual(["OTHER_REAL_READ", "REAL_READ"]);
+    expect([...new Set(envNamesRead(enclosed))].sort()).toEqual(["OTHER_REAL_READ", "REAL_READ"]);
   });
 
   it("scans subdirectories, so a read cannot be moved out of view", () => {

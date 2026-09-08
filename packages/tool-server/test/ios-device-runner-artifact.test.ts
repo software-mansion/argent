@@ -129,10 +129,14 @@ describe("ensureRunnerArtifact", () => {
     try {
       return await fn();
     } finally {
-      process.env.HOME = saved.HOME;
-      process.env.PATH = saved.PATH;
-      if (saved.PROJECT === undefined) delete process.env.ARGENT_IOS_RUNNER_PROJECT;
-      else process.env.ARGENT_IOS_RUNNER_PROJECT = saved.PROJECT;
+      // Assigning back an undefined saved value writes the string "undefined",
+      // which os.homedir() then resolves as a relative path — the same
+      // delete-or-assign the PROJECT restore below already does.
+      for (const [name, value] of Object.entries(saved)) {
+        const key = name === "PROJECT" ? "ARGENT_IOS_RUNNER_PROJECT" : name;
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   }
 

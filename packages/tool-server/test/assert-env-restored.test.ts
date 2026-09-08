@@ -5,30 +5,30 @@ import { SCOPED_ENV_VARS } from "./setup/assert-env-restored";
 // its body never reports anything and a refactor could hollow it out unnoticed —
 // the same blind spot clear-argent-env.ts has, pinned the same way.
 
+const BEFORE = "argent-guard-ambient";
+const PROBE = "argent-guard-probe";
+
 describe("assert-env-restored", () => {
   it("watches the pair os.homedir() consults and the PATH a stubbed binary is found on", () => {
     expect(SCOPED_ENV_VARS).toEqual(["HOME", "USERPROFILE", "PATH"]);
   });
 
-  it("registers an afterAll that reports against the environment as it was at module load", async () => {
+  it("registers an afterAll that reports every watched variable against the environment as it was at module load", async () => {
     // Registration and the module-load snapshot are the two halves no direct
-    // call reaches: a hook that never registers and one that snapshots on the
-    // spot — comparing the environment with itself — both leave every suite
+    // call reaches: a hook that never registers, and one that snapshots on the
+    // spot and so compares the environment with itself, both leave every suite
     // green. Importing under a stubbed vitest hands over the real hook body.
-    const ambient = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-    const ambientPath = process.env.PATH!;
-    const restore = (name: "HOME" | "USERPROFILE"): void => {
-      if (ambient[name] === undefined) delete process.env[name];
-      else process.env[name] = ambient[name];
-    };
+    const ambient = Object.fromEntries(SCOPED_ENV_VARS.map((name) => [name, process.env[name]]));
     const hooks: Array<() => void> = [];
 
     try {
-      // Snapshot with USERPROFILE unset whichever platform this is: unset ->
-      // set is the shape a dropped restore leaves on macOS and Linux, and a
-      // guard narrowed to variables that were already set would still pass a
-      // changed -> changed case.
+      // A known environment at module load, so neither half of the message
+      // depends on the machine. USERPROFILE is left unset: unset -> set is the
+      // shape a dropped restore leaves on macOS and Linux, and a guard narrowed
+      // to variables that were already set would pass the other direction.
+      for (const name of SCOPED_ENV_VARS) process.env[name] = BEFORE;
       delete process.env.USERPROFILE;
+
       vi.doMock("vitest", () => ({ afterAll: (fn: () => void) => hooks.push(fn) }));
       vi.resetModules();
       await import("./setup/assert-env-restored");
@@ -38,24 +38,28 @@ describe("assert-env-restored", () => {
       expect(hooks).toHaveLength(1);
       expect(hooks[0]!).not.toThrow();
 
-      // The ambient half of the message is whatever this machine has, so only
-      // the leaked half is asserted literally.
-      process.env.HOME = "/tmp/argent-tool-server-deleted";
-      expect(hooks[0]!).toThrow(/HOME: .+ -> \/tmp\/argent-tool-server-deleted/);
-      restore("HOME");
+      // Every entry, not just the ones a suite here happens to change: one
+      // declared but not watched reports nothing and nothing says so.
+      for (const name of SCOPED_ENV_VARS) {
+        const was = name === "USERPROFILE" ? "(unset)" : BEFORE;
+        process.env[name] = PROBE;
 
-      process.env.USERPROFILE = "/tmp/argent-tool-server-deleted";
-      expect(hooks[0]!).toThrow("USERPROFILE: undefined -> /tmp/argent-tool-server-deleted");
-      restore("USERPROFILE");
+        expect(hooks[0]!).toThrow(`${name}: ${was} -> ${PROBE}`);
 
-      // PATH runs to well over a kilobyte on a developer machine, so both
-      // halves of its line are cut to 60 characters.
+        if (name === "USERPROFILE") delete process.env[name];
+        else process.env[name] = BEFORE;
+      }
+
+      // A long value is cut on both halves, so one leaked PATH cannot bury
+      // the rest of the line.
       process.env.PATH = "/a".repeat(200);
+
       expect(hooks[0]!).toThrow(`-> ${"/a".repeat(30)}…`);
     } finally {
-      restore("HOME");
-      restore("USERPROFILE");
-      process.env.PATH = ambientPath;
+      for (const name of SCOPED_ENV_VARS) {
+        if (ambient[name] === undefined) delete process.env[name];
+        else process.env[name] = ambient[name];
+      }
     }
   });
 });

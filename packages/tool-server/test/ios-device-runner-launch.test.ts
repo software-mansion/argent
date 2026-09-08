@@ -29,8 +29,12 @@ async function launchWithPath(pathDir: string): Promise<Awaited<ReturnType<typeo
       derivedDataPath: path.join(tmpRoot, "derived"),
     });
   } finally {
-    process.env.PATH = saved.PATH;
-    process.env.HOME = saved.HOME;
+    // Assigning back an undefined saved value writes the string "undefined",
+    // which os.homedir() then resolves as a relative path.
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 }
 
