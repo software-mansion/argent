@@ -1603,15 +1603,40 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
  * credential, which the placeholder says.
  */
 function repairQuotedCuts(text: string, secrets: readonly FlowScriptSecret[]): string {
+  const cuts = [...text.matchAll(FOREIGN_CUT_RE)];
+  if (cuts.length === 0) return text;
+  const quotes = openingQuotes(text);
   let out = "";
   let copied = 0;
-  for (const cut of text.matchAll(FOREIGN_CUT_RE)) {
-    const hit = quotedCutBefore(text, cut.index, copied, secrets);
+  for (const cut of cuts) {
+    const hit = quotedCutBefore(text, cut.index, copied, secrets, quotes);
     if (!hit) continue;
     out += `${text.slice(copied, hit.from)}${SECRET_PLACEHOLDER_MARKER}${hit.name}}}`;
     copied = hit.from + hit.length;
   }
   return copied === 0 ? text : out + text.slice(copied);
+}
+
+/**
+ * For each position, the nearest quote at or before it, or `-1`.
+ *
+ * Read once for the whole text rather than at each candidate, because the
+ * candidates are the PRODUCT of the ellipses in the text and the length of a
+ * spelling, and neither is bounded by anything smaller than the 8 KiB message
+ * and 16 KiB stack ceilings. A failure text that is dense in ellipses and a
+ * value long enough to be a PEM key — the shape the docs recommend an `env`
+ * value for — met as a walk of one against the other, on the shared tool
+ * server's own event loop, after the child had already exited. Neither factor
+ * costs anything alone, which is what made the product easy to miss.
+ */
+function openingQuotes(text: string): Int32Array {
+  const quotes = new Int32Array(text.length);
+  let last = -1;
+  for (let at = 0; at < text.length; at++) {
+    if (CUT_QUOTES.has(text[at]!)) last = at;
+    quotes[at] = last;
+  }
+  return quotes;
 }
 
 /**
@@ -1623,28 +1648,53 @@ function repairQuotedCuts(text: string, secrets: readonly FlowScriptSecret[]): s
  * Shorter than the value it came from, always: a whole value is what
  * `scrubSecretValues` has already replaced, and searching for one here would
  * only find text that pass left alone on purpose.
+ *
+ * The quote that OPENS the fragment is the nearest one before the cut, and it
+ * bounds the descent: nothing before it is inside the fragment, so no prefix
+ * can start there. A cut with no quote in front of it at all answers nothing
+ * and is skipped whole. For a value that holds a quote of its own the nearest
+ * quote can be the value's, which anchors the repair short — the raw scrub
+ * still takes such a value whole, and every credential shape this repair was
+ * written for holds none.
  */
 function quotedCutBefore(
   text: string,
   at: number,
   floor: number,
-  secrets: readonly FlowScriptSecret[]
+  secrets: readonly FlowScriptSecret[],
+  quotes: Int32Array
 ): { from: number; length: number; name: string } | undefined {
   const ends = at - 1 > floor && CUT_QUOTES.has(text[at - 1]!) ? [at, at - 1] : [at];
   let best: { from: number; length: number; name: string } | undefined;
   for (const end of ends) {
+    const quote = end > 0 ? quotes[end - 1]! : -1;
+    if (quote < floor) continue;
     for (const { name, value } of secrets) {
-      const longest = Math.min(value.length - 1, end - floor - 1);
+      const longest = Math.min(value.length - 1, end - quote - 1);
       for (let n = longest; n > (best?.length ?? 0); n--) {
         const from = end - n;
         if (!CUT_QUOTES.has(text[from - 1]!)) continue;
-        if (!text.startsWith(value.slice(0, n), from)) continue;
+        if (!holdsPrefix(text, from, value, n)) continue;
         best = { from, length: n, name };
         break;
       }
     }
   }
   return best;
+}
+
+/**
+ * Whether `text` carries the first `n` characters of `value` at `from`.
+ *
+ * Compared in place rather than through `startsWith` on a slice: the slice
+ * allocates the whole prefix on every candidate, and a candidate is rejected on
+ * its first character nearly always.
+ */
+function holdsPrefix(text: string, from: number, value: string, n: number): boolean {
+  for (let at = 0; at < n; at++) {
+    if (text[from + at] !== value[at]) return false;
+  }
+  return true;
 }
 
 /**
