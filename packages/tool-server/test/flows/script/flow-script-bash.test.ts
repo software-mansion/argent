@@ -581,6 +581,28 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
   }, 30_000);
 
+  // The same stray sibling on the non-zero exit path, which is the only path
+  // that ever reads `$ARGENT_REASON`. The author whose script DID explain
+  // itself got the bare exit line - no reason text, no note, and no CRLF hint,
+  // since `exitCodeHint` names CRLF only for 126 and 127 - while the identical
+  // stray file on the exit-0 path produced a full remediation message.
+  it("names CRLF when a failing script's reason landed one carriage return away", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "crlf-reason.sh",
+      'echo "the orders API answered 503" > "$ARGENT_REASON"\r\nexit 4\r\n'
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+    });
+
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toContain("CRLF");
+    expect(result.failure?.message).toContain("$ARGENT_REASON");
+  }, 30_000);
+
   // Windows is the one platform a CRLF checkout happens on, and there bash is
   // msys2 — a Cygwin fork, which cannot put an ASCII control character in a
   // file name and transposes it into the private-use block. So the stray file

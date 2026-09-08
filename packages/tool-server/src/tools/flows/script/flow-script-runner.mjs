@@ -488,10 +488,23 @@ function bashOutcome(request, code, signal) {
     // `interpreterPath` is the one term here nothing bounds, and a bash far
     // enough down a directory tree spends the room `MAX_REASON_CHARS` reserves.
     const reason = readReasonFile(request.reasonFile, MAX_FAILURE_MESSAGE_CHARS - line.length - 1);
+    // The same stray sibling, on the one path that ever reads `$ARGENT_REASON`.
+    // A CRLF script's `echo … > "$ARGENT_REASON"` writes `reason.txt\r`, the
+    // read finds the empty file the parent seeded, and the step reported the
+    // bare exit line - so the author whose script DID explain itself got
+    // nothing, while the identical stray file on the exit-0 path produced a
+    // full remediation message. `exitCodeHint` does not cover it either: it
+    // names CRLF only for 126 and 127.
+    const strayed = reason === "" && strayedByCarriageReturn(request.reasonFile);
+    const tail = reason
+      ? ` ${reason}`
+      : strayed
+        ? ` ${carriageReturnHint("$ARGENT_REASON", "so the explanation it wrote is not in this report")}`
+        : "";
     return {
       type: "failure",
       failureType: "exit",
-      message: line + (reason ? ` ${reason}` : ""),
+      message: line + (line.length + tail.length <= MAX_FAILURE_MESSAGE_CHARS ? tail : ""),
     };
   }
   const read = readOutputFile(request.outputFile, request.maxOutputBytes);
@@ -526,15 +539,24 @@ function carriageReturnProblem(request) {
     ["$ARGENT_OUTPUT", request.outputFile],
     ["$ARGENT_REASON", request.reasonFile],
   ]) {
-    if (!STRAY_SUFFIXES.some((suffix) => fs.existsSync(`${file}${suffix}`))) continue;
-    return (
-      `the script wrote to a file one carriage return past the one ${name} names, so the ` +
-      "document Argent read is the one it seeded: the script has CRLF line endings, and the " +
-      "carriage return ends every line inside the word before it. Convert the file to LF " +
-      "(`*.sh text eol=lf` in .gitattributes)"
-    );
+    if (!strayedByCarriageReturn(file)) continue;
+    return carriageReturnHint(name, "so the document Argent read is the one it seeded");
   }
   return null;
+}
+
+/** Whether the script wrote one carriage return past the name it was given. */
+function strayedByCarriageReturn(file) {
+  return STRAY_SUFFIXES.some((suffix) => fs.existsSync(`${file}${suffix}`));
+}
+
+/** The one CRLF sentence, with the consequence its caller can see. */
+function carriageReturnHint(name, consequence) {
+  return (
+    `the script wrote to a file one carriage return past the one ${name} names, ${consequence}: ` +
+    "the script has CRLF line endings, and the carriage return ends every line inside the word " +
+    "before it. Convert the file to LF (`*.sh text eol=lf` in .gitattributes)"
+  );
 }
 
 function exitCodeHint(status) {
