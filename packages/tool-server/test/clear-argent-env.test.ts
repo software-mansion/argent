@@ -60,16 +60,18 @@ describe("clear-argent-env suite guard", () => {
     expect(MIXED_CASE_PROBE in process.env).toBe(false);
   });
 
-  it("is registered first, so it cannot sweep away what a later setup file sets", async () => {
+  it("comes first in the pinned setup-file list, so it cannot sweep away what a later one sets", async () => {
     // Order is load-bearing here, not just membership: ignore-device-providers.ts
     // sets ARGENT_DISABLE_DEVICE_PROVIDERS, which this sweep would delete if it
-    // ran after. Moving the sweep last leaves the whole suite green.
+    // ran after. Moving the sweep last leaves the whole suite green. Pinning the
+    // whole list also makes adding a setup file a deliberate edit here.
     const config = await import("../vitest.config");
 
     expect(config.default.test?.setupFiles).toEqual([
       "test/setup/clear-argent-env.ts",
       "test/setup/stub-status-bar.ts",
       "test/setup/ignore-device-providers.ts",
+      "test/setup/assert-env-restored.ts",
     ]);
   });
 });

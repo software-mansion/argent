@@ -44,23 +44,47 @@ describe("assert-env-restored", () => {
     // call reaches: a hook that never registers and one that snapshots on the
     // spot — comparing the environment with itself — both leave every suite
     // green. Importing under a stubbed vitest hands over the real hook body.
+    const ambient = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    const restore = (name: "HOME" | "USERPROFILE"): void => {
+      if (ambient[name] === undefined) delete process.env[name];
+      else process.env[name] = ambient[name];
+    };
     const hooks: Array<() => void> = [];
-    vi.doMock("vitest", () => ({ afterAll: (fn: () => void) => hooks.push(fn) }));
-    vi.resetModules();
-    await import("./setup/assert-env-restored.js");
-    vi.doUnmock("vitest");
-    vi.resetModules();
 
-    expect(hooks).toHaveLength(1);
-
-    const ambientHome = process.env.HOME;
-    process.env.HOME = "/tmp/argent-launcher-deleted";
     try {
-      expect(hooks[0]!).toThrow("HOME: /");
+      // Snapshot with USERPROFILE unset whichever platform this is: unset ->
+      // set is the shape a dropped restore leaves on macOS and Linux, and a
+      // guard narrowed to variables that were already set would still pass a
+      // changed -> changed case.
+      delete process.env.USERPROFILE;
+      vi.doMock("vitest", () => ({ afterAll: (fn: () => void) => hooks.push(fn) }));
+      vi.resetModules();
+      await import("./setup/assert-env-restored.js");
+      vi.doUnmock("vitest");
+      vi.resetModules();
+
+      expect(hooks).toHaveLength(1);
+      expect(hooks[0]!).not.toThrow();
+
+      // The ambient half of the message is whatever this machine has, so only
+      // the leaked half is asserted literally.
+      process.env.HOME = "/tmp/argent-launcher-deleted";
+      expect(hooks[0]!).toThrow(/HOME: .+ -> \/tmp\/argent-launcher-deleted/);
+      restore("HOME");
+
+      process.env.USERPROFILE = "/tmp/argent-launcher-deleted";
+      expect(hooks[0]!).toThrow("USERPROFILE: undefined -> /tmp/argent-launcher-deleted");
     } finally {
-      if (ambientHome === undefined) delete process.env.HOME;
-      else process.env.HOME = ambientHome;
+      restore("HOME");
+      restore("USERPROFILE");
     }
-    expect(hooks[0]!).not.toThrow();
+  });
+
+  it("keeps this file registered as a setup file, so the hook runs for every suite", async () => {
+    // Without the registration the helper's contract is all that is pinned, and
+    // stripping restoreHome() from every call site leaves the package green.
+    const config = await import("../vitest.config.js");
+
+    expect(config.default.test?.setupFiles).toContain("test/setup/assert-env-restored.ts");
   });
 });

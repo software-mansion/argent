@@ -7,10 +7,12 @@
 //     privacy-conscious developer exports globally rather than per project — and
 //     a falsy ARGENT_TELEMETRY each short-circuit track(), so every emission
 //     assertion in index.test.ts fails on an event that was never sent.
-//   - Cloud-agent detection (src/cloud-agent-detect.ts). The Claude Code, Cursor
-//     and Replit markers each report their vendor on their own; only the
-//     GITHUB_* trio is combinational, since copilot needs GITHUB_ACTIONS *and* a
-//     matching actor or workflow ref. Any of them can move
+//   - Cloud-agent detection (src/cloud-agent-detect.ts). One Cursor or Replit
+//     marker reports its vendor on its own, as does CLAUDE_CODE_REMOTE_SESSION_ID;
+//     the other two Claude Code markers are value-gated, on a cloud environment
+//     kind or a remote entrypoint. Only the GITHUB_* trio is combinational, since
+//     copilot needs GITHUB_ACTIONS *and* a matching actor or workflow ref. Any of
+//     them can move
 //     getBaseProps().cloud_agent to a vendor the test never asked for, which is
 //     what the base-props case pinning the replit branch reads.
 //

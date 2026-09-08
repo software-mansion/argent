@@ -1,7 +1,7 @@
 import { afterAll } from "vitest";
 
-// Nine suites in this package point HOME (and USERPROFILE, which os.homedir()
-// reads on Windows) at a temp dir and then delete that dir; two do the same to
+// Suites in this package point HOME (and USERPROFILE, which os.homedir() reads
+// on Windows) at a temp dir and then delete that dir; two of them do the same to
 // PATH. Restoring is the half that is easy to omit and impossible to notice:
 // under the shipped `isolate: true` each file gets its own fork, so a suite that
 // leaves a variable naming a deleted directory takes the evidence with it when
@@ -33,13 +33,12 @@ export function leakedEnvVars(
 
 // Read at module load, which for a setup file is before the test module is
 // imported. Snapshotting inside the hook instead would compare the environment
-// with itself and pass whatever the file left behind, so AMBIENT is not a
-// parameter — there is nothing for a caller to substitute.
+// with itself and pass whatever the file left behind.
 const AMBIENT = Object.fromEntries(SCOPED_ENV_VARS.map((name) => [name, process.env[name]]));
 
 /** Throws naming every variable the file failed to put back, or returns. */
-export function assertEnvRestored(current: NodeJS.ProcessEnv = process.env): void {
-  const leaked = leakedEnvVars(AMBIENT, current);
+function assertEnvRestored(): void {
+  const leaked = leakedEnvVars(AMBIENT, process.env);
   if (leaked.length === 0) return;
   throw new Error(
     `this file left the process environment redirected; restore it in the same hook that ` +

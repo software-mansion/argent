@@ -26,10 +26,18 @@ const LOOKALIKE = "ARGENTINA_REGION";
 // subdirectory is caught rather than silently dropped from the count.
 const UNSWEPT_SRC_FILES = ["ci-detect.ts"];
 
-// Every statically-named access form, so rewriting a read cannot walk it out of
-// view. A computed name is out of reach of any source scan — otel.ts reads
-// `process.env[name]` over a list — and those are the OTEL_* variables the setup
-// file documents as deliberately untouched.
+// Which files the scan can see, not just which names it finds. Every pattern
+// below keys on the identifier `env`, so renaming a parameter takes its whole
+// file out of view — cloud-agent-detect.ts reads the environment only through
+// one — while the remaining files still supply DO_NOT_TRACK and the scan
+// reports full coverage of nothing.
+const SRC_FILES_READING_ENV = ["cloud-agent-detect.ts", "consent.ts", "debug.ts"];
+
+// Every form a read spelled through an `env` identifier takes. A read that
+// reaches the environment some other way — an alias, `Reflect.get`, a computed
+// name — is out of view; otel.ts is the real case, reading `process.env[name]`
+// over a list of the OTEL_* variables the setup file leaves alone on purpose.
+// SRC_FILES_READING_ENV below is what keeps a rename from emptying the scan.
 const ENV_DOTTED = /\benv\??\.([A-Z][A-Z0-9_]*)\b/g;
 const ENV_BRACKETED = /\benv(?:\?\.)?\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g;
 // `[^{}]` keeps the match inside the destructuring pattern. Without it the
@@ -124,6 +132,7 @@ describe("clear-telemetry-env suite guard", () => {
     // A scan that stopped matching would otherwise report full coverage of
     // nothing; DO_NOT_TRACK is the read the whole file exists for.
     expect(read.map((r) => r.name)).toContain("DO_NOT_TRACK");
+    expect([...new Set(read.map((r) => r.file))].sort()).toEqual(SRC_FILES_READING_ENV);
 
     const uncleared = read.filter(
       ({ name }) => !name.startsWith("ARGENT_") && !CLEARED_ENV_VARS.includes(name)

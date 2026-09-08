@@ -15,15 +15,6 @@ afterEach(() => {
 });
 
 describe("redirectHomeTo", () => {
-  it("keeps assert-env-restored.ts registered as a setup file", async () => {
-    // That file is what fails a suite leaving the redirect in place. Without the
-    // registration the helper's contract is all that is pinned, and stripping
-    // restoreHome() from every call site leaves the package green.
-    const config = await import("../vitest.config.js");
-
-    expect(config.default.test?.setupFiles).toContain("test/setup/assert-env-restored.ts");
-  });
-
   it("points both home variables at the directory and puts them back", () => {
     process.env.HOME = "/ambient/home";
     process.env.USERPROFILE = "/ambient/profile";
