@@ -90,6 +90,20 @@ const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
  */
 const GROUP_SIGNAL_SETTLE_MS = 1_000;
 
+/**
+ * How much of the step's own time limit the wait above leaves alone. The
+ * parent's timer is armed before the fork and this process is only reached
+ * tens of milliseconds later, and the verdict has to travel back before that
+ * timer fires: past it the parent seals the interruption and discards a
+ * terminal message that was already correct.
+ *
+ * Without this, the whole legal range up to about 1050 ms sat under the settle:
+ * a bash killed by SIGTERM at five milliseconds under a 500 ms limit was
+ * reported as "did not finish within its 500ms time limit" at 565 ms - a limit
+ * that was never exceeded, about the one fact that explains the failure.
+ */
+const GROUP_SIGNAL_SETTLE_GUARD_MS = 250;
+
 const ENTRY_SETTLE_PROBE_MS = 1_000;
 
 /**
@@ -261,6 +275,8 @@ async function prepare() {
  */
 function runBash(request) {
   bashMode = true;
+  // As close to the moment the parent armed its own timer as this side can see.
+  const startedAt = Date.now();
   holdGroupSignals();
   // Registered here for the reason node mode registers it here: Node references
   // the IPC channel while a `disconnect` listener exists.
@@ -342,8 +358,13 @@ function runBash(request) {
     // A signal that reached bash reached this process in the same instant when
     // it was aimed at the group, and `heldSignals` is what the report names it
     // by — so the answer waits for it to arrive.
-    if (signal) whenGroupSignalHeld(signal, () => finish(bashOutcome(request, code, signal)));
-    else finish(bashOutcome(request, code, signal));
+    if (signal) {
+      whenGroupSignalHeld(
+        signal,
+        () => finish(bashOutcome(request, code, signal)),
+        groupSignalBudget(request, startedAt)
+      );
+    } else finish(bashOutcome(request, code, signal));
   });
   return never();
 }
@@ -382,6 +403,23 @@ function holdGroupSignals() {
 }
 
 /**
+ * What is left of the settle above once the step's own time limit is taken into
+ * account. The wait is worth having only while the answer can still reach the
+ * parent: past its timer the parent seals the interruption and reports a
+ * timeout instead, so a wait that outlives the timer trades a right answer for
+ * a wrong one. A limit too short to spare any of it reports at once, which is
+ * the classification the signal alone would have given.
+ *
+ * `timeoutMs` is absent from a request an older parent sent; the whole settle
+ * stands for it, as it did before this was sent.
+ */
+function groupSignalBudget(request, startedAt) {
+  if (!Number.isFinite(request.timeoutMs)) return GROUP_SIGNAL_SETTLE_MS;
+  const left = request.timeoutMs - (Date.now() - startedAt) - GROUP_SIGNAL_SETTLE_GUARD_MS;
+  return Math.min(GROUP_SIGNAL_SETTLE_MS, left);
+}
+
+/**
  * Run `report` once `signal` is one this process holds, or once the window
  * above has passed without it.
  *
@@ -396,8 +434,8 @@ function holdGroupSignals() {
  * The holding listener was registered first and so runs first, which is what
  * leaves `heldSignals` correct for the report this hands off to.
  */
-function whenGroupSignalHeld(signal, report) {
-  if (heldSignals.has(signal) || !GROUP_SIGNALS.includes(signal)) {
+function whenGroupSignalHeld(signal, report, budgetMs = GROUP_SIGNAL_SETTLE_MS) {
+  if (heldSignals.has(signal) || !GROUP_SIGNALS.includes(signal) || budgetMs <= 0) {
     report();
     return;
   }
@@ -409,7 +447,7 @@ function whenGroupSignalHeld(signal, report) {
     process.off(signal, settle);
     report();
   };
-  const timer = setTimeout(settle, GROUP_SIGNAL_SETTLE_MS);
+  const timer = setTimeout(settle, budgetMs);
   try {
     process.on(signal, settle);
   } catch {

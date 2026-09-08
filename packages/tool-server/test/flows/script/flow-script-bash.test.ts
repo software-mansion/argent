@@ -713,6 +713,27 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // The runner holds a signalled bash's answer briefly, in case the same signal
+  // is still on its way to the group. Bounded by nothing, that wait outlived
+  // the parent's timer on any step whose limit was under about a second - the
+  // whole legal range from `MIN_SCRIPT_TIMEOUT_MS` up - and the parent sealed
+  // the interruption and discarded a terminal message that was already correct.
+  // The step was then reported as a time limit that was never exceeded, about
+  // the one fact that explains the failure.
+  it.each([100, 500, 900])(
+    "reports a signalled bash as a signal under a %sms time limit",
+    async (timeoutMs) => {
+      const ws = workspace();
+      const result = await runBash(ws, `self-signalled-${timeoutMs}`, `kill -s TERM $$; sleep 30`, {
+        timeoutMs,
+      });
+
+      expect(result.failure?.kind).toBe("signal");
+      expect(result.failure?.message).toContain("SIGTERM");
+    },
+    30_000
+  );
+
   // The one signal where bash and Node disagree in the direction that matters:
   // GNU bash 5.x IGNORES SIGQUIT in a non-interactive shell and Node's default
   // kills on it, so `kill -QUIT 0` ended the runner and left bash running - the

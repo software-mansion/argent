@@ -64,6 +64,15 @@ export interface ScriptExecuteBashRequest extends ScriptExecuteCommon {
   outputJson: string;
   /** `$ARGENT_REASON`: the failure text, read only on a non-zero exit. */
   reasonFile: string;
+  /**
+   * The parent's OWN time limit - {@link ScriptExecuteCommon.deadlineMs} minus
+   * the stall margin the child's watchdog sits behind it. The runner needs it
+   * because it has one wait of its own: when bash dies by a signal it holds the
+   * answer briefly, in case the same signal is still on its way to the group.
+   * Bounded by nothing, that wait outlived the parent's timer on a short step,
+   * and a signalled bash was reported as a time limit that was never exceeded.
+   */
+  timeoutMs: number;
 }
 
 export type ScriptExecuteRequest = ScriptExecuteNodeRequest | ScriptExecuteBashRequest;

@@ -807,6 +807,7 @@ export class FlowScriptExecutor {
             outputFile: toForwardSlashes(run.exchange.outputFile),
             outputJson: run.outputJson,
             reasonFile: toForwardSlashes(run.exchange.reasonFile),
+            timeoutMs,
             deadlineMs: timeoutMs + CHILD_DEADLINE_MARGIN_MS,
             maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
           }
