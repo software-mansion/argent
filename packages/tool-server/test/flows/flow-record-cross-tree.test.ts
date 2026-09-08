@@ -761,8 +761,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // A cloud sim resolves as platform "ios-remote", but both its trees are the
     // iOS ones — so the prose is the iOS prose. Read raw, "ios-remote" matches
     // no clause and the author gets UNSUPPORTED_PLATFORM, which says no tool on
-    // this platform is known. Served a tree here; the real remote source lands
-    // with the flow-tree work, and this pins the advice that then applies.
+    // this platform is known.
     serveTree(iosRunnerTree(IOS_ACCESSIBLE_CONTAINER));
     await startRecording("iosremote");
 
@@ -1316,13 +1315,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
   });
 
-  it("offers no repair on a platform whose tree source does not exist", async () => {
-    // `ios-remote` folds to iOS for the PROSE above, but the repair is a machine
-    // question and this machine has no flow tree source at all
-    // (`supportsFlowTree`). Its silence is structural, not an outage: relaunching
-    // the app loads no instrumentation that would produce a tree, so quoting the
-    // iOS remedy would send the author after a repair that cannot exist.
-    expect(supportsFlowTree("ios-remote")).toBe(false);
+  it("offers the iOS repair on a remote simulator, whose source is real", async () => {
+    // `ios-remote` folds to iOS for the PROSE above, and the repair is a machine
+    // question — but the machine now has the iOS source, reached over the
+    // sim-remote tunnel (`supportsFlowTree`). So a silent read there is an
+    // outage like any other, and the iOS remedy is the one that repairs it.
+    expect(supportsFlowTree("ios-remote")).toBe(true);
     fetchRunnerTree = async () => {
       throw new Error("no connected app; provide bundleId explicitly");
     };
@@ -1335,10 +1333,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     });
     const warning = warningOf(result, "remoteblind");
 
-    // Still recorded, still honestly labelled UNKNOWN — just not repaired.
+    // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice.
     expect(warning).toContain("is UNKNOWN, not known-bad");
-    expect(warning).not.toContain("no directive takes a bundleId");
-    expect(warning).not.toContain("`launch-app`");
+    expect(warning).toContain("no directive takes a bundleId");
+    expect(warning).toContain("`launch-app`");
     expect(await recordedSteps("remoteblind")).toHaveLength(1);
   });
 
@@ -2140,21 +2138,37 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // The wait tool itself now accepts a remote sim: it polls the same AX tree
-  // through describeIos, which the ax-service blueprint routes over the
-  // sim-remote tunnel. The re-probe REACHES the recorder's tables too — the flow
-  // tools declare no capability at all, so nothing gates a remote udid out — and
-  // REPLAY_TREE_SOURCES now answers for one, through the authoring fold. What is
-  // still missing is the read itself: FLOW_TREE_SOURCES (flow-tree.ts) has no
-  // `ios-remote` arm, so `fetchTree` throws its not-supported error, the recorder
-  // catches it, and the step records with the UNKNOWN-verdict warning rather than
-  // a known-bad one. Giving that table an arm is what lets the re-probe verify.
+  // The wait tool itself accepts a remote sim: it polls the same AX tree through
+  // describeIos, which the ax-service blueprint routes over the sim-remote
+  // tunnel. The re-probe reaches the recorder's tables too — the flow tools
+  // declare no capability at all, so nothing gates a remote udid out — and both
+  // tables answer for one: REPLAY_TREE_SOURCES through the authoring fold, and
+  // FLOW_TREE_SOURCES with its own `ios-remote` arm onto the iOS full
+  // hierarchy. So the verdict there is determinate, not UNKNOWN.
   it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toEqual({ simulator: true });
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).not.toThrow();
+  });
+
+  it("returns a determinate verdict on ios-remote, not an UNKNOWN one", async () => {
+    // The runner's tree is readable there now, so a condition that does not hold
+    // against it is reported as known-bad — the same verdict a local sim gets.
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await startRecording("remoteverdict");
+
+    const result = await recordWait("remoteverdict", {
+      udid: IOS_REMOTE,
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "remoteverdict");
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    expect(warning).not.toContain("is UNKNOWN, not known-bad");
+    expect(await recordedSteps("remoteverdict")).toHaveLength(1);
   });
 });
 

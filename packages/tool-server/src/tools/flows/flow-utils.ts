@@ -2220,9 +2220,9 @@ export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
  * platform.
  *
  * One caution where it IS applied: the recorder's advice in flow-add-step also
- * names a REPAIR, and a repair is a machine question. `ios-remote` has no flow
- * tree source yet (`supportsFlowTree`), so a source that never existed must not
- * be offered the remedy for one that is merely down.
+ * names a REPAIR, and a repair is a machine question — so it asks the real
+ * platform whether a runner tree exists at all (`supportsFlowTree`) before
+ * quoting the remedy for a source that is merely down.
  */
 export function authoringPlatform(platform: string): string {
   return platform === "ios-remote" ? "ios" : platform;
