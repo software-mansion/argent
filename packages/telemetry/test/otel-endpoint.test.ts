@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { diag, DiagLogLevel } from "@opentelemetry/api";
 import { OTLP_LOGS_ENDPOINT, getClient, resetClient, resolveConfig } from "../src/otel.js";
+import { snapshotEnv } from "./helpers.js";
 
 // Mock the OpenTelemetry Logs SDK so constructing the client is cheap and the
 // exporter/processor/provider config is observable without any network I/O.
@@ -232,6 +234,34 @@ describe("otel endpoint invariance", () => {
       "event.name": "tool:invoke",
       "tool": "screenshot",
     });
+  });
+
+  it("leaves a host application's diag logger alone when debug is off", () => {
+    // Routing the SDK's diagnostics into argent's debug channel means taking
+    // over a PROCESS-GLOBAL logger, in a package that ships inside other
+    // people's processes. Confinement to ARGENT_TELEMETRY_DEBUG is the whole
+    // reason that is acceptable, so a normal run has to leave the channel with
+    // whoever already owned it.
+    const restoreEnv = snapshotEnv(["ARGENT_TELEMETRY_DEBUG"]);
+    delete process.env.ARGENT_TELEMETRY_DEBUG;
+    const host: string[] = [];
+    const record = (message: string): void => void host.push(message);
+    // WARN, not ALL: the API narrates its own global registration at debug,
+    // while the takeover this watches for is announced into the outgoing logger
+    // at warn - so a swap fails this twice, on the announcement and on the probe.
+    diag.setLogger(
+      { error: record, warn: record, info: record, debug: record, verbose: record },
+      DiagLogLevel.WARN
+    );
+
+    try {
+      getClient();
+      diag.warn("host still owns the channel");
+      expect(host).toEqual(["host still owns the channel"]);
+    } finally {
+      diag.disable();
+      restoreEnv();
+    }
   });
 
   it("bounds connection establishment too, not just the request", () => {

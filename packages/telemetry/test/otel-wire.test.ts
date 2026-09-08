@@ -26,6 +26,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import http from "node:http";
+import type net from "node:net";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { SeverityNumber } from "@opentelemetry/api-logs";
@@ -63,6 +64,8 @@ interface CapturedRequest {
   path: string;
   headers: http.IncomingHttpHeaders;
   raw: Buffer;
+  /** Which connection carried it, counted from 1 in accept order. */
+  connection: number;
 }
 
 interface Capture {
@@ -74,6 +77,8 @@ const closers: Array<() => Promise<void>> = [];
 
 async function startCapture(): Promise<Capture> {
   const requests: CapturedRequest[] = [];
+  const connections = new WeakMap<net.Socket, number>();
+  let accepted = 0;
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -83,11 +88,13 @@ async function startCapture(): Promise<Capture> {
         path: req.url ?? "",
         headers: req.headers,
         raw: Buffer.concat(chunks),
+        connection: connections.get(req.socket) ?? 0,
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end("{}");
     });
   });
+  server.on("connection", (socket) => connections.set(socket, ++accepted));
   const port = await listenLoopback(server);
   closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return { url: `http://127.0.0.1:${port}/v1/logs`, requests };
@@ -233,5 +240,22 @@ describe("the OTLP request Argent sends", () => {
 
     expect(perRequest.reduce((sum, count) => sum + count, 0)).toBe(25);
     for (const count of perRequest) expect(count).toBeLessThanOrEqual(20);
+  }, 15_000);
+
+  it("sends both batches of one drain over a single connection", async () => {
+    // The behavioural half of keepAlive. Supplying httpAgentOptions at all
+    // replaces the agent the SDK would otherwise build, so keepAlive has to be
+    // restated or every request pays a fresh handshake - a TLS one against the
+    // production endpoint. The agent's own timeout reaps an idle socket at
+    // EXPORT_TIMEOUT_MS, so reuse spans the batches of one drain but not the 10s
+    // cadence; one drain is what this measures.
+    const events = Array.from({ length: 25 }, (_, index) => ({
+      event: `tool:invoke:${index}`,
+      attributes: {},
+    }));
+    await exportRecords(capture.url, events);
+
+    expect(capture.requests.length).toBeGreaterThan(1);
+    expect(new Set(capture.requests.map((request) => request.connection)).size).toBe(1);
   }, 15_000);
 });
