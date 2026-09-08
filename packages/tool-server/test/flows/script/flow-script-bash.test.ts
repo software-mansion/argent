@@ -275,6 +275,28 @@ describe("the document a bash step returns", () => {
     }
   }, 60_000);
 
+  // V8's `SyntaxError` quotes about ten characters of the offending document
+  // verbatim, mid-sentence. A `.sh` step is the first thing that can put
+  // arbitrary bytes on this path - the `.mjs` runner's `encodeOutput` always
+  // emits valid JSON - and the excerpt defeats the redaction the parent applies
+  // afterwards: a whole-value scrub cannot match the half of a secret the
+  // excerpt cut, and `redactTruncated` repairs a cut at the END of a message,
+  // not one V8 made in the middle of it.
+  it("says a document did not parse without quoting the document", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "unquoted-parse-failure",
+      `printf '%s' '{"auth":s3cr3t-token-value}' > "$ARGENT_OUTPUT"`
+    );
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("did not parse");
+    expect(result.failure?.message).toContain("Unexpected token");
+    expect(result.failure?.message).not.toContain("s3cr3t");
+    expect(result.failure?.message).not.toContain('"');
+  }, 30_000);
+
   onPosix(
     "refuses a document the runner may not read, naming why",
     async () => {

@@ -1064,7 +1064,7 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
   try {
     parsed = JSON.parse(outputJson);
   } catch (err) {
-    return failed("output", `The script's output did not parse: ${errorMessage(err)}`);
+    return failed("output", `The script's output did not parse: ${withoutDocumentExcerpt(err)}`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return failed("output", "The script's output was not an object.");
@@ -1116,6 +1116,31 @@ function findOwnProtoKey(root: Record<string, unknown>): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * V8's `SyntaxError` for a malformed document quotes about ten characters of it
+ * verbatim, mid-sentence: `Unexpected token 's', "{"auth":s3cr3t-tok"... is not
+ * valid JSON`. That is script-controlled text, and a `.sh` step is the first
+ * thing that can put arbitrary bytes on this path - the `.mjs` runner's
+ * `encodeOutput` always emits valid JSON, so the branch was unreachable by
+ * ordinary script behaviour before.
+ *
+ * A quoted excerpt is worth nothing to the author, who has the file, and it
+ * defeats the redaction: `scrubSecretValues` matches whole values, so the
+ * PREFIX of a secret that the excerpt cut in half matches nothing, and
+ * `redactTruncated` cannot repair a cut V8 made in the middle of the message
+ * rather than the runner at the end of it.
+ *
+ * Every double-quoted run goes, rather than the exact sentence: the wording is
+ * V8's and is not a stability contract, but the quoting is where a document's
+ * own bytes are, and the rest of the family (`… at position 6`, `Unexpected end
+ * of JSON input`) quotes only with apostrophes and survives unchanged.
+ */
+function withoutDocumentExcerpt(err: unknown): string {
+  return errorMessage(err).replace(JSON_DOCUMENT_EXCERPT_RE, "");
+}
+
+const JSON_DOCUMENT_EXCERPT_RE = /,? "[\s\S]*"(?:\.\.\.)?/;
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
