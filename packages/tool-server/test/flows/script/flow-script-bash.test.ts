@@ -590,6 +590,37 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // The one signal where bash and Node disagree in the direction that matters:
+  // GNU bash 5.x IGNORES SIGQUIT in a non-interactive shell and Node's default
+  // kills on it, so `kill -QUIT 0` ended the runner and left bash running - the
+  // failure `holdGroupSignals` exists to prevent. The parent then reported "the
+  // script process was killed by SIGQUIT … it did not stop itself" about a
+  // script that had already written a complete document.
+  //
+  // Which of the two verdicts follows is the bash's own: 5.x survives and the
+  // step passes on the document it wrote, Apple's 3.2 dies and the step reports
+  // the same `kill 0` guidance the SIGTERM case does. Neither is the runner
+  // dying, which is what this pins.
+  onPosix(
+    "survives a SIGQUIT the script sent its own group",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "kill-group-quit",
+        `trap 'kill -QUIT 0' EXIT
+       sleep 30 &
+       printf '{"seeded":true}' > "$ARGENT_OUTPUT.t"
+       mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
+      );
+
+      expect(result.failure?.message ?? "").not.toContain("did not stop itself");
+      if (result.ok) expect(result.output).toEqual({ seeded: true });
+      else expect(result.failure?.message).toContain("kill 0");
+    },
+    30_000
+  );
+
   // The OTHER spelling of the same mistake, and the one the split above cannot
   // see. A `kill 0` in the body of the script — with bash still to run the rest
   // of it — kills bash and reaches nothing else: measured on macOS, neither the

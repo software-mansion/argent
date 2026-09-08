@@ -38,8 +38,17 @@ let bashMode = false;
  * The signals a script can aim at its own process group, which this process
  * leads in bash mode. Held in `heldSignals` rather than acted on: see
  * `holdGroupSignals`.
+ *
+ * SIGQUIT is here for the case the other three do not have: GNU bash 5.x
+ * IGNORES it in a non-interactive shell and Node's default kills on it, so a
+ * `kill -QUIT 0` used to end this process and leave bash running - the exact
+ * failure `holdGroupSignals` exists to prevent. The parent then reported "the
+ * script process was killed by SIGQUIT … it did not stop itself", both halves
+ * false: bash was not killed, and the script's own line is what killed the
+ * runner. Apple's bash 3.2, the other fallback candidate, dies on SIGQUIT
+ * instead, so the two bashes disagreed here as well.
  */
-const GROUP_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
+const GROUP_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 
 const heldSignals = new Set();
 
