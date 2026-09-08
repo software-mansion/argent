@@ -766,3 +766,207 @@ describe("flow script executor — redaction through an encoder", () => {
     }
   }, 60_000);
 });
+
+/**
+ * The encoders above are all CHARACTER-LOCAL: each byte of the value lands in
+ * the same place in the output whatever surrounds it, so a spelling of the
+ * whole value still appears in the text. The three shapes here are not, and
+ * each one left the credential whole and losslessly recoverable in a report
+ * that held no spelling of it at all.
+ */
+describe("flow script executor — redaction of a re-framed, wrapped or cut value", () => {
+  const KEY: FlowScriptSecret = { name: "KEY", value: "key-p2b-live-7f3c9a1e5b2d8046" };
+  // No fragment of a value may spell part of the placeholder that replaces it,
+  // or the sweep below flags argent's own `{{secret:…}}` as a leak.
+  const CUT: FlowScriptSecret = { name: "CUT", value: "sk-live-9d3f-topvalue-abcdef123456" };
+  const ODD: FlowScriptSecret = { name: "ODD", value: "pa'ss\"w\\ord-9d3f7a2b" };
+  const ALL = [KEY, CUT, ODD];
+
+  async function failWith(source: string, name: string): Promise<string> {
+    const ws = workspace();
+    const script = ws.write("reframed.mjs", source);
+    const secret = ALL.find((entry) => entry.name === name)!;
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: secret.value },
+      secrets: ALL,
+    });
+    expect(result.ok).toBe(false);
+    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+  }
+
+  /** No run of six or more characters of the value survives anywhere. */
+  function expectNoValue(text: string, name: string): void {
+    const value = ALL.find((entry) => entry.name === name)!.value;
+    expect(text).toContain(`{{secret:${name}}}`);
+    for (let n = value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= value.length; at += 1) {
+        expect(text).not.toContain(value.slice(at, at + n));
+      }
+    }
+  }
+
+  // base64 frames in THREE-byte groups, so a prefix whose length is not a
+  // multiple of three moves every following byte into a different frame and no
+  // spelling of the value appears. `Basic base64(user:secret)` is the standard
+  // HTTP credential idiom, and the comment that justifies having base64 in the
+  // spelling list cites Basic auth as the reason for it.
+  it("replaces a value base64 re-framed behind a prefix", async () => {
+    const text = await failWith(
+      `throw new Error("Basic " + Buffer.from(\`api:\${process.env.K}\`).toString("base64"));`,
+      "KEY"
+    );
+    expectNoValue(text, "KEY");
+  }, 30_000);
+
+  // Every frame offset a run can START on. A prefix glued straight onto the
+  // encoded output — no separator to align it — puts the payload one, two or
+  // three characters into its first frame.
+  it("replaces a value in a run that starts mid-frame, at every offset", async () => {
+    for (const prefix of ["", "x", "xy", "xyz"]) {
+      const text = await failWith(
+        `throw new Error(${JSON.stringify(prefix)} + Buffer.from("ab" + process.env.K).toString("base64"));`,
+        "KEY"
+      );
+      expectNoValue(text, "KEY");
+    }
+  }, 60_000);
+
+  // `=` is padding, so a decoder stops there: read as one run, `?token=<payload>`
+  // decoded the word in front of the credential and nothing after it.
+  it("replaces a value behind a query key the padding character would have merged", async () => {
+    const text = await failWith(
+      `throw new Error("https://api.example.com/?token=" + Buffer.from("ab" + process.env.K).toString("base64"));`,
+      "KEY"
+    );
+    expectNoValue(text, "KEY");
+  }, 30_000);
+
+  // The shell's own tools wrap at a fixed column, so a value merely long enough
+  // to wrap has a newline through the middle of its encoding. No prefix is
+  // needed for this one.
+  it("replaces a value whose encoding a wrap split over lines", async () => {
+    for (const encoding of ["hex", "base64"]) {
+      const text = await failWith(
+        `const e = Buffer.from(process.env.K).toString(${JSON.stringify(encoding)});
+         throw new Error(e.replace(/(.{7})/g, "$1\\n"));`,
+        "KEY"
+      );
+      expectNoValue(text, "KEY");
+    }
+  }, 60_000);
+
+  // `encodedSpellings` writes lower-case hex; a signature printed upper-case is
+  // the same bytes in the same order.
+  it("replaces a value printed as upper-case hex", async () => {
+    const text = await failWith(
+      `throw new Error("sig " + Buffer.from(process.env.K).toString("hex").toUpperCase());`,
+      "KEY"
+    );
+    expectNoValue(text, "KEY");
+  }, 30_000);
+
+  // Node embeds a fixed-length PREFIX of a string argument in the error it
+  // raises — 10 characters for `JSON.parse`, 25 for ERR_INVALID_ARG_TYPE. The
+  // repair for that required the value to begin one character after the opening
+  // quote, so a credential built into a larger string first disabled it.
+  it("replaces a cut prefix that starts inside the quoted fragment", async () => {
+    const parsed = await failWith('JSON.parse(`{"token":${process.env.K}}`);', "CUT");
+    expectNoValue(parsed, "CUT");
+
+    const timed = await failWith(
+      `setTimeout("Bearer " + process.env.K, 1);
+       await new Promise((r) => setTimeout(r, 50));`,
+      "CUT"
+    );
+    expectNoValue(timed, "CUT");
+  }, 60_000);
+
+  // `util.inspect` picks a BACKTICK body for a value holding both quotes and
+  // escapes neither of them, and `RegExp.source` writes `/` as `\/`. Read as
+  // one rule: a backslash takes the character after it.
+  it("replaces a value an escaper backslashed", async () => {
+    const inspected = await failWith(
+      `import assert from "node:assert";
+       assert.strictEqual(process.env.K, "expected-value");`,
+      "ODD"
+    );
+    expectNoValue(inspected, "ODD");
+  }, 30_000);
+
+  // The floor and the alphabets must not rewrite argent's own text: hex- and
+  // base64-shaped words decode to bytes as well, and nothing about them says
+  // they were ever an encoding.
+  it("leaves hex- and base64-shaped prose that holds no value alone", async () => {
+    const text = await failWith(
+      `throw new Error("deadbeefcafe0123 aGVsbG8gd29ybGQ= ordinary words");`,
+      "KEY"
+    );
+    expect(text).toContain("deadbeefcafe0123 aGVsbG8gd29ybGQ= ordinary words");
+    expect(text).not.toContain("{{secret:");
+  }, 30_000);
+});
+
+/**
+ * Two defects the frame widening and the loosened cut anchor introduced, each
+ * the mirror of the other: one replaced too little and disclosed a credential,
+ * one replaced too much and corrupted argent's own text.
+ */
+describe("flow script executor — what the byte-space repairs must not do", () => {
+  const USER: FlowScriptSecret = { name: "USER", value: "apiuser" };
+  const KEY: FlowScriptSecret = { name: "KEY", value: "sk-live-9d3f4a1b2c8e" };
+  const BOTH = [USER, KEY];
+
+  async function failWith(source: string): Promise<string> {
+    const ws = workspace();
+    const script = ws.write("pair.mjs", source);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { U: USER.value, K: KEY.value },
+      secrets: BOTH,
+    });
+    expect(result.ok).toBe(false);
+    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+  }
+
+  // `encodedRunSpans` widens a byte match out to the base64 frames it lies in,
+  // so two values in one payload share a frame whenever the first leaves the
+  // second starting mid-frame. `spliceSpans` dropped the second span whole and
+  // copied out everything from the end of the first — 19 of the 20 characters
+  // of the key, one base64 hop away. `Basic base64(user:key)` is the idiom the
+  // whole pass exists for, and `len(user) % 3 == 1` is a third of all users.
+  it("replaces BOTH values when two share a base64 frame", async () => {
+    const text = await failWith(
+      `throw new Error("POST /v1/session -> 401  Basic " +
+         Buffer.from(process.env.U + ":" + process.env.K).toString("base64"));`
+    );
+    expect(text).toContain("{{secret:USER}}");
+    expect(text).toContain("{{secret:KEY}}");
+    for (let n = KEY.value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= KEY.value.length; at += 1) {
+        const part = KEY.value.slice(at, at + n);
+        expect(text).not.toContain(part);
+        // And not in the alphabet the payload was written in either.
+        expect(text).not.toContain(Buffer.from(part, "utf8").toString("base64").replace(/=+$/, ""));
+      }
+    }
+  }, 30_000);
+
+  // The mirror: with the prefix free to start anywhere inside the fragment,
+  // one character before an ellipsis matched the first character of SOME
+  // spelling nearly always, and argent's own diagnostic lost a letter to a
+  // placeholder that named a credential nothing had disclosed.
+  it("leaves argent's own quoted, elided wording alone", async () => {
+    for (const wording of [
+      "Command failed: '/bin/sh -c npm run seeds...'",
+      "The runner reported 'ERR_STREAM_PREMATURE_CLOSE' after 3s...",
+      "timed out waiting for 'settle'...",
+    ]) {
+      const text = await failWith(`throw new Error(${JSON.stringify(wording)});`);
+      expect(text).toContain(wording);
+      expect(text).not.toContain("{{secret:");
+    }
+  }, 60_000);
+});

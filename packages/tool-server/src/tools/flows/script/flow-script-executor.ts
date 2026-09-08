@@ -1500,11 +1500,44 @@ function encodedSpellings(value: string): string[] {
 /**
  * The body a JSON encoder writes, which is also `util.inspect`'s double-quoted
  * form; then its single-quoted form, which is what inspect prefers and differs
- * in exactly the two quotes.
+ * in exactly the two quotes; then its BACKTICK form, which inspect picks for a
+ * value holding both other quotes and which escapes neither of them.
+ *
+ * Each body again with `\xNN` where JSON writes `\u00nn`. That is the one
+ * character class the two encoders spell differently — inspect's own escape for
+ * a control character — and an ESC or a NEL inside a token is enough to reach
+ * it. `\n`, `\t`, `\r`, `\b`, `\f` and `\v` are named the same way by both, so
+ * they need no second form.
  */
 function quotedSpellings(text: string): string[] {
   const json = JSON.stringify(text).slice(1, -1);
-  return [json, json.replace(/\\"/g, '"').replace(/'/g, "\\'")];
+  const unquoted = json.replace(/\\"/g, '"');
+  const bodies = [
+    json,
+    unquoted.replace(/'/g, "\\'"),
+    unquoted.replace(/`/g, "\\`").replace(/\$\{/g, "\\${"),
+  ];
+  return [...bodies, ...bodies.map(inspectEscapes)];
+}
+
+/**
+ * One JSON body as `util.inspect` would have written it, which differs in the
+ * control characters and in nothing else.
+ *
+ * Two classes, not one. Below U+0020 both encoders escape and only the spelling
+ * differs: JSON writes `\u001b` where inspect writes `\x1B`. From U+007F to
+ * U+009F, `JSON.stringify` escapes NOTHING and inspect still writes `\xNN`, so
+ * the raw character reaches the body and no rewrite of `\u00nn` can find it.
+ * NEL (U+0085) is the one that turns up: a line break to a YAML reader, an
+ * ordinary character to everything else.
+ */
+function inspectEscapes(body: string): string {
+  return body
+    .replace(/\\u00([0-9a-f]{2})/g, (_match, code: string) => `\\x${code.toUpperCase()}`)
+    .replace(
+      /[\u007f-\u009f]/g,
+      (character) => `\\x${character.charCodeAt(0).toString(16).toUpperCase()}`
+    );
 }
 
 /**
@@ -1563,13 +1596,30 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
   // order is what keeps the second pass off a value the first one already took:
   // it searches only for prefixes SHORTER than the value they came from.
   const scrub = (part: string) =>
-    repairByteRenderings(repairQuotedCuts(scrubSecretValues(part, secrets), secrets), secrets);
+    SCRUB_REPAIRS.reduce(
+      (carried, repair) => repair(carried, secrets),
+      scrubSecretValues(part, secrets)
+    );
   const omission = OMISSION_RE.exec(text);
   if (!omission) return scrub(text);
   const head = scrub(text.slice(0, omission.index));
   const partial = partialSecretTail(head, secrets);
   return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
 }
+
+/**
+ * What runs after the whole-value scrub, in order. Each one answers a rendering
+ * that leaves no spelling of the value in the text: a prefix another process
+ * cut, a rendering of the bytes, an escaper's backslashes, a re-encoding into
+ * another alphabet. Each reads the text the ones before it left, so a value
+ * that two of them rewrote is still taken.
+ */
+const SCRUB_REPAIRS = [
+  repairQuotedCuts,
+  repairByteRenderings,
+  repairBackslashEscapes,
+  repairEncodedRuns,
+] as const;
 
 /**
  * A value some OTHER process cut, repaired where the cut left a quoted prefix.
@@ -1606,10 +1656,11 @@ function repairQuotedCuts(text: string, secrets: readonly FlowScriptSecret[]): s
   const cuts = [...text.matchAll(FOREIGN_CUT_RE)];
   if (cuts.length === 0) return text;
   const quotes = openingQuotes(text);
+  const ends = prefixEnds(secrets);
   let out = "";
   let copied = 0;
   for (const cut of cuts) {
-    const hit = quotedCutBefore(text, cut.index, copied, secrets, quotes);
+    const hit = quotedCutBefore(text, cut.index, copied, secrets, quotes, ends);
     if (!hit) continue;
     out += `${text.slice(copied, hit.from)}${SECRET_PLACEHOLDER_MARKER}${hit.name}}}`;
     copied = hit.from + hit.length;
@@ -1656,32 +1707,95 @@ function openingQuotes(text: string): Int32Array {
  * quote can be the value's, which anchors the repair short — the raw scrub
  * still takes such a value whole, and every credential shape this repair was
  * written for holds none.
+ *
+ * The prefix starts ANYWHERE inside that fragment, not one character after the
+ * quote. Node puts its window over the argument it was handed, and a script
+ * hands it the credential built into a larger string — `JSON.parse` on
+ * `{"token":<value>}` reports `"{"token":sk-live-9d"...`, and `setTimeout` on
+ * `"Bearer " + value` reports `('Bearer sk-live-9d3f-topse...')`. Both are one
+ * quoted fragment whose prefix is argent's to leave alone and whose tail is the
+ * front of a credential. Requiring the value at the quote answered neither.
+ *
+ * That freedom is why {@link CUT_MIN_PREFIX_CHARS} exists. Anchored at the
+ * quote, a one-character "prefix" had to be the first character of the
+ * fragment; anchored anywhere, every character before an ellipsis inside quotes
+ * is a candidate, and one of them matches the first character of SOME spelling
+ * nearly always. `Command failed: '/bin/sh -c npm run seeds...'` came back as
+ * `… npm run seed{{secret:API_KEY}}...` — argent's own diagnostic corrupted,
+ * and a credential announced where none stood.
  */
 function quotedCutBefore(
   text: string,
   at: number,
   floor: number,
   secrets: readonly FlowScriptSecret[],
-  quotes: Int32Array
+  quotes: Int32Array,
+  ends: ReadonlyArray<ReadonlyMap<string, number[]>>
 ): { from: number; length: number; name: string } | undefined {
-  const ends = at - 1 > floor && CUT_QUOTES.has(text[at - 1]!) ? [at, at - 1] : [at];
+  const cuts = at - 1 > floor && CUT_QUOTES.has(text[at - 1]!) ? [at, at - 1] : [at];
   let best: { from: number; length: number; name: string } | undefined;
-  for (const end of ends) {
+  for (const end of cuts) {
     const quote = end > 0 ? quotes[end - 1]! : -1;
     if (quote < floor) continue;
-    for (const { name, value } of secrets) {
+    const last = text[end - 1]!;
+    for (const [index, { name, value }] of secrets.entries()) {
       const longest = Math.min(value.length - 1, end - quote - 1);
-      for (let n = longest; n > (best?.length ?? 0); n--) {
-        const from = end - n;
-        if (!CUT_QUOTES.has(text[from - 1]!)) continue;
-        if (!holdsPrefix(text, from, value, n)) continue;
-        best = { from, length: n, name };
+      // Only the lengths whose LAST character is the one before the cut can
+      // match, and they arrive longest first. A character no spelling ends on
+      // costs one map lookup, which is what keeps an ellipsis-dense text off
+      // the whole descent.
+      for (const n of ends[index]!.get(last) ?? []) {
+        if (n > longest) continue;
+        if (n <= (best?.length ?? 0)) break;
+        if (!holdsPrefix(text, end - n, value, n)) continue;
+        best = { from: end - n, length: n, name };
         break;
       }
     }
   }
   return best;
 }
+
+/**
+ * Per spelling, the prefix lengths that END on a given character, longest
+ * first — the index {@link quotedCutBefore} reads its candidates out of.
+ *
+ * Built once for the whole text rather than walked per cut. The descent it
+ * replaces was bounded by the nearest quote, which answers a quote-dense text
+ * but not a text holding ONE quote and then thousands of ellipses: there the
+ * bound stayed at the spelling's own length and the product came back. A PEM
+ * key against the 16 KiB stack ceiling took 1.7 s of the shared server's event
+ * loop; the same run is now flat against a text with no ellipsis at all.
+ */
+function prefixEnds(secrets: readonly FlowScriptSecret[]): Array<Map<string, number[]>> {
+  return secrets.map(({ value }) => {
+    const ends = new Map<string, number[]>();
+    for (let n = value.length - 1; n >= CUT_MIN_PREFIX_CHARS; n--) {
+      const last = value[n - 1]!;
+      const lengths = ends.get(last);
+      if (lengths) lengths.push(n);
+      else ends.set(last, [n]);
+    }
+    return ends;
+  });
+}
+
+/**
+ * The shortest cut prefix worth repairing, which is also the shortest fragment
+ * of a credential this file treats as a disclosure at all: the redaction tests
+ * sweep every run down to six characters, on the reasoning that anything an
+ * encoder wrote is trivially reversible. Below it a match says more about the
+ * alphabet than about the value — six specific characters landing in argent's
+ * own wording is a coincidence no failure text has produced, and one character
+ * is a coincidence nearly every failure text produces.
+ *
+ * What it gives up is the tail of a window a long non-secret prefix already ate
+ * — `setTimeout("<24 characters> " + key, 1)` leaves one character of the key
+ * inside Node's 25-character window. Five characters of a credential is the
+ * most this can leave standing, against corrupting the report on text that
+ * holds none.
+ */
+const CUT_MIN_PREFIX_CHARS = 6;
 
 /**
  * Whether `text` carries the first `n` characters of `value` at `from`.
@@ -1886,7 +2000,188 @@ function decodeByteRun(run: ByteRun, radix: number): Buffer | undefined {
   return Buffer.from(codes);
 }
 
-/** The spans replaced by their placeholders, earliest first, overlaps dropped. */
+/**
+ * A value an ESCAPER put backslashes through, read back with them taken out.
+ *
+ * A spelling is a transform of the WHOLE value, so the list only answers an
+ * escaper it names. Three that a step meets are one line of an ordinary script
+ * each, and each writes the value with a backslash in front of a character the
+ * spellings leave alone: `util.inspect` picks a BACKTICK body for a value
+ * holding both quotes and escapes only the backslashes in it, `RegExp.source`
+ * writes `/` as `\/`, and bash's `printf %q` backslashes a space, an
+ * apostrophe and a backslash alike.
+ *
+ * Read as one rule instead of three, because the three tables disagree and
+ * bash's is not even the same across versions: a backslash takes the character
+ * after it, whatever that character is, and the decoded text is searched for
+ * the value. What that misses is the escapes that MEAN something else — `\n`,
+ * and the `\xNN` the spellings carry — and reading `\n` as `n` can only
+ * over-redact, never leave a value standing.
+ */
+function repairBackslashEscapes(text: string, secrets: readonly FlowScriptSecret[]): string {
+  if (!text.includes("\\")) return text;
+  let decoded = "";
+  const at: number[] = [];
+  const to: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor++) {
+    const escaped = text[cursor] === "\\" && cursor + 1 < text.length;
+    decoded += text[escaped ? cursor + 1 : cursor];
+    at.push(cursor);
+    to.push(escaped ? cursor + 2 : cursor + 1);
+    if (escaped) cursor++;
+  }
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const { name, value } of secrets) {
+    if (value.length === 0) continue;
+    for (let found = decoded.indexOf(value); found >= 0; ) {
+      spans.push({ from: at[found]!, to: to[found + value.length - 1]!, name });
+      found = decoded.indexOf(value, found + value.length);
+    }
+  }
+  return spliceSpans(text, spans);
+}
+
+/**
+ * A value RE-ENCODED into another alphabet, decoded back in byte space.
+ *
+ * The spellings hold what `base64` and `hex` write the value ON ITS OWN as,
+ * which only answers while the encoder is character-local — while each byte of
+ * the value lands in the same place in the output whatever surrounds it.
+ * Neither of these is: base64 frames in THREE-byte groups, so a prefix whose
+ * length is not a multiple of three moves every following byte into a different
+ * frame, and the shell's own tools wrap their output at a fixed column, so a
+ * value merely long enough to wrap has a newline through the middle of its
+ * encoding. Both leave the credential whole and losslessly recoverable in text
+ * that no spelling appears in — `"Basic " + Buffer.from(\`api:${k}\`)
+ * .toString("base64")` and `printf %s "$K" | xxd -p` are one line each, and the
+ * first is the standard HTTP credential idiom.
+ *
+ * So the run is decoded rather than matched, exactly as
+ * {@link repairByteRenderings} reads a rendering's numbers: every maximal run
+ * of one alphabet is decoded whole — a newline inside it is the wrap and is
+ * skipped — and the bytes are searched. A byte span maps back to the characters
+ * of the frames it lies in, so a frame the value SHARES with its prefix goes
+ * with it; over-redacting argent's own text is the lesser fault. Case comes for
+ * free, which is what covers a hex signature printed upper-case.
+ *
+ * Floored at {@link ENCODED_RUN_MIN_BYTES}, unlike every other pass here. A run
+ * of ordinary letters decodes to bytes too, and nothing about it says it was
+ * ever an encoding, so a short value would be found in the noise: four bytes
+ * puts a chance hit past one in four billion per position, and a credential
+ * shorter than that is not one.
+ */
+function repairEncodedRuns(text: string, secrets: readonly FlowScriptSecret[]): string {
+  const needles = secrets
+    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
+    .filter(({ bytes }) => bytes.length >= ENCODED_RUN_MIN_BYTES)
+    .sort((a, b) => b.bytes.length - a.bytes.length);
+  if (needles.length === 0) return text;
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const view of ENCODED_VIEWS) {
+    for (const run of encodedRuns(text, view.runs))
+      spans.push(...encodedRunSpans(run, view, needles));
+  }
+  return spliceSpans(text, spans);
+}
+
+const ENCODED_RUN_MIN_BYTES = 4;
+
+/**
+ * The alphabets a re-encoding is read in, with the frame each one writes.
+ *
+ * `base64url` is its own view rather than a lenient read of the standard
+ * alphabet: `-` and `_` widen a run across ordinary hyphenated words, which
+ * would move a standard payload out of its frame.
+ */
+const ENCODED_VIEWS = [
+  { encoding: "hex", runs: /[0-9A-Fa-f][0-9A-Fa-f\r\n]*[0-9A-Fa-f]/g, chars: 2, bytes: 1 },
+  {
+    // `=` is left OUT of the alphabet on purpose. It is padding, so it only
+    // ever ends a payload — and a decoder stops there, so `?token=<payload>`
+    // read as one run decoded the word in front of the credential and nothing
+    // after it. Ending the run at the `=` instead leaves the payload a run of
+    // its own, which is what it is.
+    encoding: "base64",
+    runs: /[A-Za-z0-9+/][A-Za-z0-9+/\r\n]*[A-Za-z0-9+/]/g,
+    chars: 4,
+    bytes: 3,
+  },
+  {
+    encoding: "base64url",
+    runs: /[A-Za-z0-9\-_][A-Za-z0-9\-_\r\n]*[A-Za-z0-9\-_]/g,
+    chars: 4,
+    bytes: 3,
+  },
+] as const;
+
+/** One run's alphabet characters, with where each of them sits in the text. */
+interface EncodedRun {
+  chars: string;
+  at: number[];
+}
+
+/** Maximal runs of one alphabet, with the wrap newlines inside them dropped. */
+function encodedRuns(text: string, pattern: RegExp): EncodedRun[] {
+  const runs: EncodedRun[] = [];
+  for (const match of text.matchAll(pattern)) {
+    const run: EncodedRun = { chars: "", at: [] };
+    for (let cursor = 0; cursor < match[0].length; cursor++) {
+      const character = match[0][cursor]!;
+      if (character === "\n" || character === "\r") continue;
+      run.chars += character;
+      run.at.push(match.index + cursor);
+    }
+    if (run.chars.length >= ENCODED_RUN_MIN_BYTES) runs.push(run);
+  }
+  return runs;
+}
+
+/** Where in the text this run spells a value, read in one alphabet. */
+function encodedRunSpans(
+  run: EncodedRun,
+  view: (typeof ENCODED_VIEWS)[number],
+  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
+): Array<{ from: number; to: number; name: string }> {
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  // Every frame offset the run can start on, because a run does not have to
+  // start on one. The separator in front of a payload is what aligns it, and a
+  // prefix glued straight on — `"u" + …`, or a query key the `=` no longer
+  // ends — puts the whole payload one, two or three characters into its first
+  // frame, where a single decode reads only rubbish. There are `chars` of them
+  // and each is one linear decode.
+  for (let offset = 0; offset < view.chars && offset < run.chars.length; offset++) {
+    const decoded = Buffer.from(run.chars.slice(offset), view.encoding);
+    for (const { name, bytes } of needles) {
+      for (let found = decoded.indexOf(bytes); found >= 0; ) {
+        const first = offset + Math.floor(found / view.bytes) * view.chars;
+        const last = Math.min(
+          run.at.length,
+          offset + Math.ceil((found + bytes.length) / view.bytes) * view.chars
+        );
+        if (first < last) spans.push({ from: run.at[first]!, to: run.at[last - 1]! + 1, name });
+        found = decoded.indexOf(bytes, found + bytes.length);
+      }
+    }
+  }
+  return spans;
+}
+
+/**
+ * The spans replaced by their placeholders, earliest first.
+ *
+ * A span that STARTS inside one already replaced is clipped to what is left of
+ * it, not dropped. Dropping it lost a whole credential: {@link encodedRunSpans}
+ * widens a byte match out to the base64 frames it lies in, so two values inside
+ * one payload — `Basic base64(user:key)`, the idiom this pass exists for —
+ * produce spans that share a frame whenever the first value's length leaves the
+ * second starting mid-frame. The first was replaced, the second was discarded
+ * whole, and everything from the end of the first span to the end of the second
+ * was copied out in the clear: one base64 hop from the key.
+ *
+ * Clipping can only ever over-redact, because a span says the text it covers
+ * spells a value. Two placeholders then sit side by side, which is what two
+ * values in one payload really are.
+ */
 function spliceSpans(
   text: string,
   spans: Array<{ from: number; to: number; name: string }>
@@ -1895,8 +2190,8 @@ function spliceSpans(
   let out = "";
   let copied = 0;
   for (const { from, to, name } of spans.sort((a, b) => a.from - b.from || b.to - a.to)) {
-    if (from < copied) continue;
-    out += `${text.slice(copied, from)}${SECRET_PLACEHOLDER_MARKER}${name}}}`;
+    if (to <= copied) continue;
+    out += `${text.slice(copied, Math.max(from, copied))}${SECRET_PLACEHOLDER_MARKER}${name}}}`;
     copied = to;
   }
   return out + text.slice(copied);
