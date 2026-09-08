@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCOPED_ENV_VARS, assertEnvRestored } from "./setup/assert-env-restored.js";
+import { SCOPED_ENV_VARS, assertEnvRestored, leakedEnvVars } from "./setup/assert-env-restored.js";
 
 // The setup file's afterAll only fires on a suite that leaks, so on a green run
 // its body never reports anything and a refactor could hollow it out unnoticed —
@@ -17,26 +17,35 @@ describe("assert-env-restored", () => {
   });
 
   it("says nothing when the file put everything back", () => {
-    expect(() => assertEnvRestored(ambient, { ...ambient })).not.toThrow();
+    expect(leakedEnvVars(ambient, { ...ambient })).toEqual([]);
   });
 
   it("names the variable, the ambient value and what was left behind", () => {
-    expect(() => assertEnvRestored(ambient, { ...ambient, HOME: "/tmp/gone" })).toThrow(
-      "HOME: /ambient -> /tmp/gone"
-    );
+    expect(leakedEnvVars(ambient, { ...ambient, HOME: "/tmp/gone" })).toEqual([
+      "HOME: /ambient -> /tmp/gone",
+    ]);
   });
 
   it("catches a variable left set that was unset before, not just a changed one", () => {
     // USERPROFILE is unset on macOS and Linux, so this is the shape every
     // redirect in this package leaves behind when its restorer is dropped.
-    expect(() => assertEnvRestored(ambient, { ...ambient, USERPROFILE: "/tmp/gone" })).toThrow(
-      "USERPROFILE: undefined -> /tmp/gone"
-    );
+    expect(leakedEnvVars(ambient, { ...ambient, USERPROFILE: "/tmp/gone" })).toEqual([
+      "USERPROFILE: undefined -> /tmp/gone",
+    ]);
   });
 
   it("abbreviates a long value so a leaked PATH stays one readable line", () => {
-    expect(() => assertEnvRestored(ambient, { ...ambient, PATH: "/a".repeat(200) })).toThrow(
-      `PATH: /usr/bin -> ${"/a".repeat(30)}…`
+    expect(leakedEnvVars(ambient, { ...ambient, PATH: "/a".repeat(200) })).toEqual([
+      `PATH: /usr/bin -> ${"/a".repeat(30)}…`,
+    ]);
+  });
+
+  it("throws against a snapshot taken at module load, not one taken on the spot", () => {
+    // What the hook actually calls. A snapshot taken inside the hook would
+    // compare the environment with itself, and every leak would read as clean.
+    expect(() => assertEnvRestored({ ...process.env, HOME: "/tmp/not-the-ambient-home" })).toThrow(
+      "HOME: "
     );
+    expect(() => assertEnvRestored()).not.toThrow();
   });
 });

@@ -21,14 +21,25 @@ export const SCOPED_ENV_VARS = ["HOME", "USERPROFILE", "PATH"];
 const abbreviate = (value: string | undefined): string =>
   value === undefined || value.length <= 60 ? String(value) : `${value.slice(0, 60)}…`;
 
-/** Throws naming every variable the file failed to put back, or returns. */
-export function assertEnvRestored(
+/** One `name: before -> after` line per variable the file failed to put back. */
+export function leakedEnvVars(
   ambient: Record<string, string | undefined>,
-  current: NodeJS.ProcessEnv = process.env
-): void {
-  const leaked = SCOPED_ENV_VARS.filter((name) => current[name] !== ambient[name]).map(
+  current: NodeJS.ProcessEnv
+): string[] {
+  return SCOPED_ENV_VARS.filter((name) => current[name] !== ambient[name]).map(
     (name) => `${name}: ${abbreviate(ambient[name])} -> ${abbreviate(current[name])}`
   );
+}
+
+// Read at module load, which for a setup file is before the test module is
+// imported. Snapshotting inside the hook instead would compare the environment
+// with itself and pass whatever the file left behind, so AMBIENT is not a
+// parameter — there is nothing for a caller to substitute.
+const AMBIENT = Object.fromEntries(SCOPED_ENV_VARS.map((name) => [name, process.env[name]]));
+
+/** Throws naming every variable the file failed to put back, or returns. */
+export function assertEnvRestored(current: NodeJS.ProcessEnv = process.env): void {
+  const leaked = leakedEnvVars(AMBIENT, current);
   if (leaked.length === 0) return;
   throw new Error(
     `this file left the process environment redirected; restore it in the same hook that ` +
@@ -36,6 +47,4 @@ export function assertEnvRestored(
   );
 }
 
-const AMBIENT = Object.fromEntries(SCOPED_ENV_VARS.map((name) => [name, process.env[name]]));
-
-afterAll(() => assertEnvRestored(AMBIENT));
+afterAll(() => assertEnvRestored());
