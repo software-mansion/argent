@@ -397,9 +397,9 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
   // Every remedy below repairs a source that is DOWN, which is the only kind of
-  // silence there is: both machines this clause covers - a local simulator and a
-  // remote one - read the iOS full hierarchy, so a relaunch can always bring the
-  // tree back.
+  // silence there is: every machine this clause covers - a local simulator, a
+  // remote one, a physical device - has a tree source, so a relaunch can always
+  // bring the tree back.
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
     "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
