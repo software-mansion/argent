@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { CLEARED_ENV_VARS } from "./setup/clear-telemetry-env";
 
@@ -25,19 +26,39 @@ const LOOKALIKE = "ARGENTINA_REGION";
 // subdirectory is caught rather than silently dropped from the count.
 const UNSWEPT_SRC_FILES = ["ci-detect.ts"];
 
-// Every access form, so rewriting a read cannot walk it out of view: dotted,
-// optional-chained, bracketed, and destructured off `env` / `process.env`.
-const ENV_READ =
-  /\benv(?:\?)?\.([A-Z][A-Z0-9_]*)\b|\benv(?:\?)?\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g;
-const ENV_DESTRUCTURE = /\{([^}]*)\}\s*=\s*(?:process\.)?env\b/g;
-const ENV_NAME = /[A-Z][A-Z0-9_]*/g;
+// Every statically-named access form, so rewriting a read cannot walk it out of
+// view. A computed name is out of reach of any source scan — otel.ts reads
+// `process.env[name]` over a list — and those are the OTEL_* variables the setup
+// file documents as deliberately untouched.
+const ENV_DOTTED = /\benv\??\.([A-Z][A-Z0-9_]*)\b/g;
+const ENV_BRACKETED = /\benv(?:\?\.)?\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g;
+// `[^{}]` keeps the match inside the destructuring pattern. Without it the
+// leftmost match starts at the enclosing block's brace and harvests every
+// capitalised token in the body — `Number(` reads as an env name called `N`.
+const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*(?:process\.)?env\b/g;
+
+// `{ FOO: local }` binds under a different name; the env key is the half before
+// the colon, and it has to be the whole token or it is not an env name.
+const destructuredNames = (pattern: string): string[] =>
+  pattern
+    .split(",")
+    .map((part) => part.split(":")[0]!.trim())
+    .filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name));
 
 function envNamesRead(source: string): string[] {
-  const dotted = [...source.matchAll(ENV_READ)].map((m) => (m[1] ?? m[2])!);
-  const destructured = [...source.matchAll(ENV_DESTRUCTURE)].flatMap(
-    (m) => m[1]!.match(ENV_NAME) ?? []
-  );
-  return [...dotted, ...destructured];
+  return [
+    ...[...source.matchAll(ENV_DOTTED)].map((m) => m[1]!),
+    ...[...source.matchAll(ENV_BRACKETED)].map((m) => m[1]!),
+    ...[...source.matchAll(ENV_DESTRUCTURED)].flatMap((m) => destructuredNames(m[1]!)),
+  ];
+}
+
+/** Every .ts file under `dir`, at any depth, minus the declared exemptions. */
+function scannedSrcFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true })
+    .map((entry) => String(entry).split(sep).join("/"))
+    .filter((name) => name.endsWith(".ts") && !UNSWEPT_SRC_FILES.includes(name))
+    .sort();
 }
 
 // The probes and the named variables are the setup file's job to delete, so
@@ -88,48 +109,74 @@ describe("clear-telemetry-env suite guard", () => {
     expect(MIXED_CASE_PROBE in process.env).toBe(false);
   });
 
-  it("covers every env name src reads, in any access form and in any file", () => {
+  it("covers every statically-named env read in src, in any form and at any depth", () => {
     // Pinned, not just declared: adding a name here is the cheapest way to make
     // the guard stop guarding, so widening it has to be a deliberate edit here.
     expect(UNSWEPT_SRC_FILES).toEqual(["ci-detect.ts"]);
 
     const srcDir = join(__dirname, "..", "src");
-    const files = readdirSync(srcDir, { recursive: true })
-      .map((entry) => String(entry).split(sep).join("/"))
-      .filter((name) => name.endsWith(".ts") && !UNSWEPT_SRC_FILES.includes(name))
-      .sort();
-
-    const read = files.flatMap((file) =>
+    const read = scannedSrcFiles(srcDir).flatMap((file) =>
       envNamesRead(readFileSync(join(srcDir, file), "utf8")).map((name) => ({ file, name }))
     );
 
-    // A regex that stopped matching would otherwise report full coverage of
+    // A scan that stopped matching would otherwise report full coverage of
     // nothing; DO_NOT_TRACK is the read the whole file exists for.
     expect(read.map((r) => r.name)).toContain("DO_NOT_TRACK");
-
-    // Only the dotted form appears in src today, so the alternatives that handle
-    // the rest are not exercised by the scan above and could be dropped unnoticed.
-    const forms = [
-      `env.DOT_READ`,
-      `env?.CHAIN_READ`,
-      `env["BRACKET_READ"]`,
-      `env['QUOTED_READ']`,
-      `const { DESTRUCTURED_READ } = env;`,
-      `const { PROCESS_DESTRUCTURED } = process.env;`,
-    ].join("\n");
-    expect(envNamesRead(forms).sort()).toEqual([
-      "BRACKET_READ",
-      "CHAIN_READ",
-      "DESTRUCTURED_READ",
-      "DOT_READ",
-      "PROCESS_DESTRUCTURED",
-      "QUOTED_READ",
-    ]);
 
     const uncleared = read.filter(
       ({ name }) => !name.startsWith("ARGENT_") && !CLEARED_ENV_VARS.includes(name)
     );
     expect(uncleared).toEqual([]);
+  });
+
+  it("reads every access form, and nothing that merely looks like one", () => {
+    // Only the dotted form appears in src today, so the branches handling the
+    // rest are unexercised by the scan above and could be dropped unnoticed.
+    const forms = [
+      `env.DOT_READ`,
+      `env?.CHAIN_READ`,
+      `env["BRACKET_READ"]`,
+      `env?.['CHAINED_BRACKET_READ']`,
+      `const { DESTRUCTURED_READ } = env;`,
+      `const { PROCESS_DESTRUCTURED } = process.env;`,
+      `const { RENAMED_READ: local } = env;`,
+    ].join("\n");
+    expect(envNamesRead(forms).sort()).toEqual([
+      "BRACKET_READ",
+      "CHAINED_BRACKET_READ",
+      "CHAIN_READ",
+      "DESTRUCTURED_READ",
+      "DOT_READ",
+      "PROCESS_DESTRUCTURED",
+      "RENAMED_READ",
+    ]);
+
+    // The destructure pattern must not start at the enclosing block's brace and
+    // harvest the body: `Number(` there would otherwise read as a name `N`.
+    const enclosed = [
+      `function rate(env: NodeJS.ProcessEnv): number {`,
+      `  const parsed = Number(env.REAL_READ);`,
+      `  const { OTHER_REAL_READ } = env;`,
+      `  return parsed || Number(OTHER_REAL_READ) || 1;`,
+      `}`,
+    ].join("\n");
+    expect(envNamesRead(enclosed).sort()).toEqual(["OTHER_REAL_READ", "REAL_READ"]);
+  });
+
+  it("scans subdirectories, so a read cannot be moved out of view", () => {
+    // src/ is flat today, so the recursion is otherwise unexercised — the same
+    // blind spot the forms above have.
+    const root = mkdtempSync(join(tmpdir(), "argent-scan-probe-"));
+    try {
+      mkdirSync(join(root, "detect"));
+      for (const file of ["top.ts", "ci-detect.ts", "detect/vendor.ts", "detect/notes.md"]) {
+        writeFileSync(join(root, file), "");
+      }
+
+      expect(scannedSrcFiles(root)).toEqual(["detect/vendor.ts", "top.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("is registered as a setup file, so it runs before any test module", async () => {
