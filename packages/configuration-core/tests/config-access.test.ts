@@ -23,6 +23,7 @@ import {
   getConfigDefinition,
   MIN_SCRIPT_HEAP_LIMIT_MB,
   MIN_SCRIPT_TIMEOUT_MS,
+  WINDOWS_ROOTED_PATH_RE,
   type ConfigDefinition,
 } from "../src/config-schema.js";
 
@@ -531,5 +532,52 @@ describe("scripts.bash — schema entry", () => {
     expect(expected).toContain("an absolute path to a bash executable");
     expect(expected).toContain("the host running the tool server");
     expect(expected).toContain("on Windows");
+  });
+
+  // The win32 half of the write gate, on the platform the repository cannot
+  // run its unit tests on by default. It is the WRITE side of a rule the tool
+  // server reads back through the same `WINDOWS_ROOTED_PATH_RE`, and the two
+  // had already disagreed once in exactly this direction: `argent config set`
+  // stored a POSIX path that every `.sh` step then refused with "names no
+  // drive".
+  describe("under Windows rules", () => {
+    const realPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    });
+
+    it.each([
+      ["a drive-rooted path", "C:\\Program Files\\Git\\bin\\bash.exe"],
+      ["a drive-rooted path with forward slashes", "C:/Program Files/Git/bin/bash.exe"],
+      ["a UNC share", "\\\\build01\\tools\\git\\bin\\bash.exe"],
+    ])("writes %s", (_label, value) => {
+      expect(setConfigValue("scripts.bash", value, "global", opts())).toBe(value);
+      expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: value } });
+    });
+
+    it.each([
+      // `path.win32.isAbsolute` says true for both of these, and neither names
+      // a drive - so the step would refuse a value the write gate had accepted.
+      ["a POSIX path", "/usr/bin/bash"],
+      ["a path rooted on no drive", "\\Git\\bin\\bash.exe"],
+      ["a relative path", "bin\\bash.exe"],
+    ])("refuses %s", (_label, value) => {
+      expect(() => setConfigValue("scripts.bash", value, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+      expect(readConfigObject("global", opts())).toEqual({});
+    });
+
+    // The rule both sides share, so a change to one of them is a change to the
+    // other's test too.
+    it("uses the same rooted-path rule the tool server reads back", () => {
+      expect(WINDOWS_ROOTED_PATH_RE.test("C:\\Git\\bin\\bash.exe")).toBe(true);
+      expect(WINDOWS_ROOTED_PATH_RE.test("/usr/bin/bash")).toBe(false);
+    });
   });
 });
