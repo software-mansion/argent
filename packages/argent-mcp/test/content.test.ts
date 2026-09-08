@@ -623,6 +623,8 @@ describe("flowRunToMcpContent", () => {
     );
     expect(artifactText?.text).toContain("home-baseline.png");
     expect(artifactText?.text).toContain("home-current.png");
+    // Under the pinned root, not artifactsRoot()'s shared default.
+    expect(artifactText?.text).toContain(`diff: ${root}`);
     expect(artifactText?.text).toMatch(/diff: .*home-diff\.png/);
 
     // Exactly one inline image — the diff, not the full-res baseline/current.
