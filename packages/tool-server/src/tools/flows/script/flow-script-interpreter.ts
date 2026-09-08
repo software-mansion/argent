@@ -56,6 +56,14 @@ const BASH_PROBE_FORCE_GRACE_MS = 1_000;
  */
 const BASH_PROBE_SETTLE_MS = 250;
 
+/**
+ * How much of the candidate's standard output is kept - the LAST of it, not the
+ * first. `BASH_PROBE_COMMAND` prints the marker last, after whatever the
+ * candidate greeted with, so a window on the head is a window the answer falls
+ * out of: a wrapper that printed 4 KiB of banner before `exec`ing a real bash
+ * was refused as "not a bash", while the same wrapper one character shorter ran
+ * the step. A window on the tail holds the marker whatever precedes it.
+ */
 const BASH_PROBE_MAX_CHARS = 4 * 1024;
 
 const POSIX_FIXED_LOCATIONS = ["/bin/bash", "/usr/bin/bash"];
@@ -161,7 +169,8 @@ async function notBashProblem(candidate: string): Promise<string | null> {
  * the wrapper this check exists for reads an open pipe until the timeout, and
  * answers in five seconds what it can answer at once. Its standard output is
  * kept only up to the marker's own length, so a candidate that streams costs
- * the timeout rather than the heap. A candidate still alive at the timeout is
+ * the timeout rather than the heap, and the window is on the END of the output,
+ * where the answer is. A candidate still alive at the timeout is
  * asked to stop and then killed, rather than asked once and waited on. And the
  * answer is taken at the candidate's OWN exit, with a short window for the read
  * behind it, rather than at the close of a pipe whatever it started still
@@ -198,7 +207,7 @@ function askForBashVersion(
     };
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
-      if (stdout.length < BASH_PROBE_MAX_CHARS) stdout += chunk;
+      stdout = (stdout + chunk).slice(-BASH_PROBE_MAX_CHARS);
     });
     child.on("error", (err) => answer(null, firstLine(err)));
     child.on("exit", (_code, signal) => {

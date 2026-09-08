@@ -276,6 +276,30 @@ describe("scripts.bash, read against the flow's own project", () => {
     expect((found as { problem: string }).problem).toContain(stub);
   });
 
+  // The marker is the LAST thing the probe prints, so a window on the head of
+  // the candidate's output is a window the answer falls out of. A wrapper that
+  // greets before `exec`ing a real bash is the shape the leading newline in
+  // `BASH_PROBE_COMMAND` already exists for; past 4 KiB of greeting that
+  // mitigation was undone and the wrapper was refused as "not a bash".
+  it.skipIf(realPlatform === "win32" || hostBashPath === undefined)(
+    "reads the version of a candidate that greets with more than the probe keeps",
+    async () => {
+      const root = projectWith(undefined);
+      const wrapper = path.join(root, "greeting-bash");
+      fs.writeFileSync(
+        wrapper,
+        `#!/bin/sh\nprintf '%s\\n' '${"B".repeat(64 * 1024)}'\nexec ${hostBashPath} "$@"\n`
+      );
+      fs.chmodSync(wrapper, 0o755);
+      fs.writeFileSync(
+        path.join(root, ".argent", "config.json"),
+        JSON.stringify({ scripts: { bash: wrapper } })
+      );
+
+      expect(await resolveBashInterpreter(root)).toEqual({ path: wrapper });
+    }
+  );
+
   // The guard is a comparison of strings, and Windows gives one file several
   // names. `\\?\` is the extended-length prefix, which `path.resolve` keeps —
   // so the resolved path never matched the plain `%SystemRoot%`.
