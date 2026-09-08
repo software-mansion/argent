@@ -147,7 +147,7 @@ Use the map form for a flow that runs on more than one platform:
 
 `native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
 
-A run on a remote simulator uses the `ios` entry. A flow file names no host, so no flow needs a key for a remote run.
+A run on a remote simulator uses the `ios` entry.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
 
