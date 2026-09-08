@@ -6,6 +6,6 @@ export default defineConfig({
     globals: true,
     // Suite-wide guards, one for each direction the environment leaks; each
     // setup file documents why it exists.
-    setupFiles: ["test/setup/clear-argent-env.ts", "test/setup/assert-home-restored.ts"],
+    setupFiles: ["test/setup/clear-argent-env.ts", "test/setup/assert-env-restored.ts"],
   },
 });

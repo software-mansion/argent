@@ -13,8 +13,15 @@ const PROBE = "ARGENT_PIN_PROBE";
 const MIXED_CASE_PROBE = "Argent_Pin_Probe_Mixed";
 const LOOKALIKE = "ARGENTINA_REGION";
 
+// The probes are the setup file's job to delete, so dropping them is the correct
+// end state. The lookalike is not — it is planted here, and this file must leave
+// the ambient one exactly as it found it.
+const AMBIENT_LOOKALIKE = process.env[LOOKALIKE];
+
 afterEach(() => {
-  for (const name of [PROBE, MIXED_CASE_PROBE, LOOKALIKE]) delete process.env[name];
+  for (const name of [PROBE, MIXED_CASE_PROBE]) delete process.env[name];
+  if (AMBIENT_LOOKALIKE === undefined) delete process.env[LOOKALIKE];
+  else process.env[LOOKALIKE] = AMBIENT_LOOKALIKE;
 });
 
 async function rerunSetup(): Promise<void> {
