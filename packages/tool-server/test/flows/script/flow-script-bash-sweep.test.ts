@@ -92,6 +92,43 @@ describe("a bash step's sweep of the exchange root", () => {
     }
   }, 30_000);
 
+  // The throttle bounds how OFTEN the root is read, not what one read costs -
+  // and in production that root is `os.tmpdir()`, shared with every process on
+  // the host and bounded by nothing. A whole-directory read builds one array of
+  // every name on the main thread however it was scheduled, so the sweep of a
+  // large root stalled the tool server's event loop: no MCP request, device
+  // socket or timer ran during it. A handle read in small batches leaves the
+  // loop between them.
+  it("sweeps a large root without stalling the event loop", async () => {
+    const ws = createScriptWorkspace("bash-sweep-stall");
+    const crowded = fs.mkdtempSync(path.join(os.tmpdir(), "argent-sweep-crowded-"));
+    for (let i = 0; i < 40_000; i += 1) fs.mkdirSync(path.join(crowded, `junk-${i}`));
+
+    let worstBlockMs = 0;
+    let last = process.hrtime.bigint();
+    const heartbeat = setInterval(() => {
+      const now = process.hrtime.bigint();
+      worstBlockMs = Math.max(worstBlockMs, Number(now - last) / 1e6 - 5);
+      last = now;
+    }, 5);
+    try {
+      const script = ws.write("crowded.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+      const result = await new FlowScriptExecutor({
+        concurrency: 2,
+        maxTimeoutMs: 60_000,
+        exchangeRoot: crowded,
+      }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
+
+      expect(result.ok).toBe(true);
+      // 21-22 ms on this machine before, 0 after; the margin is for a loaded one.
+      expect(worstBlockMs).toBeLessThan(12);
+    } finally {
+      clearInterval(heartbeat);
+      fs.rmSync(crowded, { recursive: true, force: true });
+      ws.cleanup();
+    }
+  }, 120_000);
+
   // The bound a directory carries has to be a whole number of milliseconds,
   // because the sweep reads it back with `/^(\d+)-/` and a `.` matches nothing
   // there. `flow-script-step-parse.test.ts` pins `timeout: 1500.5` as a legal

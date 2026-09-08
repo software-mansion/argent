@@ -106,6 +106,14 @@ const EXCHANGE_FILE_MODE = 0o600;
 const EXCHANGE_SWEEP_INTERVAL_MS = 60_000;
 
 /**
+ * How many names the sweep's directory handle reads at a time. Small, because
+ * what it bounds is the work one turn of the event loop does: the read is
+ * scheduled off-thread either way, and it is building the JavaScript names that
+ * blocks.
+ */
+const EXCHANGE_SWEEP_BATCH = 64;
+
+/**
  * An allowlist rather than a denylist because what it must keep out — the
  * bearer token, the port, every `ARGENT_SECRET_*` value — is exactly the set
  * that grows without this file being touched. Leak hygiene, not containment: a
@@ -649,6 +657,10 @@ export class FlowScriptExecutor {
       // holds a file) is a note, never a throw: `execute` owes its caller a
       // verdict.
       if (exchange) removeExchange(exchange, notes);
+      // The sweep this step started, which ran beside it rather than in front
+      // of it. Waiting for it here costs nothing a step of ordinary length can
+      // measure, and it keeps the root readable the moment `execute` resolves.
+      if (pendingSweep) await pendingSweep;
     }
   }
 
@@ -1290,7 +1302,7 @@ function createExchange(
   timeoutMs: number,
   sweepIntervalMs: number
 ): ExchangeFiles {
-  sweepStaleExchanges(root, sweepIntervalMs);
+  startStaleExchangeSweep(root, sweepIntervalMs);
   // Rounded UP to a whole millisecond, because the sweep below reads the stamp
   // back with `/^(\d+)-/` and a `timeout: 30000.5` in a flow file is a positive
   // finite number the parser keeps. A `.` in the name matches nothing there, so
@@ -1325,6 +1337,34 @@ function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
 let sweptStaleExchangesAt = 0;
 
 /**
+ * The sweep this process last started, until it finishes. `runOne` waits on it
+ * before it returns, so a step never outlives its own sweep and a test can read
+ * the root the moment `execute` resolves - the sweep itself runs beside the
+ * step it was started for, not in front of it.
+ */
+let pendingSweep: Promise<void> | undefined;
+
+/**
+ * Start the sweep, at most once per interval, and never wait for it here. The
+ * throttle bounds how OFTEN the root is read; it does not bound what one read
+ * costs, and in production that root is `os.tmpdir()` - shared with every other
+ * process on the host and bounded by nothing. A `readdirSync` there took 48 ms
+ * on a machine holding 88 000 entries, on the tool server's main thread: no MCP
+ * request, device socket or timer ran during it, and the bash step's own wall
+ * time roughly doubled. The stall grows over a machine's life, since the
+ * directory it reads is one the tool server never prunes.
+ */
+function startStaleExchangeSweep(root: string, sweepIntervalMs: number): void {
+  const now = Date.now();
+  if (now - sweptStaleExchangesAt < sweepIntervalMs) return;
+  sweptStaleExchangesAt = now;
+  const sweep = sweepStaleExchanges(root).finally(() => {
+    if (pendingSweep === sweep) pendingSweep = undefined;
+  });
+  pendingSweep = sweep;
+}
+
+/**
  * The orphan case has an owner too. When the tool server dies mid-step the
  * lifeline kills the runner and nobody reaches the directory — and the document
  * in it may hold values derived from a secret. So a bash step sweeps the
@@ -1348,26 +1388,37 @@ let sweptStaleExchangesAt = 0;
  *
  * The stamp is taken before the read, so a root this process cannot read costs
  * one failed `readdir` a minute and not one per bash step.
+ *
+ * Asynchronous throughout, for the reason {@link startStaleExchangeSweep}
+ * gives: every call here is one the event loop can leave.
  */
-function sweepStaleExchanges(root: string, sweepIntervalMs: number): void {
+async function sweepStaleExchanges(root: string): Promise<void> {
   const now = Date.now();
-  if (now - sweptStaleExchangesAt < sweepIntervalMs) return;
-  sweptStaleExchangesAt = now;
-  let entries: string[];
+  let dir: fs.Dir;
   try {
-    entries = fs.readdirSync(root);
+    // `opendir` rather than `readdir`: a `readdir` of this root builds one
+    // array of every name in it, and that array is built on the main thread
+    // however the read itself was scheduled - 60 000 entries cost 33 ms of
+    // blocked loop whether the call was `readdirSync` or awaited. A directory
+    // handle hands back a small batch per turn instead, so no single slice is
+    // one anything else has to wait behind.
+    dir = await fs.promises.opendir(root, { bufferSize: EXCHANGE_SWEEP_BATCH });
   } catch {
     return;
   }
-  for (const entry of entries) {
-    if (!entry.startsWith(EXCHANGE_DIR_PREFIX)) continue;
-    const ownUntil = exchangeOwnedUntil(entry);
-    if (ownUntil === undefined || ownUntil > now) continue;
-    try {
-      fs.rmSync(path.join(root, entry), { recursive: true, force: true });
-    } catch {
-      // Raced with the step that owns it, or with another server's own sweep.
+  try {
+    for await (const entry of dir) {
+      if (!entry.name.startsWith(EXCHANGE_DIR_PREFIX)) continue;
+      const ownUntil = exchangeOwnedUntil(entry.name);
+      if (ownUntil === undefined || ownUntil > now) continue;
+      try {
+        await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
+      } catch {
+        // Raced with the step that owns it, or with another server's own sweep.
+      }
     }
+  } catch {
+    // The directory went away, or became unreadable, while it was being read.
   }
 }
 
