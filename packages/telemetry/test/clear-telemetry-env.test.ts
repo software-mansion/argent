@@ -35,14 +35,16 @@ const ENV_BRACKETED = /\benv(?:\?\.)?\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]/g;
 // `[^{}]` keeps the match inside the destructuring pattern. Without it the
 // leftmost match starts at the enclosing block's brace and harvests every
 // capitalised token in the body — `Number(` reads as an env name called `N`.
-const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*(?:process\.)?env\b/g;
+// The optional `: Type` is the annotated form, `const { X }: ProcessEnv = env`.
+const ENV_DESTRUCTURED = /(?:const|let|var)\s*\{([^{}]*)\}\s*(?::[^={}]*)?=\s*(?:process\.)?env\b/g;
 
-// `{ FOO: local }` binds under a different name; the env key is the half before
-// the colon, and it has to be the whole token or it is not an env name.
+// `{ FOO: local }` binds under a different name and `{ FOO = "x" }` gives one a
+// default; the env key is what precedes both, and it has to be the whole token
+// or it is not an env name.
 const destructuredNames = (pattern: string): string[] =>
   pattern
     .split(",")
-    .map((part) => part.split(":")[0]!.trim())
+    .map((part) => part.split(":")[0]!.split("=")[0]!.trim())
     .filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name));
 
 function envNamesRead(source: string): string[] {
@@ -140,14 +142,20 @@ describe("clear-telemetry-env suite guard", () => {
       `const { DESTRUCTURED_READ } = env;`,
       `const { PROCESS_DESTRUCTURED } = process.env;`,
       `const { RENAMED_READ: local } = env;`,
+      `const { ANNOTATED_READ }: NodeJS.ProcessEnv = env;`,
+      `const { DEFAULTED_READ = "fallback" } = env;`,
+      `const { RENAMED_DEFAULTED_READ: also = "fallback" } = env;`,
     ].join("\n");
     expect(envNamesRead(forms).sort()).toEqual([
+      "ANNOTATED_READ",
       "BRACKET_READ",
       "CHAINED_BRACKET_READ",
       "CHAIN_READ",
+      "DEFAULTED_READ",
       "DESTRUCTURED_READ",
       "DOT_READ",
       "PROCESS_DESTRUCTURED",
+      "RENAMED_DEFAULTED_READ",
       "RENAMED_READ",
     ]);
 
