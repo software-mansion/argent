@@ -1,6 +1,6 @@
 // sanitize.ts enforces this same event surface at runtime.
 
-import type { FailureSignal } from "@argent/registry";
+import type { DeviceKind, FailureSignal } from "@argent/registry";
 import type { AiTelemetryProps } from "./ai-identity.js";
 
 // Single source of truth for the telemetry device-platform enum: sanitize.ts's
@@ -23,7 +23,20 @@ export const PLATFORMS = [
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
-export type FailureTelemetryProps = Partial<FailureSignal>;
+// Telemetry-only subset of the registry's `DeviceKind`: `unknown` is never
+// produced by `resolveDevice` and is rejected by the sanitizer, as
+// `platform: "unknown"` already is. Reported next to `platform` from the same
+// device id — `platform: "ios"` + `device_kind: "device"` is a physical iPhone.
+export const DEVICE_KINDS = [
+  "simulator",
+  "emulator",
+  "vvd",
+  "device",
+  "app",
+] as const satisfies readonly DeviceKind[];
+export type TelemetryDeviceKind = (typeof DEVICE_KINDS)[number];
+
+type FailureTelemetryProps = Partial<FailureSignal>;
 
 export interface InstallationCliInitStartProps {
   package_manager: "npm" | "yarn" | "pnpm" | "bun" | "unknown";
@@ -89,9 +102,9 @@ export interface InstallationSkillRefreshResultProps extends FailureTelemetryPro
   failed_count: number;
 }
 
-export type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
+type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
 
-export type InstallationPackageAction =
+type InstallationPackageAction =
   | "fresh_install"
   | "already_installed"
   | "init_triggered_update"
@@ -135,22 +148,34 @@ export interface InstallationCliUninstallCompleteProps extends FailureTelemetryP
 }
 
 export interface ToolInvokeProps extends AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
+  /**
+   * Simulator / emulator / physical device / desktop app, derived with
+   * `platform` from the same device id. Omitted when `platform` is omitted, when
+   * the call names no concrete device (an `avdName`-only boot), or when the id
+   * has no positively recognised shape (see tool-server telemetry-platform.ts).
+   */
+  device_kind?: TelemetryDeviceKind;
 }
 
 export interface ToolCompleteProps extends AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
+  device_kind?: TelemetryDeviceKind;
   duration_ms: number;
 }
 
 export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id?: string;
   platform?: Platform;
+  device_kind?: TelemetryDeviceKind;
   duration_ms: number;
   /**
    * Parameter names that failed zod validation on an HTTP tool call, plus the

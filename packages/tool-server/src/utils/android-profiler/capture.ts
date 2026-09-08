@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { traceConfigPath } from "@argent/native-devtools-android";
 import { resolveAndroidBinary } from "../android-binary";
-import { runAdb, adbShell } from "../adb";
+import { runAdb, adbArgv, adbShell } from "../adb";
 
 const ON_DEVICE_TRACE_DIR = "/data/misc/perfetto-traces";
 const START_TIMEOUT_MS = 15_000;
@@ -36,14 +36,14 @@ export async function buildTraceConfig(
     .replaceAll("TARGET_PACKAGE_PLACEHOLDER", appPackage);
 }
 
-export interface StartPerfettoOptions {
+interface StartPerfettoOptions {
   serial: string;
   appPackage: string;
   /** Timestamp slug for the on-device filename. */
   timestamp: string;
 }
 
-export interface StartPerfettoResult {
+interface StartPerfettoResult {
   pid: number;
   onDeviceTracePath: string;
   /** The host-side `adb shell`; it exits while the on-device daemon keeps running. */
@@ -91,7 +91,12 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     onDeviceTracePath,
   ];
 
-  const child = spawn(adbPath, args, { stdio: ["pipe", "pipe", "pipe"] });
+  /**
+   * Spawned rather than routed through `runAdb`, because the config goes in on
+   * stdin and the PID comes back on stdout, so the argv substitution `runAdb`
+   * would have applied has to be applied here.
+   */
+  const child = spawn(adbPath, adbArgv(args), { stdio: ["pipe", "pipe", "pipe"] });
 
   let stdout = "";
   let stderr = "";
@@ -258,7 +263,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
   return { pid, onDeviceTracePath, child };
 }
 
-export interface StopPerfettoOptions {
+interface StopPerfettoOptions {
   serial: string;
   pid: number;
   onDeviceTracePath: string;
@@ -267,7 +272,7 @@ export interface StopPerfettoOptions {
   recordingTimedOut?: boolean;
 }
 
-export interface StopPerfettoResult {
+interface StopPerfettoResult {
   hostTracePath: string;
   warning?: string;
 }

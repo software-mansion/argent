@@ -35,7 +35,7 @@ export type CaptureStrategyReason =
   | { kind: "degraded-xcode"; major: number; minor: number }
   | { kind: "default" };
 
-export interface CaptureStrategyDecision {
+interface CaptureStrategyDecision {
   strategy: IosCaptureStrategy;
   reason: CaptureStrategyReason;
   /** Set when ARGENT_IOS_CAPTURE held an unrecognised value that was ignored. */

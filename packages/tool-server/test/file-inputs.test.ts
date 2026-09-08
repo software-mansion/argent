@@ -30,6 +30,38 @@ describe("resolveFileInputs", () => {
     expect(fileInputs).toBeUndefined();
   });
 
+  it("reports which targets the CLIENT derived, so an error need not read them back", async () => {
+    const filePath = path.join(tmpDir, "derived.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+    const specs: FileInputSpec[] = [
+      { target: "input", path: "${input}", kind: "file" },
+      { target: "derived", path: "${root}/flows/${input}.yaml", kind: "file" },
+    ];
+
+    const { derivedTargets } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        input: wire({ path: filePath, size: st.size, mtimeMs: st.mtimeMs }),
+        derived: wire({ path: filePath, size: st.size, mtimeMs: st.mtimeMs }),
+      }
+    );
+
+    expect(derivedTargets).toEqual(["derived"]);
+  });
+
+  it("does not call a derived target the client's when the CALLER set it as a plain value", async () => {
+    const specs: FileInputSpec[] = [
+      { target: "derived", path: "${root}/flows/${input}.yaml", kind: "file" },
+    ];
+    const { args, derivedTargets } = await resolveFileInputs(
+      { fileInputs: specs },
+      { derived: "/caller/wrote/this.yaml" }
+    );
+    expect(derivedTargets).toEqual([]);
+    expect(args.derived).toBe("/caller/wrote/this.yaml");
+  });
+
   it("uses the wrapper path in place when it matches on this host", async () => {
     const filePath = path.join(tmpDir, "input.png");
     await fs.writeFile(filePath, "png-bytes");

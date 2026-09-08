@@ -30,7 +30,6 @@ export {
 export type { PackageManager, ShellCommand } from "./package-manager.js";
 export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
 export {
-  isTempRunnerPath,
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
@@ -41,7 +40,6 @@ export {
   getLocalArgentBinRelPath,
   probeLocalInstall,
 } from "./topology.js";
-export type { LocalInstallProbe } from "./topology.js";
 export {
   getInstallRecordPath,
   readInstallRecord,
@@ -51,16 +49,15 @@ export {
   resolveInstallModeFromFlags,
   InstallModeFlagError,
 } from "./install-record.js";
-export type { InstallMode, InstallRecord } from "./install-record.js";
+export type { InstallMode } from "./install-record.js";
 export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-export type { TargetFlags, DecideTargetsContext, TargetDecision } from "./install-targets.js";
 
 // resolvePackageRoot lives in the leaf package-root.ts module: topology.ts
 // needs it too, and importing it from this barrel — which re-exports topology —
 // was an ESM cycle.
 export { resolvePackageRoot };
 
-export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
+const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
 
 function resolveBundledDir(dirName: "skills" | "rules" | "agents"): string {
   const packagedDir = path.join(PACKAGE_ROOT, dirName);

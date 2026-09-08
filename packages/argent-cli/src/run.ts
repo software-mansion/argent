@@ -219,19 +219,25 @@ Examples:
 
   const schema = meta.inputSchema as JsonSchema | undefined;
 
-  // The one place a rejected invocation is reported, so the locally detected and the
-  // server-reported case cannot drift apart in wording, output channel or exit code.
-  const failValidation = async (report: ValidationReport, stage: string): Promise<never> => {
-    const summary = formatValidationError(report, schema);
+  // The one place a rejected invocation is reported, so the three ways one can be refused
+  // (unparseable flags, locally detected, server-reported) cannot drift apart in wording, output
+  // channel or exit code.
+  const failInvocation = async (
+    summary: string,
+    report: ValidationReport | null,
+    failure: { error_code: FailureCode; failure_stage: string }
+  ): Promise<never> => {
     if (json) {
       // One object on stderr and nothing on stdout, so `--json | jq` on a failed run reads an
       // empty stream and a non-zero status.
+      // The keys stay present when flags never parsed and carry no report, so one reader
+      // handles every rejected invocation.
       console.error(
         JSON.stringify(
           {
             error: summary,
-            missing: missingFlagNames(report, schema),
-            issues: report.rawIssues ?? [],
+            missing: report ? missingFlagNames(report, schema) : [],
+            issues: report?.rawIssues ?? [],
           },
           null,
           2
@@ -242,28 +248,28 @@ Examples:
       printToolHelp(meta);
     }
     await trackRunFailure(toolName, startedAt, {
-      error_code: FAILURE_CODES.CLI_RUN_INPUT_VALIDATION_FAILED,
-      failure_stage: stage,
+      ...failure,
       failure_area: "cli",
       error_kind: "validation",
     });
     process.exit(2);
   };
 
+  const failValidation = (report: ValidationReport, stage: string): Promise<never> =>
+    failInvocation(formatValidationError(report, schema), report, {
+      error_code: FAILURE_CODES.CLI_RUN_INPUT_VALIDATION_FAILED,
+      failure_stage: stage,
+    });
+
   let parsed;
   try {
     parsed = parseFlags(argvForFlags, schema);
   } catch (err) {
     if (err instanceof FlagParseException) {
-      console.error(`Error: ${err.message}\n`);
-      printToolHelp(meta);
-      await trackRunFailure(toolName, startedAt, {
+      await failInvocation(err.message, null, {
         error_code: FAILURE_CODES.CLI_RUN_FLAG_PARSE_FAILED,
         failure_stage: "cli_run_parse_flags",
-        failure_area: "cli",
-        error_kind: "validation",
       });
-      process.exit(2);
     }
     throw err;
   }

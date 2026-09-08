@@ -1,10 +1,19 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  ToolNotFoundError,
+  wrapFailure,
+  type Registry,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
+  holdsOutputReference,
   appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
@@ -23,8 +32,8 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
-import { stepAnchor, summarizeStep } from "./flow-finish-recording";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { stepAnchor, summarizeStep } from "./flow-step-definitions";
+import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
@@ -49,7 +58,11 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording this step belongs to."
     ),
-  command: z.string().describe('MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app")'),
+  command: z
+    .string()
+    .describe(
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass a flow directive or a recording tool. Call flow-add-script directly for a requested script step.'
+    ),
   args: z
     .string()
     .optional()
@@ -75,7 +88,7 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
 
 /**
  * The app this recording last started, from the recorder's `launch` steps — the
- * session's stand-in for the runner's {@link ActionEnv.launchedNativeApp}. Last
+ * session's stand-in for the runner's {@link FlowTreeTarget.bundleId}. Last
  * rather than first: a mid-recording relaunch retargets what follows, exactly as
  * a nested `launch:` retargets a run.
  */
@@ -577,11 +590,12 @@ async function probeAgainstRunnerTree(
  * replay tree keeps. A describe-derived selector could fail — or hit a
  * different element — at replay while recording reported success.
  *
- * The launched app is passed because a recording relaunches the app AFTER this
- * tool-server bound its listener: the first tap reads during the connect
- * window, where that id is the only one the iOS tree source can measure, and it
- * yields a measured reason instead of auto-targeting's "Launch or restart the
- * app first".
+ * The launched app is passed — unpinned, unlike replay, since recording has no
+ * run state vouching for the foreground app — because a recording relaunches
+ * the app AFTER this tool-server bound its listener: the first tap reads during
+ * the connect window, where that id is the only one the iOS tree source can
+ * measure, and it yields a measured reason instead of auto-targeting's "Launch
+ * or restart the app first".
  */
 async function captureTapSelector(
   registry: Registry,
@@ -592,7 +606,11 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(registry, device, launched);
+    const { tree, source } = await fetchFlowTree(
+      registry,
+      device,
+      launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
+    );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
@@ -623,6 +641,185 @@ async function captureTapSelector(
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
     };
   }
+}
+
+async function activeFlowState(
+  session: RecordingSession
+): Promise<{ stepCount: number; note?: string }> {
+  if (session.persist === "host") {
+    try {
+      session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
+    } catch (err) {
+      return {
+        stepCount: session.flow.steps.length,
+        note:
+          `The persisted flow could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
+          `the step count is from the last valid in-memory snapshot.`,
+      };
+    }
+  }
+  return { stepCount: session.flow.steps.length };
+}
+
+async function recordNothing(
+  session: RecordingSession,
+  guidance: string
+): Promise<{
+  message: string;
+  toolResult: undefined;
+  stepCount: number;
+  savedTo: FlowSavedTo;
+}> {
+  const { stepCount, note } = await activeFlowState(session);
+  return {
+    message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
+    toolResult: undefined,
+    stepCount,
+    savedTo: session.filePath,
+  };
+}
+
+interface DirectiveHint {
+  tool: string;
+  rewritten: boolean;
+  rewriteCondition?: string;
+}
+
+const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
+  tap: { tool: "gesture-tap", rewritten: true },
+  launch: {
+    tool: "restart-app",
+    rewritten: true,
+    rewriteCondition:
+      "when it carries only the bundle id (a call with an extra arg, e.g. an Android `activity`, " +
+      "is kept as a raw `tool: restart-app` step to convert during polish)",
+  },
+  run: {
+    tool: "flow-execute",
+    rewritten: true,
+    rewriteCondition:
+      "when the target resolves as a sibling flow in this recording's folder — a `name` that " +
+      "does not is kept as a raw `tool: flow-execute` step, and so is every target in a REMOTE " +
+      "recording (`run:` composition is host-resolved, so the host cannot validate the client's " +
+      "siblings); a `flow_path` that is not a sibling is refused outright and records nothing",
+  },
+  type: { tool: "keyboard", rewritten: false },
+  await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
+  assert: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
+  pinch: { tool: "gesture-pinch", rewritten: false },
+};
+
+const NESTED_RECORDER_TOOLS: Record<string, string> = {
+  "flow-add-echo":
+    "`flow-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
+    "flow-add-step — nesting it would write the echo AND a `tool: flow-add-echo` step that " +
+    "fails on every replay.",
+  "flow-add-script":
+    "`flow-add-script` records its own step. Call it directly, not through flow-add-step.",
+  "flow-add-step":
+    "flow-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
+  "flow-start-recording":
+    "`flow-start-recording` truncates the flow it names. Recording it as a step would erase " +
+    "this flow at replay; call it directly when you want to start a recording.",
+  "flow-finish-recording":
+    "`flow-finish-recording` ends the recording, so it cannot also be a step in it. Call it " +
+    "directly when the walkthrough is complete.",
+};
+
+/**
+ * Keyed on the error's identity and its `toolId`, so a tool that ran and
+ * reported its own "not found" is not read as the command being absent.
+ */
+function isToolNotFound(err: unknown, command: string): boolean {
+  return err instanceof ToolNotFoundError && err.toolId === command;
+}
+
+/**
+ * Directive keys with no hint, and why. `flow-record-cross-tree.test.ts` holds
+ * this against the parser's vocabulary, so a directive added later is either
+ * answered or listed here.
+ */
+export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
+  // A real `rotate` tool is registered, so the not-found path never fires.
+  "rotate",
+  // `command` already is the tool name a `tool:` step wants.
+  "tool",
+];
+
+export function directiveCommandHint(command: string): string | undefined {
+  if (command === "swipe") {
+    return (
+      `"swipe" is a flow directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
+      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through flow-add-step. ` +
+      `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
+      `\`swipe:\` is part of the polish pass.`
+    );
+  }
+  if (command === "echo") {
+    return (
+      `"echo" is a flow directive, not a tool. Call \`flow-add-echo\` DIRECTLY — not through ` +
+      `flow-add-step, which would run it as a nested tool AND record a \`tool: flow-add-echo\` ` +
+      `step that fails on every replay.`
+    );
+  }
+  if (command === "script") {
+    return `"script" is a flow directive. Call \`flow-add-script\` directly.`;
+  }
+  if (command === "wait") {
+    return (
+      `"wait" is a flow directive, not a tool, and there is no tool that records one — a fixed ` +
+      `sleep is not a readiness signal. Record the thing you are actually waiting for with ` +
+      `\`${AWAIT_UI_ELEMENT_TOOL_ID}\` instead.`
+    );
+  }
+  if (command === "long-press") {
+    return (
+      `"long-press" is a flow directive, not a tool, and no tool records one — there is no ` +
+      `gesture-long-press. Record the rest of the path, then add the \`long-press:\` step by ` +
+      `hand during polish and prove it with the replay.`
+    );
+  }
+  if (command === "scroll-to") {
+    return (
+      `"scroll-to" is a flow directive, not a tool, and no tool records one — it SEARCHES, ` +
+      `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
+      `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium) if the path ` +
+      `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
+      `replay.`
+    );
+  }
+  if (command === "snapshot") {
+    return (
+      `"snapshot" is a flow directive, not a tool, and no tool records one — it compares the ` +
+      `screen against a stored baseline, which \`screenshot-diff\` does not manage. Add the ` +
+      `\`snapshot:\` step by hand during polish, then adopt its baseline with a run that sets ` +
+      `updateBaselines, and review the PNG before committing it.`
+    );
+  }
+  if (command === "when") {
+    return (
+      `"when" is a flow directive, not a tool, and no tool records one — it GUARDS the steps ` +
+      `nested under it, so there is no action of its own to run. Record those steps, then wrap ` +
+      `them in the \`when:\` block by hand during polish and prove both branches with the replay.`
+    );
+  }
+  // `Object.hasOwn`, not a bare index: `"constructor"` would hit the prototype
+  // and render a hint with `tool: undefined`.
+  const hint = Object.hasOwn(DIRECTIVE_COMMAND_HINTS, command)
+    ? DIRECTIVE_COMMAND_HINTS[command]
+    : undefined;
+  if (!hint) return undefined;
+  return (
+    `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
+    `through flow-add-step` +
+    (hint.rewritten
+      ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}. ` +
+        `Where the call is recorded at all, a \`delayMs\` on it opts out of the rewrite: the step is then ` +
+        `kept in its raw \`tool: ${hint.tool}\` form (a replay delay has no directive form), so leave ` +
+        `\`delayMs\` off if you want the \`${command}:\` step.`
+      : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
+        `is part of the polish pass.`)
+  );
 }
 
 // A fragment replayed mid-recording through `flow-execute` would record
@@ -881,10 +1078,10 @@ async function captureRunTarget(
     // as-written flows dir under the caller's project_root. When the recording
     // is a symlink out of the flows dir the two anchors can name different
     // files, so require them to canonicalize to the same one, matching the
-    // runner's own canonicalization (canonicalFlowPath in flow-run.ts realpaths
-    // before reading). An executed path that cannot be canonicalized (e.g.
-    // ENOENT) means nothing verifiable ran from the flows dir, and the raw step
-    // is then the honest record: it replays via name + project_root.
+    // runner's own canonicalization (canonicalFlowPath in flow-file-refs.ts
+    // realpaths before reading). An executed path that cannot be canonicalized
+    // (e.g. ENOENT) means nothing verifiable ran from the flows dir, and the raw
+    // step is then the honest record: it replays via name + project_root.
     let executedPath: string | undefined;
     try {
       executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
@@ -919,7 +1116,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     message: string;
     toolResult: unknown;
     stepCount: number;
-    recorded: string;
+    recorded?: string;
     savedTo: FlowSavedTo;
   }
 > {
@@ -929,14 +1126,16 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       // Name the flow: recordings are concurrent, so several of these lines can
       // interleave in one log and "the recorded flow" would not say which.
       startedMsg: ({ params }) => `Adding ${params.command} step to flow ${params.name}`,
-      completedMsg: ({ params }) => `Added ${params.command} step to flow ${params.name}`,
+      completedMsg: ({ params, result }) =>
+        result.recorded === undefined
+          ? `Recorded no ${params.command} step in flow ${params.name}`
+          : `Added ${params.command} step to flow ${params.name}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
-A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
-Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded.
-If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
+    description: `Execute one MCP tool and record its flow step, in the flow named by \`name\` + \`project_root\`. Use when recording a flow and you want each action run and captured; the recording must already be open.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`flow-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
     // MCP adapter capped the POST at 30s and retried the identical body four
@@ -947,7 +1146,33 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
-      const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
+
+      // Before parsing `args`, so a malformed payload cannot pre-empt this
+      // guidance with a bare JSON error. `Object.hasOwn`, not a bare index: an
+      // inherited member would read truthy off the prototype chain.
+      const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, params.command)
+        ? NESTED_RECORDER_TOOLS[params.command]
+        : undefined;
+      if (nested) return recordNothing(session, nested);
+
+      let args: Record<string, unknown>;
+      try {
+        args = params.args ? JSON.parse(params.args) : {};
+      } catch (err) {
+        // The hint normally fires from the sub-invoke catch below, which a
+        // malformed payload never reaches. Gated on the registry, not the hint
+        // table alone, so a real tool of that name still reports its own error.
+        if (registry.getTool(params.command) === undefined) {
+          const hint = directiveCommandHint(params.command);
+          if (hint) return recordNothing(session, hint);
+        }
+        throw err;
+      }
+
+      // Snapshot before the rewrite below mutates `args` in place, so a schema
+      // miss can be re-rendered against the keys the author wrote. Shallow is
+      // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
+      const authoredArgs = { ...args };
 
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
@@ -971,7 +1196,30 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         });
       }
 
-      const toolResult = await invokeSubTool(registry, ctx, params.command, args);
+      let toolResult: unknown;
+      try {
+        toolResult = await invokeSubTool(registry, ctx, params.command, args);
+      } catch (err) {
+        const hint = isToolNotFound(err, params.command)
+          ? directiveCommandHint(params.command)
+          : undefined;
+        if (hint) return recordNothing(session, hint);
+
+        const reframed = describeNestedParamError(
+          registry,
+          err,
+          params.command,
+          args,
+          authoredArgs
+        );
+        if (reframed === undefined) throw err;
+        throw new FailureError(reframed, {
+          error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+          failure_stage: "flow_add_step_nested_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
 
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
@@ -1051,7 +1299,33 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         };
       }
 
-      const { savedTo, stepCount } = await appendStepToFlow(session, step);
+      let savedTo: FlowSavedTo;
+      let stepCount: number;
+      try {
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+      } catch (err) {
+        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+        const refused = err instanceof Error ? err.message : String(err);
+        // A host-mode append re-parses the file, so the scan that refuses an
+        // output reference sees the steps ALREADY there as well — and a
+        // mid-recording hand edit is a supported way for one of those to carry
+        // one. Blaming the just-run call for that step's field would send the
+        // author back over a call whose args were clean.
+        throw wrapFailure(
+          err,
+          {
+            error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+            failure_stage: "flow_output_reference",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          },
+          holdsOutputReference(step)
+            ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
+                `recorded. Check the call's changes before you retry. ${refused}`
+            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
+                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+        );
+      }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by

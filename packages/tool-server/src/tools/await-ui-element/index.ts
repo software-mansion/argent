@@ -15,7 +15,9 @@ import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
+import { isBlindRead } from "../describe/blind-read";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
+import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
@@ -123,7 +125,8 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium."
+        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium, " +
+          "and on physical iOS."
       ),
     timeoutMs: z
       .number()
@@ -245,6 +248,7 @@ function timeoutCause(
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
@@ -255,16 +259,6 @@ const capability: ToolCapability = {
 // params-shaped wrapper for this tool and its tests.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
   return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
-}
-
-// An empty tree is not trustworthy evidence the element is gone, so `hidden` —
-// the only condition that resolves true on one — must not resolve off it when
-// the adapter flagged the read (`describeIos` returns an empty tree plus a hint /
-// should_restart instead of throwing), or when the selector matched on an earlier
-// poll and the tree has since gone blank mid-navigation.
-function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
-  if (data.tree.children.length > 0) return false;
-  return Boolean(data.hint || data.should_restart || everMatched);
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -330,7 +324,14 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     isTvOs: boolean,
     androidIsTv: boolean
   ): Promise<DescribeTreeData> {
-    if (device.platform === "ios") {
+    // ios-remote reads the same AX tree through describeIos: the ax-service
+    // blueprint routes it over the sim-remote tunnel, so only the preflight dep
+    // differs from the local branch. `isTvOs` is false for it, matching describe.
+    if (device.platform === "ios" || device.platform === "ios-remote") {
+      // Physical devices poll the same XCUITest runner snapshot as describe.
+      if (device.kind === "device") {
+        return describeIosDevice(registry, device);
+      }
       return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
@@ -367,7 +368,8 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
+(iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
+Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
 Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
@@ -394,13 +396,13 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
       if (device.platform === "ios") await ensureDeps(iosRequires);
+      else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
 
-      // Resolve once, outside the poll loop: an id that isn't listed is never
-      // cached, so probing per fetch would re-run `simctl list` / `adb devices`
-      // on every poll.
-      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
+      const isTvOs =
+        device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Clock starts after setup so its fixed cost isn't charged to timeoutMs.

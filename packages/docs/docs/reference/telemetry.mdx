@@ -14,6 +14,28 @@ You can opt out at any time:
 argent telemetry disable   # check status with: argent telemetry status
 ```
 
+This writes `telemetry.enabled: false` to `~/.argent/config.json` and applies to every project on this machine.
+
+## Opt out for a whole repository
+
+A team that must not send usage data can commit the opt-out with the project, so it holds on every clone without each developer running a command:
+
+```bash
+argent telemetry disable --scope project
+```
+
+This writes `telemetry.enabled: false` to `<project-root>/.argent/config.json`. Commit that file. The [local install mode](/docs/fundamentals/installation#share-argent-with-your-team) writes it for you when you pass `--no-telemetry`:
+
+```bash
+npx @swmansion/argent@latest init --local --no-telemetry
+```
+
+The two files merge restrictively: `false` in either one turns telemetry off. A project file can therefore never re-enable telemetry that a developer turned off globally, and `argent telemetry enable` on one machine does not override a committed project opt-out. `argent telemetry status` names the file that made the decision.
+
+The project file is found from the working directory of the process, at the nearest parent that contains `.argent`, `.git` or `package.json`. Editors start the MCP server in the workspace root, so it and the tool-server it launches read the project file. The tool-server is shared by every editor on the machine; it reads the project file of the workspace that started it.
+
+The environment variable `DO_NOT_TRACK=1` still turns telemetry off regardless of either file.
+
 For the full details, see the [Argent Privacy Notice (Telemetry)](https://github.com/software-mansion/argent/blob/main/Telemetry.md).
 
 ## License

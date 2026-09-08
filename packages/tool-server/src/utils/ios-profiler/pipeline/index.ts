@@ -3,7 +3,7 @@ import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
 import { aggregateCpuHotspots } from "./02-aggregate";
 
-export interface PipelineOutput {
+interface PipelineOutput {
   bottlenecks: Bottleneck[];
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
@@ -11,7 +11,7 @@ export interface PipelineOutput {
   memoryLeaks: MemoryLeak[];
 }
 
-export interface PipelineOptions {
+interface PipelineOptions {
   /**
    * Keep only CPU samples from this PID. Set by the all-processes strategy, whose
    * capture is host-wide; null for the device strategy, already scoped by `--attach`.

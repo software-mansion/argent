@@ -296,7 +296,7 @@ export function pressEnter(session: TerminalSession): boolean {
 }
 
 /** Every controlling tty currently backing a live process. One `ps` call. */
-export function aliveTtys(): Set<string> {
+function aliveTtys(): Set<string> {
   try {
     const out = execFileSync("/bin/ps", ["-A", "-o", "tty="], { encoding: "utf8" });
     return parseAliveTtys(out);

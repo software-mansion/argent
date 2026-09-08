@@ -1,6 +1,6 @@
 export const IDLE_CHECK_INTERVAL_MS = 60_000;
 
-export interface IdleTimer {
+interface IdleTimer {
   touch(): void;
   dispose(): void;
   getLastActivityAt(): number;

@@ -8,7 +8,7 @@ import { isDeclaredLocally } from "./topology.js";
 
 export type InstallMode = "global" | "local";
 
-export interface InstallRecord {
+interface InstallRecord {
   mode: InstallMode;
   package: string;
   writtenBy?: string;

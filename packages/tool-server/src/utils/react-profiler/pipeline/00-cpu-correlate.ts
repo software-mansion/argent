@@ -6,7 +6,7 @@ import type { HermesCpuProfile, HermesProfileNode } from "../types/input";
 import type { CpuCommitHotspot } from "../types/output";
 
 /** Prefix on argent's injected profiler functions, which are kept out of hotspots. */
-export const ARGENT_PROFILER_PREFIX = "__argent_";
+const ARGENT_PROFILER_PREFIX = "__argent_";
 
 export function isArgentProfilerFunction(name: string): boolean {
   return name.startsWith(ARGENT_PROFILER_PREFIX);

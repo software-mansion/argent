@@ -49,7 +49,7 @@ export interface OcrTextBlock {
   words: OcrWord[];
 }
 
-export interface OcrExtractionResult {
+interface OcrExtractionResult {
   status: "ok" | "unavailable";
   provider: "tesseract";
   blocks: OcrTextBlock[];

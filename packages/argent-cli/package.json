@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/cli",
-  "version": "0.22.0",
+  "version": "0.24.0",
   "description": "Shell CLI commands for argent: tools, run, server, enable, disable, flags",
   "type": "module",
   "main": "dist/index.js",
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@argent/configuration-core": "file:../configuration-core",
+    "@argent/device-providers": "file:../device-providers",
     "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^26.0.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "zod": "^4.0.0"
   }
 }

@@ -23,7 +23,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 | Platform          | Targets                                                                 | Interaction      |
 | ----------------- | ----------------------------------------------------------------------- | ---------------- |
-| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **iOS**           | Simulators and physical iPhones                                         | Touch / gesture  |
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
@@ -169,6 +169,7 @@ project already opted into local mode (a committed `.argent/install.json`, or
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
 | `argent flags`     | List available feature flags and their state                                                                                                                                                              |
+| `argent providers` | Inspect and manage external device providers: `list` / `check` / `publish` / `withdraw` / `prune`                                                                                                         |
 | `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`                                                                                                                                                         |
 
 ## Supported Editors

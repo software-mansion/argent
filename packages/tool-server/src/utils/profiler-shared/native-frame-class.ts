@@ -9,7 +9,7 @@ import type { UiHangStateBreakdownEntry } from "./types";
  * Patterns are unanchored substrings because perf leaf names are often
  * C++-mangled (`_Z23__pthread_internal_findlPKc`).
  */
-export type NativeFrameClass = "app" | "system";
+type NativeFrameClass = "app" | "system";
 
 /**
  * Android perf labels kernel leaves `/kernel`; `[kernel.kallsyms]` and bare
@@ -81,9 +81,9 @@ export function classifyNativeFrame(
  * sleep. A hang dominated by "S"/"D" is a wait, not CPU-bound work, so "move
  * heavy work off the main thread" would be the wrong advice.
  */
-export type HangCpuKind = "executing" | "runnable" | "blocked";
+type HangCpuKind = "executing" | "runnable" | "blocked";
 
-export interface HangBlockingSummary {
+interface HangBlockingSummary {
   dominantState: string;
   kind: HangCpuKind;
 }

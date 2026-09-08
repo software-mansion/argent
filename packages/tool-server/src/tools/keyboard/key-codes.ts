@@ -72,7 +72,7 @@ export const NAMED_KEYS: Record<string, number> = {
   "f12": 69,
 };
 
-export interface KeyPress {
+interface KeyPress {
   keyCode: number;
   withShift: boolean;
 }

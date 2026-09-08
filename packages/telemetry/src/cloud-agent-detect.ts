@@ -86,7 +86,7 @@ function safeExists(fileExists: (path: string) => boolean, path: string): boolea
   }
 }
 
-export interface DetectCloudAgentOptions {
+interface DetectCloudAgentOptions {
   /** Test seam: override the filesystem check used for the Devin/Jules markers. */
   fileExists?: (path: string) => boolean;
 }

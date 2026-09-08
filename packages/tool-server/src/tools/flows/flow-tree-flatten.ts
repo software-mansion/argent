@@ -59,7 +59,7 @@ export interface FlatNode<T> {
   shield: boolean;
 }
 
-export type NodeProjection<T> = (node: T) => FlatNode<T>;
+type NodeProjection<T> = (node: T) => FlatNode<T>;
 
 // Intersection of a scroller's rect with the clip inherited from any outer
 // scrollers (null = unclipped).

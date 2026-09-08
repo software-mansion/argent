@@ -3,7 +3,7 @@ import { MCP_BINARY_NAME } from "./constants.js";
 import { isGloballyInstalled } from "./utils.js";
 import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
 
-export interface StaleConfigCleanupResult {
+interface StaleConfigCleanupResult {
   /** One line per removed entry or warning. */
   lines: string[];
   removedCount: number;

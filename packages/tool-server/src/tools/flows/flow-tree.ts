@@ -1,6 +1,7 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
 import { fetchTree } from "../../utils/ui-tree-match";
-import { queryFullHierarchyTree } from "./flow-ios-tree";
+import type { FlowTreeTarget } from "./flow-actions";
+import { queryFullHierarchyTree, queryIosDeviceFlowTree } from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
@@ -27,28 +28,28 @@ import type { DescribeTreeData } from "../describe/contract";
 export async function fetchFlowTree(
   registry: Registry,
   device: DeviceInfo,
-  launchedNativeApp?: string
+  target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
   const source = FLOW_TREE_SOURCES[device.platform];
   // Only `ios-remote` is left, and `fetchTree` throws its not-supported error
   // naming the platform.
   if (!source) return fetchTree(registry, device);
-  return source(registry, device, launchedNativeApp);
+  return source(registry, device, target);
 }
 
 /** The source {@link fetchFlowTree} reads on each platform that has one. */
 const FLOW_TREE_SOURCES: Partial<
   Record<
     Platform,
-    (
-      registry: Registry,
-      device: DeviceInfo,
-      launchedNativeApp?: string
-    ) => Promise<DescribeTreeData>
+    (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
   >
 > = {
-  ios: (registry, device, launchedNativeApp) =>
-    queryFullHierarchyTree(registry, device, launchedNativeApp),
+  // Simulator iOS uses the injected hierarchy and an optional target.
+  // Physical devices use the XCUITest runner tree.
+  ios: (registry, device, target) =>
+    device.kind === "device"
+      ? queryIosDeviceFlowTree(registry, device)
+      : queryFullHierarchyTree(registry, device, target),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
   chromium: (registry, device) => queryChromiumTree(registry, device),
   vega: (_registry, device) => queryVegaTree(device),

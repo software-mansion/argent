@@ -32,7 +32,7 @@ export async function shutdownOwnedDevices(ids: readonly string[]): Promise<void
   await Promise.all(ids.map((id) => shutdownOwnedDevice(id)));
 }
 
-export interface ShutdownResult {
+interface ShutdownResult {
   ok: boolean;
   /** Present when ok=false — human-readable reason for the UI. */
   error?: string;

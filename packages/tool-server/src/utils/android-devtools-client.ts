@@ -1,6 +1,6 @@
 import * as net from "node:net";
-import * as readline from "node:readline";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "./ndjson-socket";
 
 /** Newline-delimited JSON socket client for the android-devtools helper. */
 
@@ -62,36 +62,36 @@ export function connectAndroidDevtoolsClient(
     };
 
     socket.once("connect", () => {
-      const rl = readline.createInterface({ input: socket });
-      rl.on("line", (line) => {
-        if (!line.trim()) return;
-        let parsed: { id?: number; result?: unknown; error?: { message?: string; type?: string } };
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          return;
-        }
-        if (typeof parsed.id !== "number") return;
-        const req = pending.get(parsed.id);
-        if (!req) return;
-        pending.delete(parsed.id);
-        clearTimeout(req.timer);
-        if (parsed.error) {
-          const message = parsed.error.message ?? "Unknown helper error";
-          const type = parsed.error.type ?? "HelperError";
-          req.reject(
-            new FailureError(`${type}: ${message}`, {
-              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
-              failure_stage: "android_devtools_rpc_response",
-              failure_area: "tool_server",
-              error_kind: "subprocess",
-            })
-          );
-        } else {
-          req.resolve(parsed.result);
-        }
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr("android-devtools"),
+        onMessage: (raw) => {
+          const parsed = raw as {
+            id?: number;
+            result?: unknown;
+            error?: { message?: string; type?: string };
+          };
+          if (typeof parsed.id !== "number") return;
+          const req = pending.get(parsed.id);
+          if (!req) return;
+          pending.delete(parsed.id);
+          clearTimeout(req.timer);
+          if (parsed.error) {
+            const message = parsed.error.message ?? "Unknown helper error";
+            const type = parsed.error.type ?? "HelperError";
+            req.reject(
+              new FailureError(`${type}: ${message}`, {
+                error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+                failure_stage: "android_devtools_rpc_response",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+              })
+            );
+          } else {
+            req.resolve(parsed.result);
+          }
+        },
       });
-      rl.on("close", () => cleanup());
+      socket.on("close", () => cleanup());
 
       resolve({
         request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {

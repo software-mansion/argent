@@ -8,7 +8,7 @@ import {
   type ServiceState,
 } from "@argent/registry";
 
-export type EventLogValue =
+type EventLogValue =
   | string
   | number
   | boolean
@@ -16,14 +16,11 @@ export type EventLogValue =
   | EventLogValue[]
   | { [key: string]: EventLogValue | undefined };
 
-export type EventLogRecord = { type: string; msg: string } & Record<
-  string,
-  EventLogValue | undefined
->;
+type EventLogRecord = { type: string; msg: string } & Record<string, EventLogValue | undefined>;
 
 type EventLogLevel = "info" | "warn" | "error" | "fatal";
 
-export interface ToolServerEventLog {
+interface ToolServerEventLog {
   filePath: string;
   info: (record: EventLogRecord) => void;
   warn: (record: EventLogRecord) => void;
@@ -32,7 +29,7 @@ export interface ToolServerEventLog {
   dispose: () => Promise<void>;
 }
 
-export interface CreateToolServerEventLogOptions {
+interface CreateToolServerEventLogOptions {
   filePath: string;
 }
 

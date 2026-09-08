@@ -21,7 +21,7 @@ export async function openMoqClient(udid: string): Promise<MoqClient> {
   return openMoqClientFromInfo(await moqInfo(udid));
 }
 
-export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
+async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   await installNodeWebTransport();
   const session = new MoqDeviceSession(await connectMoq(info), { publishPath: PUBLISH_PATH });
 

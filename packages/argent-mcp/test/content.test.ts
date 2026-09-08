@@ -255,6 +255,58 @@ describe("toMcpContent with artifact ctx", () => {
     expect((result[1] as { text: string }).text).toMatch(/^Saved: .*shot\.png$/);
   });
 
+  // The renderer's half of the one-observation guarantee; the allow-list half
+  // is tool-server's run-sequence-observation-gate.test.ts. The result is
+  // walked whole, steps included, and every artifact handle found becomes its
+  // own image block — so a sequence holds at one frame only while its steps
+  // report none.
+  it("renders a multi-step sequence result without a frame of its own", async () => {
+    // A fetch that resolves. Left to the global one, a step-carried handle
+    // would fail to download and be swallowed, so the assertions below would
+    // hold just as well for a sequence whose frames were merely unreachable.
+    const fetchImpl = vi.fn(fetchReturning([...PNG_SIGNATURE, 0x42]));
+
+    const result = await toMcpContent(
+      {
+        completed: 3,
+        total: 3,
+        steps: [
+          { tool: "gesture-swipe", result: { swiped: true, timestampMs: 1 } },
+          { tool: "keyboard", result: { typed: "hello", keys: 0 } },
+          { tool: "gesture-tap", result: { tapped: true, timestampMs: 2 } },
+        ],
+      },
+      undefined,
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl }
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.filter((b) => b.type === "image")).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect((result[0] as { text: string }).text).toContain("gesture-tap");
+  });
+
+  it("materializes an artifact handle carried on a step result", async () => {
+    // Keeps the pin above honest: the walk really does reach steps[].result,
+    // so a step tool that returned a frame would be inlined mid-sequence.
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const result = await toMcpContent(
+      {
+        completed: 1,
+        total: 1,
+        steps: [
+          { tool: "gesture-tap", result: { image: artifactHandle("s0", "shot.png", "image/png") } },
+        ],
+      },
+      undefined,
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(result.filter((b) => b.type === "image")).toEqual([
+      { type: "image", data: Buffer.from(pngBytes).toString("base64"), mimeType: "image/png" },
+    ]);
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
@@ -302,6 +354,84 @@ describe("flowRunToMcpContent", () => {
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
+  });
+
+  it("renders a script step's captured output as its own block", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "script",
+          status: "pass",
+          target: "scripts/seed.mjs",
+          scriptLog: "creating order\norder 4711 created\n",
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks[1]).toEqual({ type: "text", text: "[1] ✓ script scripts/seed.mjs" });
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: "script output:\ncreating order\norder 4711 created",
+    });
+  });
+
+  it("indents a nested script step's output block with its step line", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "run", status: "pass", target: "seed.yaml" },
+        {
+          index: 1,
+          kind: "script",
+          status: "pass",
+          target: "scripts/seed.mjs",
+          depth: 1,
+          scriptLog: "creating order\n",
+          scriptLogTruncated: true,
+        },
+      ],
+    });
+
+    expect(blocks[2]).toEqual({ type: "text", text: "[2] ✓   script scripts/seed.mjs" });
+    expect(blocks[3]).toEqual({
+      type: "text",
+      text: "  script output:\ncreating order\n… output truncated",
+    });
+  });
+
+  it("says when a script's log was truncated, and ignores a non-string one off the wire", async () => {
+    const truncated = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "script", status: "fail", scriptLog: "…", scriptLogTruncated: true },
+      ],
+    });
+    expect(JSON.stringify(truncated)).toContain("output truncated");
+
+    const nothingLeft = await flowRunToMcpContent({
+      flow: "f",
+      steps: [{ index: 0, kind: "script", status: "pass", scriptLogTruncated: true }],
+    });
+    expect(nothingLeft[2]).toEqual({
+      type: "text",
+      text: "script output:\n… output truncated",
+    });
+
+    const hostile = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "script",
+          status: "pass",
+          scriptLog: { evil: true } as unknown as string,
+        },
+      ],
+    });
+    expect(hostile.filter((b) => b.type === "text")).toHaveLength(3); // header, step, footer
   });
 
   it("renders run steps by their as-written path, with a stem fallback for legacy servers", async () => {

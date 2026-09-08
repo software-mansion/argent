@@ -34,6 +34,10 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Disable the automatic screenshot captured after interaction tools.",
   },
   {
+    name: "disable-auto-describe",
+    description: "Disable the accessibility element tree appended after interaction tools.",
+  },
+  {
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
@@ -45,6 +49,13 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "tool-server-event-log",
     description: "Write structured tool-server lifecycle events to a JSONL file.",
+  },
+  {
+    name: "boot-sound",
+    description:
+      "Default boot-device's `sound` argument to true so Android emulators boot with audio " +
+      "output instead of muted. Only the argument's default changes — an explicit " +
+      "`sound: false` on a call still boots muted.",
   },
   {
     name: "microinteractions",

@@ -134,7 +134,7 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
   return lines;
 }
 
-export interface FormatDescribeOptions {
+interface FormatDescribeOptions {
   source: DescribeSource;
 }
 
@@ -146,7 +146,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "uiautomator" ||
     opts.source === "android-devtools" ||
     opts.source === "cdp-dom" ||
-    opts.source === "vega-automation"
+    opts.source === "vega-automation" ||
+    // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
+    opts.source === "xcuitest-runner"
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
@@ -165,8 +167,12 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {
+    // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
     header.push(
-      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+      opts.source === "xcuitest-runner"
+        ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
+            "No two-finger gestures on physical iOS."
+        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."

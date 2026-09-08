@@ -20,7 +20,7 @@ export interface Cookie {
   sameSite?: "Strict" | "Lax" | "None";
 }
 
-export interface SetCookieParams {
+interface SetCookieParams {
   name: string;
   value: string;
   /** One of `url` or `domain` is required to scope the cookie. */
@@ -34,7 +34,7 @@ export interface SetCookieParams {
   expires?: number;
 }
 
-export interface DeleteCookieParams {
+interface DeleteCookieParams {
   name: string;
   url?: string;
   domain?: string;
@@ -69,7 +69,7 @@ export async function clearCookies(cdp: CDPClient): Promise<void> {
   await cdp.send("Network.clearBrowserCookies");
 }
 
-export type StorageType = "local" | "session";
+type StorageType = "local" | "session";
 
 function storeRef(type: StorageType): string {
   return type === "local" ? "localStorage" : "sessionStorage";

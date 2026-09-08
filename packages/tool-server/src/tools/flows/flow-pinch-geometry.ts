@@ -77,7 +77,7 @@ export interface PinchCandidate {
   clearance: number;
 }
 
-export interface AxisCandidateInput {
+interface AxisCandidateInput {
   angle: 0 | 90;
   center: { x: number; y: number };
   /**

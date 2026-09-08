@@ -80,7 +80,7 @@ function ensureLensAppBundle(electronBin: string): string | null {
  * No IPC port — commands go to the child as line-delimited JSON over stdin, and
  * the child loads the tool-server's own `/preview/` HTTP URL.
  */
-export interface PreviewWindowManager {
+interface PreviewWindowManager {
   /** Spawn the window if not running; foreground + (re)load otherwise. */
   ensureOpen(url: string): void;
   /** Ask the window to play the close animation and exit. */
@@ -89,7 +89,7 @@ export interface PreviewWindowManager {
   dispose(): void;
 }
 
-export interface PreviewWindowManagerOptions {
+interface PreviewWindowManagerOptions {
   /** Override for tests / unusual installs (default: `require("electron")`). */
   electronBinaryPath?: string;
   /** Override for tests. */

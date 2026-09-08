@@ -9,6 +9,18 @@ export class TypedEventEmitter<
     return this;
   }
 
+  /**
+   * @public
+   * Every caller is in another workspace — tool-server (the variant-proposal
+   * store, the chromium server's frame/fps and network listeners, both
+   * js-runtime-debugger blueprints) and telemetry (`registry-listener`, which
+   * detaches from `Registry.events`) — and the dead-code gate runs against an
+   * unbuilt tree, where a cross-workspace edge cannot form. See `knip.jsonc`.
+   *
+   * To re-audit whether this tag is still earned, rename the member and read
+   * the `Property 'off' does not exist` errors `tsc` reports. Do not grep
+   * `.off(`: most hits in this repo are Node `EventEmitter`s.
+   */
   off<K extends keyof T>(event: K, listener: T[K]): this {
     this.listeners.get(event)?.delete(listener);
     return this;

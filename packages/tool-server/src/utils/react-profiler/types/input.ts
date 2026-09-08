@@ -26,7 +26,7 @@ export interface HermesCpuProfile {
 
 // Raw shape returned by `ri.getProfilingData()`, narrowed to the fields
 // `flattenProfilingData` and the injected stop-and-read script read.
-export interface BackendCommitData {
+interface BackendCommitData {
   timestamp: number; // ms since profiling started
   duration?: number;
   fiberActualDurations?: Array<[number, number]>;

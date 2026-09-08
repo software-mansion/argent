@@ -76,7 +76,7 @@ jobs:
         run: npm install @rollup/rollup-win32-x64-msvc --no-save
 
       - name: Build workspace
-        run: npx tsc --build
+        run: npm run build
 
       - name: Resolver unit tests on Windows (tool-server)
         # The win32 branches added for Windows support, exercised on a real

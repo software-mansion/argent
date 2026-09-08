@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as readline from "node:readline";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
@@ -9,27 +9,30 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
+  withdrawDyldInsertLibraries,
   processCarriesInjection,
   type IosEndpoint,
 } from "../utils/ios-host";
 
-// Re-exported for native-devtools-env.test.ts, which imports it from here.
-export { buildDyldInsertLibraries };
+// Re-exported for native-devtools-env.test.ts, which imports them from here.
+export { buildDyldInsertLibraries, withdrawDyldInsertLibraries };
 
-export type NativeDevtoolsTransport = "unix" | "tcp";
+type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
 /**
- * Whether the Argent native devtools dylib can ever be injected into an app.
+ * Whether an app is a supported target for the Argent native devtools.
  *
- * Apple system apps (bundle ids under `com.apple.`) are platform binaries with
- * library validation, so the simulator may or may not honour
- * `DYLD_INSERT_LIBRARIES` for them — runtime-dependent, and no relaunch changes
- * which way it goes (#453 recorded `connected: false` for
+ * Apple system apps (bundle ids under `com.apple.`) are not: they are never the
+ * app under test, and the ones seen connected are background-launched processes
+ * that may never service their main queue, so a read hangs or describes UI
+ * nobody is looking at — and whether one connects at all is
+ * runtime-dependent anyway (#453 recorded `connected: false` for
  * `com.apple.Preferences` on iOS 26.5, an E2E run `connected: true` on 18.5).
  * Answering "not injectable" for both gives the native-* tools a terminal
  * signal instead of an unbounded restart-app → retry loop; an app that MIGHT
@@ -120,7 +123,9 @@ export type NativeDevtoolsAppState =
   | "stale_process"
   | "unregistered"
   | "connecting"
-  | "indeterminate";
+  | "indeterminate"
+  /** Serving a provider's agent, where none of the measured states apply. */
+  | "provider_attached";
 
 /**
  * How much younger than the listener a process must be to have plainly started
@@ -209,6 +214,17 @@ export function buildAppStateMessage(
         `after that restart, the native-devtools service is stale rather than the app being ` +
         `uninjected — do not keep restarting the app; restart the tool-server ` +
         `(\`argent server stop && argent server start --detach\`) and retry.`
+      );
+    case "provider_attached":
+      // No remedy names a restart: the provider armed the injection and owns
+      // the app's lifecycle, so every relaunch this file otherwise prescribes
+      // would be argent restarting a process it does not run.
+      return (
+        `Native devtools here are an external provider's agent, which serves only the app that ` +
+        `provider chose to lend. ${bundleId} is either not that app or its connection has not ` +
+        `landed yet. argent did not launch this process and cannot re-point it, so restarting ` +
+        `anything is the provider's call rather than argent's. Retry if the app has just started; ` +
+        `otherwise read the screen with describe or screenshot and drive it by coordinate.`
       );
   }
 }
@@ -311,16 +327,16 @@ export async function precheckNativeDevtools(
   // knowable without any env state, so this fires before the env plumbing below
   // — a given-up sim or a transient ensureEnvReady failure must not mask the
   // terminal signal behind init_failed's "re-boot the simulator" guidance (a
-  // reboot cannot make a system app injectable), and no env-setup work is spent
-  // on an app that may never load the dylib. Throwing (rather than returning a
+  // reboot cannot make a system app a supported target), and no env-setup work
+  // is spent on an app the gate refuses. Throwing (rather than returning a
   // restart-required block) makes the native-* feature tools surface a hard
   // error instead of an unbounded restart→retry loop. The 2-arg overload
   // (bundleId undefined) must NOT throw: native-devtools-status reports the
   // state instead, and launch-app / restart-app run it too — launching or
-  // restarting a system app is legitimate, it just may not inject.
+  // restarting a system app is legitimate, it just is not a target.
   if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
     throw new FailureError(
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools cannot be relied on to inject into it — treat it as unavailable rather than retrying. ` +
+      `${bundleId} is an Apple system app: it is never the app under test, so Argent native devtools refuse to read one — treat it as unavailable rather than retrying. ` +
         NON_INJECTABLE_RECOVERY,
       {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
@@ -359,6 +375,10 @@ export async function precheckNativeDevtools(
   });
   if (typeof state !== "string") return state;
   if (state === "connected") return null;
+  // Attach mode has no restart to prescribe and no listener of ours to blame,
+  // so let the call through and leave the tool's own not-connected error — the
+  // one that names the bundle id — to say what is wrong.
+  if (state === "provider_attached") return null;
   return {
     // Neither `unregistered` (a relaunch provably cannot fix it) nor
     // `connecting` (a relaunch aborts the handshake and resets the age the
@@ -431,6 +451,22 @@ export interface NativeDevtoolsApi {
    * idempotent, so this is a cheap no-op when the env is already correct.
    */
   reverifyEnv(): Promise<void>;
+  /**
+   * Whether this service arms the simulator's injection itself. False in attach
+   * mode, where a device provider armed it and lends us its agent, so the
+   * launchd environment is none of our business.
+   */
+  readonly armsEnv: boolean;
+  /**
+   * Take our bootstrap and endpoint back out of the simulator's launchd
+   * environment. A no-op in attach mode and it removes only what still names
+   * us, so a provider that has already armed over us keeps its own injection.
+   *
+   * Disposing is not enough on its own. launchd keeps the variables for the
+   * rest of the boot, so the next app to launch would load our dylib and dial a
+   * socket nothing is listening on.
+   */
+  withdrawEnv(): Promise<void>;
   getInitFailure(): NativeDevtoolsInitFailure | null;
 
   isConnected(bundleId: string): boolean;
@@ -562,6 +598,39 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
       );
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Gating here at the
+     * blueprint, rather than per tool is what keeps this bounded. Every tool
+     * built on `NATIVE_DEVTOOLS_NAMESPACE`, now and in future, inherits the
+     * check without being re-audited. A no-op for every device Argent booted
+     * itself.
+     */
+    await assertExternalCapability(NATIVE_DEVTOOLS_NAMESPACE, device, "native-devtools");
+
+    /**
+     * A provider that grants this mechanism lends us the agent it already has
+     * in the app. Injecting our own instead would overwrite the simulator-wide
+     * `DYLD_INSERT_LIBRARIES` and endpoint it set, so attaching is the only
+     * supported shape on a device we did not boot.
+     */
+    const claim = externalClaimForAnyId(device.id);
+    const lentSocketPath = claim?.nativeDevtools?.socketPath;
+
+    if (claim && !lentSocketPath) {
+      throw new FailureError(
+        `${NATIVE_DEVTOOLS_NAMESPACE} needs a socket to attach to on a provider-supplied device, ` +
+          `and this one published none. Argent will not inject its own agent here: that would ` +
+          `overwrite the injection its provider already armed.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_SOCKET_NOT_PUBLISHED,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
+
     const host = pickIosHost(device);
     // Remote sims can't use unix sockets: the sim-remote tunnel only bridges
     // TCP streams.
@@ -585,6 +654,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let envSetup = false;
     let initFailure: NativeDevtoolsInitFailure | null = null;
     let inFlight: Promise<void> | null = null;
+    /**
+     * Set once {@linkcode NativeDevtoolsApi.withdrawEnv} starts, never cleared.
+     *
+     * Withdrawal happens because the simulator stopped being ours, so there is
+     * no state this service could go back to arming. Latching says that once,
+     * where clearing `envSetup` alone would leave every later `ensureEnv` free
+     * to put the injection back.
+     */
+    let envRetired = false;
 
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -605,6 +683,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // so the watcher's 10s poll cannot spawn an attempt per poll and inflate
     // `attempts`.
     const runEnsureEnv = (): Promise<void> => {
+      /**
+       * Withdrawal has begun or finished. Either way the endpoint variables
+       * this would write are the provider's now.
+       */
+      if (envRetired) return Promise.resolve();
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
@@ -693,8 +776,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     }
 
-    // Stale socket file from a crashed previous run (unix-only).
-    if (transport === "unix") {
+    // Stale socket file from a crashed previous run (unix-only). Never in
+    // attach mode: that path is the provider's live socket, not ours.
+    if (transport === "unix" && !lentSocketPath) {
       try {
         fs.unlinkSync(socketPath);
       } catch {
@@ -702,80 +786,79 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       }
     }
 
-    const server = net.createServer((socket) => {
+    // Drives one agent connection: the handshake, the network log it feeds and
+    // the RPC responses it answers with. Same wire protocol whether our dylib
+    // dialled in or we dialled out to a lent socket, so only who connects
+    // differs.
+    const serveAgentConnection = (socket: net.Socket) => {
       let bundleId: string | null = null;
-      const rl = readline.createInterface({ input: socket });
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
+        onMessage: (parsed) => {
+          const msg = parsed as { type: string; payload: any };
 
-      rl.on("line", (raw) => {
-        let msg: { type: string; payload: any };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
+          // Handshake: must be the first message.
+          if (bundleId === null) {
+            if (msg.type !== "Control") return;
+            bundleId = msg.payload.bundleId as string;
 
-        // Handshake: must be the first message.
-        if (bundleId === null) {
-          if (msg.type !== "Control") return;
-          bundleId = msg.payload.bundleId as string;
+            // The same app reconnecting (fast restart) supersedes the old socket.
+            const existing = connections.get(bundleId);
+            if (existing) {
+              existing.socket.destroy();
+            }
 
-          // The same app reconnecting (fast restart) supersedes the old socket.
-          const existing = connections.get(bundleId);
-          if (existing) {
-            existing.socket.destroy();
+            connections.set(bundleId, { socket, networkLog: [] });
+
+            if (activatedBundleIds.has(bundleId)) {
+              socket.write(
+                JSON.stringify({
+                  type: "Control",
+                  payload: { command: "activateNetworkInspection" },
+                }) + "\n"
+              );
+            }
+            return;
           }
 
-          connections.set(bundleId, { socket, networkLog: [] });
-
-          if (activatedBundleIds.has(bundleId)) {
-            socket.write(
-              JSON.stringify({
-                type: "Control",
-                payload: { command: "activateNetworkInspection" },
-              }) + "\n"
-            );
-          }
-          return;
-        }
-
-        if (msg.type === "CDP") {
-          const p = msg.payload;
-          // Unsolicited events have method but no id
-          if (p.method && p.id === undefined) {
-            const conn = connections.get(bundleId);
-            if (conn) {
-              if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
-                conn.networkLog.shift();
+          if (msg.type === "CDP") {
+            const p = msg.payload;
+            // Unsolicited events have method but no id
+            if (p.method && p.id === undefined) {
+              const conn = connections.get(bundleId);
+              if (conn) {
+                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
+                  conn.networkLog.shift();
+                }
+                conn.networkLog.push({
+                  method: p.method,
+                  params: p.params,
+                  timestamp: Date.now(),
+                });
               }
-              conn.networkLog.push({
-                method: p.method,
-                params: p.params,
-                timestamp: Date.now(),
-              });
             }
           }
-        }
 
-        if (msg.type === "ViewInspector") {
-          const p = msg.payload;
-          const pending = pendingRpc.get(p.id);
-          if (!pending) return;
-          pendingRpc.delete(p.id);
-          if (p.error) {
-            pending.reject(
-              new FailureError(p.error.message, {
-                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
-                failure_stage: "native_devtools_rpc_response",
-                failure_area: "tool_server",
-                error_kind: "subprocess",
-              })
-            );
-          } else pending.resolve(p.result);
-        }
+          if (msg.type === "ViewInspector") {
+            const p = msg.payload;
+            const pending = pendingRpc.get(p.id);
+            if (!pending) return;
+            pendingRpc.delete(p.id);
+            if (p.error) {
+              pending.reject(
+                new FailureError(p.error.message, {
+                  error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+                  failure_stage: "native_devtools_rpc_response",
+                  failure_area: "tool_server",
+                  error_kind: "subprocess",
+                })
+              );
+            } else pending.resolve(p.result);
+          }
+        },
       });
 
       socket.on("close", () => {
-        rl.close();
         if (bundleId !== null) {
           // A fast reconnect may have already replaced this socket.
           if (connections.get(bundleId)?.socket === socket) {
@@ -787,18 +870,83 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       socket.on("error", () => {
         // handled via the close event
       });
-    });
+    };
 
-    if (endpoint.transport === "tcp") {
+    // In attach mode nothing dials us, so there is no listener to open.
+    const server = lentSocketPath ? null : net.createServer(serveAgentConnection);
+    let lentSocket: net.Socket | null = null;
+    /** Our own hang-up must not read as the provider dropping us. */
+    let disposed = false;
+
+    if (lentSocketPath) {
+      /**
+       * Dial the provider's socket, which plays the agent's side. Failing here
+       * beats degrading, the descriptor advertised it, so a refusal is worth
+       * saying out loud rather than surfacing later as empty results.
+       */
+      lentSocket = await new Promise<net.Socket>((resolve, reject) => {
+        const socket = net.connect(lentSocketPath);
+
+        const onError = (err: NodeJS.ErrnoException) => {
+          socket.destroy();
+
+          reject(
+            new FailureError(
+              `${NATIVE_DEVTOOLS_NAMESPACE} could not attach to the socket its provider published ` +
+                `at ${lentSocketPath}: ${err.code ?? err.message}. The provider may have stopped ` +
+                `serving it — run list-devices to see what it is offering now.`,
+              {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_FAILED,
+                error_kind: "network",
+                failure_area: "tool_server",
+                failure_stage: "native_devtools_attach",
+              }
+            )
+          );
+        };
+
+        socket.once("error", onError);
+
+        socket.once("connect", () => {
+          socket.off("error", onError);
+          resolve(socket);
+        });
+      });
+
+      serveAgentConnection(lentSocket);
+
+      /**
+       * A provider hangs up when the app it was lending goes away. We are the
+       * client here, so nothing re-dials on its own. Terminating lets the
+       * registry tear the service down and re-run this factory on the next
+       * call, which attaches to whatever the provider is serving then.
+       */
+      lentSocket.once("close", () => {
+        if (disposed) return;
+
+        events.emit(
+          "terminated",
+          new FailureError(
+            `${NATIVE_DEVTOOLS_NAMESPACE} lost the agent connection its provider was lending.`,
+            {
+              error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_LOST,
+              error_kind: "network",
+              failure_area: "tool_server",
+              failure_stage: "native_devtools_attach_lifecycle",
+            }
+          )
+        );
+      });
+    } else if (endpoint.transport === "tcp") {
       // `endpoint.port` is undefined here — bind ephemeral and write the
       // realized port back so each per-device instance gets its own.
       await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(endpoint.port ?? 0, "127.0.0.1", () => {
-          server.off("error", reject);
-          const addr = server.address();
+        server!.once("error", reject);
+        server!.listen(endpoint.port ?? 0, "127.0.0.1", () => {
+          server!.off("error", reject);
+          const addr = server!.address();
           if (addr === null || typeof addr === "string") {
-            server.close();
+            server!.close();
             reject(new Error("native-devtools server failed to bind a TCP port"));
             return;
           }
@@ -811,7 +959,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // lands on our listener.
       await host.startProxy(udid, endpoint.port!);
     } else {
-      await bindNativeDevtoolsUnixSocket(server, socketPath);
+      await bindNativeDevtoolsUnixSocket(server!, socketPath);
     }
     // A process older than this dialed a listener we no longer hold, so it needs
     // relaunching however well-injected it looks. Stamped after the bind, so no
@@ -820,14 +968,44 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
     // registry's `_teardown` skips dispose when `node.instance` is never set.
-    // The watcher retries on subsequent polls.
-    await ensureEnvReady().catch(() => {});
+    // The watcher retries on subsequent polls. Attach mode has no env of ours
+    // to arm: the provider owns the injection.
+    if (!lentSocketPath) {
+      await ensureEnvReady().catch(() => {});
+    }
 
     const api: NativeDevtoolsApi = {
-      isEnvSetup: () => envSetup,
-      socketPath,
-      ensureEnvReady,
-      reverifyEnv,
+      /**
+       * Attach mode: the provider armed the injection, so the env is by
+       * definition ready and there is nothing of ours to re-apply.
+       */
+      isEnvSetup: () => (lentSocketPath ? true : envSetup),
+      socketPath: lentSocketPath ?? socketPath,
+      ensureEnvReady: lentSocketPath ? () => Promise.resolve() : ensureEnvReady,
+      reverifyEnv: lentSocketPath ? () => Promise.resolve() : reverifyEnv,
+      armsEnv: !lentSocketPath,
+      withdrawEnv: lentSocketPath
+        ? () => Promise.resolve()
+        : async () => {
+            /**
+             * Close the door before opening the other one. An `ensureEnv` that
+             * is still writing `DYLD_INSERT_LIBRARIES` and the endpoint
+             * variable would otherwise land after the withdrawal and re-arm the
+             * simulator we are handing back. Its success path sets `envSetup`
+             * too, so even the latch would agree it was armed. Retiring first
+             * stops the next attempt, awaiting the current one means there is
+             * nothing left in flight to undo our undo.
+             */
+            envRetired = true;
+            await inFlight?.catch(() => {});
+
+            await host.withdrawNativeDevtoolsEnv(udid, endpoint);
+            /**
+             * Drop the latch too: what it recorded is no longer on the device,
+             * so a later re-arm must do the work rather than skip it.
+             */
+            envSetup = false;
+          },
       getInitFailure: () => initFailure,
 
       isConnected: (bundleId) => connections.has(bundleId),
@@ -836,6 +1014,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
       async appConnectionState(bundleId) {
         if (connections.has(bundleId)) return "connected";
+        // Attach mode: every measurement below reads argent's own injection —
+        // the launchd env we set, our endpoint, our listener's age. None of it
+        // describes a process the provider launched, so the probe would answer
+        // about the wrong thing and prescribe restarting somebody else's app.
+        if (lentSocketPath) return "provider_attached";
         // Re-apply the env in case a sim reboot cleared DYLD_INSERT_LIBRARIES.
         // Must be reverifyEnv, not ensureEnvReady: the latter latches after the
         // first success and would skip the wiped env. Runs before the probe:
@@ -960,13 +1143,19 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     return {
       api,
       dispose: async () => {
+        disposed = true;
         for (const { socket } of connections.values()) {
           socket.destroy();
         }
         connections.clear();
         activatedBundleIds.clear();
-        server.close();
-        if (transport === "unix") {
+        /**
+         * Attach mode owns only its end of the connection: hang up and leave
+         * the provider's socket file and server exactly as they were.
+         */
+        lentSocket?.destroy();
+        server?.close();
+        if (transport === "unix" && !lentSocketPath) {
           try {
             fs.unlinkSync(socketPath);
           } catch {
@@ -984,7 +1173,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           );
         }
         pendingRpc.clear();
-        if (endpoint.transport === "tcp") {
+        if (endpoint.transport === "tcp" && !lentSocketPath) {
           await host.stopProxy(udid, endpoint.port!);
         }
       },

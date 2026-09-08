@@ -25,7 +25,7 @@ interface VegaConfig {
   defaultVersion?: string;
 }
 
-export interface VvdImage {
+interface VvdImage {
   /** Image name, e.g. "tv" — boot-device's `vvdImage` argument. */
   name: string;
   /** Absolute VVD package root, passed to `vega virtual-device start -p <path>`. */

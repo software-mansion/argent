@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 
-export interface AndroidNativeProfilerMetadata {
+interface AndroidNativeProfilerMetadata {
   platform: "android";
   appProcess: string;
   wallClockStartMs: number | null;

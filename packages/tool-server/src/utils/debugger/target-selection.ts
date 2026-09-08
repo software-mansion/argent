@@ -1,7 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPTarget } from "./discovery";
 
-export interface SelectedTarget {
+interface SelectedTarget {
   target: CDPTarget;
   webSocketUrl: string;
   isNewDebugger: boolean;

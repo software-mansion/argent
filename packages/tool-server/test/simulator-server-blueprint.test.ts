@@ -29,7 +29,7 @@ vi.mock("../src/blueprints/ax-service", () => ({
 
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
-  simulatorServerBinaryDir: () => "/fake/bin",
+  simulatorServerRunDir: () => "/fake/bin",
 }));
 
 // The factory now probes the runtime kind to reject tvOS sims. Mock it to the
@@ -192,6 +192,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android_device", "--id", serial]);
+    // The binary resolves resources/android relative to cwd — must be the run dir.
+    expect(spawnMock.mock.calls[0]![2]).toMatchObject({ cwd: "/fake/bin" });
   });
 
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
@@ -223,8 +225,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     signalReady(fakeProc, 55558);
     const instance = await factoryPromise;
 
-    instance.api.pressKey("Down", 0x29);
-    instance.api.pressKey("Up", 0x29);
+    await instance.api.pressKey("Down", 0x29);
+    await instance.api.pressKey("Up", 0x29);
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");

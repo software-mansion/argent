@@ -55,7 +55,7 @@ async function getTraceStartNs(tracePath: string): Promise<number> {
   }
 }
 
-export interface AndroidPipelineResult {
+interface AndroidPipelineResult {
   bottlenecks: Bottleneck[];
   cpuHotspots: CpuHotspot[];
   uiHangs: UiHang[];
@@ -221,7 +221,7 @@ export type AndroidStackQueryMode =
   | "thread_breakdown"
   | "leak_stacks";
 
-export interface AndroidStackQueryOptions {
+interface AndroidStackQueryOptions {
   tracePath: string;
   mode: AndroidStackQueryMode;
   appPackage: string;

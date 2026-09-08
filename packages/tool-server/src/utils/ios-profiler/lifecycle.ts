@@ -1,6 +1,1 @@
-export {
-  waitForChildExit,
-  shutdownChild,
-  type ShutdownTimings,
-  type ShutdownResult,
-} from "../profiler-shared/lifecycle";
+export { waitForChildExit, shutdownChild } from "../profiler-shared/lifecycle";

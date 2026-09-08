@@ -228,7 +228,7 @@ function resolveFrames(
   return frames;
 }
 
-export function parseHangsXml(xml: string): RawHang[] {
+function parseHangsXml(xml: string): RawHang[] {
   const hangs: RawHang[] = [];
   const rows = extractRows(xml);
 

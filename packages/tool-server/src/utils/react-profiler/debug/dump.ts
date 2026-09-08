@@ -79,7 +79,7 @@ export async function readCpuProfile(path: string): Promise<HermesCpuProfile> {
   return parsed as HermesCpuProfile;
 }
 
-export interface CommitTreeOnDisk {
+interface CommitTreeOnDisk {
   commits: DevToolsFiberCommit[];
   meta?: {
     detectedArchitecture?: "bridge" | "bridgeless" | null;

@@ -87,11 +87,7 @@ async function listDir(path: string): Promise<string[] | null> {
 
 const COMMAND_TIMEOUT_MS = 3_000;
 
-export function runVersionCommand(
-  cmd: string,
-  args: string[],
-  cwd: string
-): Promise<string | null> {
+function runVersionCommand(cmd: string, args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { cwd, timeout: COMMAND_TIMEOUT_MS }, (err, stdout) => {
       if (err) {

@@ -9,7 +9,7 @@ import { processScopedUdid } from "./helpers/process-scoped-udid";
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/bootstrap.dylib",
   simulatorServerBinaryPath: () => "/fake/sim-server",
-  simulatorServerBinaryDir: () => "/fake",
+  simulatorServerRunDir: () => "/fake",
 }));
 
 // The proof-of-gate iOS test below runs the native-devtools factory for real,

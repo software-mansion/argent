@@ -33,12 +33,12 @@ The file has two top-level keys:
 
 A flow has one of two shapes:
 
-| Shape           | First non-echo step | Start state                                         |
-| --------------- | ------------------- | --------------------------------------------------- |
-| End-to-end flow | `launch:`           | Argent starts the app from scratch                  |
-| Fragment        | Any other step      | The app is already in the state that the flow needs |
+| Shape           | First step that is not `echo:` or `script:` | Start state                                         |
+| --------------- | ------------------------------------------- | --------------------------------------------------- |
+| End-to-end flow | `launch:`                                   | Argent starts the app from scratch                  |
+| Fragment        | Any other step                              | The app is already in the state that the flow needs |
 
-Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
+Argent skips leading `echo` and `script` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. A flow that opens with a `script` step and then a `launch:` step is also end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
@@ -69,10 +69,10 @@ A bare string, for example `tap: Save`, is a loose selector. It tries `id` first
 
 When several elements match:
 
-| Directive type                                                       | Chosen element                                                                                                                     |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
-| Condition (`await`, `assert`)                                        | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+| Directive type                                                                | Chosen element                                                                                                                     |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
+| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
 
 ### Relational scopes
 
@@ -96,14 +96,15 @@ A selector can scope its matches by the frames of other elements:
 
 The runner resolves a selector against a different tree than the `describe` tool:
 
-| Platform | Runner tree                                   | `describe` tree            |
-| -------- | --------------------------------------------- | -------------------------- |
-| iOS      | Native UIView hierarchy                       | Accessibility tree         |
-| Android  | Full accessibility hierarchy                  | Trimmed interactable nodes |
-| Chromium | DOM nodes with an id, label, value or handler | Full DOM                   |
-| Vega     | Toolkit page source                           | Same source                |
+| Platform        | Runner tree                                   | `describe` tree            |
+| --------------- | --------------------------------------------- | -------------------------- |
+| iOS simulator   | Native UIView hierarchy                       | Accessibility tree         |
+| Physical iPhone | Accessibility snapshot of `describe`          | Same snapshot              |
+| Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
+| Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
+| Vega            | Toolkit page source                           | Same source                |
 
-On iOS and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On iOS, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
 ## Directives
 
@@ -114,6 +115,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `launch`     | `<app id>` or `{ native, ios, android, vega, chromium }`           | Terminate and start the app, then wait until the app is ready                                     |
 | `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
+| `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
@@ -123,6 +125,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
 | `run`        | `<path>`                                                           | Run another flow file inline. See [Composition](#composition)                                     |
+| `script`     | `{ path, timeout }`                                                | Run a local `.mjs` file in a new Node process. See [Local scripts](#local-scripts)                |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
@@ -131,7 +134,7 @@ Each step contains one directive. A failed directive stops the flow.
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
-A coordinate `tap`, or a `pinch` or `rotate` without `on`, passes with a warning when the runner cannot read the UI tree. The warning says that Argent sent the gesture, not that the gesture reached the element.
+A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
 ### Launch map
 
@@ -145,6 +148,30 @@ Use the map form for a flow that runs on more than one platform:
 `native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
+
+### Swipe
+
+```yaml
+- swipe: left
+- swipe: { from: { id: story-card }, direction: left }
+- swipe: { by: { y: -0.4 }, duration: 600 }
+- swipe: { from: { id: drag-handle }, to: { id: drop-zone }, momentum: false }
+```
+
+A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
+
+| Option      | Value                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `from`      | The start point. A selector or `{ x, y }`. Argent selects the start when `from` is absent                                                  |
+| `direction` | `up`, `down`, `left` or `right`. Argent moves the finger a preset distance. With `from`, Argent clamps the travel on screen                |
+| `to`        | The end point. A selector or `{ x, y }`                                                                                                    |
+| `by`        | A signed delta `{ x, y }` in screen fractions. Argent delivers the exact delta. With `from`, a delta that leaves the screen fails the step |
+| `momentum`  | `false` removes the fling at the default `duration`. Default `true`                                                                        |
+| `duration`  | The travel time in milliseconds. Default 300, minimum 150, maximum 10000                                                                   |
+
+A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
+
+On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
 
 ## Conditions
 
@@ -217,11 +244,11 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ p
 
 A `run:` path resolves against the directory of the flow file that contains the step. The `.yaml` suffix is optional.
 
-| Platform     | Behavior                                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                     |
-| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. `pinch` and `rotate` are rejected |
-| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                       |
+| Platform     | Behavior                                                                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                                                          |
+| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected |
+| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                            |
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 
@@ -238,6 +265,60 @@ Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline 
 
 Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
 
+## Local scripts
+
+```yaml
+- script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+```
+
+Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local `.mjs` file.
+
+A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+
+The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
+
+| Key       | Required | Description                                                                                                                        |
+| --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs` file, relative to the flow file that holds the step. Write the extension in lowercase, and match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                           |
+
+Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
+
+- `PATH`, `HOME` and the equivalent Windows names
+- The identity, shell, locale, terminal, temporary-directory and cache names of the host
+- The Windows platform names
+- The proxy names and the TLS certificate names
+- The Node, npm, Android, Java and Apple toolchain names
+- `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
+
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
+
+Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
+
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
+
+A failed step stops the flow. The verdict names the side that caused the failure.
+
+| Verdict | Cause      | Examples                                                                                                                   |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Failed  | The script | A missing file, a load error, a thrown error, or a non-zero exit code                                                      |
+| Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, or a mis-cased filename |
+
+A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.
+
+The split holds only when the `timeout` is generous. Argent needs about a second to tell a script that never settles from a script the host stopped. Below that, the same defect of the script becomes a time limit, and the step is errored. Give a script a second or more before you read `errored` as a fact about the machine.
+
+Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
+
+`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+
+`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
+
+On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
+
+On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
+
 ## The `argent flow` command
 
 `argent flow run` replays a flow without an agent and exits non-zero on failure. The command always uses a local tool-server.
@@ -249,15 +330,16 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 | `argent flow run <dir>`       | Run every flow in the directory, one after the other |
 | `argent flow list`            | List the flow files in `.argent/flows`               |
 
-| Option               | Description                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------ |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option                               |
-| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection                                          |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                 |
-| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload        |
-| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped |
-| `--json`             | Print the raw JSON report                                                                              |
-| `--`                 | End of options, for a flow name that starts with `-`                                                   |
+| Option               | Description                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here |
+| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection. `ios` still never picks a physical iPhone                    |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                      |
+| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                             |
+| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                      |
+| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                   |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                 |
+| `--`                 | End of options, for a flow name that starts with `-`                                                                        |
 
 ```bash
 argent flow run checkout --platform ios
@@ -266,13 +348,34 @@ argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
 argent flow run .argent/flows --recursive
 ```
 
-The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`. A directory run prints only the failing steps and a summary. An invalid file fails alone and the batch continues. An infrastructure error stops the batch and counts the remaining flows as skipped.
+The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
+
+A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
+
+A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
+
+The outcome line of a flow that produced a report gives the result and the step counts of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
+
+| Outcome line                     | Meaning                                                         |
+| -------------------------------- | --------------------------------------------------------------- |
+| `not run (invalid flow)`         | The tool-server rejected the flow file or one of its steps      |
+| `not run (no device resolved)`   | Argent did not resolve one device for the flow                  |
+| `not run (rejected)`             | The tool-server rejected the flow for another reason            |
+| `did not finish (run error)`     | The run failed before it produced a report                      |
+| `did not finish (no run report)` | The tool-server answered without a run report                   |
+| `not run (batch stopped)`        | An earlier failure ended the directory run. Directory runs only |
+
+`--json` and `--json-stream` print no header, no outcome line and no summary.
+
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
+
+A single flow run with `--json` writes the report of that flow. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:`, `script:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment, script or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
 
 ## YAML safety
 

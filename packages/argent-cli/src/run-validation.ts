@@ -5,7 +5,7 @@
 // known only to the tool-server, which answers with a serialized validation issue list. Both
 // become one `ValidationReport` rendered by one function, so the wording cannot drift.
 
-import { flagNameFor, type JsonSchema } from "./flag-parser.js";
+import { flagNameFor, isRetiredField, type JsonSchema } from "./flag-parser.js";
 
 /** A rejected value, addressed by its path in the payload; an empty path means the payload. */
 export interface InvalidField {
@@ -34,14 +34,21 @@ interface ValidationIssue {
  * Presence only: a field that is present but wrong is the tool-server's call. Fields carrying a
  * default are not marked required by the schema generator, so this cannot reject an invocation
  * the server would have accepted.
+ *
+ * Retired keys are skipped: usage renders a retirement as a notice rather than a flag row, and the
+ * parser refuses every spelling of it, so demanding one would ask for a flag the help does not show
+ * and no input can satisfy.
  */
 export function findMissingRequired(
   payload: Record<string, unknown>,
   schema: JsonSchema | undefined
 ): string[] {
-  const required = new Set(schema?.required ?? []);
+  const properties = schema?.properties ?? {};
+  const required = new Set(
+    (schema?.required ?? []).filter((name) => !isRetiredField(properties[name] ?? {}))
+  );
   if (required.size === 0) return [];
-  const declared = Object.keys(schema?.properties ?? {});
+  const declared = Object.keys(properties);
   // Declared order first, then any required name the schema declares no property for, which
   // would otherwise be dropped silently.
   const names = [...declared.filter((n) => required.has(n))];
@@ -49,6 +56,29 @@ export function findMissingRequired(
     if (!names.includes(name)) names.push(name);
   }
   return names.filter((name) => !Object.hasOwn(payload, name));
+}
+
+/**
+ * Two channels, because the wire grew one: a tool-server now sends the issue list in `issues`,
+ * where before the list WAS the message. Reading the structured field first and falling back to
+ * parsing the message covers a new client against an old server.
+ */
+function serverIssueList(err: unknown): ValidationIssue[] | null {
+  const carried = (err as { issues?: unknown } | null)?.issues;
+  if (Array.isArray(carried)) {
+    return carried.length > 0 && carried.every(isValidationIssue) ? carried : null;
+  }
+
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
+  if (message === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  return parsed.every(isValidationIssue) ? parsed : null;
 }
 
 /**
@@ -63,17 +93,8 @@ export function describeServerValidationFailure(
   payload: Record<string, unknown>,
   schema: JsonSchema | undefined
 ): ValidationReport | null {
-  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
-  if (message === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return null;
-  if (!parsed.every(isValidationIssue)) return null;
+  const parsed = serverIssueList(err);
+  if (parsed === null) return null;
 
   const properties = schema?.properties ?? {};
   // Every issue must address a field this tool declares, or the payload as a whole (an empty
@@ -85,7 +106,10 @@ export function describeServerValidationFailure(
     (typeof issue.path[0] === "string" && Object.hasOwn(properties, issue.path[0]));
   if (!parsed.every(addressesThisTool)) return null;
 
-  const required = new Set(schema?.required ?? []);
+  // Retired keys are skipped as in `findMissingRequired`: a retirement is never a flag to pass.
+  const required = new Set(
+    (schema?.required ?? []).filter((name) => !isRetiredField(properties[name] ?? {}))
+  );
   const missing: string[] = [];
   const invalid: InvalidField[] = [];
   for (const issue of parsed) {

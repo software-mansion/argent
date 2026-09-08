@@ -120,11 +120,11 @@ export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
 
-export function includesCI(haystack: string | undefined, needle: string): boolean {
+function includesCI(haystack: string | undefined, needle: string): boolean {
   return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
 }
 
-export function equalsCI(actual: string | undefined, expected: string): boolean {
+function equalsCI(actual: string | undefined, expected: string): boolean {
   return (actual ?? "").toLowerCase() === expected.toLowerCase();
 }
 

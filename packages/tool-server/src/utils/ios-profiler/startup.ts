@@ -2,12 +2,12 @@ import type { ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { NotifyHandle } from "./notify";
 
-export interface WaitForXctraceReadyOptions {
+interface WaitForXctraceReadyOptions {
   notify: NotifyHandle | null;
   timeoutMs: number;
 }
 
-export interface WaitForXctraceReadyResult {
+interface WaitForXctraceReadyResult {
   /** stderr accumulated while waiting for ready. */
   stderrBuffer: string;
 }

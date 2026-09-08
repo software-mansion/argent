@@ -8,9 +8,9 @@ import { settleWithin, sleepOrAbort } from "./timing";
  */
 
 /** Verdict from evaluating one successfully-fetched tree. */
-export type PollVerdict<R> = { done: true; result: R } | { done: false };
+type PollVerdict<R> = { done: true; result: R } | { done: false };
 
-export interface PollDescribeTreeArgs<R> {
+interface PollDescribeTreeArgs<R> {
   /** Called once per poll; must be read-only. */
   fetchTree: () => Promise<DescribeTreeData>;
   timeoutMs: number;
@@ -23,7 +23,7 @@ export interface PollDescribeTreeArgs<R> {
   onSample: (data: DescribeTreeData, nowMs: number) => PollVerdict<R>;
 }
 
-export interface PollDescribeTreeResult<R> {
+interface PollDescribeTreeResult<R> {
   /** Result from the first `onSample` that returned done. */
   result: R | undefined;
   aborted: boolean;

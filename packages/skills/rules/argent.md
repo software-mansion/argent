@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -36,8 +36,10 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 > </availability_check>
 
 <tapping_rule>
-<important>**Never** derive tap coordinates from a screenshot</important>
-Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
+<important>**Never** derive tap coordinates from screenshot pixels</important>
+Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree — the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
+
+Call a discovery tool yourself only when you have no fresh tree for the current screen — before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
@@ -45,9 +47,7 @@ Before **every** tap, you MUST call a discovery tool and extract coordinates fro
 
 `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
 
-Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
-
-If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
+If a **tap fails twice** at the same coordinates, **stop retrying** and re-run a discovery tool.
 
 If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-device-interact` to choose the correct next action.
 
@@ -60,7 +60,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -73,8 +73,8 @@ Decision order:
 - All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
-  Call `screenshot` separately only for a baseline before any action or after a delay.
+- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
+  Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
@@ -83,7 +83,7 @@ Decision order:
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
   machine-wide cleanup.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 
@@ -112,9 +112,14 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
+PHYSICAL iPHONE (USB)
+Skills: `argent-ios-device-setup` (cable, trust, signing), then `argent-ios-device-interact` (the app-scoped interaction contract)
+When: The user names a physical iPhone, a real device, or hardware, or the target `list-devices` iOS entry has kind `"device"`. Never for a simulator, and never because a cabled phone is listed first. On hardware every interaction starts with `launch-app`; `paste`, `settings-permissions`, two-finger gestures, `rotate`, `shake`, screen recording, `debugger-*`, `react-profiler-*`, `native-profiler-*` and `native-*` do not exist there.
+Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
+
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`

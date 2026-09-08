@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-export const nativeDescribeRectSchema = z.object({
+const nativeDescribeRectSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   width: z.number().finite(),
   height: z.number().finite(),
 });
 
-export const nativeDescribePointSchema = z.object({
+const nativeDescribePointSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
 });
@@ -34,8 +34,6 @@ export const nativeDescribeScreenResultSchema = z
   })
   .passthrough();
 
-export type NativeDescribeRect = z.infer<typeof nativeDescribeRectSchema>;
-export type NativeDescribePoint = z.infer<typeof nativeDescribePointSchema>;
 export type NativeDescribeElement = z.infer<typeof nativeDescribeElementSchema>;
 export type NativeDescribeScreenResult = z.infer<typeof nativeDescribeScreenResultSchema>;
 

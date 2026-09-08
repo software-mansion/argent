@@ -1,6 +1,6 @@
 import type { ToolMeta } from "@argent/tools-client";
 
-export type McpTool = {
+type McpTool = {
   name: string;
   description: string;
   inputSchema: { type: "object" } & Record<string, unknown>;

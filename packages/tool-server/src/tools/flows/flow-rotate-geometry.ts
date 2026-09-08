@@ -9,7 +9,7 @@ import { SCREEN_EDGE_INSET, TARGET_START_FRACTION, type EdgeGuards } from "./flo
  */
 
 /** Recognizer-friendly rotation pace: ~90° per 300 ms. */
-export const ROTATE_MS_PER_90_DEG = 300;
+const ROTATE_MS_PER_90_DEG = 300;
 /** Single-gesture time envelope; {@link MAX_ROTATE_BY_DEG} derives from it. */
 export const MAX_DERIVED_ROTATE_MS = 10_000;
 /** Largest sweep one gesture delivers at the fixed pace (3000°); parse rejects `by` beyond it. */
@@ -39,7 +39,7 @@ export interface RotateCandidate {
   clearance: number;
 }
 
-export interface RotateCandidateInput {
+interface RotateCandidateInput {
   startAngle: 0 | 90;
   center: { x: number; y: number };
   /**

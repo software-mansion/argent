@@ -4,11 +4,11 @@ import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/nat
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 
 // A getFullHierarchy read that returns no windows is the signal of an untrusted
-// read — a non-injectable target (an Apple system app the frontmost resolver
-// still picked), a backgrounded app, or a window that has not attached yet.
+// read — a backgrounded app, a window that has not attached yet, or a system
+// process the frontmost resolver still picked on an unpinned read.
 // The flow tree source must THROW there rather than hand back an empty tree:
 // an empty tree is the one thing a `hidden`/absent check accepts as satisfied,
-// so degrading to it turns a non-injectable target into a false green pass.
+// so degrading to it turns an unreadable target into a false green pass.
 
 const IOS_DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -37,7 +37,6 @@ function nativeApi(hierarchy: () => unknown, bundleId = APP): NativeDevtoolsApi 
   return {
     listConnectedBundleIds: () => [bundleId],
     getAppState: async (id: string) => appState(id),
-    requiresAppRestart: async () => false,
     queryViewHierarchy: async () => hierarchy(),
   } as unknown as NativeDevtoolsApi;
 }
