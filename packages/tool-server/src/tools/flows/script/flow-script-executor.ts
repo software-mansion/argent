@@ -1562,7 +1562,8 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
   // Whole values first, then the prefixes a cut somewhere else left behind. The
   // order is what keeps the second pass off a value the first one already took:
   // it searches only for prefixes SHORTER than the value they came from.
-  const scrub = (part: string) => repairQuotedCuts(scrubSecretValues(part, secrets), secrets);
+  const scrub = (part: string) =>
+    repairByteRenderings(repairQuotedCuts(scrubSecretValues(part, secrets), secrets), secrets);
   const omission = OMISSION_RE.exec(text);
   if (!omission) return scrub(text);
   const head = scrub(text.slice(0, omission.index));
@@ -1646,8 +1647,216 @@ function quotedCutBefore(
   return best;
 }
 
+/**
+ * A value RENDERED AS BYTES, which is neither a spelling of it nor a cut of it.
+ *
+ * `util.inspect` prints a `Buffer` or a `TypedArray` as its NUMBERS, so nothing
+ * a whole-value or per-spelling search looks for is in the text at all — and
+ * the disclosure is total and lossless, character for character. Two shapes
+ * reach a step reason, both from one line a seeding script plausibly writes:
+ *
+ *   assert.deepStrictEqual(Buffer.from(process.env.API_KEY), expected)
+ *
+ * renders decimal, one byte per line, with the assert diff's own `+ ` down the
+ * left — so the bytes are not even contiguous — and `util.inspect(Buffer.from(k))`
+ * renders `<Buffer 73 6b 2d …>` in hex, cut to the first 50 with a `… N more
+ * bytes` trailer of Node's own.
+ *
+ * Read as numbers rather than matched as text, which is what makes one rule of
+ * it: whatever sits between the numbers — a comma, a newline, a diff marker, an
+ * indent — is separator, and the run is decoded and searched in byte space. A
+ * run is broken wherever a LETTER appears between two numbers, which is what
+ * keeps `Buffer(49) [Uint8Array] [` out of the bytes that follow it.
+ *
+ * Both readings of a run are tried, because the two shapes disagree on the
+ * radix and neither announces it: decimal admits one to three digits under 256,
+ * hex exactly two digits. A run that is not a byte rendering decodes to bytes
+ * that hold no value, and nothing is replaced.
+ */
+function repairByteRenderings(text: string, secrets: readonly FlowScriptSecret[]): string {
+  const needles = secrets
+    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
+    .filter(({ bytes }) => bytes.length > 0)
+    .sort((a, b) => b.bytes.length - a.bytes.length);
+  if (needles.length === 0) return text;
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const { radix, numbers } of BYTE_VIEWS) {
+    const runs = byteRuns(text, numbers);
+    for (let at = 0; at < runs.length; at++) {
+      spans.push(...byteRunSpans(runs[at]!, radix, needles));
+      spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
+    }
+  }
+  return spliceSpans(text, spans);
+}
+
+/**
+ * The two readings, each with the digits its own radix writes a byte in.
+ *
+ * Tokenized apart rather than tokenized once and filtered, because a hex letter
+ * standing next to a decimal rendering — the `B` of the `- Buffer(4)` line an
+ * assert diff puts between two halves of the actual buffer — would otherwise
+ * join the run and stop it decoding as decimal at all.
+ */
+const BYTE_VIEWS = [
+  { radix: 10, numbers: /[0-9]+/g },
+  { radix: 16, numbers: /[0-9A-Fa-f]+/g },
+] as const;
+
+/**
+ * A value the rendering itself SPLIT, across the break that split it.
+ *
+ * `assert.deepStrictEqual(Buffer.from(k), expected)` writes the two buffers
+ * interleaved — the expected side's `Buffer(4) [Uint8Array] [` lands in the
+ * middle of the actual side's bytes — so the credential ends one run and
+ * resumes in the next, and neither run holds it whole.
+ *
+ * The gate is that the two halves reconstruct the WHOLE value: the tail of one
+ * run and the head of the next have to be a value's own two pieces, at the same
+ * radix, with nothing left over. That is what lets this run without a length
+ * floor, which the design has none of — a one-byte tail that happens to open a
+ * value answers nothing unless the rest of that value follows it exactly.
+ */
+function stitchedSpans(
+  run: ByteRun,
+  next: ByteRun | undefined,
+  radix: number,
+  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
+): Array<{ from: number; to: number; name: string }> {
+  if (!next) return [];
+  const head = decodeByteRun(run, radix);
+  const tail = decodeByteRun(next, radix);
+  if (!head || !tail) return [];
+  for (const { name, bytes } of needles) {
+    for (let n = Math.min(bytes.length - 1, head.length); n > 0; n--) {
+      const rest = bytes.length - n;
+      if (rest > tail.length) continue;
+      if (head.compare(bytes, 0, n, head.length - n, head.length) !== 0) continue;
+      if (tail.compare(bytes, n, bytes.length, 0, rest) !== 0) continue;
+      return [
+        { from: run.tokens[head.length - n]!.from, to: run.tokens[head.length - 1]!.to, name },
+        { from: next.tokens[0]!.from, to: next.tokens[rest - 1]!.to, name },
+      ];
+    }
+  }
+  return [];
+}
+
+interface ByteRun {
+  tokens: Array<{ from: number; to: number; text: string }>;
+  /** The run stopped at an ellipsis, so its last bytes may be a cut value. */
+  cut: boolean;
+}
+
+/**
+ * Maximal sequences of numbers separated by anything that is not a letter.
+ *
+ * A letter between two numbers ends the run: a rendering's own numbers are
+ * separated by punctuation and whitespace only, so this is what tells
+ * `Uint8Array(8) [` from the bytes it introduces. An ellipsis ends one too, and
+ * says why — the renderer cut there, and what precedes it is a prefix.
+ *
+ * A lone number is no rendering, so a run of one is dropped: it costs two
+ * decodes and can only match a one-byte value, which the raw scrub already has.
+ */
+function byteRuns(text: string, numbers: RegExp): ByteRun[] {
+  const runs: ByteRun[] = [];
+  let run: ByteRun = { tokens: [], cut: false };
+  let end = -1;
+  const close = (cut: boolean) => {
+    if (run.tokens.length > 1) runs.push({ tokens: run.tokens, cut });
+    run = { tokens: [], cut: false };
+  };
+  for (const token of text.matchAll(numbers)) {
+    const gap = end < 0 ? "" : text.slice(end, token.index);
+    if (/[A-Za-z]/.test(gap)) close(false);
+    else if (GAP_CUT_RE.test(gap)) close(true);
+    run.tokens.push({ from: token.index, to: token.index + token[0].length, text: token[0] });
+    end = token.index + token[0].length;
+  }
+  close(false);
+  return runs;
+}
+
+/** Where in `text` this run spells a value, read at one radix. */
+function byteRunSpans(
+  run: ByteRun,
+  radix: number,
+  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
+): Array<{ from: number; to: number; name: string }> {
+  const decoded = decodeByteRun(run, radix);
+  if (!decoded) return [];
+  const span = (first: number, count: number, name: string) => ({
+    from: run.tokens[first]!.from,
+    to: run.tokens[first + count - 1]!.to,
+    name,
+  });
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  let at = 0;
+  while (at < decoded.length) {
+    const hit = needles.find(
+      ({ bytes }) =>
+        at + bytes.length <= decoded.length &&
+        decoded.compare(bytes, 0, bytes.length, at, at + bytes.length) === 0
+    );
+    if (!hit) {
+      at += 1;
+      continue;
+    }
+    spans.push(span(at, hit.bytes.length, hit.name));
+    at += hit.bytes.length;
+  }
+  if (spans.length > 0 || !run.cut) return spans;
+  // Nothing whole, and the renderer cut here — so the tail may be the front of
+  // a value. Longest first, and shorter than the value, exactly as
+  // {@link quotedCutBefore} reads a cut in text space.
+  for (const { name, bytes } of needles) {
+    for (let n = Math.min(bytes.length - 1, decoded.length); n > 0; n--) {
+      if (decoded.compare(bytes, 0, n, decoded.length - n, decoded.length) !== 0) continue;
+      return [span(decoded.length - n, n, name)];
+    }
+  }
+  return spans;
+}
+
+/**
+ * The run's bytes, or nothing when it is no rendering at this radix. Decimal
+ * takes one to three digits below 256; hex takes exactly the two a byte is
+ * always written as, so a decimal run is not read as hex by accident.
+ */
+function decodeByteRun(run: ByteRun, radix: number): Buffer | undefined {
+  const codes: number[] = [];
+  for (const { text } of run.tokens) {
+    if (radix === 16 && text.length !== 2) return undefined;
+    if (radix === 10 && text.length > 3) return undefined;
+    const code = parseInt(text, radix);
+    if (!(code >= 0 && code <= 255)) return undefined;
+    codes.push(code);
+  }
+  return Buffer.from(codes);
+}
+
+/** The spans replaced by their placeholders, earliest first, overlaps dropped. */
+function spliceSpans(
+  text: string,
+  spans: Array<{ from: number; to: number; name: string }>
+): string {
+  if (spans.length === 0) return text;
+  let out = "";
+  let copied = 0;
+  for (const { from, to, name } of spans.sort((a, b) => a.from - b.from || b.to - a.to)) {
+    if (from < copied) continue;
+    out += `${text.slice(copied, from)}${SECRET_PLACEHOLDER_MARKER}${name}}}`;
+    copied = to;
+  }
+  return out + text.slice(copied);
+}
+
 /** Node's ellipsis, in both spellings; argent's own markers carry a count. */
 const FOREIGN_CUT_RE = /\.\.\.|…/g;
+
+/** The same, without the `g` whose `lastIndex` a repeated `test` would carry. */
+const GAP_CUT_RE = /\.\.\.|…/;
 
 const CUT_QUOTES = new Set(['"', "'", "`"]);
 
