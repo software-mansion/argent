@@ -480,6 +480,41 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toMatch(/keeps the first \d+ characters]$/);
   }, 30_000);
 
+  // The count is what the report really carries, not what the budget allowed.
+  // The read is bounded in BYTES and then trimmed, so leading whitespace leaves
+  // far fewer characters than the ceiling while the truncation path is still
+  // the right one - and the marker announced the ceiling either way. With
+  // nothing but whitespace in the file the report showed no reason text at all
+  // and still announced 7168 characters kept, sending its author after a lost
+  // report rather than a blank reason file.
+  //
+  // 28 672 is the bounded read: 7168 characters at four bytes each. What
+  // survives the trim is whatever of it is not the leading whitespace.
+  it.each([
+    ["a reason behind leading whitespace", 25_000, 5_000, 3_672],
+    ["a reason of nothing but whitespace", 100_000, 0, 0],
+  ])(
+    "counts what it kept of %s",
+    async (_label, spaces, letters, kept) => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        `padded-reason-${letters}`,
+        `set -euo pipefail
+       {
+         head -c ${spaces} /dev/zero | LC_ALL=C tr '\\0' ' '
+         head -c ${letters} /dev/zero | LC_ALL=C tr '\\0' 'Z'
+       } > "$ARGENT_REASON"
+       exit 9`
+      );
+
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toContain(`keeps the first ${kept} characters]`);
+      expect(result.failure?.message.match(/Z/g)?.length ?? 0).toBe(kept);
+    },
+    30_000
+  );
+
   // Octal escapes rather than `\u`, which bash 3.2 does not know: the point is
   // that the bytes really are multi-byte. The read is bounded in BYTES and the
   // ceiling counts CHARACTERS, so a cut that ignored continuation bytes would

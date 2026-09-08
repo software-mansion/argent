@@ -689,12 +689,21 @@ function readReasonFile(file, budget) {
  * the first thing cut.
  *
  * Two passes at most: the marker only shrinks by the digits a smaller count
- * drops. A budget narrower than the marker itself drives the kept head to
+ * drops. The count is the length of the head this keeps, so it is what the
+ * report really carries. A budget narrower than the marker itself drives the kept head to
  * nothing, which is the outcome wanted — the marker alone still says a reason
  * was written, and no reason text means no half of a secret to leave behind.
  */
 function markReason(text, maxChars, budget, size) {
-  let cut = maxChars;
+  // What is really there, not what the budget allowed. The read is bounded in
+  // BYTES and then trimmed, so leading whitespace can leave far fewer
+  // characters than `maxChars` while the truncation path is still the right one
+  // - a reason of 25 000 spaces and 3672 letters announced 7168 characters kept
+  // and showed 3672, and one of nothing but spaces announced 7168 and showed
+  // none, so its author went looking for a lost report rather than for a blank
+  // reason file. The same number is what `REASON_KEPT_RE` reads back in the
+  // parent to find where the reason was cut.
+  let cut = Math.min(maxChars, text.length);
   let marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
   while (marked.length > budget && cut > 0) {
     cut = Math.max(0, cut - (marked.length - budget));
