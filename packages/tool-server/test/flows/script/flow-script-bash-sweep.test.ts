@@ -92,6 +92,44 @@ describe("a bash step's sweep of the exchange root", () => {
     }
   }, 30_000);
 
+  // The bound a directory carries has to be a whole number of milliseconds,
+  // because the sweep reads it back with `/^(\d+)-/` and a `.` matches nothing
+  // there. `flow-script-step-parse.test.ts` pins `timeout: 1500.5` as a legal
+  // step and `clampTimeout` returns a wanted value un-rounded, so the
+  // fractional value really reaches the name - and a directory named
+  // `argent-flow-script-<n>.5-XXXXXX` would be passed over forever, keeping an
+  // `output.json` that may hold values derived from a secret under the shared
+  // `os.tmpdir()`.
+  it("stamps a fractional time limit as a whole millisecond", async () => {
+    const ws = createScriptWorkspace("bash-fractional");
+    try {
+      // The step reports its own exchange directory, which is otherwise removed
+      // before anything outside the executor could look at it.
+      const script = ws.write(
+        "fractional.sh",
+        `printf '{"dir":"%s"}' "$(dirname "$ARGENT_OUTPUT")" > "$ARGENT_OUTPUT.t"
+         mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
+      );
+      const result = await new FlowScriptExecutor({
+        concurrency: 2,
+        maxTimeoutMs: 60_000,
+        exchangeRoot,
+      }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        timeoutMs: 1500.5,
+      });
+
+      expect(result.ok).toBe(true);
+      const name = path.basename(String(result.output?.dir));
+      expect(name.startsWith(exchangeDirPrefix())).toBe(true);
+      expect(name.slice(exchangeDirPrefix().length)).toMatch(/^\d+-/);
+    } finally {
+      ws.cleanup();
+    }
+  }, 30_000);
+
   // The orphan a crashed tool server leaves is stamped with a moment in the
   // FUTURE — its dead owner's whole time limit still ahead of it — so the next
   // server's first bash step reads it as live and passes over it. A process
