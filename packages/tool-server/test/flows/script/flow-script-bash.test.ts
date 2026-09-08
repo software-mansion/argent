@@ -300,6 +300,25 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("__proto__");
   }, 30_000);
 
+  // `toString("utf8")` substitutes U+FFFD for an invalid byte sequence, and
+  // nothing downstream re-validates: the size, `JSON.parse`, object-ness and an
+  // own `__proto__` all pass a substituted character, so the bytes the script
+  // wrote were rewritten and the step was a pass, with the corrupted value
+  // going into flow state for later steps to compare against.
+  it("refuses a document that is not valid UTF-8 rather than rewriting it", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "bad-utf8",
+      `printf '{"token":"\\xc3\\x28abc"}' > "$ARGENT_OUTPUT.t"
+       mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("not valid UTF-8");
+  }, 30_000);
+
   // The read is bounded rather than `stat`-ed first: a `stat` would describe a
   // file a descendant is still growing, and leave the read itself unbounded.
   // Both sides of the boundary, at the exact byte: the runner reads

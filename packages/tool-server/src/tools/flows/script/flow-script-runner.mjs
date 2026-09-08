@@ -72,6 +72,14 @@ const STRAY_SUFFIXES = ["\r", "\uF00D"];
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 
 /**
+ * How the exchange files are decoded. `fatal` because the alternative is
+ * `toString("utf8")`, which substitutes U+FFFD for every invalid sequence:
+ * silent, unequal to what the script wrote, and three bytes wide where the
+ * input was one. See `readOutputFile`.
+ */
+const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
+
+/**
  * How long bash's death by a signal waits for the SAME signal to arrive here,
  * before it is read as one from outside the group. `kill 0` reaches every
  * member of the group at one syscall, so the signal is already pending on this
@@ -593,7 +601,24 @@ function readOutputFile(file, maxOutputBytes) {
           "command writing it runs, so write to a sibling and `mv` it into place",
       };
     }
-    return { json: buffer.subarray(0, read).toString("utf8") };
+    // Decoded strictly, never with replacement. `toString("utf8")` turns an
+    // invalid byte sequence into U+FFFD and nothing downstream re-validates -
+    // `commitOutput` in the parent checks the size, `JSON.parse`, object-ness
+    // and an own `__proto__`, none of which notices a substituted character -
+    // so bytes the script wrote were silently rewritten and the step was a
+    // pass, with the corrupted value flowing into flow state for later steps to
+    // read and compare against. A `.mjs` step cannot reach that state, because
+    // there the document is a live JavaScript value.
+    try {
+      return { json: STRICT_UTF8.decode(buffer.subarray(0, read)) };
+    } catch {
+      return {
+        error:
+          "the document the script wrote to $ARGENT_OUTPUT is not valid UTF-8, and Argent will " +
+          "not rewrite the bytes a script emitted: write the document as UTF-8 (a JSON document " +
+          "is UTF-8 by definition)",
+      };
+    }
   } catch (err) {
     return { error: `the file named by $ARGENT_OUTPUT could not be read: ${errorMessage(err)}` };
   } finally {
