@@ -275,7 +275,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script is a local `.mjs` or `.sh` file.
 
-The extension selects the interpreter. An `.mjs` file runs under Node.js, and a `.sh` file runs under bash. There is no `language` key. See [Bash scripts](#bash-scripts).
+The extension selects the interpreter. An `.mjs` file runs under Node.js, and a `.sh` file runs under bash. There is no `language` key. Argent reads the extension of the file the path resolves to, so a symlink takes the interpreter of its target. A target that has no extension keeps the extension you wrote in the step. See [Bash scripts](#bash-scripts).
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
@@ -299,7 +299,7 @@ Argent removes each other name. Argent removes its own token, its own port and e
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
-`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. An `.mjs` script runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell. A `.sh` script that runs `node` itself gets the `node` on that same tool-server `PATH`.
 
 A failed step stops the flow. The verdict names the side that caused the failure.
 

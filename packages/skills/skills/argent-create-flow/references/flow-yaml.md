@@ -240,7 +240,7 @@ Use a local `.mjs` or `.sh` script only when the user requests one. It needs no 
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js`.
+The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js`. For a symlink, the extension of the target file decides. If the target has no extension, the extension in the step decides.
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
