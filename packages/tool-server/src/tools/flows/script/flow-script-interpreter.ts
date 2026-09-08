@@ -327,8 +327,9 @@ function interpreterProblem(candidate: string): string | null {
     !WINDOWS_ROOTED_PATH_RE.test(stripExtendedPrefix(candidate))
   ) {
     return (
-      "names no drive (a path that begins with a backslash is rooted on whatever drive the " +
-      "process is on, and the tool server and the script's own process are not on the same one)"
+      "names no drive (a path that begins with a slash or a backslash is rooted on whatever " +
+      "drive the process is on, and the tool server and the script's own process are not on " +
+      "the same one)"
     );
   }
   if (underSystemRoot(candidate)) {

@@ -351,12 +351,20 @@ describe("scripts.bash, read against the flow's own project", () => {
   // `path.win32.isAbsolute` accepts a path with no drive, and the two processes
   // that read it are not on the same one: the tool server stats it against its
   // own working directory, and the runner spawns it against project_root.
-  it("refuses a path that names no drive", async () => {
+  // A POSIX path is the value this branch sees most often - it is what `argent
+  // config set` stored before the write gate applied the same rule - so the
+  // sentence has to describe the leading forward slash as well as the backslash.
+  it.each([
+    ["a path rooted on no drive", "\\Windows\\System32\\bash.exe"],
+    ["a POSIX path", "/usr/bin/bash"],
+  ])("refuses %s, naming the character it begins with", async (_label, configured) => {
     setPlatform("win32");
-    const root = projectWith({ scripts: { bash: "\\Windows\\System32\\bash.exe" } });
+    const root = projectWith({ scripts: { bash: configured } });
     const found = await resolveBashInterpreter(root);
 
-    expect((found as { problem: string }).problem).toContain("names no drive");
+    const problem = (found as { problem: string }).problem;
+    expect(problem).toContain("names no drive");
+    expect(problem).toContain("begins with a slash or a backslash");
   });
 
   it("refuses a configured System32 bash, naming WSL", async () => {
