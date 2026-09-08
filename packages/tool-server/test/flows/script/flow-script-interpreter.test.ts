@@ -82,6 +82,19 @@ function notBash(dir: string, name = "bash"): string {
 }
 
 /**
+ * A shell that is not bash, answering the probe the way zsh, ksh and dash do:
+ * the marker, and an empty `$BASH_VERSION` after it. Written rather than taken
+ * from the host, because which of those three a machine has varies and the
+ * answer under test does not.
+ */
+function emptyVersionShell(dir: string, name = "shell"): string {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, "#!/bin/sh\nprintf '\\n%s%s\\n' 'argent-bash-version:' ''\n");
+  fs.chmodSync(file, 0o755);
+  return file;
+}
+
+/**
  * A real bash, found without the resolver under test. The resolver runs each
  * candidate once and refuses one that prints no `$BASH_VERSION`, so a written
  * stand-in would be refused for a reason the tests below are not about.
@@ -275,6 +288,28 @@ describe("scripts.bash, read against the flow's own project", () => {
     expect((found as { problem: string }).problem).toContain("is not a bash");
     expect((found as { problem: string }).problem).toContain(stub);
   });
+
+  // The version after the marker is the whole of what separates bash from the
+  // shells that would run the file with different word-splitting and array
+  // semantics. They answer the probe with the marker and nothing after it, and
+  // accepting one would report every `.sh` step green while running none of
+  // them: it never reads the file, so the parent reads back the document it
+  // seeded and the exit code is 0.
+  it.skipIf(realPlatform === "win32")(
+    "refuses a shell that answers the marker with an empty version",
+    async () => {
+      const root = projectWith(undefined);
+      const shell = emptyVersionShell(root);
+      fs.writeFileSync(
+        path.join(root, ".argent", "config.json"),
+        JSON.stringify({ scripts: { bash: shell } })
+      );
+
+      const found = await resolveBashInterpreter(root);
+      expect("path" in found).toBe(false);
+      expect((found as { problem: string }).problem).toContain("printed no $BASH_VERSION");
+    }
+  );
 
   // The marker is the LAST thing the probe prints, so a window on the head of
   // the candidate's output is a window the answer falls out of. A wrapper that
