@@ -68,6 +68,18 @@ on:
       # without touching any file listed above it.
       - "packages/tool-server/test/helpers/host-bash.ts"
       - "packages/tool-server/test/helpers/flow-script-workspace.ts"
+      # The same rule, applied to the rest of the import graph of those three.
+      # `config-schema.ts` is where `WINDOWS_ROOTED_PATH_RE` and the win32 arm
+      # of `asAbsolutePath` live, and `flow-script-interpreter.ts` reads that
+      # same regex back - so a change to the one rule the two sides share
+      # touched none of the paths above and was never exercised against a real
+      # Windows host, a real `where.exe` or a real Git-for-Windows `bash.exe`.
+      - "packages/configuration-core/src/config-schema.ts"
+      - "packages/configuration-core/src/config-access.ts"
+      - "packages/tool-server/src/utils/electron-env.ts"
+      - "packages/tool-server/src/utils/format-error.ts"
+      - "packages/tool-server/src/utils/secrets.ts"
+      - "packages/tool-server/src/utils/timing.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
