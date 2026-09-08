@@ -113,11 +113,10 @@ describe("type directive focus wait", () => {
     // Text first, then the submitting Enter as a separate call.
     expect(keys.map((c) => c.args.text ?? c.args.key)).toEqual(["a@b.com", "enter"]);
     // The gap covers the fixed settle (500ms) plus at least one poll interval
-    // (300ms) before read 4 confirmed focus. Bounded from below only (an upper
-    // bound would price CI jitter), and 10% under the sum, because a setTimeout
-    // measured on Date.now() can span a millisecond less than its delay. Losing
-    // either wait costs the gap hundreds of milliseconds, so the slack does not
-    // buy the code anything.
+    // (300ms) before read 4 confirmed focus. Lower bound only (an upper one
+    // would price CI jitter), 10% under the sum because a setTimeout measured
+    // on Date.now() can span a millisecond less than its delay — while losing
+    // either wait costs the gap hundreds of them.
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(720);
   });
 
@@ -164,10 +163,9 @@ describe("type directive focus wait", () => {
     const keys = calls.filter((c) => c.id === "keyboard");
     // submit: false — no trailing Enter.
     expect(keys.map((c) => c.args.text)).toEqual(["a@b.com"]);
-    // The fixed settle still applies even without a focus-reporting source.
-    // Skipping it alongside the poll would leave only the single tree read
-    // above, so 10% under the 500ms settle still pins the branch — while an
-    // exact 500 fails outright whenever the timer spans 499 on Date.now().
+    // The fixed settle still applies even without a focus-reporting source:
+    // skipping it alongside the poll leaves only the single tree read above, so
+    // 10% of slack for the timer (see the case above) still pins the branch.
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(450);
   });
 });
