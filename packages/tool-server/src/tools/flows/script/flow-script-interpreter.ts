@@ -103,11 +103,12 @@ function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined):
  * `$ARGENT_OUTPUT` do not exist, and it is early on every PATH.
  */
 export async function resolveBashInterpreter(
-  anchor: string | undefined
+  anchor: string | undefined,
+  probeEnv: NodeJS.ProcessEnv = process.env
 ): Promise<{ path: string } | { problem: string }> {
   const configured = projectAnchoredConfigValue<string>(BASH_CONFIG_KEY, anchor);
   if (configured !== undefined) {
-    const problem = interpreterProblem(configured) ?? (await notBashProblem(configured));
+    const problem = interpreterProblem(configured) ?? (await notBashProblem(configured, probeEnv));
     const source = configuredSource(configured, anchor);
     return problem
       ? {
@@ -135,7 +136,7 @@ export async function resolveBashInterpreter(
       }
       continue;
     }
-    const problem = await notBashProblem(candidate);
+    const problem = await notBashProblem(candidate, probeEnv);
     if (!problem) return { path: candidate };
     rejected.push(`${candidate} ${problem}`);
   }
@@ -159,8 +160,11 @@ export async function resolveBashInterpreter(
  * bash from the shells that would run the file with different word-splitting
  * and array semantics: zsh, ksh and dash answer this with an empty version.
  */
-async function notBashProblem(candidate: string): Promise<string | null> {
-  const answer = await askForBashVersion(candidate);
+async function notBashProblem(
+  candidate: string,
+  probeEnv: NodeJS.ProcessEnv
+): Promise<string | null> {
+  const answer = await askForBashVersion(candidate, probeEnv);
   if (BASH_PROBE_MARKER.test(answer.stdout)) return null;
   if (answer.signal) {
     // Which of the two happened, because the remedy is not the same one. A
@@ -186,8 +190,9 @@ async function notBashProblem(candidate: string): Promise<string | null> {
  * is. This is the only place a `.sh` step can wait before it has a process to
  * time out, so a probe that does not settle is a flow run that never finishes.
  *
- * The bounds, one per way a candidate can fail to answer. Its standard input is
- * the null device, the same end of file the step gives the script — without it
+ * The bounds, one per way a candidate can fail to answer. Its environment is the
+ * step's own, so the check and the step ask the same question. Its standard
+ * input is the null device, the same end of file the step gives the script — without it
  * the wrapper this check exists for reads an open pipe until the timeout, and
  * answers in five seconds what it can answer at once. Its standard output is
  * kept only up to the marker's own length, so a candidate that streams costs
@@ -198,7 +203,10 @@ async function notBashProblem(candidate: string): Promise<string | null> {
  * behind it, rather than at the close of a pipe whatever it started still
  * holds.
  */
-function askForBashVersion(candidate: string): Promise<{
+function askForBashVersion(
+  candidate: string,
+  probeEnv: NodeJS.ProcessEnv
+): Promise<{
   stdout: string;
   signal: NodeJS.Signals | null;
   stoppedByCheck: boolean;
@@ -208,6 +216,17 @@ function askForBashVersion(candidate: string): Promise<{
     let child: ChildProcess;
     try {
       child = spawn(candidate, ["-c", BASH_PROBE_COMMAND], {
+        // The environment the STEP's bash gets, not the tool server's. The two
+        // diverged in both directions: `BASH_ENV` is deliberately outside the
+        // step allowlist - it is the one variable that changes what a
+        // non-interactive `bash -c` does - so a host that exported it had every
+        // candidate refused for a file the step's bash could never have read,
+        // and the remedy the refusal names went through the same probe; and in
+        // the other direction the candidate is an arbitrary executable named
+        // `bash`, and inheriting here handed it the bearer token, the port and
+        // every `ARGENT_SECRET_*` value the allowlist exists to keep out of a
+        // script's reach.
+        env: probeEnv,
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
       });

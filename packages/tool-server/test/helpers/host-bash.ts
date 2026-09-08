@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { buildChildEnv } from "../../src/tools/flows/script/flow-script-executor";
 import { resolveBashInterpreter } from "../../src/tools/flows/script/flow-script-interpreter";
 
 /**
@@ -28,7 +29,7 @@ export async function resolveHostBash(): Promise<{ path: string } | { problem: s
   process.env.USERPROFILE = home;
   let found: { path: string } | { problem: string };
   try {
-    found = await resolveBashInterpreter(undefined);
+    found = await resolveBashInterpreter(undefined, buildChildEnv(undefined));
   } finally {
     for (const [name, value] of Object.entries(real)) {
       if (value === undefined) delete process.env[name];

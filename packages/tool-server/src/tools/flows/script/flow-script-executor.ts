@@ -581,7 +581,12 @@ export class FlowScriptExecutor {
     let interpreterPath: string | undefined;
     let exchange: ExchangeFiles | undefined;
     if (interpreter === "bash") {
-      const found = await resolveBashInterpreter(request.projectRoot ?? request.flowDir);
+      // The step's own environment, so the check and the step ask the same
+      // question of the same candidate: `BASH_ENV` is outside the allowlist, so
+      // a probe that inherited it refused a bash the step would have run under,
+      // and an arbitrary executable named `bash` was handed the tool server's
+      // token, port and secrets on the way.
+      const found = await resolveBashInterpreter(request.projectRoot ?? request.flowDir, env);
       if (!("path" in found)) {
         return emptyResult(
           { kind: "spawn", message: found.problem },
@@ -1407,7 +1412,7 @@ function resolveRunnerPath(runnerDir: string | undefined): string {
   return runner;
 }
 
-function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
+export function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
   // Windows environment names are case-insensitive, so a host may surface any
   // of these under non-canonical casing; POSIX names are exact.
   const caseInsensitive = process.platform === "win32";

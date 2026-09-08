@@ -630,6 +630,43 @@ describe("a candidate that will not answer", () => {
     30_000
   );
 
+  // The probe asks the candidate the same question the step asks it, so it has
+  // to ask it in the same environment. Inheriting the tool server's diverged in
+  // both directions: `BASH_ENV` is outside the step allowlist, so a host that
+  // exported it had every candidate refused over a file the step's bash could
+  // never read; and the candidate is an arbitrary executable named `bash`,
+  // which was handed the token, the port and every `ARGENT_SECRET_*` value the
+  // allowlist exists to keep out of a script's reach.
+  onPosix("runs the candidate in the environment the step gives bash", async () => {
+    const root = projectWith(undefined);
+    const saw = path.join(root, "saw.json");
+    const recorder = nodeExecutable(
+      root,
+      "bash",
+      `require("node:fs").writeFileSync(${JSON.stringify(saw)}, JSON.stringify(process.env));\n` +
+        'process.stdout.write("\\nargent-bash-version:5.2.37\\n");\n'
+    );
+    fs.writeFileSync(
+      path.join(root, ".argent", "config.json"),
+      JSON.stringify({ scripts: { bash: recorder } })
+    );
+    process.env.ARGENT_SECRET_DEMO = "s3cr3t";
+    process.env.BASH_ENV = path.join(root, "never-read.sh");
+
+    expect(await resolveBashInterpreter(root, { PATH: process.env.PATH })).toEqual({
+      path: recorder,
+    });
+
+    try {
+      const env = JSON.parse(fs.readFileSync(saw, "utf8")) as Record<string, string>;
+      expect(env.ARGENT_SECRET_DEMO).toBeUndefined();
+      expect(env.BASH_ENV).toBeUndefined();
+    } finally {
+      delete process.env.ARGENT_SECRET_DEMO;
+      delete process.env.BASH_ENV;
+    }
+  });
+
   // The other way a probed candidate dies by a signal. It answers in
   // milliseconds and nothing here stopped it, so the sentence about a
   // five-second wait was false about it - and it sent an operator whose pinned
