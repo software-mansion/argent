@@ -1274,10 +1274,10 @@ steps:
   it("does not pass on a screen that settled early and then started moving again", async () => {
     currentFrame = () => undefined; // force the tree-only path
     // Three still reads set the verdict — two agreeing intervals is what it
-    // takes — and everything after them moves. Counted in reads and given a
-    // wait that fits well over four of them: the case needs a moving read after
-    // the quiet stretch, and a loaded suite that fits only the quiet ones into
-    // the wait would hand it a screen that never moved at all.
+    // takes — and everything after them moves, so the case needs a fourth read
+    // to show the movement. A healthy 6000ms wait serves about thirty; the
+    // assertion on `reads` below is what separates a starved run, which saw no
+    // movement to judge, from a latch that failed to clear.
     let reads = 0;
     currentTree = () => {
       reads += 1;
@@ -1287,19 +1287,22 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 3500, stableFor: 0 }
+  - await: { idle: true, timeout: 6000, stableFor: 0 }
 `
     );
     const r = await run("ready");
+    expect(reads, "reads served — under four, nothing moved to be judged").toBeGreaterThanOrEqual(
+      4
+    );
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  });
+  }, 15_000);
 
   // H2: the same latch let a screen that had gone BLANK by the deadline report
   // ready. A blank tree is an observation, not a gap — it clears the verdict.
   it("does not pass on a screen that settled early and then went blank", async () => {
     currentFrame = () => undefined;
-    // Three still reads, then blank, and a wait sized for them the same way the
-    // case above sizes its own.
+    // Three still reads, then blank, sized and guarded the same way as the
+    // case above.
     let reads = 0;
     currentTree = () => {
       reads += 1;
@@ -1309,11 +1312,16 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 3500, stableFor: 0 }
+  - await: { idle: true, timeout: 6000, stableFor: 0 }
 `
     );
-    expect((await run("ready")).steps.at(-1)!.warning).toContain("never held still");
-  });
+    const r = await run("ready");
+    expect(
+      reads,
+      "reads served — under four, nothing went blank to be judged"
+    ).toBeGreaterThanOrEqual(4);
+    expect(r.steps.at(-1)!.warning).toContain("never held still");
+  }, 15_000);
 
   // H3: bounding the tree read by the remaining budget made the LAST read
   // time out on every run, which turned every honest timeout into an
