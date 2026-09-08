@@ -55,9 +55,8 @@ describe("NotImplementedOnPlatformError", () => {
     expect(err.toolId).toBe("demo-tool");
     expect(err.platform).toBe("android");
     expect(err.hint).toBe("Use `adb shell <command>`.");
-    // The whole sentence, not `toContain("demo-tool")` + `toContain("android")`: both of
-    // those are substrings of the path asserted below, so they would hold for a message
-    // that had dropped the prose naming the tool and the platform entirely.
+    // The whole sentence: "demo-tool" and "android" on their own are substrings of the
+    // path asserted below, so they hold for a message carrying no prose naming either.
     expect(err.message).toContain("Tool 'demo-tool' is not yet implemented on android.");
     expect(err.message).toContain("tools/demo-tool/platforms/android.ts");
     expect(err.message).toContain("capability declaration");

@@ -225,9 +225,9 @@ describe("INSTALLER_COMMAND_META", () => {
 describe("mcp is intercepted like the installers", () => {
   // `argent mcp --help` used to start the stdio server, which then blocked
   // reading JSON-RPC from stdin — the reason this command joined the set.
-  // Each row is ONE argv, nested so `%j` renders the whole thing: spread rows against a
-  // single placeholder printed only argv[0], so the last two both rendered as `treats
-  // "--foo"` — a bare `--foo` being the opposite of a help request.
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], so the last two rows both read `treats "--foo"` — the opposite of
+  // what they assert.
   it.each([
     [["--help"]],
     [["-h"]],
