@@ -1166,6 +1166,37 @@ describe("secret placeholders in an env value", () => {
     expect(result.steps[0].reason).toContain("KNOWN");
   });
 
+  it("refuses an unknown name in the RUN's own env as caller input", async () => {
+    // A flow file's `env:` is that file's own text, so an unknown name there is
+    // one flow's fault and stays a per-step error. The run's map is one
+    // argument every flow in a directory takes, so the same name there is ONE
+    // fault: left to the step it repeated a ~900-character refusal once per
+    // file and ended `0 passed, N failed`, naming N files for one typo.
+    //
+    // The error CODE is the fix, not the wording: the CLI stops a directory run
+    // on `TOOL_INPUT_INVALID` and on nothing else, so a more granular code here
+    // would silently put the batch back to blaming every file.
+    await writeProjectSecret("KNOWN", "value");
+    await write("scripts/probe.mjs", "");
+    await flow("runsecret", "steps:\n  - script: { path: ../../scripts/probe.mjs }\n");
+
+    const refused = runFlow("runsecret", { env: { AUTH: "{{secret:MISSING}}" } });
+    await expect(refused).rejects.toThrow(/This run's env value AUTH/);
+    await expect(refused).rejects.toThrow(/Unknown secret "MISSING"/);
+    expect(getFailureSignal(await refused.catch((err: unknown) => err))?.error_code).toBe(
+      FAILURE_CODES.TOOL_INPUT_INVALID
+    );
+
+    // The other side of the same rule, so the two cannot drift together.
+    await flow(
+      "filesecret",
+      'env: { AUTH: "{{secret:MISSING}}" }\nsteps:\n  - script: { path: ../../scripts/probe.mjs }\n'
+    );
+    const { result } = await runFlow("filesecret");
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toContain('Unknown secret "MISSING"');
+  });
+
   it("refuses an unpaired surrogate in an env value", async () => {
     // `describeScriptEnvProblem` refuses a NUL because an environment cannot
     // carry one; a lone surrogate is the same rule one character class further

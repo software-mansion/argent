@@ -46,6 +46,7 @@ import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import {
   describeScriptEnvProblem,
   mergeScriptEnv,
+  resolveScriptEnvSecrets,
   scriptEnvParameter,
 } from "./script/flow-script-env";
 import { createScriptRunNotes, type FlowScriptRunNotes } from "./script/flow-script-executor";
@@ -148,7 +149,7 @@ const zodSchema = z
       .optional()
       .describe(
         "Environment values every `script` step in this run reads from its environment — `process.env` in a `.mjs`, `$NAME` in a `.sh` — through nested `run:` flows. This is what makes a flow reusable: the file holds the defaults a project checks in, and this map holds what changes per run (a build number, a staging URL, a per-run account), so no CI job has to edit the YAML. Values are strings — quote a number. A name must match [A-Za-z_][A-Za-z0-9_]* and must not be NODE_OPTIONS, NODE_CHANNEL_FD, NODE_UNIQUE_ID, NODE_CHANNEL_SERIALIZATION_MODE, ELECTRON_RUN_AS_NODE, ARGENT_FLOW_SCRIPT_RUNNER, or any npm spelling of npm_config_node-options / npm_config_userconfig / npm_config_globalconfig — each steers the runner's own process. ARGENT_OUTPUT and ARGENT_REASON are refused too: they name the files a `.sh` step exchanges its output document and its failure reason through, and this map reaches every step whatever its language. Do not send __proto__ either: it is an accessor rather than an entry, so `z.record` would rebuild the map without it and the call would pass with that one value silently missing — this parameter refuses the name instead. These OVERRIDE the flow file's own `env` defaults at every depth; a `script` step's own `env` still wins over them. " +
-          "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: a plaintext value in a tool call enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from the same sources `keyboard` uses (`ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, its `.env.local`/`.env` ARGENT_SECRET_-prefixed keys, then `~/.argent/secrets.env`). " +
+          "Put a credential behind `{{secret:<NAME>}}` rather than in the clear: a plaintext value in a tool call enters your context and ~/.argent/mcp-calls.log, which records every call whole. The placeholder is resolved on the machine running the tool-server, from the same sources `keyboard` uses (`ARGENT_SECRET_<NAME>`, the project's `.argent/secrets.env`, its `.env.local`/`.env` ARGENT_SECRET_-prefixed keys, then `~/.argent/secrets.env`). A name no source defines refuses THIS CALL before the run starts, unlike the same name in a flow file's own `env:`, which errors the step that reads it: this map is one argument rather than one flow's own text, so a run over a directory stops at the first flow instead of repeating the refusal once per file. " +
           "A shell `export` does NOT reach a script: the tool server's environment is a snapshot from its first start, so a value exported after it started is not in that snapshot at all. `scripts.env.allow` only widens which NAMES are copied out of it, so it cannot recover one — pass the value here, or in the flow's `env`, or restart the tool server."
       ),
   })
@@ -1289,6 +1290,28 @@ Returns a per-step report: the first failure stops the run and the rest report a
         throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
           failure_stage: "flow_run_env",
         });
+      }
+      // And the `{{secret:NAME}}` names of that same map, resolved here only to
+      // be refused here. A name no source defines is a fault in the ARGUMENT,
+      // and every flow in a directory run takes the same arguments apart from
+      // its own path — so left to the step it became one ~900-character refusal
+      // per file, and a run of N flows ended `0 passed, N failed` for one
+      // mistyped name. Raised as caller input, the run stops at the first flow,
+      // which is what the two checks above it already do for a bad NAME.
+      //
+      // The step resolves again and is still the authority: this reads the
+      // run's own map only, holds nothing it resolved, and passes the same
+      // project anchor the step will. A flow file's own `env:` is a fault in
+      // that FILE and is left to the step, where it stays one flow's problem.
+      if (params.env && Object.keys(params.env).length > 0) {
+        try {
+          resolveScriptEnvSecrets(params.env, { cwd: params.project_root });
+        } catch (err) {
+          throw new InvalidToolInputError(
+            `This run's ${err instanceof Error ? err.message : String(err)}`,
+            { failure_stage: "flow_run_env" }
+          );
+        }
       }
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(

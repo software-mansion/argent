@@ -439,7 +439,7 @@ On Windows, Argent refuses two names of one map that differ only in case. Window
 
 ### Secrets in an `env` value
 
-Write a credential as `{{secret:NAME}}`. Argent resolves it on the machine that runs the flow, from the sources in [Secrets](/docs/reference/configuration#secrets), just before the process starts. A name that no source defines errors the step, and the message lists the names that are available.
+Write a credential as `{{secret:NAME}}`. Argent resolves it on the machine that runs the flow, from the sources in [Secrets](/docs/reference/configuration#secrets), just before the process starts. A name that no source defines errors the step, and the message lists the names that are available. In the values of the run — `argent flow run --env`, or the `env` parameter of `flow-execute` — Argent refuses that name before the run starts, because those values are one argument and not one flow's own text. A run over a directory then stops at the first flow instead of blaming each file in turn.
 
 The spelling is exact: lowercase `secret`, a colon, a name, no spaces. `{{ secret: NAME }}`, `{{SECRET:NAME}}` and `{secret:NAME}` are not placeholders. They reach the script as written, the way any other value does. Argent does not detect a near spelling.
 

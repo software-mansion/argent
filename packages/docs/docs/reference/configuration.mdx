@@ -174,7 +174,7 @@ A bare `NAME=value` line in `.env` or `.env.local` stays unresolved. Write `ARGE
 
 A change in a secrets file applies to the next tool call. An environment variable reaches only a tool-server that started after you exported the variable.
 
-A name that no source defines fails the step at run time. Argent replaces a resolved value with its placeholder in the text of a failure. Argent does not redact any other output. For the exact rule for a `script` step, see [Secrets in an `env` value](/docs/reference/flow-yaml#secrets-in-an-env-value). Thus do not use a placeholder for content that a report must show.
+A name that no source defines fails the step at run time. In the values of the run, Argent refuses that name before the run starts. Argent replaces a resolved value with its placeholder in the text of a failure. Argent does not redact any other output. For the exact rule for a `script` step, see [Secrets in an `env` value](/docs/reference/flow-yaml#secrets-in-an-env-value). Thus do not use a placeholder for content that a report must show.
 
 ### Commands
 
