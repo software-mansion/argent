@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { SCOPED_ENV_VARS, assertEnvRestored, leakedEnvVars } from "./setup/assert-env-restored.js";
+import { describe, expect, it, vi } from "vitest";
+import { SCOPED_ENV_VARS, leakedEnvVars } from "./setup/assert-env-restored.js";
 
 // The setup file's afterAll only fires on a suite that leaks, so on a green run
 // its body never reports anything and a refactor could hollow it out unnoticed —
-// the same blind spot clear-argent-env.ts has, pinned the same way. The
-// registration itself is asserted in home-redirect.test.ts.
+// the same blind spot clear-argent-env.ts has, pinned the same way.
 
 const ambient = { HOME: "/ambient", USERPROFILE: undefined, PATH: "/usr/bin" };
 
@@ -40,12 +39,28 @@ describe("assert-env-restored", () => {
     ]);
   });
 
-  it("throws against a snapshot taken at module load, not one taken on the spot", () => {
-    // What the hook actually calls. A snapshot taken inside the hook would
-    // compare the environment with itself, and every leak would read as clean.
-    expect(() => assertEnvRestored({ ...process.env, HOME: "/tmp/not-the-ambient-home" })).toThrow(
-      "HOME: "
-    );
-    expect(() => assertEnvRestored()).not.toThrow();
+  it("registers an afterAll that reports against the environment as it was at module load", async () => {
+    // Registration and the module-load snapshot are the two halves no direct
+    // call reaches: a hook that never registers and one that snapshots on the
+    // spot — comparing the environment with itself — both leave every suite
+    // green. Importing under a stubbed vitest hands over the real hook body.
+    const hooks: Array<() => void> = [];
+    vi.doMock("vitest", () => ({ afterAll: (fn: () => void) => hooks.push(fn) }));
+    vi.resetModules();
+    await import("./setup/assert-env-restored.js");
+    vi.doUnmock("vitest");
+    vi.resetModules();
+
+    expect(hooks).toHaveLength(1);
+
+    const ambientHome = process.env.HOME;
+    process.env.HOME = "/tmp/argent-launcher-deleted";
+    try {
+      expect(hooks[0]!).toThrow("HOME: /");
+    } finally {
+      if (ambientHome === undefined) delete process.env.HOME;
+      else process.env.HOME = ambientHome;
+    }
+    expect(hooks[0]!).not.toThrow();
   });
 });

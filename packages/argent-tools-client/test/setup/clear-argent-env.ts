@@ -9,8 +9,8 @@
 // added to src later without a second edit here. ARGENT_HOST is the only one
 // that currently changes an outcome: the three other in-process reads
 // (ARGENT_TOOLS_URL, ARGENT_AUTH_TOKEN, ARGENT_ARTIFACTS_DIR) are set by the
-// tests that exercise them, so exporting all three and dropping this file still
-// leaves the suite at 191 passed.
+// tests that exercise them, so exporting all three and dropping this file
+// leaves the suite green.
 //
 // This runs before the test module graph is imported, so module-level env reads
 // observe the cleared state too.
