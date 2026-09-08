@@ -20,6 +20,7 @@ import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { SeverityNumber } from "@opentelemetry/api-logs";
 import { diag, DiagLogLevel } from "@opentelemetry/api";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { createExporter } from "../src/otel.js";
 import { listenLoopback, snapshotEnv } from "./helpers.js";
 
@@ -104,6 +105,8 @@ describe("what reaches the collector, against the real OTLP exporter", () => {
   it("delivers to the url passed in code while every OTLP env var names another host", async () => {
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT = hostile.url.replace("/v1/logs", "");
     process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = hostile.url;
+    // Inert against this SDK - protocol selection lives in @opentelemetry/sdk-node,
+    // which is not a dependency. Set so a version that starts reading it fails here.
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
 
     await exportOneRecord(code.url, "real-ingest-token");
@@ -201,6 +204,28 @@ describe("what reaches the collector, against the real OTLP exporter", () => {
     // would fail this cert test on an unrelated env var.
     const certReadWarnings = warnings.filter((message) => message.startsWith("Failed to read "));
     expect(certReadWarnings).toEqual([]);
+
+    // Positive control: that prefix is a string in a transitive dependency, and
+    // if it is ever reworded this test starts passing by seeing nothing. The
+    // variables are still set - createExporter restores them - so an exporter
+    // built without the clear has to produce one.
+    const warningsWithoutClear: string[] = [];
+    diag.setLogger(
+      {
+        error: () => {},
+        warn: (message) => warningsWithoutClear.push(String(message)),
+        info: () => {},
+        debug: () => {},
+        verbose: () => {},
+      },
+      DiagLogLevel.WARN
+    );
+    try {
+      new OTLPLogExporter({ url: code.url, headers: { authorization: "Bearer x" } });
+    } finally {
+      diag.disable();
+    }
+    expect(warningsWithoutClear.filter((m) => m.startsWith("Failed to read "))).not.toEqual([]);
   });
 
   it("leaves the OTLP environment as it found it", () => {

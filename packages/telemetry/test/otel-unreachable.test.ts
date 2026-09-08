@@ -144,19 +144,23 @@ function captureExportErrors(): string[] {
 
 /**
  * Poll until `condition` holds, returning how long that took measured from
- * `started` - or Infinity if it still did not hold within `budgetMs`, so the
- * caller asserts on one number rather than on a flag plus a clock.
+ * `started` - or Infinity if it never held, so the caller asserts on one number
+ * rather than on a flag plus a clock.
+ *
+ * `started` predates the work being waited on, so the budget can already be
+ * spent on entry - test the condition before the clock, or an overrun somewhere
+ * else arrives here as "it never happened".
  */
 async function settle(
   condition: () => boolean,
   started: number,
   budgetMs: number
 ): Promise<number> {
-  while (performance.now() - started < budgetMs) {
+  for (;;) {
     if (condition()) return performance.now() - started;
+    if (performance.now() - started >= budgetMs) return Infinity;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  return Infinity;
 }
 
 /**
@@ -301,6 +305,11 @@ describe("a collector that cannot take the batch", () => {
     // the endpoint, rather than here. The empty error channel IS that missing
     // signal: it is what a delivered batch and a discarded one both look like.
     const errors = captureExportErrors();
+    // An empty channel only means something if the channel is live, and this is
+    // the one case with no failure of its own to prove it.
+    diag.error("capture probe");
+    expect(errors).toEqual(["capture probe"]);
+    errors.length = 0;
     const collector = await startResponding(204);
 
     await expect(exportAndDrain(collector.url)).resolves.toBeLessThan(FAILURE_BUDGET_MS);

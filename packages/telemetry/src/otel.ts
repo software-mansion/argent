@@ -44,7 +44,10 @@ const SERVICE_NAME = "argent";
 /** Logger instrumentation-scope name. */
 const LOGGER_NAME = "@argent/telemetry";
 
-// Batching parameters: queue up to 20 records and flush every 10s.
+// Batching parameters: at most 20 records per request, sent as soon as 20 are
+// queued and after 10s otherwise. The queue behind that is left at the SDK's
+// own 2048, which is where records start being dropped.
+//
 // EXPORT_TIMEOUT_MS bounds each export AND caps the OTLP exporter's built-in
 // retry loop, which treats a connection failure (ECONNREFUSED, timeout, DNS) as
 // retryable and would otherwise keep re-sending with backoff. It is deliberately kept at or below index.ts's
@@ -277,9 +280,8 @@ class OtelClient implements TelemetryClient {
     // LoggerProvider.shutdown() force-flushes the batch processor and then tears
     // it down. The time bound comes from the caller's Promise.race and from the
     // exporter's timeoutMillis — NOT from exportTimeoutMillis, which the
-    // force-flush awaits straight past (otel-unreachable.test.ts measures it) —
-    // so the argument is part of the TelemetryClient contract rather than
-    // something this implementation reads.
+    // force-flush awaits straight past — so the argument is part of the
+    // TelemetryClient contract rather than something this implementation reads.
     await this.provider.shutdown();
   }
 }
