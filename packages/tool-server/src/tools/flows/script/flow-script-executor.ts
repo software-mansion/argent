@@ -1559,12 +1559,97 @@ export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret
  */
 function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
   const secrets = scriptSecretSpellings(raw);
+  // Whole values first, then the prefixes a cut somewhere else left behind. The
+  // order is what keeps the second pass off a value the first one already took:
+  // it searches only for prefixes SHORTER than the value they came from.
+  const scrub = (part: string) => repairQuotedCuts(scrubSecretValues(part, secrets), secrets);
   const omission = OMISSION_RE.exec(text);
-  if (!omission) return scrubSecretValues(text, secrets);
-  const head = scrubSecretValues(text.slice(0, omission.index), secrets);
+  if (!omission) return scrub(text);
+  const head = scrub(text.slice(0, omission.index));
   const partial = partialSecretTail(head, secrets);
   return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
 }
+
+/**
+ * A value some OTHER process cut, repaired where the cut left a quoted prefix.
+ *
+ * {@link redactTruncated} answers argent's own clamp, which cuts at the end of
+ * the text and says so in a marker. V8 and Node cut in the MIDDLE of a message
+ * and say so with an ellipsis, embedding a fixed-length prefix of a string
+ * argument in the error they raise:
+ *
+ *   - `JSON.parse(k)` — 10 characters, V8's own window;
+ *   - any API raising `ERR_INVALID_ARG_TYPE` with the value as the offending
+ *     argument — 25 characters, and `setTimeout(k, 1)` is enough to reach it;
+ *   - `ERR_INVALID_ARG_VALUE` — 128 characters.
+ *
+ * A prefix is not the value, so the whole-value scrub cannot match it, and none
+ * of these ends in a marker {@link redactTruncated} reads — so a `.mjs` that
+ * handed a resolved secret to a Node API reported the front of that credential
+ * in the step reason, the `--json` report and the recorder's own result. The
+ * cut only bites a value LONGER than the window, which is why short fixture
+ * values came back correctly scrubbed and real-length tokens did not.
+ *
+ * Anchored on the QUOTES Node renders the cut value in, not on the ellipsis
+ * alone. Every one of these writes the fragment as `'…...'` or `"…"...`, so the
+ * repair asks for a whole quoted fragment that is a prefix of a value — which
+ * an ordinary `timed out...` in a script's own prose is not. Keyed on the
+ * ellipsis alone, a single character before any `...` in the text would answer,
+ * and the report would lose a letter of its own wording to a placeholder.
+ *
+ * The window count itself is left alone: it is Node's wording, and there are
+ * three different ones. What the reader needs is that the fragment was a
+ * credential, which the placeholder says.
+ */
+function repairQuotedCuts(text: string, secrets: readonly FlowScriptSecret[]): string {
+  let out = "";
+  let copied = 0;
+  for (const cut of text.matchAll(FOREIGN_CUT_RE)) {
+    const hit = quotedCutBefore(text, cut.index, copied, secrets);
+    if (!hit) continue;
+    out += `${text.slice(copied, hit.from)}${SECRET_PLACEHOLDER_MARKER}${hit.name}}}`;
+    copied = hit.from + hit.length;
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
+
+/**
+ * The longest value prefix that runs from just after a quote to the cut, over
+ * every spelling. Two ends are tried, because the cut sits inside the quotes
+ * for one Node shape (`'sk-live-ab...'`) and outside the closing one for the
+ * other (`"sk-live-9d"...`).
+ *
+ * Shorter than the value it came from, always: a whole value is what
+ * `scrubSecretValues` has already replaced, and searching for one here would
+ * only find text that pass left alone on purpose.
+ */
+function quotedCutBefore(
+  text: string,
+  at: number,
+  floor: number,
+  secrets: readonly FlowScriptSecret[]
+): { from: number; length: number; name: string } | undefined {
+  const ends = at - 1 > floor && CUT_QUOTES.has(text[at - 1]!) ? [at, at - 1] : [at];
+  let best: { from: number; length: number; name: string } | undefined;
+  for (const end of ends) {
+    for (const { name, value } of secrets) {
+      const longest = Math.min(value.length - 1, end - floor - 1);
+      for (let n = longest; n > (best?.length ?? 0); n--) {
+        const from = end - n;
+        if (!CUT_QUOTES.has(text[from - 1]!)) continue;
+        if (!text.startsWith(value.slice(0, n), from)) continue;
+        best = { from, length: n, name };
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+/** Node's ellipsis, in both spellings; argent's own markers carry a count. */
+const FOREIGN_CUT_RE = /\.\.\.|…/g;
+
+const CUT_QUOTES = new Set(['"', "'", "`"]);
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
 
