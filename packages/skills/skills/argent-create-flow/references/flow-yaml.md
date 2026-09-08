@@ -255,7 +255,9 @@ If a script fails, check its changes before you retry.
 
 ### Bash scripts
 
-- The exit code is the verdict. Exit 0 passes the step.
+- The exit code is the verdict. A non-zero code fails the step. Exit 0 passes the step, unless the output document is unusable.
+- `$ARGENT_OUTPUT` names the output document of the step, as a file. Argent puts the document the flow holds into that file before the step, and reads the file again after exit 0. The content must be a JSON object, in UTF-8, of 1 MiB or less.
+- Write a sibling file and `mv` it into place: `printf '{"id":"%s"}' "$id" > "$ARGENT_OUTPUT.new" && mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"`. A redirection into `$ARGENT_OUTPUT` makes the file empty before the command that fills it runs. An empty document fails the step, and so does a file that is gone, a file that is not a regular file, and a document that is not valid UTF-8.
 - `$ARGENT_REASON` names an empty file for the failure text. Argent reads about 7000 characters of it after a non-zero exit, and puts them in the step's reason. A script that writes nothing there reports only its exit code.
 - Argent runs the file as `bash <file>`. The file needs no execute bit, and the `#!` line is a comment. The script gets no arguments, and its standard input is empty. Argent does not report what the script prints. Exit 126 means that bash cannot read the file, or that a command in the file is not executable.
 - Argent finds bash from `scripts.bash`, then from PATH, then from `/bin/bash` and `/usr/bin/bash`. On Windows, the fallback is the bash of Git for Windows, never the WSL launcher. A `scripts.bash` that is not a bash errors the step. macOS ships bash 3.2 at `/bin/bash`, so set `scripts.bash` to use bash 4 features.

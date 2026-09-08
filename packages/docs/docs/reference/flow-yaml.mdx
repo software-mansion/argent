@@ -326,7 +326,16 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 Argent runs the file as `bash <file>`. The file needs no execute bit, and Argent ignores the `#!` line. The script gets no arguments, and its standard input is empty. Argent does not report what the script prints.
 
-The exit code is the verdict. Exit code 0 passes the step, and a different code fails it. Exit code 126 means that bash cannot read the file, or that a command in the file is not executable. Exit code 127 means that bash did not find a command.
+The exit code is the verdict. A non-zero code fails the step. Exit code 0 passes the step, unless the output document is unusable. Exit code 126 means that bash cannot read the file, or that a command in the file is not executable. Exit code 127 means that bash did not find a command.
+
+`$ARGENT_OUTPUT` names the output document of the step, as a file. Argent puts the document the flow holds into that file before the step, and reads the file back after exit code 0. The content must be a JSON object, in UTF-8, of at most 1 MiB. Write a sibling file and `mv` it into place:
+
+```bash
+printf '{"order":{"id":"%s"}}\n' "$id" > "$ARGENT_OUTPUT.new"
+mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"
+```
+
+A redirection into `$ARGENT_OUTPUT` empties the file before the command that fills it runs, and Argent fails a step whose document is empty. These four cases fail a script that exited 0: an empty file, a file that is gone, a file that is not a regular file, and a document that is not valid UTF-8. A script that leaves the file as Argent seeded it also fails when a sibling one carriage return past the name exists, which is the silent symptom of CRLF line endings.
 
 `$ARGENT_REASON` names an empty file for the failure text. To explain a failure, write the explanation to that file and exit with a non-zero code. Argent reads about 7000 characters of the file and puts them in the reason of the step. A script that writes nothing there reports only its exit code.
 
