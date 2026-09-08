@@ -77,10 +77,13 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     // restores after a `false`, so undo here; the cleanup is a no-op when
     // nothing was applied.
     const restored = await restoreStatusBar(device);
-    // iOS's single override command leaves nothing behind on failure. Android
-    // may be stuck mid-demo-mode: when even the undo failed, report `true` so
-    // the caller's run-end restore retries.
-    return device.platform === "android" && !restored;
+    // A local iOS override is one command that either applied or did not, so a
+    // failure leaves nothing behind. The other two arms can: Android may be
+    // stuck mid-demo-mode, and a remote override crosses a network, so the CLI
+    // can fail on a response whose request the far host already applied — and
+    // a cloud simulator is shared, so a stuck pin outlives this run. When even
+    // the undo failed, report `true` so the caller's run-end restore retries.
+    return (device.platform === "android" || device.platform === "ios-remote") && !restored;
   }
 }
 
