@@ -198,6 +198,21 @@ function isHostFrame(frame: string): boolean {
 }
 
 /**
+ * The `file://` URL of one frame, taken to the `:line:column` V8 always writes
+ * after it rather than to the first `)`.
+ *
+ * `)` is a legal character in a file name and the URL path encode set does not
+ * escape it, so a class that stopped at one stopped INSIDE the path: the head
+ * came back a readable path and the tail stayed percent-encoded. That is a
+ * shape no whole-value spelling holds, so the re-scrub {@link scriptFrames}
+ * runs for exactly this reason matched nothing either, and a resolved value
+ * that named the file reached the reader half decoded and wholly readable. A
+ * frame carrying no position at all keeps the older reading, which is the one
+ * thing the closing paren has to end.
+ */
+const FRAME_FILE_URL_RE = /file:\/\/\S*?:\d+:\d+(?=[\s)]|$)|file:\/\/[^\s)]+/g;
+
+/**
  * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
  * go on ONE step line, so the anchor is the run's own `project_root` — the
  * directory the script also ran in. A script outside it keeps its absolute
@@ -210,7 +225,7 @@ function isHostFrame(frame: string): boolean {
  * of the two differing.
  */
 function readableFrame(frame: string, roots: readonly string[]): string {
-  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+  return frame.replace(FRAME_FILE_URL_RE, (match) => {
     const split = /^(.*?)(:\d+:\d+)$/.exec(match);
     const url = split ? split[1]! : match;
     const position = split ? split[2]! : "";
