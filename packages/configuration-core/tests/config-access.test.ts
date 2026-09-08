@@ -469,6 +469,18 @@ describe("scripts.bash — schema entry", () => {
     expect(getConfigValueByKey("scripts.bash", opts())).toBe("bin/bash");
   });
 
+  // `null` is what a generator writes for a key it has no value for, and every
+  // other parser in the schema reads it as an absent key. Read as the text
+  // "null" it became the one value nothing can use and nothing falls back
+  // from: every `.sh` step in that scope refused, naming a relative path.
+  it("reads a null as an unset key rather than as the text null", () => {
+    const file = configFilePath("global", opts());
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ scripts: { bash: null } }));
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBeUndefined();
+  });
+
   it.each([
     ["a value that is not a string", 42],
     ["a value that is not text at all", { a: 1 }],

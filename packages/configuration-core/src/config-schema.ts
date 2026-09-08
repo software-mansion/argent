@@ -61,9 +61,14 @@ export function asString(raw: unknown): string | undefined {
  * Any value that is present, as text. Only for a key whose own reader checks
  * the value and reports what it found: a rejected value is invisible to that
  * reader, and a wrong one that is silently ignored fails somewhere else.
+ *
+ * `null` is absent here, as it is for every other parser in this file. A
+ * generator that writes `null` for a key it has no value for means "unset",
+ * and reading it as the text "null" makes it the one value nothing can use and
+ * nothing falls back from.
  */
 function asPresentText(raw: unknown): string | undefined {
-  if (raw === undefined) return undefined;
+  if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "string") return raw.trim();
   // A config file is JSON, so everything that reaches here has a JSON text
   // form; `??` covers a caller that passed a live value which has none.
