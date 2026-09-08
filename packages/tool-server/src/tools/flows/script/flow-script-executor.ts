@@ -1425,6 +1425,12 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
  *     PLAIN SPACE as `+` — which is why this is not a special-characters case:
  *     the brief's own worked run-time value is `--env "AUTH=Bearer abc"`.
  *
+ * The same argument settles the binary-to-text encoders, which are one call
+ * each and lossless: `Buffer.from(k).toString("base64")` is how a Basic auth
+ * header is built and `"hex"` is how a signing key is printed, so a script that
+ * reports the header it sent reports the credential. `base64` and `hex` are
+ * also what `base64` and `xxd -p` write on the `.sh` side of the same step.
+ *
  * The escaping is trivially reversible, so leaving it is disclosure rather than
  * obfuscation. The reasoning already existed for one character: the `env`
  * resolver refuses a value holding a NUL because Node quotes it back escaped
@@ -1455,9 +1461,28 @@ function encodedSpellings(value: string): string[] {
   spellings.push(...quotedSpellings(value));
   try {
     spellings.push(encodeURIComponent(value));
+    spellings.push(encodeURI(value));
     spellings.push(new URLSearchParams([["", value]]).toString().slice(1));
+    // `escape` is the third percent-encoder in the language and the one a
+    // pre-`encodeURIComponent` idiom still reaches for. Deprecated, not gone.
+    spellings.push(escape(value));
   } catch {
     // A lone surrogate. The raw value and every other spelling still stand.
+  }
+  // The binary-to-text encoders. Each is one call on a credential and each is
+  // lossless, so what reaches the report is the value itself in another
+  // alphabet — a `Basic` header is base64 and a signing key is hex.
+  const bytes = Buffer.from(value, "utf8");
+  for (const encoding of ["base64", "base64url", "hex", "latin1"] as const) {
+    spellings.push(bytes.toString(encoding));
+  }
+  // Case and Unicode form. Neither is an encoder a script applies on purpose,
+  // but both come off an ordinary comparison — `tr a-z A-Z`, a `toUpperCase`
+  // before a lookup, a `normalize` before a signature — and a case fold is a
+  // TOTAL disclosure of a hex or base32 key, whose alphabet has one case.
+  spellings.push(value.toUpperCase(), value.toLowerCase());
+  for (const form of ["NFC", "NFD", "NFKC", "NFKD"] as const) {
+    spellings.push(value.normalize(form));
   }
   // Each line RAW and escaped alike. `util.inspect` picks the quote per chunk
   // and escapes the rest, so a line holding anything its `strEscape` rewrites —
