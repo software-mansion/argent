@@ -16,7 +16,13 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tar-dir-test-"));
 });
 
+// A tar upload extracts into its own temp dir, released only by the cleanup
+// resolveFileInputs returns — the dispatcher's job in production, this list's
+// here.
+const cleanups: Array<() => Promise<void>> = [];
+
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -124,7 +130,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
     const uploadId = "prefer-upload";
     const entry = await uploadEntry(tarPath);
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       {
         appPath: wire({
@@ -139,6 +145,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
       },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     expect(await fs.readFile(path.join(args.appPath as string, "MyApp"), "utf8")).toBe(
       "upload-bytes"
@@ -173,11 +180,12 @@ describe("resolveFileInputs — tar-upload kind", () => {
     const uploadId = "test-upload-id-apk";
     const entry = await uploadEntry(tarPath);
 
-    const { args, fileInputs } = await resolveFileInputs(
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       { appPath: wireUpload("/client/app.apk", uploadId, entry) },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     const resolvedPath = args.appPath as string;
     expect(path.basename(resolvedPath)).toBe("app.apk");
@@ -192,11 +200,12 @@ describe("resolveFileInputs — tar-upload kind", () => {
     const uploadId = "test-upload-id-sidecar";
     const entry = await uploadEntry(tarPath);
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       { appPath: wireUpload("/client/MyApp.app", uploadId, entry) },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     const resolvedPath = args.appPath as string;
     expect(path.basename(resolvedPath)).toBe("MyApp.app");

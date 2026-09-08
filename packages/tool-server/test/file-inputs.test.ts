@@ -12,7 +12,13 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "file-inputs-test-"));
 });
 
+// resolveFileInputs hands its caller the cleanup for whatever it materialized;
+// in production the dispatcher calls it. A test that keeps the result must too,
+// or the upload's temp dir outlives the run.
+const cleanups: Array<() => Promise<void>> = [];
+
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -135,7 +141,7 @@ describe("resolveFileInputs", () => {
     await fs.writeFile(filePath, "stale");
     const content = Buffer.from("fresh client bytes");
 
-    const { args, fileInputs } = await resolveFileInputs(
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: FILE_SPEC },
       {
         input: wire({
@@ -145,6 +151,7 @@ describe("resolveFileInputs", () => {
         }),
       }
     );
+    cleanups.push(cleanup);
 
     expect(args.input).not.toBe(filePath);
     expect(await fs.readFile(args.input as string, "utf8")).toBe("fresh client bytes");
@@ -155,7 +162,7 @@ describe("resolveFileInputs", () => {
     const clientPath = path.join(tmpDir, "not-here", "flow.yaml");
     const content = Buffer.from("steps: []\n");
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: FILE_SPEC },
       {
         input: wire({
@@ -165,6 +172,7 @@ describe("resolveFileInputs", () => {
         }),
       }
     );
+    cleanups.push(cleanup);
 
     expect(await fs.readFile(args.input as string, "utf8")).toBe("steps: []\n");
   });
