@@ -5,7 +5,13 @@ import {
   wrapFailure,
   type ToolDefinition,
 } from "@argent/registry";
-import { requireRecordingSession, appendStepToFlow, type FlowSavedTo } from "./flow-utils";
+import {
+  requireRecordingSession,
+  appendStepToFlow,
+  holdsOutputReference,
+  type FlowSavedTo,
+  type FlowStep,
+} from "./flow-utils";
 
 const zodSchema = z.object({
   name: z
@@ -47,13 +53,11 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
     // that wording when the file-level `env:` refusal was added; this recorder
     // was the one left behind. No "check what ran" clause here, because an echo
     // runs nothing.
+    const step: FlowStep = { kind: "echo", message: params.message };
     let savedTo: FlowSavedTo;
     let stepCount: number;
     try {
-      ({ savedTo, stepCount } = await appendStepToFlow(session, {
-        kind: "echo",
-        message: params.message,
-      }));
+      ({ savedTo, stepCount } = await appendStepToFlow(session, step));
     } catch (err) {
       if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
       throw wrapFailure(
@@ -64,8 +68,16 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
           failure_area: "tool_server",
           error_kind: "unknown",
         },
-        `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
-          `already in the file, not in this call. ` +
+        // An echo's own `message` is one of the fields that scan reads, so this
+        // call can be the one that supplied the offending value — and sending
+        // its author to a file that holds nothing but `steps: []` is the same
+        // misattribution the wrapper exists to correct, pointed the other way.
+        // {@link holdsOutputReference} is what `flow-add-step` asks to tell the
+        // two apart.
+        (holdsOutputReference(step)
+          ? `The echo was not recorded: its own \`message\` failed validation. `
+          : `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
+            `already in the file, not in this call. `) +
           `${err instanceof Error ? err.message : String(err)}`
       );
     }
