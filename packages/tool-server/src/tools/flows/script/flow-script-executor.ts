@@ -1238,6 +1238,25 @@ function clampPath(at: string): string {
 }
 
 /**
+ * V8 writes the window in four shapes, one per side it had to cut: the whole
+ * document, `"…"...`, `..."…"` and `..."…"...`. Both ellipses are optional, so
+ * both are matched here — a leading one appears whenever the error is more than
+ * about ten characters into the document, which is every document with
+ * structure around the value.
+ *
+ * The token is exactly ONE code unit, and saying so is what keeps the window
+ * out of the part that is kept. A lazy `.+?` in its place stops at the first
+ * `, "` it can find, which for a document holding `", "` — an ordinary object
+ * with two members — is INSIDE the window, so the characters before it were
+ * carried into the reported reason. Greedy is no better from the other side.
+ *
+ * Greedy to the LAST quote, because the window is inserted raw: an unbalanced
+ * `"` inside it is the ordinary case for a document that failed to parse.
+ */
+const JSON_WINDOW_RE =
+  /^(Unexpected token '[\s\S]'), (?:\.\.\.)?"[\s\S]*"(?:\.\.\.)? is not valid JSON$/;
+
+/**
  * Every rule the parent applies to a document it did not encode itself, or
  * `undefined` for one it accepts.
  *
@@ -1342,10 +1361,10 @@ function childProblem(
  * of JSON input`) quotes only with apostrophes and survives unchanged.
  */
 function withoutDocumentExcerpt(err: unknown): string {
-  return errorMessage(err).replace(JSON_DOCUMENT_EXCERPT_RE, "");
+  const message = errorMessage(err);
+  const quoted = JSON_WINDOW_RE.exec(message);
+  return quoted ? `${quoted[1]} is not valid JSON` : message;
 }
-
-const JSON_DOCUMENT_EXCERPT_RE = /,? "[\s\S]*"(?:\.\.\.)?/;
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
