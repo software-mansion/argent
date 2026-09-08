@@ -3705,10 +3705,9 @@ export function validateFlow(flow: FlowFile): void {
  *
  * The half of {@link parseFlow} that answers questions about the FILE rather
  * than about its steps: the trims, the YAML parse, the top-level key rule and
- * the `env` rule. {@link parseFlowEnv} reads the header through this so a
- * defect in a step cannot take the header down; `parseFlow` goes on to the
- * steps from the same result, so the two can never disagree about what a file's
- * head means. `undefined` for a file holding nothing.
+ * the `env` rule. `parseFlow` goes on to the steps from the same result, which
+ * is what keeps one reading of a file's head. `undefined` for a file holding
+ * nothing.
  */
 function readFlowHead(content: string): YamlFlowFile | undefined {
   // Trimmed at the START, and at the trailing edge only back to the last line
@@ -3833,35 +3832,6 @@ export function parseFlow(content: string): FlowFile {
   };
   validateFlow(flow);
   return flow;
-}
-
-/**
- * A flow file's own `env:`, read without reading its steps.
- *
- * `flow-start-recording` keeps this header across the reset it writes, and read
- * it through {@link parseFlow} — which ends in the steps and in
- * {@link validateFlow}, so a defect ANYWHERE in the file took the header down
- * with it. A bogus key on one `echo` step, a leading `launch` beside an
- * `executionPrerequisite`, a misspelled top-level key: each one silently reset
- * a file whose `env:` was perfectly good, and the message was byte-identical to
- * the one for a file that never had an `env:` at all.
- *
- * The steps are exactly what that caller is about to discard, so not reading
- * them is not a shortcut — it is the question it meant to ask. Everything the
- * `env` itself must survive is still applied: the same parse, the same
- * top-level key rule, the same {@link describeScriptEnvProblem}, and the same
- * {@link validateFlow} against a stepless flow, which is what refuses a
- * `{{output:}}` template in it.
- *
- * Throws exactly what `parseFlow` throws, so a caller that wants the old
- * silence still writes the `catch`; the difference is which faults reach it.
- */
-export function parseFlowEnv(content: string): ScriptEnv | undefined {
-  const head = readFlowHead(content);
-  if (head?.env === undefined) return undefined;
-  const env = { ...(head.env as ScriptEnv) };
-  validateFlow({ executionPrerequisite: "", env, steps: [] });
-  return env;
 }
 
 /**

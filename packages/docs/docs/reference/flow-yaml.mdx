@@ -431,7 +431,7 @@ The map is a plain map. A YAML tag that builds something else — `!!omap` in it
 
 Argent refuses a value that holds a NUL character or an unpaired surrogate, because an environment carries neither. Argent applies the same rule to the value a `{{secret:NAME}}` resolves to.
 
-The top-level `env:` survives a re-record. `flow-start-recording` resets the file to an empty flow and keeps that map, so the defaults a project checks in still apply to the steps you record, and `flow-add-script` runs the live script under them.
+No recording tool writes the top-level `env:`. `flow-start-recording` resets the file to an empty flow, and it does not keep that header. Write the header into the YAML yourself. Write it again each time you record the flow again.
 
 On Windows, Argent refuses two names of one map that differ only in case. Windows reads them as one variable, so a flow file that parses on macOS is refused there.
 
@@ -479,7 +479,7 @@ Unlike the environment, the secret sources are read on **each** resolution. A se
 | `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                      |
 | `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                             |
 | `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                      |
-| `--env <NAME=value>` | An environment value for every `script` step in the run. Repeatable. See [Environment values](#environment-values) |
+| `--env <NAME=value>` | An environment value for every `script` step in the run. Repeatable. See [Environment values](#environment-values)          |
 | `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                   |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                 |
 | `--`                 | End of options, for a flow name that starts with `-`                                                                        |

@@ -612,46 +612,23 @@ describe("serialization", () => {
     }
   });
 
-  it("keeps a checked-in `env:` when a STEP in the file is malformed", async () => {
-    // The header was read through `parseFlow`, which ends in the steps and in
-    // `validateFlow`, so a bogus key on one `echo` step took a perfectly good
-    // `env:` down with it — and the message was byte-identical to the one for a
-    // file that never had an `env:`, so the loss was silent as well.
+  it("truncates a checked-in `env:` with the rest of the file", async () => {
+    // The reset replaces the file, and the header is part of the file: no
+    // recording tool writes an `env:`, so nothing here can put one back. An
+    // author who re-records a flow that declares one writes it again by hand,
+    // which is the same edit that put it there.
     await write(
-      ".argent/flows/badstep.yaml",
-      'env:\n  API_URL: https://example.com\n  BUILD: "42"\n' +
-        "steps:\n  - echo: hello\n    bogusKey: 1\n"
+      ".argent/flows/header.yaml",
+      'env:\n  API_URL: https://example.com\n  BUILD: "42"\n' + "steps:\n  - echo: hello\n"
     );
 
     const started = (await flowStartRecordingTool.execute(
       {},
-      { name: "badstep", project_root: root }
+      { name: "header", project_root: root }
     )) as { message: string; flowFile: string };
 
-    expect(started.message).toContain("API_URL, BUILD");
-    expect(started.flowFile).toContain("API_URL");
-    expect(parseFlow(started.flowFile).env).toEqual({
-      API_URL: "https://example.com",
-      BUILD: "42",
-    });
-  });
-
-  it("still drops an `env:` the header rule itself refuses", async () => {
-    // The narrowing is about the STEPS. Everything the `env` must survive on
-    // its own — the top-level key rule, the name rule, the `{{output:}}` rule —
-    // still applies, and a header that fails one of those is still not kept.
-    await write(
-      ".argent/flows/badenv.yaml",
-      'env:\n  API_URL: "{{output:1.url}}"\nsteps:\n  - echo: hello\n'
-    );
-
-    const started = (await flowStartRecordingTool.execute(
-      {},
-      { name: "badenv", project_root: root }
-    )) as { message: string; flowFile: string };
-
-    expect(started.message).not.toContain("is kept");
     expect(started.flowFile).toBe("steps: []\n");
+    expect(started.message).not.toContain("API_URL");
   });
 
   it("keeps `env` through a flow-add-step append", async () => {
@@ -1579,13 +1556,12 @@ describe("what is NOT hidden", () => {
 });
 
 describe("recording a script step with env", () => {
-  it("keeps a checked-in flow-level env across the reset, and says it did", async () => {
-    // The reset discards STEPS. `env:` is the header a checked-in flow declares
-    // its script defaults in, no recording tool writes one, and the reference
-    // forbids editing the YAML during a recording — so truncating it left the
-    // documented order with no way to record a step under the environment the
-    // replay takes. The step ran under nothing and replayed under the file's
-    // map, silently.
+  it("runs the live script under a header written back after the reset", async () => {
+    // The reset truncates the whole file, `env:` included, and no recording
+    // tool writes that header — so the route to a recorded step that runs under
+    // a checked-in default is to write it again after starting. What matters is
+    // that `flow-add-script` reads it from the file, so the live run takes the
+    // same map the replay will.
     await write("scripts/dump.mjs", reporter("kept", ["PLAIN"]));
     await flow(
       "qa",
@@ -1600,19 +1576,14 @@ describe("recording a script step with env", () => {
       { name: "qa", project_root: root }
     )) as { message: string; flowFile: string };
 
-    expect(started.flowFile).toContain("PLAIN: checked-in-default");
-    expect(started.flowFile).toContain("steps: []");
-    expect(started.message).toContain("PLAIN");
+    expect(started.flowFile).toBe("steps: []\n");
+    expect(started.message).toBe('Started recording "qa" flow');
 
-    // An `env:` with nothing under it is kept the same way, and the message
-    // does not announce a list of no names.
-    await flow("empty", "env: {}\nsteps:\n  - echo: hi\n");
-    const emptyStart = (await flowStartRecordingTool.execute(
-      {},
-      { name: "empty", project_root: root }
-    )) as { message: string; flowFile: string };
-    expect(emptyStart.flowFile).toContain("env: {}");
-    expect(emptyStart.message).toBe('Started recording "empty" flow.');
+    await fs.writeFile(
+      path.join(root, ".argent/flows/qa.yaml"),
+      "env:\n  PLAIN: checked-in-default\nsteps: []\n",
+      "utf8"
+    );
 
     const added = (await flowAddScriptTool.execute(
       {},
@@ -1962,8 +1933,14 @@ describe("recording a script step with env", () => {
     // under the step's own map. That is what the tool description claims and
     // nothing read it back.
     await write("scripts/probe.mjs", reporter("replayed", ["FROM_FILE", "FROM_STEP"]));
-    await flow("roundtrip", "env: { FROM_FILE: file-default }\nsteps: []\n");
     await flowStartRecordingTool.execute({}, { name: "roundtrip", project_root: root });
+    // The header arrives by hand edit AFTER the reset: the reset truncates the
+    // whole file, `env:` included, and no recording tool writes that header.
+    await fs.writeFile(
+      path.join(root, ".argent/flows/roundtrip.yaml"),
+      "env: { FROM_FILE: file-default }\nsteps: []\n",
+      "utf8"
+    );
 
     await flowAddScriptTool.execute(
       {},

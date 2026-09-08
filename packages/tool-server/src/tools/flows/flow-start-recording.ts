@@ -1,11 +1,9 @@
 import { z } from "zod";
-import * as fs from "node:fs/promises";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import {
   countStepsOnDisk,
   getFlowPath,
   getRecordingSession,
-  parseFlowEnv,
   startRecordingSession,
   withFlowFileLock,
   writeNewFlowFile,
@@ -14,38 +12,7 @@ import {
   validateFlow,
   type FlowFile,
   type FlowSavedTo,
-  type ScriptEnv,
 } from "./flow-utils";
-
-/**
- * The flow-level `env:` the file already carries, kept across the reset.
- *
- * The reset discards STEPS — that is what starting a recording means. `env:` is
- * not a step: it is the header a checked-in flow declares its defaults in, no
- * recording tool writes one, and `flow-add-script` reads it off the file to run
- * the live script under the same map the replay will take. Truncating it made
- * that promise unreachable through the documented order (start, record, finish,
- * then edit the YAML): the step was recorded under no environment and replayed
- * under one, silently.
- *
- * Anything that stops this from being a map the next append can write back —
- * no file, a parse refusal, an `env` a validate would reject — leaves the reset
- * exactly as it was. A file being replaced is no place to raise a refusal the
- * caller cannot act on.
- */
-async function keptFlowEnv(filePath: string): Promise<ScriptEnv | undefined> {
-  try {
-    // The header only. Read through `parseFlow`, which ends in the steps and in
-    // `validateFlow`, this swallowed a defect ANYWHERE in the file and reset a
-    // perfectly good `env:` — a bogus key on one `echo` step was enough — with
-    // a message byte-identical to the one for a file that never had an `env:`.
-    // The steps are what this reset is about to discard, so not reading them is
-    // the question rather than a shortcut.
-    return parseFlowEnv(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
 
 const zodSchema = z.object({
   name: z
@@ -111,7 +78,7 @@ export const flowStartRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to start recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one. The file's top-level \`env:\` is the one part kept across that reset, when the project is co-located with this server: it is the header a checked-in flow declares its script defaults in, no recording tool writes one, and flow-add-script runs the live script under it so the recorded step matches a replay. Against a remote tool-server there is no file here to read one from, so a recording starts with none and the result message says which names it kept.
+  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one. The reset discards everything the file held, including the top-level \`env:\`. No recording tool writes that header, so write it back by hand if the steps you record need one.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
 Whether this server writes that file depends on where your project is: co-located, it creates it and fails if the .argent/flows/ directory cannot be created or the file cannot be written; against a remote tool-server it writes nothing and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
@@ -146,6 +113,15 @@ costs the finish the cross-tree verdicts anchored to them.`,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const filePath = getFlowPath(params.project_root, params.name);
+    // The type emerges from the steps: a first `restart-app` becomes a leading
+    // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
+    // documents a fragment.
+    const flow: FlowFile = {
+      executionPrerequisite: params.executionPrerequisite ?? "",
+      steps: [],
+    };
+    validateFlow(flow);
+    const flowFile = serializeFlow(flow);
 
     // No probe (older client, direct invocation) means the caller shares this
     // filesystem — the pre-boundary assumption — so host persistence stands.
@@ -156,7 +132,7 @@ costs the finish the cross-tree verdicts anchored to them.`,
     // step from the take being discarded can neither slip in between the reset
     // and the swap nor land after both - it finds its session superseded and
     // fails.
-    const { savedTo, replaced, discardedSteps, flow, flowFile } = await withFlowFileLock(
+    const { savedTo, replaced, discardedSteps } = await withFlowFileLock(
       params.project_root,
       params.name,
       async () => {
@@ -180,20 +156,6 @@ costs the finish the cross-tree verdicts anchored to them.`,
               ? await countStepsOnDisk(replaced.filePath)
               : replaced.flow.steps.length;
 
-        // The type emerges from the steps: a first `restart-app` becomes a
-        // leading `launch` (flow-add-step) and makes it e2e; an
-        // executionPrerequisite documents a fragment. Built here, inside the
-        // lock, because the `env:` it keeps is read off the file this section
-        // is about to replace. Client mode has no file on this host to read.
-        const kept = persist === "host" ? await keptFlowEnv(filePath) : undefined;
-        const flow: FlowFile = {
-          executionPrerequisite: params.executionPrerequisite ?? "",
-          ...(kept ? { env: kept } : {}),
-          steps: [],
-        };
-        validateFlow(flow);
-        const flowFile = serializeFlow(flow);
-
         let savedTo: FlowSavedTo;
         if (persist === "host") {
           await writeNewFlowFile(filePath, flowFile);
@@ -208,20 +170,9 @@ costs the finish the cross-tree verdicts anchored to them.`,
           filePath,
           flow,
         });
-        return { savedTo, replaced, discardedSteps, flow, flowFile };
+        return { savedTo, replaced, discardedSteps };
       }
     );
-
-    // Said, not assumed: the reset destroys everything else in the file, so an
-    // agent that reads "reset to an empty flow" has no way to know the header
-    // it will record under survived. Names only — the file at `savedTo` and the
-    // returned `flowFile` both hold the values.
-    const keptNames = Object.keys(flow.env ?? {});
-    const keptEnv =
-      keptNames.length > 0
-        ? ` The flow-level \`env:\` already in the file is kept, so the steps you record run ` +
-          `under it: ${keptNames.join(", ")}.`
-        : "";
 
     // Recordings are keyed per flow file, so only a same-key restart replaces
     // anything; starting a *different* flow abandons nothing to report.
@@ -241,8 +192,7 @@ costs the finish the cross-tree verdicts anchored to them.`,
           ? "the previous take"
           : `the previous take (${discardedSteps} step${discardedSteps === 1 ? "" : "s"})`;
       return {
-        message:
-          `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset + keptEnv,
+        message: `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset,
         restarted: true,
         ...(discardedSteps === undefined ? {} : { discardedSteps }),
         flowFile,
@@ -251,7 +201,7 @@ costs the finish the cross-tree verdicts anchored to them.`,
     }
 
     return {
-      message: `Started recording "${params.name}" flow.${keptEnv}`,
+      message: `Started recording "${params.name}" flow`,
       flowFile,
       savedTo,
     };
