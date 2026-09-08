@@ -1009,8 +1009,10 @@ function never() {
 
 /**
  * The protocol carries no version field, so an absent `interpreter` means the
- * pre-2.7 shape — node. The loader resolves whichever runner sits beside the
- * compiled executor, so an older parent really can reach this file.
+ * shape the executor sent before bash mode existed - node. The loader resolves
+ * whichever runner sits beside the compiled executor, so an older parent really
+ * can reach this file; the day no installed argent still sends that shape, this
+ * default can go.
  */
 function parseRequest(raw) {
   if (typeof raw !== "object" || raw === null) return null;
