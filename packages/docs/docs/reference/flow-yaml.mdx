@@ -263,7 +263,7 @@ A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequi
 
 A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
 
-Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A remote iOS simulator uses the iOS key, so a cloud run compares against the baseline a local run of the same device model committed. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. Review each baseline before you commit it.
+Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It compares against the baseline that a local run of the same device model writes. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. Review each baseline before you commit it.
 
 Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
 
