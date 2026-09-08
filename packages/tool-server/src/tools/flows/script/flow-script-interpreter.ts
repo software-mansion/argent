@@ -118,13 +118,29 @@ export async function resolveBashInterpreter(
       : { path: configured };
   }
 
+  // Each rejection is kept, not just acted on. A host that HAS a bash which
+  // fails the run probe reached `notFoundMessage` otherwise, and that message
+  // is written for the case where nothing exists: it says to install bash,
+  // while `which bash` answers on the same host. The reason that would name the
+  // real problem existed here and was thrown away.
+  const rejected: string[] = [];
   for (const candidate of await bashSearchPath()) {
-    if (interpreterProblem(candidate)) continue;
-    if (await notBashProblem(candidate)) continue;
-    return { path: candidate };
+    const shape = interpreterProblem(candidate);
+    if (shape) {
+      // Only about a file that is really there. A fixed location this host
+      // simply lacks is not news - macOS has no `/usr/bin/bash` - and the WSL
+      // launcher is named by the message itself.
+      if (!shape.startsWith("is the WSL launcher") && fileExists(candidate)) {
+        rejected.push(`${candidate} ${shape}`);
+      }
+      continue;
+    }
+    const problem = await notBashProblem(candidate);
+    if (!problem) return { path: candidate };
+    rejected.push(`${candidate} ${problem}`);
   }
 
-  return { problem: notFoundMessage() };
+  return { problem: notFoundMessage(rejected) };
 }
 
 /**
@@ -336,6 +352,14 @@ function interpreterProblem(candidate: string): string | null {
   return null;
 }
 
+function fileExists(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function isUsableCandidate(candidate: string): boolean {
   return !underSystemRoot(candidate);
 }
@@ -429,13 +453,20 @@ async function fixedLocations(): Promise<string[]> {
   return candidates;
 }
 
-function notFoundMessage(): string {
+function notFoundMessage(rejected: readonly string[]): string {
   const looked =
     process.platform === "win32"
       ? "PATH (skipping the WSL launcher under %SystemRoot%) and Git for Windows' usual install locations, Scoop's included"
       : `PATH, ${POSIX_FIXED_LOCATIONS.join(" and ")}`;
   const install =
     process.platform === "win32" ? "Install Git for Windows, which ships bash.exe" : "Install bash";
+  if (rejected.length > 0) {
+    return (
+      `No bash this host offers could run the script: the executor looked at ${looked}, and ` +
+      `refused what it found — ${rejected.join("; ")}. Fix the candidate above, or set ` +
+      `${BASH_CONFIG_KEY} to the absolute path of a bash that answers.`
+    );
+  }
   return (
     `No bash was found on this host to run the script with: the executor looked at ${looked}. ` +
     `${install}, or set ${BASH_CONFIG_KEY} to an absolute path. The tool server's PATH is a ` +

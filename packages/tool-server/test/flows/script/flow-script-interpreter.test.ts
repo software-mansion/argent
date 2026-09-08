@@ -673,6 +673,25 @@ describe("no bash anywhere", () => {
     }
   );
 
+  // A host that HAS a bash which fails the probe reached the same "Install
+  // bash" sentence, while `which bash` answered on it. Both calls in the search
+  // loop compute a sentence, and both were used as predicates and thrown away.
+  it.skipIf(realPlatform === "win32")(
+    "names the candidate it refused rather than telling the host to install bash",
+    async () => {
+      const root = projectWith(undefined);
+      const stub = notBash(root);
+      execFileMock.mockReturnValue({ stdout: `${stub}\n`, stderr: "" });
+      hideFixedLocations = true;
+
+      const problem = (await resolveBashInterpreter(root)) as { problem: string };
+
+      expect(problem.problem).toContain(stub);
+      expect(problem.problem).toContain("is not a bash");
+      expect(problem.problem).not.toContain("Install bash");
+    }
+  );
+
   it("reports a spawn refusal naming what it looked at and each remedy", async () => {
     setPlatform("win32");
     const root = projectWith(undefined);
