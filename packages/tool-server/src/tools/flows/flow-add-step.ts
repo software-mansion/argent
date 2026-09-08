@@ -1353,8 +1353,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       try {
         ({ savedTo, stepCount } = await appendStepToFlow(session, step));
       } catch (err) {
-        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
-        const refused = err instanceof Error ? err.message : String(err);
         // A host-mode append re-parses the file, so the scan that refuses an
         // output reference sees what is ALREADY there as well — a step from an
         // earlier call, or the file's own top-level `env:`, both of which a
@@ -1362,6 +1360,27 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         // that would send the author back over a call whose args were clean —
         // and "fix the step named below" names no step when the refusal is
         // about the file's own `env:`.
+        //
+        // The re-parse refuses on two stages, not one, and only the output
+        // reference was answered. Every other `env:` fault — a reserved name, a
+        // non-string value, a tagged map, a name that is not one — arrives as
+        // `flow_file_parse` and reached the agent as a bare "Invalid flow file",
+        // AFTER the device action had already run. An agent reading that has no
+        // reason not to retry, and runs the action a second time. Both parse
+        // stages are read off the file BEFORE this step joins it, so neither can
+        // ever be this call's fault.
+        //
+        // `flow_file_validate` is left out because it is the one stage that
+        // says nothing either way: the append validates once inside the
+        // pre-push parse and again with the step pushed, so the same stage
+        // covers a defect that was already on disk and one this call just
+        // added. Re-wording it would blame the file for a leading `launch`
+        // this very call recorded. It stays as it was until the two are told
+        // apart.
+        const stage = getFailureSignal(err)?.failure_stage;
+        const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
+        if (stage !== "flow_output_reference" && !fromTheFile) throw err;
+        const refused = err instanceof Error ? err.message : String(err);
         throw wrapFailure(
           err,
           {
@@ -1370,7 +1389,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             failure_area: "tool_server",
             error_kind: "validation",
           },
-          holdsOutputReference(step)
+          !fromTheFile && holdsOutputReference(step)
             ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
                 `recorded. Check the call's changes before you retry. ${refused}`
             : `The \`${params.command}\` call ran, but something already in the flow file failed ` +

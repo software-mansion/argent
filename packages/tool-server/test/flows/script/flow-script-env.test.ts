@@ -582,6 +582,36 @@ describe("serialization", () => {
     await expect(rejection).rejects.toThrow(/unsupported template syntax/);
   });
 
+  it("says the call already ran when a PARSE-stage env fault refuses the append", async () => {
+    // The case above is the ONE stage the two recorders re-worded. Every other
+    // `env:` fault the same feature introduces — a reserved name, a non-string
+    // value — arrives from the header read as `flow_file_parse` and was
+    // rethrown as a bare "Invalid flow file", AFTER the device action had
+    // already run. An agent reading that has no reason not to retry, and runs
+    // the action a second time.
+    for (const [name, header] of [
+      ["parse-reserved", 'env:\n  NODE_OPTIONS: "--inspect"\nsteps: []\n'],
+      ["parse-number", "env:\n  RETRIES: 5\nsteps: []\n"],
+    ] as const) {
+      await flowStartRecordingTool.execute({}, { name, project_root: root });
+      await write(`.argent/flows/${name}.yaml`, header);
+
+      await expect(
+        flowInsertEchoTool.execute({}, { name, project_root: root, message: "note" })
+      ).rejects.toThrow(/The echo was not recorded\..*already in the file, not in this call/s);
+
+      const { registry } = mockRegistry({ booted: true });
+      await expect(
+        createFlowAddStepTool(registry).execute({}, {
+          name,
+          project_root: root,
+          command: "gesture-tap",
+          args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.5 }),
+        } as never)
+      ).rejects.toThrow(/call ran, but something already in the flow file failed validation/);
+    }
+  });
+
   it("keeps a checked-in `env:` when a STEP in the file is malformed", async () => {
     // The header was read through `parseFlow`, which ends in the steps and in
     // `validateFlow`, so a bogus key on one `echo` step took a perfectly good

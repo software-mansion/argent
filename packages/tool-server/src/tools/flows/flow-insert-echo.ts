@@ -59,7 +59,15 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
     try {
       ({ savedTo, stepCount } = await appendStepToFlow(session, step));
     } catch (err) {
-      if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+      // The re-parse refuses on two stages. `flow_output_reference` can be this
+      // call's own `message`; the two parse stages read the file BEFORE this
+      // step joins it, so a fault they name was already there — a reserved
+      // name, a non-string value, a tagged map. Those arrived as a bare
+      // "Invalid flow file", which says neither that the echo went unrecorded
+      // nor that the value is not this call's.
+      const stage = getFailureSignal(err)?.failure_stage;
+      const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
+      if (stage !== "flow_output_reference" && !fromTheFile) throw err;
       throw wrapFailure(
         err,
         {
@@ -74,7 +82,7 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
         // misattribution the wrapper exists to correct, pointed the other way.
         // {@link holdsOutputReference} is what `flow-add-step` asks to tell the
         // two apart.
-        (holdsOutputReference(step)
+        (!fromTheFile && holdsOutputReference(step)
           ? `The echo was not recorded: its own \`message\` failed validation. `
           : `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
             `already in the file, not in this call. `) +
