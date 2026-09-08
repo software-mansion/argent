@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The launcher captures STATE_DIR from `homedir()` at module load. Redirect
 // HOME to a per-file temp dir BEFORE the dynamic import runs so the entire

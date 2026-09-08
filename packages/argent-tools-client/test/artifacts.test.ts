@@ -12,7 +12,7 @@ import {
   ARTIFACT_MARKER,
   type ArtifactHandle,
 } from "../src/artifacts.js";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 function handle(id: string, filename: string, mimeType: string): ArtifactHandle {
   return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };

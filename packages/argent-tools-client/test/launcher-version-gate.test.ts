@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The version gate decides reuse-vs-respawn from the CURRENT on-disk bundle
 // version (the package.json above the bundle), not the caller's import-time

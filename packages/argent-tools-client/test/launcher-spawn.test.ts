@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // Same HOME-redirection pattern as launcher-state.test.ts so killToolServer
 // reads/writes the per-file isolated state directory and never touches the

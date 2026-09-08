@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The launcher captures STATE_DIR from `homedir()` at module load. Redirect
 // HOME to a per-file temp dir BEFORE the dynamic import runs so the entire

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { redirectHomeTo } from "./setup/home-redirect.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The reader pins `ps` to /bin or /usr/bin when either holds one. Hiding both
 // drops it to a bare `"ps"` resolved off PATH, which is what lets these tests
@@ -43,12 +43,15 @@ let ambientPath: string | undefined;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "argent-ps-stub-"));
+  // Captured before the fixture writes below: a throw between the mkdtemp and
+  // this line would leave afterAll calling an unassigned restorer, and stubDir
+  // never removed.
+  restoreHome = redirectHomeTo(stubDir);
+  ambientPath = process.env.PATH;
   writeFileSync(join(stubDir, "ps"), PS_STUB, "utf8");
   chmodSync(join(stubDir, "ps"), 0o755);
   bundlePath = join(stubDir, "tool-server.cjs");
   copyFileSync(FIXTURE_BUNDLE, bundlePath);
-  restoreHome = redirectHomeTo(stubDir);
-  ambientPath = process.env.PATH;
   // The stub dir first so `ps` resolves to it; node's own dir because
   // spawnToolsServer launches `node` off PATH. Neither holds a real `ps`.
   process.env.PATH = `${stubDir}:${dirname(process.execPath)}`;
