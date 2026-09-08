@@ -1275,9 +1275,9 @@ steps:
     currentFrame = () => undefined; // force the tree-only path
     // Three still reads set the verdict — two agreeing intervals is what it
     // takes — and everything after them moves, so the case needs a fourth read
-    // to show the movement. A healthy 6000ms wait serves about thirty; the
-    // assertion on `reads` below is what separates a starved run, which saw no
-    // movement to judge, from a latch that failed to clear.
+    // to show the movement. The wait is sized for a starved batch run rather
+    // than a healthy one, which serves sixty; the assertion on `reads` below
+    // separates a run that never saw movement from a latch that failed to clear.
     let reads = 0;
     currentTree = () => {
       reads += 1;
@@ -1287,7 +1287,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 6000, stableFor: 0 }
+  - await: { idle: true, timeout: 12000, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -1295,7 +1295,7 @@ steps:
       4
     );
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  }, 15_000);
+  }, 25_000);
 
   // H2: the same latch let a screen that had gone BLANK by the deadline report
   // ready. A blank tree is an observation, not a gap — it clears the verdict.
@@ -1312,7 +1312,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 6000, stableFor: 0 }
+  - await: { idle: true, timeout: 12000, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -1321,7 +1321,7 @@ steps:
       "reads served — under four, nothing went blank to be judged"
     ).toBeGreaterThanOrEqual(4);
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  }, 15_000);
+  }, 25_000);
 
   // H3: bounding the tree read by the remaining budget made the LAST read
   // time out on every run, which turned every honest timeout into an
@@ -1330,28 +1330,35 @@ steps:
   // to observe it with, and a read that ran out of step budget is the step
   // ending, not the source failing.
   it("still warns, rather than erroring, when a slow tree source keeps changing", async () => {
-    // 300ms per read, 500ms a round with the poll: 3200ms fits six whole rounds
-    // and leaves the seventh read 200ms, less than this source needs. So the
-    // LAST read runs out of step budget — the step ending, not the source
-    // failing — while the six before it clear the three-read floor under which
-    // a step reports what it could not see instead of a verdict, with room for
-    // a loaded suite to stretch every round. Earlier reads saw a moving screen,
-    // so the verdict is theirs, and the budget the last read was given is what
-    // separates this from a source that wedged (see the case above).
+    // 300ms per read, 500ms a round with the poll, and a budget that leaves the
+    // closing read less than the 300ms it needs — so the LAST read runs out of
+    // step budget, which is the step ending rather than the source failing. The
+    // reads before it carry the verdict, and they have to clear the three-read
+    // floor below which a step reports what it could not see instead: 6200ms
+    // serves twelve when the machine is idle, and the assertion on `answered`
+    // below is what tells a starved run apart from a lost warning.
     treeDelayMs = 300;
     let tick = 0;
-    currentTree = () => screenWith(`frame ${tick++}`);
+    let answered = 0;
+    currentTree = () => {
+      answered += 1;
+      return screenWith(`frame ${tick++}`);
+    };
     await writeFlow(
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 3200, stableFor: 0 }
+  - await: { idle: true, timeout: 6200, stableFor: 0 }
 `
     );
     const r = await run("ready");
+    expect(
+      answered,
+      "reads answered — under three, no verdict was reachable"
+    ).toBeGreaterThanOrEqual(3);
     expect(r.steps.at(-1)!.status).toBe("pass");
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  });
+  }, 20_000);
 
   // A step whose budget is spent mid-settle must not invent a verdict out of
   // what it did not manage to observe. It has three ways to do that — blaming
