@@ -512,6 +512,17 @@ describe("scripts.bash — schema entry", () => {
     expect(getConfigValueByKey("scripts.bash", opts())).toBe(projectBash);
   });
 
+  // Both host-specific strings are printed back as a value to type, so a path
+  // this host does not have is a value that reproduces the error it is offered
+  // to fix - and `asAbsolutePath` never checks existence, so it is written and
+  // only fails later, at every `.sh` step.
+  it.runIf(process.platform !== "win32")("offers an example this host really has", () => {
+    const def = getConfigDefinition("scripts.bash")!;
+
+    expect(fs.existsSync(def.example!)).toBe(true);
+    expect(describeExpectedValue(def)).toContain(def.example);
+  });
+
   // The refusal says WHICH host the shape is judged against, because the write
   // gate and the resolver both apply the running platform's rules and the key
   // lands in a project file a mixed-OS team shares.

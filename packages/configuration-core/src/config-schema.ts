@@ -284,15 +284,17 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     validateWrite: asAbsolutePath,
     expected:
       "an absolute path to a bash executable, spelled the way the host running the tool server " +
-      "spells one (`/usr/bin/bash` on macOS and Linux, `C:\\...\\bash.exe` on Windows)",
+      "spells one (`/bin/bash` on macOS and Linux, `C:\\...\\bash.exe` on Windows)",
     merge: "prioritize-local",
     // Host-specific for the same reason the check above is: the example is
     // printed back as a command to run, and one this host would refuse is a
-    // command that reproduces the error it is offered to fix.
-    example:
-      process.platform === "win32"
-        ? "C:\\Program Files\\Git\\bin\\bash.exe"
-        : "/opt/homebrew/bin/bash",
+    // command that reproduces the error it is offered to fix. So both strings
+    // name the one path every host of that family has: macOS ships no
+    // `/usr/bin/bash` at all, and `/opt/homebrew/bin/bash` exists only on an
+    // arm64 Mac with Homebrew. `asAbsolutePath` checks shape and never
+    // existence, so a spelling this host lacks is written and only fails later,
+    // at every `.sh` step - and a project file travels to teammates.
+    example: process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash",
   },
 ] as const;
 
