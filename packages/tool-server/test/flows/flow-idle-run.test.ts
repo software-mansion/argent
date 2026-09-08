@@ -1330,13 +1330,16 @@ steps:
   // to observe it with, and a read that ran out of step budget is the step
   // ending, not the source failing.
   it("still warns, rather than erroring, when a slow tree source keeps changing", async () => {
-    // 300ms per read, 500ms a round with the poll, and a budget that leaves the
-    // closing read less than the 300ms it needs — so the LAST read runs out of
-    // step budget, which is the step ending rather than the source failing. The
-    // reads before it carry the verdict, and they have to clear the three-read
-    // floor below which a step reports what it could not see instead: 6200ms
-    // serves twelve when the machine is idle, and the assertion on `answered`
-    // below is what tells a starved run apart from a lost warning.
+    // 300ms per read, 500ms a round with the poll: 3200ms fits six whole rounds
+    // and leaves the seventh read 200ms, less than this source needs. So the
+    // LAST read runs out of step budget — the step ending, not the source
+    // failing — while the six before it clear the three-read floor under which
+    // a step reports what it could not see instead of a verdict. The budget is
+    // counted in whole rounds and cannot simply be widened: each round overruns
+    // 500ms a little, and over twice as many rounds that drift is enough to
+    // hand the closing read a budget it fails in rather than ends on. The
+    // assertion on `answered` below is what tells a starved run, which never
+    // reached a verdict, apart from a lost warning.
     treeDelayMs = 300;
     let tick = 0;
     let answered = 0;
@@ -1348,7 +1351,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 6200, stableFor: 0 }
+  - await: { idle: true, timeout: 3200, stableFor: 0 }
 `
     );
     const r = await run("ready");
