@@ -581,6 +581,26 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
   }, 30_000);
 
+  // A fully CRLF script reaches the same place, not only a mixed-ending one: it
+  // dies early only when it HAS a `set -euo pipefail` line, and this one does
+  // not. It runs to completion, leaves the stray sibling and exits 0.
+  it("refuses a wholly CRLF script that ran to the end and exited 0", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "crlf-whole.sh",
+      "printf '%s' '{\"seeded\":true}' > \"$ARGENT_OUTPUT\"\r\n"
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+    });
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("CRLF");
+    expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
+  }, 30_000);
+
   // The same stray sibling on the non-zero exit path, which is the only path
   // that ever reads `$ARGENT_REASON`. The author whose script DID explain
   // itself got the bare exit line - no reason text, no note, and no CRLF hint,

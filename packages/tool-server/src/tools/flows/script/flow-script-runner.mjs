@@ -530,9 +530,15 @@ function bashOutcome(request, code, signal) {
  * one with a carriage return after it.
  *
  * Asked only where the document is missing or unchanged, because this explains
- * THAT and nothing else. A stray sibling beside a document the script really
- * wrote is not this, and a mixed-ending script is the only kind that ever gets
- * here: a fully CRLF one dies at `set -euo pipefail\r` with exit 2.
+ * THAT and nothing else: a stray sibling beside a document the script really
+ * wrote is not this.
+ *
+ * A fully CRLF script reaches this as readily as a mixed-ending one. It dies
+ * early only when it HAS a `set -euo pipefail\r` line - and what that costs is
+ * the bash's own: exit 2 under GNU bash 5.3 (`set: pipefail: invalid option
+ * name`) and exit 1 under the Apple bash 3.2 the docs point macOS users at.
+ * Without such a line it runs to completion, leaves the stray sibling and exits
+ * 0, which is exactly the case this function is for.
  */
 function carriageReturnProblem(request) {
   for (const [name, file] of [
