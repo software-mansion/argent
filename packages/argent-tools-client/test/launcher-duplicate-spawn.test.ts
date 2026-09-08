@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { redirectHomeTo } from "./setup/home-redirect.js";
 
 // Regression coverage for the "two tool-servers alive at once after an nvm
 // node-version switch" bug. Switching node versions makes the host relaunch
@@ -16,6 +17,7 @@ import { spawn } from "node:child_process";
 // real ~/.argent.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 
 const FAKE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
 
@@ -27,11 +29,7 @@ const fakePaths = (): import("../src/launcher.js").ToolsServerPaths => ({
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-dup-test-"));
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   expect(existsSync(FAKE_BUNDLE)).toBe(true);
@@ -42,6 +40,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 

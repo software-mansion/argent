@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { redirectHomeTo } from "./setup/home-redirect.js";
 
 // The reader pins `ps` to /bin or /usr/bin when either holds one. Hiding both
 // drops it to a bare `"ps"` resolved off PATH, which is what lets these tests
@@ -37,7 +38,8 @@ const FIXTURE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
 let launcher: typeof import("../src/launcher.js");
 let stubDir: string;
 let bundlePath: string;
-const ambient: Record<string, string | undefined> = {};
+let restoreHome: () => void;
+let ambientPath: string | undefined;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "argent-ps-stub-"));
@@ -45,14 +47,8 @@ beforeAll(async () => {
   chmodSync(join(stubDir, "ps"), 0o755);
   bundlePath = join(stubDir, "tool-server.cjs");
   copyFileSync(FIXTURE_BUNDLE, bundlePath);
-  // Captured for afterAll, which puts them back before deleting stubDir —
-  // anything left pointing at it resolves to a directory that is gone.
-  for (const name of ["HOME", "USERPROFILE", "PATH"]) ambient[name] = process.env[name];
-  // os.homedir() — which STATE_DIR is built from — reads USERPROFILE on Windows
-  // and HOME elsewhere, so pin both or the redirect is inert there and these
-  // tests operate on the real ~/.argent.
-  process.env.HOME = stubDir;
-  process.env.USERPROFILE = stubDir;
+  restoreHome = redirectHomeTo(stubDir);
+  ambientPath = process.env.PATH;
   // The stub dir first so `ps` resolves to it; node's own dir because
   // spawnToolsServer launches `node` off PATH. Neither holds a real `ps`.
   process.env.PATH = `${stubDir}:${dirname(process.execPath)}`;
@@ -73,10 +69,11 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  for (const [name, value] of Object.entries(ambient)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
+  // Both before the rmSync: anything still pointing at stubDir resolves to a
+  // directory that is gone.
+  restoreHome();
+  if (ambientPath === undefined) delete process.env.PATH;
+  else process.env.PATH = ambientPath;
   rmSync(stubDir, { recursive: true, force: true });
 });
 
