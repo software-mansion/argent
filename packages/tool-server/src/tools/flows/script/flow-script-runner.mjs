@@ -609,6 +609,14 @@ function readOutputFile(file, maxOutputBytes) {
     // pass, with the corrupted value flowing into flow state for later steps to
     // read and compare against. A `.mjs` step cannot reach that state, because
     // there the document is a live JavaScript value.
+    //
+    // It is also what puts the two sides of the size bound in the same unit.
+    // This read is bounded in FILE bytes and the parent bounds the document in
+    // post-decode UTF-8 bytes, and those agree only for text that decodes
+    // unchanged: a replacement character is three bytes where the input was
+    // one, so a file accepted here at exactly the limit was over it by the time
+    // the parent measured, and the step was refused for a size the script did
+    // not write.
     try {
       return { json: STRICT_UTF8.decode(buffer.subarray(0, read)) };
     } catch {

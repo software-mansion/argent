@@ -319,6 +319,33 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("not valid UTF-8");
   }, 30_000);
 
+  // The same decode is what makes the two sides of the size bound agree: the
+  // runner bounds what it reads in FILE bytes and the parent bounds the
+  // document it accepts in post-decode UTF-8 bytes. Those are equal only for
+  // text that decodes unchanged - a replacement character is three bytes where
+  // the input was one - so a file the runner accepted at exactly the limit was
+  // over it by the time the parent measured, and the step was refused for a
+  // size the script did not write.
+  it("refuses a document over the limit only by its own replacement characters", async () => {
+    const ws = workspace();
+    // Exactly the limit in FILE bytes, every padding byte invalid on its own:
+    // decoding with replacement doubles the document past the parent's bound.
+    const padding = SCRIPT_MAX_OUTPUT_BYTES - 10;
+    const result = await runBash(
+      ws,
+      "at-limit-invalid",
+      `set -euo pipefail
+       printf '{"big":"' > "$ARGENT_OUTPUT.t"
+       head -c ${padding} /dev/zero | LC_ALL=C tr '\\0' '\\377' >> "$ARGENT_OUTPUT.t"
+       printf '"}' >> "$ARGENT_OUTPUT.t"
+       mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
+    );
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("not valid UTF-8");
+    expect(result.failure?.message).not.toContain("limit");
+  }, 60_000);
+
   // The read is bounded rather than `stat`-ed first: a `stat` would describe a
   // file a descendant is still growing, and leave the read itself unbounded.
   // Both sides of the boundary, at the exact byte: the runner reads
