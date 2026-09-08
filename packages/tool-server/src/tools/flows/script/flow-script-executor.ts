@@ -594,7 +594,22 @@ export class FlowScriptExecutor {
       // a probe that inherited it refused a bash the step would have run under,
       // and an arbitrary executable named `bash` was handed the tool server's
       // token, port and secrets on the way.
-      const found = await resolveBashInterpreter(request.projectRoot ?? request.flowDir, env);
+      // The request's abort too, because this lookup is the one place a `.sh`
+      // step waits before it has a process to time out: each candidate costs up
+      // to the probe's own timeout plus its force grace, the step's declared
+      // limit bounds none of it, and a flow of N bash steps was un-cancellable
+      // for about six seconds each.
+      const found = await resolveBashInterpreter(
+        request.projectRoot ?? request.flowDir,
+        env,
+        request.signal
+      );
+      if ("cancelled" in found) {
+        return emptyResult(
+          { kind: "cancelled", message: "The run was cancelled before the script started." },
+          { notes, durationMs: Date.now() - startedAt }
+        );
+      }
       if (!("path" in found)) {
         return emptyResult(
           { kind: "spawn", message: found.problem },

@@ -689,6 +689,68 @@ describe("a candidate that will not answer", () => {
     expect(elapsed).toBeLessThan(5_000);
   });
 
+  // This lookup is the one place a `.sh` step waits before it has a process to
+  // time out, so an abort raised across it was not observed for the probe's own
+  // timeout plus its force grace - about six seconds per candidate, whatever
+  // the step declared. A flow of N bash steps was un-cancellable for 6N
+  // seconds, against a 30 s client budget.
+  onPosix(
+    "stops probing when the request is cancelled",
+    async () => {
+      const root = projectWith(undefined);
+      const stubborn = nodeExecutable(
+        root,
+        "bash",
+        'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
+      );
+      fs.writeFileSync(
+        path.join(root, ".argent", "config.json"),
+        JSON.stringify({ scripts: { bash: stubborn } })
+      );
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(), 300);
+
+      const startedAt = Date.now();
+      const found = await resolveBashInterpreter(root, process.env, cancel.signal);
+      const elapsed = Date.now() - startedAt;
+
+      expect(found).toEqual({ cancelled: true });
+      expect(elapsed).toBeLessThan(3_000);
+    },
+    30_000
+  );
+
+  // The candidate is stopped with everything it started. A shim that
+  // backgrounds a job left that job re-parented to pid 1 and running after the
+  // call returned - and after the flow run, and after the tool server.
+  onPosix(
+    "stops what the candidate started, not only the candidate",
+    async () => {
+      const root = projectWith(undefined);
+      const marker = path.join(root, "grandchild.pid");
+      const shim = nodeExecutable(
+        root,
+        "bash",
+        'const child = require("node:child_process").spawn(process.execPath,\n' +
+          '  ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore", detached: false });\n' +
+          `require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(child.pid));\n` +
+          'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
+      );
+      fs.writeFileSync(
+        path.join(root, ".argent", "config.json"),
+        JSON.stringify({ scripts: { bash: shim } })
+      );
+
+      await resolveBashInterpreter(root);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const grandchild = Number(fs.readFileSync(marker, "utf8"));
+      expect(Number.isFinite(grandchild)).toBe(true);
+      expect(() => process.kill(grandchild, 0)).toThrow();
+    },
+    30_000
+  );
+
   onPosix(
     "answers when the candidate exits, not when the last holder of its pipe does",
     async () => {

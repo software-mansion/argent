@@ -104,11 +104,15 @@ function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined):
  */
 export async function resolveBashInterpreter(
   anchor: string | undefined,
-  probeEnv: NodeJS.ProcessEnv = process.env
-): Promise<{ path: string } | { problem: string }> {
+  probeEnv: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal
+): Promise<{ path: string } | { problem: string } | { cancelled: true }> {
+  if (signal?.aborted) return { cancelled: true };
   const configured = projectAnchoredConfigValue<string>(BASH_CONFIG_KEY, anchor);
   if (configured !== undefined) {
-    const problem = interpreterProblem(configured) ?? (await notBashProblem(configured, probeEnv));
+    const problem =
+      interpreterProblem(configured) ?? (await notBashProblem(configured, probeEnv, signal));
+    if (signal?.aborted) return { cancelled: true };
     const source = configuredSource(configured, anchor);
     return problem
       ? {
@@ -136,7 +140,8 @@ export async function resolveBashInterpreter(
       }
       continue;
     }
-    const problem = await notBashProblem(candidate, probeEnv);
+    const problem = await notBashProblem(candidate, probeEnv, signal);
+    if (signal?.aborted) return { cancelled: true };
     if (!problem) return { path: candidate };
     rejected.push(`${candidate} ${problem}`);
   }
@@ -162,9 +167,10 @@ export async function resolveBashInterpreter(
  */
 async function notBashProblem(
   candidate: string,
-  probeEnv: NodeJS.ProcessEnv
+  probeEnv: NodeJS.ProcessEnv,
+  signal?: AbortSignal
 ): Promise<string | null> {
-  const answer = await askForBashVersion(candidate, probeEnv);
+  const answer = await askForBashVersion(candidate, probeEnv, signal);
   if (BASH_PROBE_MARKER.test(answer.stdout)) return null;
   if (answer.signal) {
     // Which of the two happened, because the remedy is not the same one. A
@@ -205,7 +211,8 @@ async function notBashProblem(
  */
 function askForBashVersion(
   candidate: string,
-  probeEnv: NodeJS.ProcessEnv
+  probeEnv: NodeJS.ProcessEnv,
+  signal_?: AbortSignal
 ): Promise<{
   stdout: string;
   signal: NodeJS.Signals | null;
@@ -228,6 +235,11 @@ function askForBashVersion(
         // script's reach.
         env: probeEnv,
         stdio: ["ignore", "pipe", "ignore"],
+        // A group of the candidate's own on POSIX, so the stops below reach
+        // what IT started. A shim that backgrounds a job was re-parented to pid
+        // 1 and outlived the whole flow run otherwise; on Windows there is no
+        // group and `taskkill /t` is what walks the tree.
+        detached: process.platform !== "win32",
         windowsHide: true,
       });
     } catch (err) {
@@ -243,6 +255,7 @@ function askForBashVersion(
       settled = true;
       const stoppedByCheck = killedWith !== null;
       for (const timer of timers) clearTimeout(timer);
+      signal_?.removeEventListener("abort", onAbort);
       // This end of the pipe, and the handle behind it: a candidate that is
       // still running is one nothing waits for any more, and either would keep
       // the tool server's own loop alive for it.
@@ -250,6 +263,17 @@ function askForBashVersion(
       child.unref();
       resolve({ stdout, signal, stoppedByCheck, ...(failure === undefined ? {} : { failure }) });
     };
+    // The abort the request carries, which this lookup is the one place a `.sh`
+    // step can wait before it has a process to time out. Without it a flow of N
+    // bash steps was un-cancellable for about six seconds each - the probe's
+    // own timeout plus its force grace, paid per candidate - which matters
+    // against a 30 s client budget.
+    const onAbort = () => {
+      killedWith = "SIGKILL";
+      stopCandidate(child, "SIGKILL");
+      answer("SIGKILL");
+    };
+    signal_?.addEventListener("abort", onAbort, { once: true });
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       stdout = (stdout + chunk).slice(-BASH_PROBE_MAX_CHARS);
@@ -263,17 +287,38 @@ function askForBashVersion(
     timers.push(
       setTimeout(() => {
         killedWith = "SIGTERM";
-        child.kill("SIGTERM");
+        stopCandidate(child, "SIGTERM");
       }, BASH_PROBE_TIMEOUT_MS)
     );
     timers.push(
       setTimeout(() => {
         killedWith = "SIGKILL";
-        child.kill("SIGKILL");
+        stopCandidate(child, "SIGKILL");
         answer("SIGKILL");
       }, BASH_PROBE_TIMEOUT_MS + BASH_PROBE_FORCE_GRACE_MS)
     );
   });
+}
+
+/**
+ * The candidate and everything it started. The group first, because a shim's
+ * own child is the process that outlived the call; the candidate alone after
+ * it, for a platform or a moment where there is no group to name.
+ */
+function stopCandidate(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid !== undefined && process.platform !== "win32") {
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      // The group is gone, or was never led by this child.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Already reaped.
+  }
 }
 
 function firstLine(err: unknown): string {
