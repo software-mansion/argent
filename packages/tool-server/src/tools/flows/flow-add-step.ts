@@ -15,6 +15,7 @@ import {
   appendStepToFlow,
   holdsOutputReference,
   appIdForPlatform,
+  authoringPlatform,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -37,7 +38,7 @@ import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke"
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -101,14 +102,31 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
 }
 
 function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
-  const expected = REPLAY_TREE_SOURCES[platform];
+  // Keyed by authoring platform: a remote simulator reads the same iOS full
+  // hierarchy a local one does, so it earns the same caveat.
+  const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 
 // `resolveDevice` classifies the id by shape and never throws, so no guard.
+// The clauses below name the tree an author reads, so this is the AUTHORING
+// platform: a remote simulator is an iOS simulator reached over a tunnel, and
+// both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
-  return typeof udid === "string" ? resolveDevice(udid).platform : undefined;
+  return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
+}
+
+/**
+ * Whether the runner has a tree to read on this device at all — the real
+ * platform, not the authoring one, because this asks about a machine.
+ *
+ * An indeterminate verdict means the source did not answer, and the repair
+ * turns on which kind of silence it was: a source that is DOWN can be brought
+ * back, one that does not exist cannot.
+ */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
 }
 
 /**
@@ -390,6 +408,10 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 // would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
+  // Every remedy below repairs a source that is down. A platform with no flow
+  // tree source at all is not down: no relaunch can produce a tree there, and
+  // "once that tree source is back" is nonsense for one that never left.
+  if (!hasRunnerTree(udid)) return "";
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
     "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +

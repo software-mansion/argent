@@ -2219,11 +2219,10 @@ export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
  * `platform` run param) and service refs / transports all keep the real
  * platform.
  *
- * Nor to the recorder's post-step advice in flow-add-step, which reads the
- * platform to name a repair: `ios-remote` has no flow tree source at all
- * (`supportsFlowTree`), so folding it there would quote iOS advice — "relaunch
- * the app" — for a source that is structurally absent rather than down. Fold it
- * there once that source exists.
+ * One caution where it IS applied: the recorder's advice in flow-add-step also
+ * names a REPAIR, and a repair is a machine question. `ios-remote` has no flow
+ * tree source yet (`supportsFlowTree`), so a source that never existed must not
+ * be offered the remedy for one that is merely down.
  */
 export function authoringPlatform(platform: string): string {
   return platform === "ios-remote" ? "ios" : platform;
