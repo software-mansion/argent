@@ -1223,7 +1223,7 @@ export function createRunFlowTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved flow — a YAML script of UI steps — end to end against a booted device. Use when
+    description: `Run a saved YAML flow end to end. Use when
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author a flow use flow-start-recording. Pass
 exactly one flow source: name (under project_root) or flow_path.
