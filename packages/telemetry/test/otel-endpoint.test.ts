@@ -238,10 +238,9 @@ describe("otel endpoint invariance", () => {
 
   it("leaves a host application's diag logger alone when debug is off", () => {
     // Routing the SDK's diagnostics into argent's debug channel means taking
-    // over a PROCESS-GLOBAL logger, in a package that ships inside other
-    // people's processes. Confinement to ARGENT_TELEMETRY_DEBUG is the whole
-    // reason that is acceptable, so a normal run has to leave the channel with
-    // whoever already owned it.
+    // over a PROCESS-GLOBAL logger. Confinement to ARGENT_TELEMETRY_DEBUG is
+    // what the source calls the reason that is acceptable, so a normal run has
+    // to leave the channel with whoever already owned it.
     const restoreEnv = snapshotEnv(["ARGENT_TELEMETRY_DEBUG"]);
     delete process.env.ARGENT_TELEMETRY_DEBUG;
     const host: string[] = [];

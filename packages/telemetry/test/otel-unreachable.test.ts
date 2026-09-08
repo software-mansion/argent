@@ -265,8 +265,8 @@ describe("a collector that cannot take the batch", () => {
     // The transport retries only while the next backoff still fits in what is
     // left of timeoutMillis, and draws that backoff from 1000ms +/-20% jitter.
     // Left random, whether the retry happens at all is a coin flip on the first
-    // round trip: at 1200ms it needs the trip under 300ms, and a loaded runner
-    // reaches that (measured: a 610ms trip, 1 failure in 40 runs at load 450+).
+    // round trip: at 1200ms it needs the trip under 300ms, which a loaded runner
+    // misses (measured: a 610ms trip, 1 failure in 40 runs at load 450+).
     // Pinned to the low draw, the retry is a function of the round trip alone
     // and fits until 700ms - and the second backoff, 1200ms against at most
     // 700ms left, still cannot fire, so two requests stays exact.

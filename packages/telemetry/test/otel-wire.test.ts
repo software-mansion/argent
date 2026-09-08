@@ -243,19 +243,18 @@ describe("the OTLP request Argent sends", () => {
   }, 15_000);
 
   it("sends both batches of one drain over a single connection", async () => {
-    // The behavioural half of keepAlive. Supplying httpAgentOptions at all
-    // replaces the agent the SDK would otherwise build, so keepAlive has to be
-    // restated or every request pays a fresh handshake - a TLS one against the
-    // production endpoint. The agent's own timeout reaps an idle socket at
-    // EXPORT_TIMEOUT_MS, so reuse spans the batches of one drain but not the 10s
-    // cadence; one drain is what this measures.
+    // The behavioural half of the keepAlive createExporter restates; the reason
+    // it has to be restated is there. The agent reaps an idle socket at its own
+    // EXPORT_TIMEOUT_MS, so the batches of one drain are the only window where
+    // reuse is observable at all.
     const events = Array.from({ length: 25 }, (_, index) => ({
       event: `tool:invoke:${index}`,
       attributes: {},
     }));
     await exportRecords(capture.url, events);
 
-    expect(capture.requests.length).toBeGreaterThan(1);
-    expect(new Set(capture.requests.map((request) => request.connection)).size).toBe(1);
+    // The ids, not their cardinality: an accept counter that never ran would
+    // report a single connection too, by reporting the same nothing twice.
+    expect(capture.requests.map((request) => request.connection)).toEqual([1, 1]);
   }, 15_000);
 });
