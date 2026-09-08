@@ -1275,9 +1275,12 @@ steps:
     currentFrame = () => undefined; // force the tree-only path
     // Three still reads set the verdict — two agreeing intervals is what it
     // takes — and everything after them moves, so the case needs a fourth read
-    // to show the movement. The wait is sized for a starved batch run rather
-    // than a healthy one, which serves sixty; the assertion on `reads` below
-    // separates a run that never saw movement from a latch that failed to clear.
+    // to show the movement. 6000ms serves about thirty when the machine is
+    // idle and still four when a batch run stretches every round; the
+    // assertion on `reads` below separates a run that never saw movement from
+    // a latch that failed to clear. It stops there because a longer wait here
+    // starves the budget-tail case below, which needs its own reads inside a
+    // 2000ms window.
     let reads = 0;
     currentTree = () => {
       reads += 1;
@@ -1287,7 +1290,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 12000, stableFor: 0 }
+  - await: { idle: true, timeout: 6000, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -1312,7 +1315,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 12000, stableFor: 0 }
+  - await: { idle: true, timeout: 6000, stableFor: 0 }
 `
     );
     const r = await run("ready");
