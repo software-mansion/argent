@@ -351,7 +351,8 @@ Rules for the script file:
 
 - **Use LF line endings.** The usual CRLF symptom is `$'\r': command not found` and exit code 127. Add `*.sh text eol=lf` to `.gitattributes`
 - **Commands resolve against the PATH of the tool-server**, not against the PATH of your shell. A command that is absent from that PATH exits 127. Restart the tool-server after you change the PATH. On Windows, the bash of Git for Windows puts its own directories first, so `curl` and `sed` resolve to its copies
-- **A background job ends with the step.** A job survives only after `setsid`, and Argent never stops a `setsid` job. Do not reap jobs with `trap 'kill 0' EXIT`: `kill 0` also kills bash, and the step fails
+- **A background job ends with the step.** Argent stops the process group of the step, which holds bash and every job bash started. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job, so stop it yourself. `setsid` is absent on macOS
+- **Do not reap jobs with `trap 'kill 0' EXIT`.** `kill 0` also kills bash, and the step fails. Signal the pid of each job instead
 
 ## The `argent flow` command
 
