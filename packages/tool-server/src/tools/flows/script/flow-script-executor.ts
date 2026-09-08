@@ -1452,19 +1452,34 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
  */
 function encodedSpellings(value: string): string[] {
   const spellings: string[] = [];
-  // The body a JSON encoder writes, which is also `util.inspect`'s
-  // double-quoted form; then its single-quoted form, which is what inspect
-  // prefers and differs in exactly the two quotes.
-  const json = JSON.stringify(value).slice(1, -1);
-  spellings.push(json, json.replace(/\\"/g, '"').replace(/'/g, "\\'"));
+  spellings.push(...quotedSpellings(value));
   try {
     spellings.push(encodeURIComponent(value));
     spellings.push(new URLSearchParams([["", value]]).toString().slice(1));
   } catch {
     // A lone surrogate. The raw value and every other spelling still stand.
   }
-  if (value.includes("\n")) spellings.push(...value.split("\n"));
+  // Each line RAW and escaped alike. `util.inspect` picks the quote per chunk
+  // and escapes the rest, so a line holding anything its `strEscape` rewrites —
+  // a trailing `\r` from CRLF is the ordinary case, and a Windows-authored PEM
+  // has one on every line but the last — never matches its raw spelling. The
+  // escaped set is a C0 or C1 control, a backslash, a lone surrogate, and an
+  // apostrophe on a line that also holds both other quotes; a line free of all
+  // of them is why the raw spelling covers LF-only values today.
+  if (value.includes("\n")) {
+    for (const line of value.split("\n")) spellings.push(line, ...quotedSpellings(line));
+  }
   return spellings;
+}
+
+/**
+ * The body a JSON encoder writes, which is also `util.inspect`'s double-quoted
+ * form; then its single-quoted form, which is what inspect prefers and differs
+ * in exactly the two quotes.
+ */
+function quotedSpellings(text: string): string[] {
+  const json = JSON.stringify(text).slice(1, -1);
+  return [json, json.replace(/\\"/g, '"').replace(/'/g, "\\'")];
 }
 
 /**
