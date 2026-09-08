@@ -313,3 +313,12 @@ export function getConstructedClient(): TelemetryClient | null {
 export function resetClient(): void {
   client = undefined;
 }
+
+/**
+ * The diag latch is process-global and one-way, so a test that drives
+ * installDiagLogger has to start from an uninstalled state - otherwise what it
+ * observes depends on which earlier test built a client first.
+ */
+export function resetDiagLoggerForTest(): void {
+  diagLoggerInstalled = false;
+}

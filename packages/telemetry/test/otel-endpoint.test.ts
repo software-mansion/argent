@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { diag, DiagLogLevel } from "@opentelemetry/api";
-import { OTLP_LOGS_ENDPOINT, getClient, resetClient, resolveConfig } from "../src/otel.js";
+import {
+  OTLP_LOGS_ENDPOINT,
+  getClient,
+  resetClient,
+  resetDiagLoggerForTest,
+  resolveConfig,
+} from "../src/otel.js";
 import { snapshotEnv } from "./helpers.js";
 
 // Mock the OpenTelemetry Logs SDK so constructing the client is cheap and the
@@ -243,14 +249,19 @@ describe("otel endpoint invariance", () => {
     // to leave the channel with whoever already owned it.
     const restoreEnv = snapshotEnv(["ARGENT_TELEMETRY_DEBUG"]);
     delete process.env.ARGENT_TELEMETRY_DEBUG;
+    resetDiagLoggerForTest();
     const host: string[] = [];
     const record = (message: string): void => void host.push(message);
     // WARN, not ALL: the API narrates its own global registration at debug,
     // while the takeover this watches for is announced into the outgoing logger
     // at warn - so a swap fails this twice, on the announcement and on the probe.
+    // suppressOverrideMessage silences only the pair this call itself would
+    // emit, which a debug-enabled environment makes non-empty by leaving an
+    // earlier test's logger installed. argent's own setLogger does not pass it,
+    // so the announcement that would catch a takeover still arrives.
     diag.setLogger(
       { error: record, warn: record, info: record, debug: record, verbose: record },
-      DiagLogLevel.WARN
+      { logLevel: DiagLogLevel.WARN, suppressOverrideMessage: true }
     );
 
     try {
@@ -259,6 +270,41 @@ describe("otel endpoint invariance", () => {
       expect(host).toEqual(["host still owns the channel"]);
     } finally {
       diag.disable();
+      resetDiagLoggerForTest();
+      restoreEnv();
+    }
+  });
+
+  it("takes the channel over when debug is on, or the flag buys nothing", () => {
+    // The other half of the same guard: confinement is only worth asserting if
+    // the thing being confined happens at all. Without it ARGENT_TELEMETRY_DEBUG
+    // prints the payload argent meant to send and gives no way to find out
+    // whether it arrived.
+    const restoreEnv = snapshotEnv(["ARGENT_TELEMETRY_DEBUG"]);
+    process.env.ARGENT_TELEMETRY_DEBUG = "1";
+    resetDiagLoggerForTest();
+    const host: string[] = [];
+    diag.setLogger(
+      {
+        error: (message) => void host.push(String(message)),
+        warn: (message) => void host.push(String(message)),
+        info: () => {},
+        debug: () => {},
+        verbose: () => {},
+      },
+      { logLevel: DiagLogLevel.WARN, suppressOverrideMessage: true }
+    );
+
+    try {
+      getClient();
+      // The handover announcement arrives here, at the outgoing logger; the
+      // probe after it does not, because the channel is argent's by then.
+      expect(host).toEqual([expect.stringContaining("Current logger will be overwritten")]);
+      diag.warn("host no longer owns the channel");
+      expect(host).toHaveLength(1);
+    } finally {
+      diag.disable();
+      resetDiagLoggerForTest();
       restoreEnv();
     }
   });
