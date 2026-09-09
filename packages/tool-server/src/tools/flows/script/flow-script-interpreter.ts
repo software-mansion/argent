@@ -41,8 +41,10 @@ const BASH_PROBE_TIMEOUT_MS = 5_000;
  * killed. `spawn`'s own `timeout` option sends one signal and never escalates,
  * so a candidate that ignores SIGTERM — a wrapper, a version-manager shim —
  * held the step with nothing left to end it: this lookup runs BEFORE the fork,
- * so the step's own time limit has not started and the request's abort has
- * nothing to interrupt.
+ * so the step's own time limit has not started. The request's abort does reach
+ * the wait — {@link askForBashVersion} listens for one — but only a client that
+ * cancels fires it, and a request nobody cancels has this grace and nothing
+ * else.
  */
 const BASH_PROBE_FORCE_GRACE_MS = 1_000;
 
