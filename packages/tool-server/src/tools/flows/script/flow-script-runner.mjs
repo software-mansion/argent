@@ -72,10 +72,10 @@ const STRAY_SUFFIXES = ["\r", "\uF00D"];
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 
 /**
- * How the exchange files are decoded. `fatal` because the alternative is
- * `toString("utf8")`, which substitutes U+FFFD for every invalid sequence:
- * silent, unequal to what the script wrote, and three bytes wide where the
- * input was one. See `readOutputFile`.
+ * How the exchange files are decoded — both of them. `fatal` because the
+ * alternative is `toString("utf8")`, which substitutes U+FFFD for every invalid
+ * sequence: silent, unequal to what the script wrote, and three bytes wide
+ * where the input was one. See `readOutputFile` and `readReasonFile`.
  */
 const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
 
@@ -741,10 +741,22 @@ function readReasonFile(file, budget) {
     const maxBytes = maxChars * 4;
     const buffer = Buffer.alloc(maxBytes + 4);
     const read = readInto(fd, buffer, buffer.length);
-    const text = buffer
-      .subarray(0, utf8SafeCut(buffer, Math.min(read, maxBytes)))
-      .toString("utf8")
-      .trim();
+    const kept = buffer.subarray(0, utf8SafeCut(buffer, Math.min(read, maxBytes)));
+    let text;
+    try {
+      // The same policy the document gets, for the same reason: `toString`
+      // substitutes U+FFFD per invalid sequence, so a reason written by a tool
+      // in a non-UTF-8 locale reached the report rewritten and said nothing
+      // about it. `utf8SafeCut` has already moved the bound off a character the
+      // budget split, so what fails here is the file's own bytes.
+      text = STRICT_UTF8.decode(kept).trim();
+    } catch {
+      return (
+        "the explanation the script wrote to $ARGENT_REASON is not valid UTF-8, and Argent " +
+        "will not rewrite the bytes a script emitted, so it is not in this report: write the " +
+        "reason as UTF-8"
+      );
+    }
     if (text.length <= maxChars && read <= maxBytes) return text;
     return markReason(text, maxChars, budget, reasonSize(fd));
   } catch {
@@ -775,13 +787,29 @@ function markReason(text, maxChars, budget, size) {
   // none, so its author went looking for a lost report rather than for a blank
   // reason file. The same number is what `REASON_KEPT_RE` reads back in the
   // parent to find where the reason was cut.
-  let cut = Math.min(maxChars, text.length);
+  let cut = wholeCharacters(text, Math.min(maxChars, text.length));
   let marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
   while (marked.length > budget && cut > 0) {
-    cut = Math.max(0, cut - (marked.length - budget));
+    cut = wholeCharacters(text, Math.max(0, cut - (marked.length - budget)));
     marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
   }
   return marked;
+}
+
+/**
+ * The cut, moved back off the halves of a surrogate pair. The BYTE read above
+ * lands on a UTF-8 boundary; this cut is in UTF-16 code units, and one landing
+ * between the two halves of an astral character left a lone surrogate at the
+ * end of the report - `JSON.stringify` carries it as `\ud83d`, and any UTF-8
+ * write of the report turns it into U+FFFD, which is the substitution
+ * {@link STRICT_UTF8} exists to refuse for the document.
+ */
+function wholeCharacters(text, cut) {
+  if (cut <= 0 || cut >= text.length) return cut;
+  const before = text.charCodeAt(cut - 1);
+  const after = text.charCodeAt(cut);
+  const splits = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+  return splits ? cut - 1 : cut;
 }
 
 /** In step with `REASON_KEPT_RE` in `flow-script-executor.ts`, which reads it. */

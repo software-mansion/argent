@@ -643,6 +643,47 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toContain("$ARGENT_REASON holds 80000 bytes");
   }, 30_000);
 
+  // The document's policy, applied to the file beside it. `toString("utf8")`
+  // substitutes U+FFFD per invalid sequence, so a reason written by a tool in a
+  // non-UTF-8 locale reached the report rewritten, with nothing saying so -
+  // while the same two bytes in $ARGENT_OUTPUT were refused.
+  it("refuses a reason that is not valid UTF-8 rather than rewriting it", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "latin-reason",
+      `printf 'caf\\351 unreachable' > "$ARGENT_REASON"
+     exit 3`
+    );
+
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toContain("code 3");
+    expect(result.failure?.message).toContain("not valid UTF-8");
+    expect(result.failure?.message).not.toContain("\uFFFD");
+  }, 30_000);
+
+  // The BYTE read lands on a UTF-8 boundary; the CHARACTER cut after it counts
+  // UTF-16 units, and one landing between the halves of an astral character
+  // left a lone surrogate at the end of the report - carried through
+  // `JSON.stringify` as `\ud83d`, and turned into U+FFFD by any UTF-8 write of
+  // the report.
+  it("clamps a reason without splitting an astral character", async () => {
+    const ws = workspace();
+    const reason = ws.write("emoji-reason.txt", `a${"\u{1F600}".repeat(9_000)}`);
+    const result = await runBash(
+      ws,
+      "emoji-reason",
+      `cp ${JSON.stringify("emoji-reason.txt")} "$ARGENT_REASON"
+     exit 1`,
+      { projectRoot: ws.dir }
+    );
+
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toContain("$ARGENT_REASON holds 36001 bytes");
+    expect(result.failure!.message.isWellFormed()).toBe(true);
+    expect(reason).toContain("emoji-reason.txt");
+  }, 30_000);
+
   it("hints at the two exit codes that are bash's own, not the script's", async () => {
     const ws = workspace();
     const missing = await runBash(ws, "missing-tool", `argent-no-such-command-here`);
