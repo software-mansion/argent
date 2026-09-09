@@ -232,7 +232,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Local scripts
 
-Use a local `.mjs` or `.sh` script only when the user requests one. It needs no device. Record it with `flow-add-script` at the point where it must run.
+Use a local `.mjs` or `.sh` script only when the user requests one. A flow of script steps alone needs no device. A `run:` or a `when:` step beside the script makes the flow resolve one again, so a script inside `when: { platform: ios }` needs a booted iOS device. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
