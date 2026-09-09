@@ -28,7 +28,6 @@ jobs:
         with:
           # Matches what lint, lockfile and repo-hygiene pin.
           node-version: "24"
-          cache: npm
 
       # Knip reads manifests and source only, so install scripts are pure cost
       # here — and skipping them keeps the job immune to a bump that ships no
