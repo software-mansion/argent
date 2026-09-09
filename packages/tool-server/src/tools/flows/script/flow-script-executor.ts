@@ -1447,10 +1447,19 @@ function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
   try {
     fs.rmSync(exchange.dir, { recursive: true, force: true });
   } catch (err) {
+    // What the sweep can and cannot do, because it is the SAME call: both are a
+    // recursive `rm` with `force`, one sync and one async. So a cause that
+    // clears on its own - a Windows EBUSY from a descendant that has since
+    // exited - is swept, and a cause that does not, such as a mode the script
+    // put on the directory itself, is still there after every later step. The
+    // note said "a later bash step sweeps it" for both, and the directory
+    // holding the document sat in $TMPDIR for good.
     notes.push(
       `The script's private directory ${exchange.dir} could not be removed ` +
-        `(${errorMessage(err)}); a later bash step sweeps it, once this step's ` +
-        `own time limit has passed.`
+        `(${errorMessage(err)}); it still holds the document the script wrote. A later bash ` +
+        `step sweeps it with the same recursive remove once this step's own time limit has ` +
+        `passed, so a cause that call cannot get past - a mode the script changed on the ` +
+        `directory itself - needs the directory removed by hand.`
     );
   }
 }

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exchangeDirPrefix,
   FlowScriptExecutor,
@@ -202,4 +202,77 @@ describe("a bash step's sweep of the exchange root", () => {
       ws.cleanup();
     }
   }, 30_000);
+
+  // The throttle is the whole of the "a single read a minute rather than one
+  // per step" bound the sweep's docstring claims, and in production the root is
+  // `os.tmpdir()` - shared with every process on the host and bounded by
+  // nothing, where one read cost 48 ms of blocked event loop on a machine
+  // holding 88 000 entries. Counted at `opendir`, which is the read.
+  it("reads the root once however many steps run inside the interval", async () => {
+    const ws = createScriptWorkspace("bash-throttle");
+    const opendir = vi.spyOn(fs.promises, "opendir");
+    try {
+      const script = ws.write("throttle.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+      const runs = new FlowScriptExecutor({
+        concurrency: 2,
+        maxTimeoutMs: 60_000,
+        exchangeRoot,
+        exchangeSweepIntervalMs: 60_000,
+      });
+      for (let step = 0; step < 4; step += 1) {
+        const result = await runs.execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+        });
+        expect(result.ok).toBe(true);
+      }
+
+      const reads = opendir.mock.calls.filter(([target]) => target === exchangeRoot);
+      expect(reads.length).toBeLessThanOrEqual(1);
+    } finally {
+      opendir.mockRestore();
+      ws.cleanup();
+    }
+  }, 60_000);
+
+  // A step never outlives its own sweep: `runOne` waits on it, so the root is
+  // readable the moment `execute` resolves and a document a dead owner left is
+  // gone by then rather than shortly after. Without the wait a small root still
+  // passed, because `rm` won the race - so the sweep's own removal is slowed
+  // here, which is the only thing that tells the two apart.
+  it("has finished its sweep by the time the step resolves", async () => {
+    const ws = createScriptWorkspace("bash-await-sweep");
+    const abandoned = fs.mkdtempSync(
+      path.join(exchangeRoot, `${exchangeDirPrefix()}${Date.now() - 1_000}-`)
+    );
+    fs.writeFileSync(path.join(abandoned, "output.json"), '{"token":"derived-from-a-secret"}');
+    const realRm = fs.promises.rm;
+    const rm = vi
+      .spyOn(fs.promises, "rm")
+      .mockImplementation(async (target: Parameters<typeof realRm>[0], options) => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return realRm(target, options);
+      });
+    try {
+      // Past the interval, so this step's own sweep is not the throttled one.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const script = ws.write("await-sweep.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+      const result = await new FlowScriptExecutor({
+        concurrency: 2,
+        maxTimeoutMs: 60_000,
+        exchangeRoot,
+        exchangeSweepIntervalMs: 1,
+      }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
+
+      expect(result.ok).toBe(true);
+      expect(fs.existsSync(abandoned)).toBe(false);
+    } finally {
+      rm.mockRestore();
+      fs.rmSync(abandoned, { recursive: true, force: true });
+      ws.cleanup();
+    }
+  }, 30_000);
 });
+
+afterEach(() => vi.restoreAllMocks());
