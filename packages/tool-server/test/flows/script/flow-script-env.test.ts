@@ -631,6 +631,39 @@ describe("serialization", () => {
     }
   });
 
+  it("opens every env refusal with the two words the decision rule reads", async () => {
+    // `live-authoring.md` tells an agent that a message opening `This call's`
+    // means nothing started. Every refusal of the `env` ARGUMENT has to keep
+    // that opening, because the rule's other branch sends the agent looking for
+    // device or database changes a call that never spawned a process cannot
+    // have made — and then lets it retry a side-effecting script.
+    //
+    // The output-reference one names `env.NAME` rather than `env`, which is why
+    // the marker is the two words in front of the parameter.
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flowStartRecordingTool.execute({}, { name: "wording", project_root: root });
+    for (const env of [
+      { NODE_OPTIONS: "--inspect" },
+      { "not a name": "x" },
+      { A: "{{output:x}}" },
+      JSON.parse('{"__proto__":"x","A":"y"}') as Record<string, string>,
+    ]) {
+      const refused = await flowAddScriptTool
+        .execute({}, {
+          name: "wording",
+          project_root: root,
+          path: "../../scripts/noop.mjs",
+          env,
+        } as never)
+        .then(
+          () => "",
+          (err: unknown) => (err instanceof Error ? err.message : String(err))
+        );
+      expect(refused, JSON.stringify(env)).toMatch(/^This call's `env/);
+      expect(refused).not.toContain("was NOT run and nothing was recorded");
+    }
+  }, 30_000);
+
   it("says the script already ran when a PARSE-stage env fault refuses its append", async () => {
     // The third recorder, and the one where the wording costs most: the script
     // has run and nothing it did is rolled back, so "check the script's changes

@@ -319,6 +319,24 @@ describe("create-flow script docs", () => {
     expect(flowAddScriptTool.description).toContain("which sit BETWEEN those two");
   });
 
+  it("names every flow-add-script wording that leaves nothing behind", () => {
+    // The decision rule an agent applies to a failed call, and the reason it is
+    // worth a test: a wording missing from the "nothing ran" list lands in the
+    // "every other wording" bucket, and the agent goes looking for device or
+    // database changes a call that never spawned a process cannot have made —
+    // then retries a side-effecting script, which is what the rule exists to
+    // stop. None of the three `env` refusals says the sentence the rule used to
+    // promise for them; all three open with the parameter's own name.
+    const liveAuthoring = readFileSync(LIVE_AUTHORING, "utf8");
+    for (const wording of ["This call's", "was NOT run and nothing was recorded", "did not run"]) {
+      expect(liveAuthoring, wording).toContain(wording);
+    }
+    // The marker is the two words in FRONT of the parameter, because the
+    // output-reference refusal names `env.NAME` rather than `env`.
+    // `flow-script-env.test.ts` drives the real tool for each of the four.
+    expect(liveAuthoring).not.toContain("the refusal of the `env` argument");
+  });
+
   it("keeps the run:-env remedy qualified wherever it is repeated", () => {
     // `execRunStep` layers a fragment's own `env:` OVER the flow that runs it,
     // so writing a dropped value into the RECORDING's top-level `env:` does
