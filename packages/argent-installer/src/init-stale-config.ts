@@ -202,7 +202,7 @@ export async function cleanupStaleMcpConfigs(args: {
           item.adapterName,
           item.location,
           `found ${item.what}; skipped with nobody to confirm it — ` +
-            `re-run \`argent init\` in a terminal, without --yes, to review and remove it`
+            `re-run in a terminal, without --yes, to review and remove it`
         );
       }
       return { lines, removedCount, warnedCount };

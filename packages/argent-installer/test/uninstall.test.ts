@@ -98,6 +98,14 @@ describe("uninstall — nobody to confirm with", () => {
   // rendered prompt, exit 0, and have removed nothing.
   it("refuses before removing anything when stdin is not a terminal", async () => {
     process.chdir(tmpDir);
+    // The refusal reports install_mode, so give the project a mode that is not
+    // the declared default: it is only right if the mode is resolved above the
+    // confirmation block the refusal replaces.
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent", writtenBy: "1.0.0" })
+    );
     const savedIsTty = process.stdin.isTTY;
     setIsTty(undefined);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -114,12 +122,15 @@ describe("uninstall — nobody to confirm with", () => {
         expect.anything()
       );
       const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
-      expect(errors.some((m) => m.includes("--yes"))).toBe(true);
+      // --yes is not "the defaults" here: it removes a global install the
+      // interactive default keeps, so the remedy has to say so.
+      expect(errors.some((m) => m.includes("remove without confirming"))).toBe(true);
       expect(telemetryMock.track).toHaveBeenCalledWith(
         "installation:cli_uninstall_complete",
         expect.objectContaining({
           has_uninstalled_package: false,
           error_code: "UNINSTALL_NEEDS_TERMINAL",
+          install_mode: "local",
         })
       );
     } finally {

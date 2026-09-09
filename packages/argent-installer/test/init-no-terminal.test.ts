@@ -78,7 +78,7 @@ describe("init — nobody to ask", () => {
       expect.anything()
     );
     const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
-    expect(errors.some((m) => m.includes("--yes"))).toBe(true);
+    expect(errors.some((m) => m.includes("take the defaults without being asked"))).toBe(true);
   });
 
   it("runs on past the guard under --yes", async () => {

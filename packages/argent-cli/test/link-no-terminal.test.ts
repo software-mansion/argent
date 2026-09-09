@@ -105,6 +105,29 @@ describe("link — nobody to ask", () => {
     expect(writeLinkConfig).not.toHaveBeenCalled();
   });
 
+  it("refuses to ask for the host when only --port was given", async () => {
+    setIsTty(undefined);
+
+    await expect(link(["--port", "3001", "--no-verify"])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(p.text).not.toHaveBeenCalled();
+    expect(writeLinkConfig).not.toHaveBeenCalled();
+  });
+
+  // --yes answers the port question with 3001, so the flags the refusal names
+  // must not themselves trip it.
+  it("takes the default port under --yes rather than refusing", async () => {
+    setIsTty(undefined);
+
+    await link(["--host", "10.0.0.9", "--yes", "--no-verify"]);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(writeLinkConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "http://10.0.0.9:3001" })
+    );
+  });
+
   it("still saves a fully specified link that has nothing to ask", async () => {
     setIsTty(undefined);
 

@@ -172,8 +172,10 @@ Security:
   an https:// tunnel/proxy when crossing untrusted networks.
 
 Notes:
-  - With no terminal on stdin, a run that would have to ask refuses with exit 2
-    instead of stopping at a prompt nobody can answer — pass --host and --yes.
+  - With no terminal on stdin, a run that would have to ask for the target or a
+    confirmation refuses with exit 2 instead of stopping at a prompt nobody can
+    answer. A failed pre-flight there fails outright (exit 1) rather than
+    offering its retry menu; --no-verify skips it.
   - If ARGENT_TOOLS_URL is also set in your environment, it overrides the link.
   - To stop using the remote target, run \`argent unlink\`.
   - \`argent server start/stop/status\` manage the local tool-server lifecycle
@@ -370,7 +372,7 @@ export async function link(argv: string[]): Promise<void> {
   if ((flags.host === null || (flags.port === null && !flags.yes)) && !canPromptUser()) {
     refuseWithoutTerminal(
       "argent link",
-      "Re-run with --host <host> --yes to name the target instead (port defaults to 3001)."
+      "Re-run with --host <host> --port <port> to name the target, or add --yes to take port 3001."
     );
   }
 
