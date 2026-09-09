@@ -5,6 +5,7 @@ import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
 
@@ -64,6 +65,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosDevice: iosDeviceImpl,
     iosRemote: iosRemoteImpl,
     vega: vegaImpl,
   }),

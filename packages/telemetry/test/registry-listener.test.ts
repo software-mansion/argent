@@ -50,6 +50,57 @@ describe("attachRegistryTelemetry", () => {
     handle.detach();
   });
 
+  it("threads the device kind through invoke / complete / fail events", () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const handle = attachRegistryTelemetry(registry);
+
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "ios", device_kind: "device" });
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 10, "Completed tool.");
+
+    handle.recordInvocation(INVOCATION_ID_2, { platform: "ios", device_kind: "device" });
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_2, "Starting tool.");
+    registry.events.emit(
+      "toolFailed",
+      "gesture-tap",
+      INVOCATION_ID_2,
+      withFailureSignal(new Error("boom"), {
+        error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+        failure_stage: "test",
+        failure_area: "registry",
+        error_kind: "unknown",
+      }),
+      5,
+      "Failed tool."
+    );
+
+    expect(trackSpy).toHaveBeenCalledTimes(4);
+    for (const call of trackSpy.mock.calls) {
+      expect(call[1]).toMatchObject({ platform: "ios", device_kind: "device" });
+    }
+
+    handle.detach();
+  });
+
+  it("omits device_kind when the invocation meta carries none", () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const handle = attachRegistryTelemetry(registry);
+
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
+    registry.events.emit("toolInvoked", "boot-device", INVOCATION_ID_1, "Starting tool.");
+
+    expect(trackSpy.mock.calls[0]![1]).toEqual({
+      tool: "boot-device",
+      tool_invocation_id: INVOCATION_ID_1,
+      platform: "android",
+    });
+    expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("device_kind");
+
+    handle.detach();
+  });
+
   it("threads the AI client through invoke / complete / fail events", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();

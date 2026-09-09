@@ -511,11 +511,8 @@ export async function sweepDeadStateFiles(): Promise<void> {
     if (fs.existsSync(fresh.bundlePath)) continue;
     // Same identity guard as killToolServerForInstallDir: never signal a
     // recycled pid, and keep an unidentifiable-but-live record reachable by
-    // `server stop`/status (swept once its pid dies). On Windows `ps` is
-    // unavailable and the check always fails, so the kill stays unguarded there
-    // rather than never retiring dead-bundle servers.
-    const guarded = process.platform !== "win32";
-    if (guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) continue;
+    // `server stop`/status (swept once its pid dies).
+    if (!couldBeOurToolServer(fresh.pid, fresh.bundlePath)) continue;
     // Unlink first, then terminate WITHOUT awaiting the grace window: the sweep
     // runs under the spawn lock while a session waits for tools, so a wedged
     // orphan must not add its multi-second SIGTERM grace to that wait.
@@ -523,10 +520,7 @@ export async function sweepDeadStateFiles(): Promise<void> {
     // await and never rejects; only the SIGKILL escalation outlives this call,
     // and its pending poll keeps a short-lived process alive until it lands.
     await unlink(file).catch(() => {});
-    void terminatePid(
-      fresh.pid,
-      guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
-    );
+    void terminatePid(fresh.pid, () => couldBeOurToolServer(fresh.pid, fresh.bundlePath));
   }
 }
 
@@ -623,22 +617,16 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
     const fresh = await readStateFile(file);
     if (!fresh || fresh.pid !== state.pid || fresh.bundlePath !== state.bundlePath) continue;
     // A long-lived record's pid may have been recycled onto an unrelated
-    // process. On Windows `ps` is unavailable and the check always fails, so we
-    // keep the unguarded kill there rather than silently never stopping servers
-    // during update/uninstall.
+    // process — same guard as the wedged-server kill in ensureToolsServer.
     const alive = isProcessAlive(fresh.pid);
-    const guarded = process.platform !== "win32";
-    if (alive && guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) {
+    if (alive && !couldBeOurToolServer(fresh.pid, fresh.bundlePath)) {
       // Unidentifiable live pid: keep the record, since unlinking a live
       // server orphans it for `server stop`/status. A truly stale record is
       // swept once its pid dies.
       continue;
     }
     if (alive) {
-      await terminatePid(
-        fresh.pid,
-        guarded ? () => processCommandMatches(fresh.pid, fresh.bundlePath) : undefined
-      );
+      await terminatePid(fresh.pid, () => couldBeOurToolServer(fresh.pid, fresh.bundlePath));
     }
     await unlink(file).catch(() => {});
     killed += 1;
@@ -646,30 +634,72 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
   return killed;
 }
 
+// Absolute path to `ps`, resolved once. An MCP server launched from a GUI /
+// launchd context inherits a sanitized PATH that omits `/bin`, so a bare `"ps"`
+// spawn ENOENTs — and the guard below reads that as "not one of ours" for every
+// live server, skipping the kill and orphaning it. Same pin as tool-server's
+// PS_BIN; bare `"ps"` stays the fallback for an atypical layout.
+const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((p) => fs.existsSync(p)) ?? "ps";
+
+// `-ww` disables ps's width truncation. Without it procps-ng clips the command
+// to $COLUMNS, so a bundle path longer than that never matches its own marker,
+// the guard returns false, and the kill-before-respawn is skipped — orphaning
+// the live server. Same flag tool-server's vega-process PS_ARGS uses.
+const PS_WIDTH_FLAGS = ["-ww"] as const;
+
 /**
- * Best-effort check that `pid` is one of OUR tool-servers, matching its command
- * line against `marker` (the bundle path recorded when we spawned it). Guards
- * kills against PID reuse. Returns false when the command line can't be read
- * (ps missing / unsupported platform) — fail safe, don't kill.
+ * `pid`'s full command line from `ps`. Throws whatever `ps` failed with, its
+ * stderr included. `flags` replaces the width flags, so a caller can measure
+ * what this host's `ps` truncates without them.
  */
-function processCommandMatches(pid: number, marker: string | undefined): boolean {
+export function readProcessCommandLine(
+  pid: number,
+  flags: readonly string[] = PS_WIDTH_FLAGS
+): string {
+  return execFileSync(PS_BIN, [...flags, "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    timeout: 2_000,
+    // A recycled pid can sit on a process with an argv past Node's 1 MiB exec
+    // default, where the overrun surfaces as ENOBUFS instead of a command line.
+    // Same ceiling as tool-server's vega-process ps probes.
+    maxBuffer: 16 * 1024 * 1024,
+    // Piping ps's stderr is what puts a rejected flag ("ps: invalid option --
+    // 'w'") into the thrown error's message.
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/**
+ * Whether `pid` may be signalled as one of OUR tool-servers, matching its
+ * command line against `marker` (the bundle path recorded when we spawned it).
+ * Guards kills against PID reuse. A command line `ps` declines to produce
+ * answers false — fail safe, don't kill.
+ */
+function couldBeOurToolServer(pid: number, marker: string | undefined): boolean {
   if (!marker) return false;
+  // Windows ships no `ps`: the check can never confirm anything there, and a
+  // false would veto every kill and leave the servers running. Callers there
+  // decide on the record alone.
+  if (process.platform === "win32") return true;
+  let cmd: string;
   try {
-    const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
-      encoding: "utf8",
-      timeout: 2_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!cmd) return false;
-    // Our servers run `node <bundlePath> start`. Requiring the path at an
-    // argument boundary followed by `start` keeps an unrelated process that
-    // merely mentions it from matching; matching the raw command string rather
-    // than split argv keeps bundle paths containing spaces working.
-    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
-  } catch {
+    cmd = readProcessCommandLine(pid);
+  } catch (err) {
+    // Say why: a rejected flag, or a bare-`"ps"` ENOENTing under a sanitized
+    // PATH, orphans every live server — silently, without this.
+    process.stderr.write(
+      `[launcher] ps could not read pid ${pid}'s command line; leaving it alone: ${String(err)}\n`
+    );
     return false;
   }
+  if (!cmd) return false;
+  // Our servers run `node <bundlePath> start`. Requiring the path at an
+  // argument boundary followed by `start` keeps a mention that is not being run
+  // from matching, though a command line embedding the pair mid-argv — a
+  // `sh -c` wrapper — still does; matching the raw command string rather than
+  // split argv keeps bundle paths containing spaces working.
+  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
 }
 
 // ensureToolsServer's "is there a healthy server? no → spawn one" is a
@@ -848,9 +878,9 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       state.managed === "autospawn" &&
       state.bundlePath === paths.bundlePath &&
       isProcessAlive(state.pid) &&
-      processCommandMatches(state.pid, state.bundlePath)
+      couldBeOurToolServer(state.pid, state.bundlePath)
     ) {
-      await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
+      await terminatePid(state.pid, () => couldBeOurToolServer(state.pid, state.bundlePath));
     }
     // Retire only OUR OWN record — another install's must survive so its server
     // stays reachable by its owner. The sweep then clears per-bundle files whose

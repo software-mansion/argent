@@ -9,6 +9,8 @@ Use `screenshot-diff` as supporting visual evidence for UI QA and visual regress
 
 Do not use screenshot diffing for tap-coordinate discovery. Use `describe`, `debugger-component-tree`, or `native-describe-screen` to find targets first.
 
+`screenshot-diff` supports physical iPhones (kind `"device"`) for both saved-file diffs and live captures. A live capture on hardware goes through the on-device runner at full resolution, is device-wide, and needs no registered app. Keep baselines per device model and resolution, and note that the `rotation` parameter is ignored on hardware: the capture follows the device's real orientation.
+
 ## 2. When To Use
 
 Use `screenshot-diff` when pixel comparison can answer the verification question:

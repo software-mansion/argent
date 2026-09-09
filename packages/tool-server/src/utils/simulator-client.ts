@@ -14,6 +14,7 @@ import {
   type TouchActionName,
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
+import { assertAllowedSimServerEndpoint } from "./external-devices";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -53,43 +54,226 @@ export interface SimulatorServerTransport {
   }): Promise<{ url: string; path: string }>;
 }
 
-const connections = new Map<string, WebSocket>();
+// A command ack is a localhost round-trip behind an already-open socket: 0.06ms
+// p50 / 0.17ms max, measured over 200 sends against a booted iOS sim. The budget
+// is for a server that is reachable but no longer answering (a wedged device),
+// not for normal latency, so it can be generous without ever being reached in a
+// healthy run.
+const COMMAND_ACK_TIMEOUT_MS = 5_000;
+
+interface PendingCommand {
+  settle: (err?: FailureError) => void;
+  cmd: string;
+}
+
+interface Connection {
+  ws: WebSocket;
+  /**
+   * Outstanding commands in send order. simulator-server answers in the order
+   * it received them, and `sendCommand` awaits each ack, so this normally holds
+   * at most one entry — the ordering matters only for an id-less reply (below)
+   * when two tools drive one device at once.
+   */
+  pending: Map<string, PendingCommand>;
+}
+
+const connections = new Map<string, Connection>();
 let cmdId = 0;
 
-function getOrCreateWs(api: SimulatorServerApi): WebSocket {
+/**
+ * A reply to a command. simulator-server echoes the request id on success
+ * (`{"id":"7","status":"ok"}`) but NOT on failure — a rejected command answers
+ * `{"status":"error","message":"parse error: unknown variant ..."}` with no id
+ * at all, so an error can only be matched positionally, against the oldest
+ * command still outstanding.
+ */
+interface CommandAck {
+  id?: string;
+  status?: string;
+  message?: string;
+}
+
+function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
+  const entries = [...conn.pending.values()];
+  conn.pending.clear();
+  for (const entry of entries) entry.settle(makeError(entry.cmd));
+}
+
+function transportError(cmd: string, apiUrl: string, detail: string): FailureError {
+  return new FailureError(
+    `simulator-server did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. Check that the simulator is still booted ` +
+      `and the simulator-server for ${apiUrl} is running.`,
+    {
+      error_code: FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED,
+      failure_stage: "simulator_command_transport",
+      failure_area: "tool_server",
+      error_kind: "network",
+      network_failure: "connection_reset",
+      failure_command: "simulator_server",
+    }
+  );
+}
+
+function getOrCreateConnection(api: SimulatorServerApi): Connection {
   const key = api.apiUrl;
   const existing = connections.get(key);
   if (
     existing &&
-    (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+    (existing.ws.readyState === WebSocket.OPEN || existing.ws.readyState === WebSocket.CONNECTING)
   ) {
     return existing;
   }
+  /**
+   * `ws:` unconditionally, because `apiUrl` is `http:` unconditionally.
+   * Argent's own spawn path reads it off the binary's `api_ready` line and the
+   * provider contract refuses any other scheme, so there is no `https:` apiUrl
+   * to mistake for a `wss:` endpoint that nothing serves.
+   */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
-  ws.on("error", () => connections.delete(key));
-  ws.on("close", () => connections.delete(key));
-  connections.set(key, ws);
-  return ws;
+  const conn: Connection = { ws, pending: new Map() };
+
+  ws.on("message", (data: WebSocket.RawData) => {
+    const text = Buffer.isBuffer(data)
+      ? data.toString()
+      : Array.isArray(data)
+        ? Buffer.concat(data).toString()
+        : Buffer.from(data).toString();
+    let ack: CommandAck;
+    try {
+      ack = JSON.parse(text) as CommandAck;
+    } catch {
+      return; // Not a command reply; the socket carries nothing else today.
+    }
+    if (ack.status !== "ok" && ack.status !== "error") return;
+
+    // A reply that names an id argent is no longer waiting on is stale — a late
+    // ack for a command that already timed out. Dropping it matters: falling
+    // back to positional matching here would settle whatever command is in
+    // flight *now* with an answer meant for an earlier one, reintroducing the
+    // phantom success this whole change exists to remove.
+    if (ack.id != null && !conn.pending.has(ack.id)) return;
+    // Only an id-less reply (i.e. an error) is matched positionally, against
+    // the oldest outstanding command, which is what an in-order server means by it.
+    const id = ack.id ?? conn.pending.keys().next().value;
+    if (id == null) return;
+    const entry = conn.pending.get(id);
+    if (entry == null) return;
+    conn.pending.delete(id);
+
+    if (ack.status === "ok") {
+      entry.settle();
+      return;
+    }
+    entry.settle(
+      new FailureError(
+        `simulator-server rejected the '${entry.cmd}' command: ${ack.message ?? "unknown error"}. ` +
+          `The command was NOT delivered to the device.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_COMMAND_REJECTED,
+          failure_stage: "simulator_command_rejected",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+          failure_command: "simulator_server",
+        }
+      )
+    );
+  });
+
+  // A socket that dies with commands in flight is the shut-the-simulator-down
+  // case: nothing was delivered, and without this the callers would hang until
+  // their ack timeout instead of failing at once.
+  ws.on("error", (err: Error) => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, err.message));
+  });
+  ws.on("close", () => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+  });
+
+  connections.set(key, conn);
+  return conn;
 }
 
 /**
- * Send a JSON command to the simulator-server. Call sites always speak the
- * WebSocket command shape (`{cmd: "touch", ...}`); with `api.transport` set it
- * is re-encoded onto MoQ instead.
+ * Send a JSON command to the simulator-server and resolve once it has been
+ * acknowledged. Call sites always speak the WebSocket command shape
+ * (`{cmd: "touch", ...}`); with `api.transport` set it is re-encoded onto MoQ
+ * instead.
+ *
+ * Rejects — rather than reporting a phantom success — when the server answers
+ * `status: "error"`, when the socket fails or closes with the command in
+ * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS`. Awaiting
+ * the ack is what separates a delivered input from a lost one: every one of
+ * those cases used to be indistinguishable from a landed tap
+ * (https://github.com/software-mansion/argent/issues/932).
  */
-export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): void {
+export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
   if (api.transport) {
     routeViaTransport(api.transport, cmd);
-    return;
+    return Promise.resolve();
   }
-  const ws = getOrCreateWs(api);
-  const payload = JSON.stringify({ id: String(++cmdId), ...cmd });
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(payload);
-  } else {
-    ws.once("open", () => ws.send(payload));
-  }
+  const conn = getOrCreateConnection(api);
+  const id = String(++cmdId);
+  const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  const payload = JSON.stringify({ id, ...cmd });
+
+  return new Promise<void>((resolve, reject) => {
+    let done = false;
+    const settle = (err?: FailureError) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      conn.pending.delete(id);
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () =>
+        settleAndDropConnection(
+          new FailureError(
+            `simulator-server did not acknowledge the '${cmdName}' command within ` +
+              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `the simulator may be wedged or the simulator-server unresponsive.`,
+            {
+              error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
+              failure_stage: "simulator_command_ack",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+              failure_command: "simulator_server",
+            }
+          )
+        ),
+      COMMAND_ACK_TIMEOUT_MS
+    );
+    // `unref` so a pending ack never holds the process open on shutdown.
+    timer.unref?.();
+
+    // A timeout leaves the reply stream permanently out of step with `pending`:
+    // the answer to this command is still owed, and once it lands nothing can
+    // tell it apart from the answer to a later one. Drop the socket instead of
+    // guessing — the next command reconnects, and `close` fails anything else
+    // still in flight rather than leaving it to mismatch.
+    const settleAndDropConnection = (err: FailureError) => {
+      settle(err);
+      connections.delete(api.apiUrl);
+      conn.ws.close();
+    };
+
+    conn.pending.set(id, { settle, cmd: cmdName });
+
+    const write = () =>
+      conn.ws.send(payload, (err) => {
+        if (err) settle(transportError(cmdName, api.apiUrl, err.message));
+      });
+    // A socket still CONNECTING queues the write; if it never opens, the
+    // `error`/`close` handlers above fail the command instead of dropping it.
+    if (conn.ws.readyState === WebSocket.OPEN) write();
+    else conn.ws.once("open", write);
+  });
 }
 
 /**
@@ -123,6 +307,7 @@ async function pointerPost(
   // Remote (MoQ) sims are gated out of recording and expose no HTTP pointer
   // endpoint; their stubbed apiUrl simply makes this fetch fail and return false.
   try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/pointer");
     const res = await fetch(`${api.apiUrl}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -146,14 +331,17 @@ async function pointerPost(
  * device pasteboard holds the text, so a paste keystroke sent afterwards cannot
  * race the fill.
  *
- * A simulator-server built without clipboard support answers the route with a
- * bare 404, reported as "unsupported" rather than as a network fault.
+ * A simulator-server built without clipboard support — an older build, or a
+ * provider's — answers the route with a bare 404, reported as "unsupported"
+ * rather than as a network fault.
  */
 export async function setSimulatorClipboardText(
   api: SimulatorServerApi,
   text: string,
   signal?: AbortSignal
 ): Promise<void> {
+  if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
@@ -166,10 +354,17 @@ export async function setSimulatorClipboardText(
     throw toSimulatorNetworkError("Paste", err, api.apiUrl);
   }
   if (res.status === 404) {
+    /**
+     * A provider's binary is not argent's, so "update argent" would be the
+     * wrong advice there.
+     */
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a build with " +
+        "clipboard support. Type the text with the keyboard tool instead."
+      : "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.";
     throw new FailureError(
-      "Paste failed: this simulator-server build has no clipboard endpoint. " +
-        "Update argent so its bundled simulator-server includes clipboard support, " +
-        "or type the text with the keyboard tool instead.",
+      "Paste failed: this simulator-server build has no clipboard endpoint. " + fix,
       {
         error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
         failure_stage: "simulator_clipboard_endpoint_missing",
@@ -206,6 +401,12 @@ async function simulatorPost<T>(
   signal?: AbortSignal,
   fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
+  /**
+   * Parity rule: on a server Argent did not spawn, use only the endpoints its
+   * own build serves.
+   */
+  if (api.external) assertAllowedSimServerEndpoint(endpoint);
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}${endpoint}`, {
@@ -361,6 +562,9 @@ function routeViaTransport(
       return;
     case "rotate":
       transport.rotate(cmd.direction as RotationName);
+      return;
+    case "key":
+      transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
       return;
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);

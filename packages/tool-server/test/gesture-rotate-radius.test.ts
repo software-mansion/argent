@@ -142,6 +142,7 @@ describe("gesture-rotate abort", () => {
     let sent = 0;
     vi.mocked(sendCommand).mockImplementation(() => {
       if (++sent === 3) controller.abort();
+      return Promise.resolve();
     });
 
     await expect(

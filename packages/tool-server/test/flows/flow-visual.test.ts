@@ -91,6 +91,8 @@ const env = {
 } as unknown as ActionEnv;
 
 let tmpDir: string;
+let osTmpdir: string;
+let restoreTmpdir: () => void = () => {};
 
 /** Minimal PNG stand-in: runSnapshot reads only the IHDR width/height bytes. */
 async function writeFakePng(file: string, w = 390, h_ = 844): Promise<void> {
@@ -155,6 +157,13 @@ const baselinePath = () => path.join(tmpDir, "__baselines__", "checkout", "home_
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-visual-"));
+  // runSnapshot mkdtemps its crop and diff scratch dirs under os.tmpdir() and
+  // deliberately leaves whichever file it registered as an artifact in place —
+  // from there the dir belongs to whoever consumes the artifact. Here that is
+  // the test, so os.tmpdir() points inside tmpDir and the sweep below takes it.
+  osTmpdir = path.join(tmpDir, "os-tmpdir");
+  await fs.mkdir(osTmpdir);
+  restoreTmpdir = redirectTmpdir(osTmpdir);
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
   h.writeContextDiff = false;
@@ -169,6 +178,7 @@ beforeEach(async () => {
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
+  restoreTmpdir();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -586,32 +596,21 @@ describe("runSnapshot cropOn", () => {
 
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
     h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
-    // runSnapshot builds its crop scratch dir with
-    // mkdtemp(join(os.tmpdir(), "argent-flow-crop-")). Point the tmpdir at a
-    // dir only this test owns, so the leftover sweep below sees this run's crop
-    // dirs and nothing else — scanning the machine-wide tmpdir would also list
-    // the in-flight crop dir of any concurrent run.
-    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-scan-"));
-    const restoreTmpdir = redirectTmpdir(scratch);
+    const r = await runSnapshot(env, opts({ cropOn }));
 
-    try {
-      const r = await runSnapshot(env, opts({ cropOn }));
-
-      expect(r.status).toBe("fail");
-      expect(r.reason).toContain("empty at this resolution");
-      // The key still names the failure for an exporter (CLI --output), and the
-      // FULL capture is attached as `current` — no crop exists to show.
-      expect(r.snapshotKey).toBe(cropKey);
-      expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
-      // The crop scratch dir (which never received a file) was swept.
-      const leftoverCropDirs = (await fs.readdir(scratch)).filter((e) =>
-        e.startsWith("argent-flow-crop-")
-      );
-      expect(leftoverCropDirs).toEqual([]);
-    } finally {
-      restoreTmpdir();
-      await fs.rm(scratch, { recursive: true, force: true });
-    }
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("empty at this resolution");
+    // The key still names the failure for an exporter (CLI --output), and the
+    // FULL capture is attached as `current` — no crop exists to show.
+    expect(r.snapshotKey).toBe(cropKey);
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    // The crop scratch dir (which never received a file) was swept. os.tmpdir()
+    // is this test's own, so the listing shows this run's crop dirs and nothing
+    // a concurrent run left in flight.
+    const leftoverCropDirs = (await fs.readdir(osTmpdir)).filter((e) =>
+      e.startsWith("argent-flow-crop-")
+    );
+    expect(leftoverCropDirs).toEqual([]);
   });
 
   it("keys same-name snapshots with different cropOn selectors to distinct baselines", async () => {

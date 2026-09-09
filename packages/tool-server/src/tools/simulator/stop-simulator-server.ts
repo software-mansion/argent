@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
+import { isExternalId } from "../../utils/external-devices";
 import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
 
 const zodSchema = z.object({
@@ -23,7 +24,7 @@ export function createStopSimulatorServerTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to stop simulator server for ${params.udid}: ${failureSignal.error_code}`,
     },
-    description: `Stop the transport session for a specific device (iOS / Android: simulator-server process; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use when you are done interacting with one device but want to keep others running, or to restart a wedged transport. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM that does not hold: the JS-runtime debugger declares the CDP session as a dependency, so stopping the transport cascades to it and its captured console history goes with it - reconnect with debugger-connect afterwards. Returns { stopped, udid }. Fails silently if no session is open for the given id.`,
+    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use when you are done interacting with one device but want to keep others running, or to restart a wedged transport. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM that does not hold: the JS-runtime debugger declares the CDP session as a dependency, so stopping the transport cascades to it and its captured console history goes with it - reconnect with debugger-connect afterwards. Returns { stopped, udid }. Fails silently if no session is open for the given id.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
@@ -36,6 +37,14 @@ export function createStopSimulatorServerTool(
       const platform = resolveDevice(udid).platform;
       const namespaces = transportNamespacesForPlatform(platform);
 
+      /**
+       * An external device has no server of ours to stop. Its `dispose()` is
+       * a no-op by design. Still drop the cached handles so the next call
+       * re-resolves against the provider's state, but report `stopped: false`.
+       * A clean no-op beats an error for an agent that calls this on every device.
+       */
+      const external = isExternalId(udid);
+
       const snapshot = registry.getSnapshot();
       let stopped = false;
       // Scanned rather than fetched by exact URN, so ids resolve through the
@@ -47,6 +56,12 @@ export function createStopSimulatorServerTool(
       for (const urn of urns) {
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
+
+        if (external) {
+          await registry.disposeService(urn);
+          continue;
+        }
+
         // ERROR / TERMINATING nodes hold no process — e.g. a tvOS UDID, which
         // the SimulatorServer factory rejects on start. Clean it up, but don't
         // report it as stopped.

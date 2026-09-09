@@ -8,6 +8,8 @@ import {
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
+import { nodeText } from "../../utils/ui-tree-match";
+import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -18,17 +20,24 @@ import {
 } from "../describe/contract";
 
 /**
- * Flow-owned iOS tree source (per-platform dispatch: `flow-tree.ts`).
+ * Flow-owned iOS tree sources (per-platform dispatch: `flow-tree.ts`).
  *
- * Flows resolve selectors against the raw UIView hierarchy
- * (`ViewHierarchy.getFullHierarchy`), not the accessibility tree `describe` and
- * `describeScreen` walk: those collapse an `accessible` container into a single
- * leaf (VoiceOver semantics), while every view here carries its
- * `accessibilityIdentifier` (React Native `testID`), so a flow can address a
- * container and its children independently. When native-devtools is unavailable
- * — or the target returns no windows — this throws rather than degrade to the
- * AX tree; see `fetchFlowTree` for why a silent fallback would flip flow
- * outcomes.
+ * Simulators (`queryFullHierarchyTree`): flows resolve selectors against the
+ * raw UIView hierarchy (`ViewHierarchy.getFullHierarchy`), not the
+ * accessibility tree `describe` and `describeScreen` walk: those collapse an
+ * `accessible` container into a single leaf (VoiceOver semantics), while every
+ * view here carries its `accessibilityIdentifier` (React Native `testID`), so
+ * a flow can address a container and its children independently.
+ *
+ * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
+ * snapshot, the same tree `describe` serves, reshaped into the flow contract.
+ *
+ * Both sources honor the contract `fetchFlowTree` states: a read that isn't
+ * the screen THROWS (the simulator's no-windows guard, the device source's
+ * empty-runner-tree guard) rather than hand back a degraded tree. An empty
+ * tree is the one thing a `hidden`/absent check accepts, and `settleTree`
+ * fingerprints two identical blind reads as a settled screen, so returning one
+ * would flip flow outcomes; see `fetchFlowTree`.
  */
 
 interface RawRect {
@@ -528,4 +537,62 @@ export async function queryFullHierarchyTree(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Project a runner node for the shared flatten (see `flow-tree-flatten`).
+ */
+function projectIosDeviceNode(node: DescribeNode): FlatNode<DescribeNode> {
+  const onScreen = node.frame.width > 0 && node.frame.height > 0;
+  return {
+    skip: false,
+    children: node.children,
+    // Off-screen text must not hoist.
+    ownText: onScreen ? nodeText(node) : "",
+    leaf: { ...node, children: [] },
+    shield: Boolean(node.identifier),
+    // Scroll-clip inputs (see `flattenHoisting`), in the adapter's normalized
+    // space. The runner drops only what lies outside the Application frame: a
+    // row scrolled out of a nested ScrollView whose own frame is still on
+    // screen arrives with its raw frame, so the scroller's frame must clip its
+    // subtree exactly as the simulator and Android projections do.
+    rect: { x: node.frame.x, y: node.frame.y, w: node.frame.width, h: node.frame.height },
+    scrolls: node.scrollable === true,
+  };
+}
+
+/**
+ * Flatten the runner tree into the flow contract (flat leaves, hoisted text).
+ */
+function adaptIosDeviceTreeForFlows(tree: DescribeNode): DescribeNode {
+  const children: DescribeNode[] = [];
+  // Children only, never the Application root.
+  for (const child of tree.children) {
+    flattenHoisting(child, projectIosDeviceNode, children);
+  }
+  return parseDescribeResult({
+    role: tree.role,
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children,
+  });
+}
+
+/**
+ * Physical-device flow tree from the XCUITest runner snapshot.
+ * Throws on a blind read: an empty tree must not settle or satisfy hidden.
+ */
+export async function queryIosDeviceFlowTree(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<DescribeTreeData> {
+  const data = await describeIosDevice(registry, device);
+  // Empty children plus a hint is the describe blind-read shape. A quality
+  // hint on a non-empty tree still has nodes.
+  if (data.tree.children.length === 0 && data.hint) {
+    throw new Error(
+      `${data.hint} Flows resolve selectors against this runner tree, so the step fails ` +
+        `rather than treating the unreadable screen as empty.`
+    );
+  }
+  return { ...data, tree: adaptIosDeviceTreeForFlows(data.tree) };
 }
