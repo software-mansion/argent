@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
-import * as net from "node:net";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
 import { electronGuiChildEnv } from "../../utils/electron-env";
+import { pickFreePort } from "../../utils/free-port";
+import { scheduleGroupSigkill, signalGroup } from "../../utils/process-kill";
 
 // An Electron app boots as a Chromium/CDP runtime, so the device id, platform
 // and tool surface are the generic `chromium` ones; only the launcher here is
@@ -37,23 +38,6 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
  * already-dead instance. Every successful boot pays this latency.
  */
 const BOOT_CONFIRM_WINDOW_MS = 300;
-
-async function pickFreePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (addr && typeof addr === "object") {
-        const { port } = addr;
-        srv.close(() => resolve(port));
-      } else {
-        srv.close(() => reject(new Error("Could not allocate a free TCP port")));
-      }
-    });
-  });
-}
 
 /**
  * Resolve the Electron binary for `appPath`: a `.app` bundle yields its
@@ -152,22 +136,10 @@ function sanitizeExtraArgs(extra: string[]): string[] {
   });
 }
 
-/**
- * Signal the whole process group led by `pid`, reporting whether anything was
- * there. Detached spawn makes the child its own group leader, so descendants
- * that survive a leader-only SIGTERM — an app trapping it in `before-quit`,
- * helpers outliving a wedged browser — are still reachable: survivors reparent
- * to init but keep their pgid.
- */
-function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
-  try {
-    process.kill(-pid, signal);
-    return true;
-  } catch (err) {
-    // ESRCH = the group is empty; anything else (EPERM) means it isn't.
-    return (err as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
+// signalGroup (imported above) is what makes group signalling meaningful here:
+// detached spawn makes the child its own group leader, so descendants that
+// survive a leader-only SIGTERM (an app trapping it in `before-quit`, helpers
+// outliving a wedged browser) are still reachable through the pgid.
 
 function killChildEscalating(child: ChildProcess): void {
   // SIGTERM through the handle lets Electron run its quit sequence and take its
@@ -283,22 +255,21 @@ function sleepUnref(ms: number): Promise<void> {
  */
 function killChromiumByPidFallback(pid: number): void {
   if (!signalGroup(pid, "SIGTERM")) return; // group already empty, nothing to escalate
-  setTimeout(() => {
-    if (signalGroup(pid, 0)) signalGroup(pid, "SIGKILL");
-  }, 2000).unref();
+  scheduleGroupSigkill(pid, 2000, { gateOnGroupLiveness: true });
 }
 
 /**
- * Chromium switches that keep an argent-booted app responsive while its window
- * is unfocused, occluded, or minimized. Without them the compositor throttles a
- * hidden window: mouse-input acks stall for seconds each on hit-testing, wheel
- * scrolls hang, and `document.visibilityState` flips to "hidden".
+ * Chromium throttles an unfocused or occluded window: mouse-input acks stall
+ * for seconds each on hit-testing, wheel scrolls hang, and
+ * `document.visibilityState` flips to "hidden". These switches disable the
+ * timer throttling and renderer backgrounding behind that.
  *
- * primePageSession's focus emulation covers the same ground, but only while a
- * CDP session is attached, and sessions are created lazily and die with the
- * tool-server (which idle-exits while the app lives on) — hence flags, applied
- * unconditionally to apps we spawn. Externally launched CDP targets are
- * unaffected.
+ * They do not reach minimization: a window carrying all three still reads
+ * "hidden" and still costs ~5s per Input.dispatchMouseEvent once minimized
+ * (measured on Electron 42 and Chrome 152). primePageSession's focus emulation
+ * does cover that, but only while a CDP session is attached, and sessions are
+ * created lazily and die with the tool-server (which idle-exits while the app
+ * lives on) — hence flags as well, applied unconditionally to apps we spawn.
  */
 const ANTI_THROTTLING_ARGS = [
   "--disable-background-timer-throttling",
