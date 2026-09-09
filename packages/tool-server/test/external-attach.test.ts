@@ -201,9 +201,9 @@ function republishAt(simulatorServer: FakeSimulatorServer): void {
 }
 
 /**
- * The hook below drops the suite-wide discovery guard, so discovery falls back
- * to `~/.argent/providers` for as long as a test has published no descriptor
- * of its own. Scope the home, so that fallback is a directory this run owns.
+ * The hook below drops the suite-wide discovery guard, so until a test
+ * publishes its own descriptor, discovery reads `~/.argent/providers`. Scoping
+ * the home keeps that a directory this run owns.
  */
 scopeTempHome("argent-external-attach-home-");
 

@@ -138,11 +138,10 @@ function useDescriptors(...files: string[]): void {
 
 /**
  * The hook below drops both the suite-wide discovery guard and
- * `ARGENT_DEVICE_PROVIDERS`, so anything this file discovers without a
- * descriptor of its own comes from `providersDirectory()`. Scoping the home
- * makes that an empty directory this run owns rather than the developer's
- * `~/.argent/providers`, where a provider they are actually running publishes
- * real devices.
+ * `ARGENT_DEVICE_PROVIDERS`, so a test that writes no descriptor of its own
+ * discovers whatever `providersDirectory()` holds. Scoping the home makes that
+ * a directory this run owns rather than the developer's `~/.argent/providers`,
+ * where a provider they are running publishes its real devices.
  */
 const HOME_PREFIX = "argent-external-devices-home-";
 
@@ -222,11 +221,8 @@ describe("the contract's tool-server facade", () => {
   });
 
   /**
-   * Every assertion in this file about an unclaimed device only holds while
-   * `providersDirectory()` is empty, and the suite reaches it whenever a test
-   * writes no descriptor of its own. Pin the directory to the run's own home,
-   * so a provider registered on the machine running the suite cannot answer
-   * for a fixture.
+   * The precondition every "nothing claims this device" assertion in the file
+   * rests on: an empty providers directory, which only a scoped home gives.
    */
   it("discovers against a providers directory this run owns", () => {
     expect(providersDirectory()).toContain(HOME_PREFIX);
