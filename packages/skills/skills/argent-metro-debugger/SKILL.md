@@ -45,12 +45,12 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                                                                                                                              |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                                                                                                                               |
-| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                                            |
-| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details. If it returns `status: "not_connected"`, there is **no** `file` — follow its `guidance` instead of grepping. |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                                                              |
+| Tool                       | Purpose                                                                                                                                                                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Pruned tree of the on-screen React components: name, text/accessibilityLabel, testID, and a normalized tap center. Carries no per-node geometry; for size, overlap or clipping use `describe`, which returns a bounding rect. |
+| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                                                     |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details. If it returns `status: "not_connected"`, there is **no** `file` — follow its `guidance` instead of grepping.          |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                                                                       |
 
 ---
 
@@ -58,10 +58,10 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### `debugger-component-tree` vs `debugger-inspect-element`
 
-|          | `debugger-component-tree`                                              | `debugger-inspect-element`                                      |
-| -------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Best for | Layout overview; finding tap targets; user-defined component hierarchy | Identifying a visible element and tracing it to its source file |
-| Use when | "What's on screen and where?"                                          | "What component is this and where is it defined?"               |
+|          | `debugger-component-tree`                             | `debugger-inspect-element`                                      |
+| -------- | ----------------------------------------------------- | --------------------------------------------------------------- |
+| Best for | Finding tap targets; user-defined component hierarchy | Identifying a visible element and tracing it to its source file |
+| Use when | "What's on screen and where?"                         | "What component is this and where is it defined?"               |
 
 Both can point to source files, but `inspect-element` is purpose-built for source tracing. `component-tree` is for orientation and tap-target discovery.
 
@@ -129,6 +129,6 @@ When reading from the log file:
 | Reload JS (already connected)     | `debugger-reload-metro`                                             |
 | Relaunch app on device            | `restart-app`                                                       |
 | Inspect component at point        | `debugger-inspect-element`                                          |
-| Full component tree               | `debugger-component-tree`                                           |
+| On-screen component tree          | `debugger-component-tree`                                           |
 | Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
 | Evaluate JS                       | `debugger-evaluate`                                                 |
