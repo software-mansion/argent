@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
@@ -35,6 +35,12 @@ const NO_IMAGE_ERROR = /no image to export/i;
 export const FIRST_FRAME_WAIT_MS = 6_000;
 const FIRST_FRAME_POLL_MS = 250;
 
+/**
+ * The input surface `sendCommand` re-encodes onto when a device has no local
+ * WebSocket, which today means only ios-remote's MoQ session. Every send is
+ * awaitable so a transport that can fail says so; the `| void` half keeps one
+ * that cannot from having to be async.
+ */
 export interface SimulatorServerTransport {
   touch(opts: {
     type: TouchActionName;
@@ -42,11 +48,11 @@ export interface SimulatorServerTransport {
     y: number;
     secondX?: number;
     secondY?: number;
-  }): void;
-  button(opts: { direction: KeyActionName; button: ButtonName }): void;
-  rotate(direction: RotationName): void;
+  }): Promise<void> | void;
+  button(opts: { direction: KeyActionName; button: ButtonName }): Promise<void> | void;
+  rotate(direction: RotationName): Promise<void> | void;
   paste(text: string): Promise<void> | void;
-  pressKey(direction: KeyActionName, keyCode: number): void;
+  pressKey(direction: KeyActionName, keyCode: number): Promise<void> | void;
   screenshot(opts?: {
     rotation?: RotationName;
     scale?: number;
@@ -99,19 +105,37 @@ function failAllPending(conn: Connection, makeError: (cmd: string) => FailureErr
   for (const entry of entries) entry.settle(makeError(entry.cmd));
 }
 
+/** A command that never reached the device, whichever transport dropped it. */
+const COMMAND_TRANSPORT_FAILURE: FailureSignal = {
+  error_code: FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED,
+  failure_stage: "simulator_command_transport",
+  failure_area: "tool_server",
+  error_kind: "network",
+  network_failure: "connection_reset",
+  failure_command: "simulator_server",
+};
+
 function transportError(cmd: string, apiUrl: string, detail: string): FailureError {
   return new FailureError(
     `simulator-server did not accept the '${cmd}' command: ${detail}. ` +
       `The command was NOT delivered to the device. Check that the simulator is still booted ` +
       `and the simulator-server for ${apiUrl} is running.`,
-    {
-      error_code: FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED,
-      failure_stage: "simulator_command_transport",
-      failure_area: "tool_server",
-      error_kind: "network",
-      network_failure: "connection_reset",
-      failure_command: "simulator_server",
-    }
+    COMMAND_TRANSPORT_FAILURE
+  );
+}
+
+/**
+ * The MoQ twin of `transportError`: the send itself rejected, so the input was
+ * never written to the remote simulator.
+ */
+function remoteTransportError(cmd: string, cause: unknown): FailureError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return wrapFailure(
+    cause,
+    COMMAND_TRANSPORT_FAILURE,
+    `The remote simulator did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. The cloud session is no longer ` +
+      `usable. Acquire a machine again and reconnect to the device.`
   );
 }
 
@@ -209,15 +233,21 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * the ack is what separates a delivered input from a lost one: every one of
  * those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
+ *
+ * MoQ has no per-command ack, so it reports less: a send the session refuses
+ * (a closed track, a released machine) rejects, while a send that goes out is
+ * reported as delivered. That is strictly narrower than the WebSocket ack, and
+ * it is still the difference between a failed gesture and `{ tapped: true }`.
  */
 export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
+  const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   if (api.transport) {
-    routeViaTransport(api.transport, cmd);
-    return Promise.resolve();
+    return Promise.resolve(routeViaTransport(api.transport, cmd)).catch((cause: unknown) => {
+      throw remoteTransportError(cmdName, cause);
+    });
   }
   const conn = getOrCreateConnection(api);
   const id = String(++cmdId);
-  const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   const payload = JSON.stringify({ id, ...cmd });
 
   return new Promise<void>((resolve, reject) => {
@@ -551,34 +581,30 @@ export async function httpScreenshot(
 function routeViaTransport(
   transport: SimulatorServerTransport,
   cmd: Record<string, unknown>
-): void {
+): Promise<void> | void {
   switch (cmd.cmd) {
     case "touch": {
       // Call sites speak the WebSocket protocol's snake_case second_x/second_y
       // (null when absent); the proto encoder takes optional secondX/secondY.
       const sx = (cmd.second_x ?? cmd.secondX) as number | null | undefined;
       const sy = (cmd.second_y ?? cmd.secondY) as number | null | undefined;
-      transport.touch({
+      return transport.touch({
         type: cmd.type as TouchActionName,
         x: cmd.x as number,
         y: cmd.y as number,
         secondX: sx == null ? undefined : sx,
         secondY: sy == null ? undefined : sy,
       });
-      return;
     }
     case "button":
-      transport.button({
+      return transport.button({
         direction: cmd.direction as KeyActionName,
         button: cmd.button as ButtonName,
       });
-      return;
     case "rotate":
-      transport.rotate(cmd.direction as RotationName);
-      return;
+      return transport.rotate(cmd.direction as RotationName);
     case "key":
-      transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
-      return;
+      return transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);
   }
@@ -603,8 +629,8 @@ export function createMoqTransport(
   };
 
   return {
-    touch(opts) {
-      void moq.sendControl(
+    async touch(opts) {
+      await moq.sendControl(
         encodeTouch({
           action: opts.type,
           x: opts.x,
@@ -614,19 +640,19 @@ export function createMoqTransport(
         })
       );
     },
-    button(opts) {
-      void moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
+    async button(opts) {
+      await moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
     },
-    rotate(direction) {
-      void moq.sendControl(encodeRotate(direction));
+    async rotate(direction) {
+      await moq.sendControl(encodeRotate(direction));
     },
     async paste(text) {
       // The pasteboard fill and ⌘V pair live in the caller's `pasteText`, so
       // this transport stays platform-agnostic.
       await options.pasteText(text);
     },
-    pressKey(direction, keyCode) {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+    async pressKey(direction, keyCode) {
+      await moq.sendControl(encodeKey({ action: direction, code: keyCode }));
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();
