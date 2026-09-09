@@ -23,7 +23,7 @@ adb -s <serial> reverse tcp:8081 tcp:8081
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
+Every tool in the tables below except `restart-app` accepts `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
@@ -38,10 +38,10 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
-| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
+| Tool                    | Purpose                                                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.                                                                |
+| `restart-app`           | Terminate and relaunch the app. Takes `udid` (the `list-devices` id) and `bundleId` — not `port` / `device_id`. Use when app lost Metro connection. |
 
 ### Inspection & console
 
