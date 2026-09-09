@@ -142,6 +142,7 @@ const zodSchema = z
       .optional()
       .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
   })
+  .strict()
   .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
     message: "condition `text` requires expectedText",
     path: ["expectedText"],

@@ -99,6 +99,35 @@ describe("await-screen-idle tool", () => {
     expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
 
+  describe("schema validation", () => {
+    const schema = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi)).zodSchema!;
+
+    it.each(["minStableMS", "min_stable_ms", "frobnicate"])(
+      "rejects the top-level key %s instead of silently applying the default",
+      (key) => {
+        const result = schema.safeParse({ udid: IOS_UDID, [key]: 1000 });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues).toContainEqual(
+            expect.objectContaining({ code: "unrecognized_keys", keys: [key] })
+          );
+        }
+      }
+    );
+
+    it("accepts the declared fields", () => {
+      expect(
+        schema.safeParse({
+          udid: IOS_UDID,
+          timeoutMs: 3000,
+          pollIntervalMs: 200,
+          minStableMs: 250,
+        }).success
+      ).toBe(true);
+    });
+  });
+
   it("settles on the first non-empty read when minStableMs is 0", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([content()])));
 
