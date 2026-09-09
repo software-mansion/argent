@@ -64,7 +64,6 @@ const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 export class LogFileWriter {
   private filePath: string;
   private fd: number | null = null;
-  private writeBuffer: string[] = [];
   private bytesWritten = 0;
   private entryCount = 0;
   private levelCounts: Record<string, number> = {};
@@ -84,19 +83,9 @@ export class LogFileWriter {
     try {
       this.fd = fs.openSync(this.filePath, "w");
       this.ready = true;
-      this.flushBuffer();
     } catch {
       // ignore
     }
-  }
-
-  private flushBuffer(): void {
-    if (!this.ready || this.fd === null) return;
-    for (const line of this.writeBuffer) {
-      const buf = Buffer.from(line);
-      fs.writeSync(this.fd, buf);
-    }
-    this.writeBuffer = [];
   }
 
   write(entry: Omit<RichLogEntry, "marker">): RichLogEntry {
@@ -123,11 +112,11 @@ export class LogFileWriter {
     const levelDisplay = LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
+    // Nothing reopens the file, and readAll() serves it alone, so a line with
+    // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
       const buf = Buffer.from(line);
       fs.writeSync(this.fd, buf);
-    } else {
-      this.writeBuffer.push(line);
     }
 
     this.bytesWritten += Buffer.byteLength(line);
@@ -184,7 +173,6 @@ export class LogFileWriter {
 
   readAll(): RichLogEntry[] {
     if (this.closed || !this.ready) return [];
-    this.flushBuffer();
     try {
       const content = fs.readFileSync(this.filePath, "utf-8");
       return content
