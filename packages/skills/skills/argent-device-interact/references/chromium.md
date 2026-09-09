@@ -4,7 +4,7 @@ Everything in the related SKILL.md still applies; this page covers what differs.
 
 ## Multi-tab / windows
 
-A Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to `list` them (stable ids `t1`, `t2`, …, optional labels), open a `new` one, `select` which is active, or `close` one.
+A Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` (which needs an existing page, so it cannot reopen the last window once it is closed) to `list` them (stable ids `t1`, `t2`, …, optional labels), `select` which is active, `close` one, or open a `new` one. `new` is browser-only: an Electron app has no browser-level target creation, so it is refused there in every state and the app has to open the window itself — e.g. `window.open()` through `debugger-evaluate`.
 
 Every other tool (`describe`, `gesture-tap`, `screenshot`, `debugger-evaluate`, `open-url`, …) acts on the **active** tab, so `chromium-tabs action=select` before driving a different tab.
 

@@ -70,7 +70,7 @@ export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
 - action="delete" (name, + url/domain/path): remove a matching cookie.
 - action="clear": remove ALL browser cookies.
 Use when seeding an authenticated session before a flow (set the session cookie, then navigate) or asserting cookie state after one.
-Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing name/value. Chromium-only.`,
+Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing name/value. It resolves through the active page, so an app that is up with no open tab/window fails before it runs; ask the user to reopen a window. Chromium-only.`,
   searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",
   zodSchema,
   capability,

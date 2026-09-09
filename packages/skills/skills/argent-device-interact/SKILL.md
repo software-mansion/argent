@@ -13,7 +13,7 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. An absent Chromium entry is not proof nothing is running: `list-devices` drops an app that is up with no drivable page exactly as it drops an exited one, so booting there gives you a second copy or a single-instance-lock failure — or, if you pass `electronPort` and something already serves CDP there, an id that drives the app that was already there rather than the one you booted. Drive the id you kept instead and read the failure: a `detail` naming the port's pages — none at all, or only devtools:// ones — is the app answering to say it has no window, and the whole recovery is to have the user reopen one. Every other detail routes elsewhere, including to a port an unrelated process holds, so take the reason and the `guidance` from `debugger-status` rather than reading the absence as an exit. `restart-app` is refused here (see §4); the quit is the user's move. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
@@ -28,7 +28,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 ## 3. Opening Apps
 
-**Never navigate to an app by tapping home-screen icons.** Use `launch-app` or `open-url` — they are instant and reliable.
+**Never navigate to an app by tapping home-screen icons.** Use `launch-app` or `open-url` — they are instant and reliable. On Chromium there is no home screen and no other app to start: navigate with `open-url`, since `launch-app` only confirms the running renderer and starts nothing.
 
 ### launch-app — by bundle ID
 
@@ -48,28 +48,28 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool                | Notes                                                             |
-| ----------------- | ------------------- | ----------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)             |
-| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                          |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                               |
-| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                |
-| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                        |
-| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                     |
-| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down  |
-| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                            |
-| Long press        | `gesture-custom`    | Context menus, drag start                                         |
-| Drag & drop       | `gesture-custom`    | Complex drag interactions                                         |
-| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                          |
-| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                       |
-| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                 |
-| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
-| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
-| Rotate device     | `rotate`            | Orientation changes                                               |
-| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
-| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
+| Action            | Tool                | Notes                                                                                                                                                 |
+| ----------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)                                                                                                 |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**; on Chromium it confirms the running renderer and starts nothing                                             |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID. **Not supported on Chromium** — the quit is the user's move; follow the `guidance` on a `debugger-status` result |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                                                                                                    |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                                                                                                            |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe. Touch only — on Chromium use `gesture-scroll` / `gesture-drag`                                                         |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down                                                                                      |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                                                                                                                |
+| Long press        | `gesture-custom`    | Context menus, drag start. Touch only — on Chromium use `gesture-scroll` / `gesture-drag`                                                             |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions. Touch only — on Chromium use `gesture-scroll` / `gesture-drag`                                                             |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation. Not on Chromium                                                                                             |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation. Not on Chromium                                                                                          |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation. Touch only — on Chromium use `gesture-scroll` / `gesture-drag`                                     |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton. Not on Chromium                                                                                   |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both                                                                                            |
+| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only                                                                                     |
+| Rotate device     | `rotate`            | Orientation changes. Not on Chromium                                                                                                                  |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu                                                                                        |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text                                                                                         |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                                                                                                    |
 
 ## 5. Finding Tap Targets
 

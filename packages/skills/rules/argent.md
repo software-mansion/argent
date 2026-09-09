@@ -17,7 +17,7 @@ Use cases:
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS, Android or Vega)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
-- Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
+- Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222`, `ARGENT_CHROMIUM_PORTS` and the ports `boot-device` opened); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
   </description>
 
 <availability_check>
@@ -41,7 +41,7 @@ Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch
 
 Call a discovery tool yourself only when you have no fresh tree for the current screen — before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
 
-- `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
+- `describe` - native app-level components and safely targetable foreground apps (every platform).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
 - `debugger-component-tree` - react-native specific components
 

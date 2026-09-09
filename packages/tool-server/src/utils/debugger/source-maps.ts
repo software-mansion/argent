@@ -115,14 +115,12 @@ export class SourceMapsRegistry {
       // for a 20 MiB map, and with no size cap, unlike the fetch below.
       //
       // This test belongs INSIDE the `try`, and it is the first thing to touch
-      // `sourceMapURL`. The value is a bare cast over socket JSON — `params
-      // .sourceMapURL as string | undefined` in `cdp-client.ts`, forwarded
-      // unchecked — and `registerFromScriptParsed` only rejects falsy, so a CDP
-      // peer that sends a number reaches `.startsWith` and throws. In here that
-      // is skipped like any other malformed map. Outside, the throw escapes as
-      // a rejected promise nothing awaits before the next tick, which
-      // `index.ts` turns into `crashShutdown` — the whole tool-server and every
-      // device session it owns, for one bad field.
+      // `sourceMapURL`. `registerFromScriptParsed` is exported and only rejects
+      // falsy, so a caller that hands it a non-string reaches `.startsWith` and
+      // throws. In here that is skipped like any other malformed map. Outside,
+      // the throw escapes as a rejected promise nothing awaits before the next
+      // tick, which `index.ts` turns into `crashShutdown` — the whole tool-server
+      // and every device session it owns, for one bad field.
       if (sourceMapURL.startsWith("data:")) return;
       if (!isAllowedSourceMapURL(sourceMapURL)) return;
       // The redirect target is never re-validated, so without

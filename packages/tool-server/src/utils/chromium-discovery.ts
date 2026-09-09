@@ -16,7 +16,7 @@ export interface ChromiumDevice {
   url: string;
   /** Browser version string from /json/version. */
   browser: string | null;
-  /** Always "Running": ports whose CDP endpoint does not answer are not listed. */
+  /** Always "Running": only ports whose CDP endpoint answers with a drivable page are listed. */
   state: "Running";
 }
 
