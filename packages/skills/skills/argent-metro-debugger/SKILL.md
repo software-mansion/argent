@@ -114,7 +114,7 @@ When reading from the log file:
 - Never `Read` the log file directly. Use `grep` or shell commands with limits using the above file format tips.
 - Default to `-m 50` unless you need more.
 - Use `tail -N` recent entries.
-- `clusters[].message` gives you the exact text which you may look for
+- `clusters[].message` is a grouped prefix, not a literal needle: the first 200 chars of the group's first message, grouped on the first 80 chars, top 20 groups only. Grep a short distinctive fragment of it with any embedded newline replaced by a space (the flat line collapses them); `count` covers the whole group, so it can exceed the number of matching lines.
 
 > **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, the specific patterns you need, and Golden Rule 4's untrusted-data caveat.
 

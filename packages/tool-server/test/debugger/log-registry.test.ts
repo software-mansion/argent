@@ -54,7 +54,7 @@ describe("Log Registry (integration)", () => {
     expect(helloCl!.firstId).toBe(0);
     expect(helloCl!.lastId).toBe(3);
     expect(helloCl!.level).toBe("log");
-    // No grepPattern field — use grep -F '<message>' directly
+    // Clusters carry no grepPattern field
     expect((helloCl as any).grepPattern).toBeUndefined();
   });
 
