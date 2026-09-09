@@ -1,8 +1,15 @@
 /**
  * Runs one trusted local script file — JavaScript or bash — in a fresh child
- * process. The extension picks the interpreter; a `.mjs` is the runner's own
- * Node, a `.sh` is the bash {@link resolveBashInterpreter} finds, and every
- * control here applies to both unchanged.
+ * process. The CALLER names the interpreter and nothing here reads an
+ * extension: `flow-script-step.ts` decides, and a request that omits
+ * `interpreter` runs the file under Node whatever it is called. Node runs the
+ * script itself; bash runs the runner, and the runner starts the bash
+ * {@link resolveBashInterpreter} found.
+ *
+ * The time limit, the concurrency slot and the output ceiling apply to both.
+ * The heap limit does not: it is a flag on the child NODE process, so under
+ * bash it bounds the runner and not the script — a `.sh` step allocated 286 MiB
+ * under a 32 MiB limit and passed. `scripts.heapLimitMb` says the same.
  *
  * The child is a *reliability* boundary, not a security one: a script is as
  * trusted as a local npm script, and all the process buys is that an infinite
