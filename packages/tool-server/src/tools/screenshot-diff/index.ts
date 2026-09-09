@@ -207,6 +207,7 @@ export async function executeScreenshotDiffTool(
 async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
   if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
+    await requireUsableOutputDir(params.outputDir);
     return params.outputDir;
   }
   if (params.outputDir) {
@@ -215,7 +216,10 @@ async function resolveOutputDir(params: Params, options?: Partial<ToolContext>):
       return params.outputDir;
     } catch (err) {
       // EEXIST: it appeared since the probe — still a usable host directory.
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") return params.outputDir;
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        await requireUsableOutputDir(params.outputDir);
+        return params.outputDir;
+      }
       // Missing parent or unwritable: not a meaningful path here — use temp below.
     }
   }
@@ -226,6 +230,35 @@ async function resolveOutputDir(params: Params, options?: Partial<ToolContext>):
   );
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Rejects a path that exists but cannot hold the diff artifacts — a regular file
+ * or a read-only directory — which otherwise surfaces as a bare EEXIST/EACCES
+ * from the artifact write and buckets as an unclassified failure. A path that
+ * cannot be stat'd is left to the caller's own create/fallback handling.
+ */
+async function requireUsableOutputDir(dir: string): Promise<void> {
+  const unusable = (reason: string): FailureError =>
+    new FailureError(`outputDir ${reason}: ${dir}`, {
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_output_dir_unusable",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+
+  let stats;
+  try {
+    stats = await fs.stat(dir);
+  } catch {
+    return;
+  }
+  if (!stats.isDirectory()) throw unusable("is not a directory");
+  try {
+    await fs.access(dir, fs.constants.W_OK);
+  } catch {
+    throw unusable("is not a writable directory");
+  }
 }
 
 async function resolveInputPaths(

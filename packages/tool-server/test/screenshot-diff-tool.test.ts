@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
+import { ArtifactStore, FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 
 describe("screenshotDiffTool", () => {
@@ -307,6 +307,87 @@ describe("screenshotDiffTool", () => {
       hostPath: path.join(outputDir, "current-diff.png"),
     });
     await expect(fs.stat(path.join(outputDir, "current-diff.png"))).resolves.toBeTruthy();
+  });
+
+  // An outputDir the diff artifacts cannot be written into reaches the recursive
+  // mkdir in writePngFile as a bare EEXIST/EACCES, which buckets as
+  // argent_unclassified_failure and never names the path.
+  it("classifies an outputDir that exists as a file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-file-out-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    const outputDir = path.join(dir, "not-a-dir.png");
+    await fs.writeFile(outputDir, "");
+
+    const err = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      { artifacts: new ArtifactStore() }
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(`outputDir is not a directory: ${outputDir}`);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_output_dir_unusable",
+      error_kind: "validation",
+    });
+  });
+
+  it("classifies an outputDir that is a read-only directory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-ro-out-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    const outputDir = path.join(dir, "read-only");
+    await fs.mkdir(outputDir);
+    await fs.chmod(outputDir, 0o555);
+
+    const err = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      { artifacts: new ArtifactStore() }
+    )
+      .catch((e: unknown) => e)
+      .finally(() => fs.chmod(outputDir, 0o755));
+
+    expect((err as Error).message).toBe(`outputDir is not a writable directory: ${outputDir}`);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_output_dir_unusable",
+    });
+  });
+
+  // Same path on the probe-said-absent route: the non-recursive mkdir reports
+  // EEXIST for a file just as it does for the raced-in directory above.
+  it("classifies an outputDir the probe missed that exists as a file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-file-race-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    const outputDir = path.join(dir, "not-a-dir.png");
+    await fs.writeFile(outputDir, "");
+
+    const err = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      {
+        artifacts: new ArtifactStore(),
+        fileInputs: {
+          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+        },
+      }
+    ).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "screenshot_diff_output_dir_unusable",
+    });
   });
 
   // The remote case must still fall back: a client-side path whose parent does
