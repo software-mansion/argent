@@ -20,6 +20,7 @@ describe("advertised bundleId pattern", () => {
   it("is advertised by exactly the tools that take an app identifier", () => {
     expect(constrained.map(({ id }) => id).sort()).toEqual([
       "launch-app",
+      "open-url",
       "reinstall-app",
       "restart-app",
       "settings-permissions",
