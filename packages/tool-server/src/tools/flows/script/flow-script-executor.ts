@@ -1467,11 +1467,16 @@ async function sweepStaleExchanges(root: string): Promise<void> {
   }
 }
 
+/**
+ * The moment the name is stamped with, or `undefined` for a name that carries
+ * no stamp. Digits only, so the value is a non-negative integer and no range
+ * check is owed: a digit string too long to be exact is at least 2^53, which
+ * the caller reads as a directory still owned and leaves alone — the same
+ * branch an unstamped name takes.
+ */
 function exchangeOwnedUntil(entry: string): number | undefined {
   const stamped = /^(\d+)-/.exec(entry.slice(EXCHANGE_DIR_PREFIX.length));
-  if (!stamped) return undefined;
-  const moment = Number(stamped[1]);
-  return Number.isSafeInteger(moment) ? moment : undefined;
+  return stamped ? Number(stamped[1]) : undefined;
 }
 
 /** Exported for the test that pins the sweep against a directory it planted. */
