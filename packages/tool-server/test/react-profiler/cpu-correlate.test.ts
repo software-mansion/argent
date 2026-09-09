@@ -232,4 +232,29 @@ describe("serialized index", () => {
     // a corrupt file into "this session had no CPU activity", permanently.
     expect(() => deserializeCpuSampleIndex({ version: 2 } as never)).toThrow(/unsupported/i);
   });
+
+  it("rejects an index whose sample arrays disagree in length", () => {
+    // A v2 file missing `intervalStartsMs` reads `undefined` per interval start,
+    // and `Math.max(startMs, undefined)` turns selfMs, totalMs and coverage into
+    // NaN for every window instead of failing.
+    const partial = {
+      version: 2,
+      timestampsMs: [1, 2, 3],
+      intervalStartsMs: [0, 1, 2],
+      sampleNodeIds: [2, 2, 2],
+      nodes: NODES,
+      durationMs: 3,
+    };
+
+    for (const broken of [
+      { ...partial, intervalStartsMs: undefined },
+      { ...partial, intervalStartsMs: [0, 1] },
+      { ...partial, sampleNodeIds: undefined },
+      { ...partial, sampleNodeIds: [2] },
+    ]) {
+      expect(() => deserializeCpuSampleIndex(broken as never)).toThrow(/unsupported/i);
+    }
+
+    expect(() => deserializeCpuSampleIndex(partial as never)).not.toThrow();
+  });
 });
