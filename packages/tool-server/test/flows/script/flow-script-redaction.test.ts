@@ -1081,6 +1081,69 @@ describe("flow script executor — redaction of a value rendered as bytes", () =
 });
 
 /**
+ * The cut argent itself makes, which no repair could see.
+ *
+ * A repair that answers a cut reads the ellipsis the cutter left. Argent's own
+ * clamp leaves a marker instead, and `redactTruncated` takes that marker off
+ * before the scrub — so the head handed to the repairs held no ellipsis and
+ * every one of them read an uncut text. The same value in the same rendering
+ * came back repaired when NODE cut it and in the clear when argent did.
+ */
+describe("flow script executor — redaction of a value argent's own clamp cut", () => {
+  const KEY: FlowScriptSecret = { name: "LIVEKEY", value: "sk-live-9d3f2a7c41b8e05f6a2d" };
+
+  /**
+   * A failure whose last `room` characters are `tail`, so argent's own ceiling
+   * cuts inside it. The runner's marker eats about thirty of those, which is
+   * why each case names its own room rather than sharing one.
+   */
+  async function clampedAt(tail: string, room: number): Promise<string> {
+    const ws = workspace();
+    const script = ws.write(
+      "clamped.mjs",
+      `throw new Error("x".repeat(${SCRIPT_MAX_FAILURE_MESSAGE_CHARS} - ${room}) + " " + ${tail});`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: KEY.value },
+      secrets: [KEY],
+    });
+    expect(result.ok).toBe(false);
+    const message = result.failure?.message ?? "";
+    expect(message).toMatch(/more characters omitted]$/);
+    return message;
+  }
+
+  /** No run of six or more characters of the value survives, decoded or raw. */
+  function expectNoFragment(text: string, decode: (fragment: string) => string): void {
+    for (let n = KEY.value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= KEY.value.length; at += 1) {
+        expect(decode(text)).not.toContain(KEY.value.slice(at, at + n));
+      }
+    }
+  }
+
+  // The rendering the clamp cuts through, so its visible head is a PREFIX of
+  // the credential in byte space. `byteRunSpans` has the branch that answers
+  // one; it was gated on an ellipsis argent's own marker never leaves.
+  it("replaces the front of a value left standing in a cut byte rendering", async () => {
+    const message = await clampedAt(
+      `(await import("node:util")).inspect(new Uint8Array(Buffer.from(process.env.K)), { maxArrayLength: Infinity })`,
+      142
+    );
+
+    expect(message).toContain("{{secret:LIVEKEY}}");
+    // Read the numbers back as bytes, which is how the disclosure reads.
+    expectNoFragment(message, (text) =>
+      Buffer.from(
+        [...text.matchAll(/\b\d{1,3}\b/g)].map((match) => Number(match[0])).filter((n) => n <= 255)
+      ).toString("utf8")
+    );
+  }, 30_000);
+});
+
+/**
  * Two defects the frame widening and the loosened cut anchor introduced, each
  * the mirror of the other: one replaced too little and disclosed a credential,
  * one replaced too much and corrupted argent's own text.

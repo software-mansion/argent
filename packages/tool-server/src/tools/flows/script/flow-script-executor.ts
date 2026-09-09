@@ -1595,14 +1595,21 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
   // Whole values first, then the prefixes a cut somewhere else left behind. The
   // order is what keeps the second pass off a value the first one already took:
   // it searches only for prefixes SHORTER than the value they came from.
-  const scrub = (part: string) =>
+  // `cutAtEnd` says the part ENDS at a cut, which nothing in the text can say
+  // any more: the marker is argent's own and is taken off before the scrub
+  // runs, so the head handed over holds no ellipsis and every repair that reads
+  // one saw an uncut text. The repair that answers a foreign cut was then off
+  // on the one cut argent itself makes — a `<Buffer …>` rendering came back
+  // repaired when NODE cut it and in the clear when argent did, from the same
+  // value and the same rendering.
+  const scrub = (part: string, cutAtEnd: boolean) =>
     SCRUB_REPAIRS.reduce(
-      (carried, repair) => repair(carried, secrets),
+      (carried, repair) => repair(carried, secrets, cutAtEnd),
       scrubSecretValues(part, secrets)
     );
   const omission = OMISSION_RE.exec(text);
-  if (!omission) return scrub(text);
-  const head = scrub(text.slice(0, omission.index));
+  if (!omission) return scrub(text, false);
+  const head = scrub(text.slice(0, omission.index), true);
   const partial = partialSecretTail(head, secrets);
   return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
 }
@@ -1837,7 +1844,11 @@ function holdsPrefix(text: string, from: number, value: string, n: number): bool
  * hex exactly two digits. A run that is not a byte rendering decodes to bytes
  * that hold no value, and nothing is replaced.
  */
-function repairByteRenderings(text: string, secrets: readonly FlowScriptSecret[]): string {
+function repairByteRenderings(
+  text: string,
+  secrets: readonly FlowScriptSecret[],
+  cutAtEnd = false
+): string {
   const needles = secrets
     .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
     .filter(({ bytes }) => bytes.length > 0)
@@ -1848,6 +1859,11 @@ function repairByteRenderings(text: string, secrets: readonly FlowScriptSecret[]
   for (const { radix, numbers } of BYTE_VIEWS) {
     for (const dropped of sides) {
       const runs = byteRuns(text, numbers, radix, dropped);
+      // The run nearest argent's own cut is the one whose tail may be a value's
+      // front. Nothing in the text says so — the marker is gone — so the caller
+      // does.
+      const last = runs[runs.length - 1];
+      if (cutAtEnd && last) last.cut = true;
       for (let at = 0; at < runs.length; at++) {
         spans.push(...byteRunSpans(runs[at]!, radix, needles));
         spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
@@ -2066,13 +2082,25 @@ function byteRunSpans(
     at += hit.bytes.length;
   }
   if (spans.length > 0 || !run.cut) return spans;
-  // Nothing whole, and the renderer cut here — so the tail may be the front of
-  // a value. Longest first, and shorter than the value, exactly as
-  // {@link quotedCutBefore} reads a cut in text space.
-  for (const { name, bytes } of needles) {
-    for (let n = Math.min(bytes.length - 1, decoded.length); n > 0; n--) {
-      if (decoded.compare(bytes, 0, n, decoded.length - n, decoded.length) !== 0) continue;
-      return runSpans(run, decoded.length - n, n, name);
+  // Nothing whole, and the rendering was cut here — so the tail may be the
+  // front of a value. Longest first, and shorter than the value, exactly as
+  // {@link quotedCutBefore} reads a cut in text space, and floored at the same
+  // {@link CUT_MIN_PREFIX_CHARS}: below it a match says more about the byte
+  // than about the value, and a placeholder is LONGER than the one or two
+  // numbers it would stand in for, so a shorter match grew the message past the
+  // ceiling the child applied and the placeholder itself came back cut.
+  //
+  // Two ends, because argent's own clamp does not cut where a renderer does. A
+  // renderer stops between elements; a character ceiling stops wherever it
+  // falls, so the last number of the run can be half of one — `… 99,\n   5` —
+  // and that half decodes to a byte no value has there, which sank the whole
+  // tail. Dropping it is the second reading.
+  for (const end of [decoded.length, decoded.length - 1]) {
+    for (const { name, bytes } of needles) {
+      for (let n = Math.min(bytes.length - 1, end); n >= CUT_MIN_PREFIX_CHARS; n--) {
+        if (decoded.compare(bytes, 0, n, end - n, end) !== 0) continue;
+        return runSpans(run, end - n, n, name);
+      }
     }
   }
   return spans;
