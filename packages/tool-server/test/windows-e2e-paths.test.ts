@@ -8,11 +8,12 @@ import { describe, expect, it } from "vitest";
  * listed above it".
  *
  * Named files rot. The filter was written file by file and left 18 of the 33
- * files the three listed test files import out of the list — including
- * `configuration-core/src/paths.ts`, which holds the `USERPROFILE` branch one
- * of those tests asserts the global config path against, and
- * `registry/src/file-inputs.ts`, where `SCRIPT_FILE_NAME_PATTERN` gained `sh`.
- * A pull request touching either ran no Windows job at all.
+ * files imported by the three test files it listed at the time out of the
+ * list — including `configuration-core/src/paths.ts`, which holds the
+ * `USERPROFILE` branch one of those tests asserts the global config path
+ * against, and `registry/src/file-inputs.ts`, where
+ * `SCRIPT_FILE_NAME_PATTERN` gained `sh`. A pull request touching either ran
+ * no Windows job at all.
  *
  * Imports are resolved the way the workspace resolves them: `@argent/<pkg>` to
  * that package's `src`, a relative `./x.js` to the `./x.ts` beside it.
@@ -20,6 +21,9 @@ import { describe, expect, it } from "vitest";
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const WORKFLOW = ".github/workflows/windows-e2e.yml";
+
+/** Importing this reaches every tool the registry holds, and most of the server. */
+const WHOLE_SERVER = "packages/tool-server/src/tools/flows/flow-run.ts";
 
 const PACKAGE_SOURCES: Record<string, string> = {
   "@argent/configuration-core": "packages/configuration-core/src",
@@ -106,15 +110,30 @@ describe("the Windows job's path filter", () => {
     // line so the two lists cannot drift apart. The seven other files that
     // line names reach most of the tool server between them, and covering
     // those is not this rule's job — the filter never claimed them.
+    //
+    // The count is what makes the rule below discriminating: the pattern is
+    // indent-sensitive, and over no seeds `unmatched` is vacuously empty, so a
+    // re-indented workflow would pass this having checked nothing. Adding a
+    // `.sh` case to the job means raising this number in the same commit.
     const seeds = [...workflow.matchAll(/^ {10}(test\/flows\/script\/[^\s]+\.test\.ts)$/gm)].map(
       (match) => `packages/tool-server/${match[1]!}`
     );
-    expect(seeds).toHaveLength(3);
+    expect(seeds).toHaveLength(6);
     for (const seed of seeds) {
       expect(fs.existsSync(path.join(WORKSPACE_ROOT, seed))).toBe(true);
     }
 
-    const unmatched = importGraph(seeds).filter((file) => !covers(file));
+    // A seed that reaches `flow-run.ts` reaches every tool behind the registry
+    // with it: 164 files for `flow-script-env.test.ts` against 31 for each of
+    // the others. That puts it with the seven above rather than here, for the
+    // same reason - naming a graph that size file by file would run this job on
+    // nearly every pull request, which is the opposite of what a path filter is
+    // for. The entries such a seed does need are named in the filter by hand,
+    // each beside the reason it decides a Windows outcome.
+    const narrow = seeds.filter((seed) => !importGraph([seed]).includes(WHOLE_SERVER));
+    expect(narrow.length).toBeGreaterThan(0);
+
+    const unmatched = importGraph(narrow).filter((file) => !covers(file));
 
     expect(unmatched).toEqual([]);
   });
