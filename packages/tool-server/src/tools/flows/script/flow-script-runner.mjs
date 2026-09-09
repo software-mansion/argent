@@ -1009,8 +1009,8 @@ function exitOnParentDisconnect() {
 /**
  * In step with both watchdogs' `stop`. On Windows there is no group to name, so
  * `taskkill /t` walks the live tree from this process down — which reaches
- * bash and a `.mjs` script's own subprocesses alike, neither of which anything
- * reached there before.
+ * bash and a `.mjs` script's own subprocesses alike, neither of which the
+ * self-kill below reaches on its own.
  */
 function stopOwnGroup() {
   try {

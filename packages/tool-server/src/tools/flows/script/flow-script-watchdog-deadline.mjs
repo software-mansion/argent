@@ -24,8 +24,8 @@ if (Number.isFinite(deadlineMs) && deadlineMs > 0) {
     // No process group to name (Windows, or a runner that never led one).
   }
   // Windows has no group for the line above to name, so the self-kill below
-  // used to be the whole reach — leaving bash, and a `.mjs` script's own
-  // subprocesses, running. `taskkill /t` walks the live tree from this process
+  // reaches this process alone, leaving bash — and a `.mjs` script's own
+  // subprocesses — running. `taskkill /t` walks the live tree from this process
   // down instead. `child_process` is available in a worker thread, and this
   // call not returning is the outcome wanted; `taskkill.exe` is itself a
   // descendant of the pid it is aimed at.
