@@ -154,7 +154,10 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  "platform": { kind: "value" },
+  // Constrained here because the tool-server's own rejection is a raw Zod issue
+  // dump — and in a directory run it lands only after the first flow has run,
+  // taking the rest of the batch down with it.
+  "platform": { kind: "value", choices: ["ios", "android", "chromium", "vega"] },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 
