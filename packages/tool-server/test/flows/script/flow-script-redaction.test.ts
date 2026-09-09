@@ -44,14 +44,35 @@ function bashAtPathOfLength(bash: string, chars: number): string {
   return link;
 }
 
-/** `scripts.bash` for one workspace, read against the flow's own project. */
-function pinBash(dir: string, bash: string): void {
-  fs.mkdirSync(path.join(dir, ".argent"), { recursive: true });
+/**
+ * `scripts.bash` for the duration of `body`, in a home directory of the test's
+ * own.
+ *
+ * The GLOBAL document, because that is the only scope the key takes: a helper
+ * that wrote `<ws>/.argent/config.json` pinned nothing — `readScopeValue`
+ * returns before a project file is read — so the case below ran under the
+ * host's ordinary short bash path and never reached the branch it exists for.
+ */
+async function withPinnedBash<T>(bash: string, body: () => Promise<T>): Promise<T> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-redaction-home-"));
+  const real = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
   fs.writeFileSync(
-    path.join(dir, ".argent", "config.json"),
+    path.join(home, ".argent", "config.json"),
     JSON.stringify({ scripts: { bash } }),
     "utf8"
   );
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  try {
+    return await body();
+  } finally {
+    for (const [name, previous] of Object.entries(real)) {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 function executor(options: FlowScriptExecutorOptions = {}) {
@@ -183,10 +204,15 @@ describe("flow script executor — redaction of a bash step", () => {
       // `The script exited with code 5 (bash: <path>).` and the space in front
       // of the reason, less the path itself.
       const exitLine = "The script exited with code 5 (bash: ). ".length;
-      // Enough to pass the ceiling by a few dozen characters, which puts the
-      // clamp inside the reason's marker rather than in front of it.
-      const pathChars = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - exitLine - reasonCeiling - 50;
-      pinBash(ws.dir, bashAtPathOfLength(hostBash, pathChars));
+      // Enough to pass the ceiling, which puts the clamp inside the reason's
+      // marker rather than in front of it. PLUS the margin, not minus: the exit
+      // line has to be LONGER than the room `MAX_REASON_CHARS` reserves for it,
+      // which is the whole premise the fix is about, and subtracting left the
+      // message short of the ceiling - so the branch was not entered even once
+      // the pin applied. The margin is small because the whole path has to stay
+      // inside PATH_MAX, 1024 on macOS.
+      const pathChars = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - exitLine - reasonCeiling + 20;
+      const pinned = bashAtPathOfLength(hostBash, pathChars);
 
       const pad = reasonCeiling - 10;
       const script = ws.write(
@@ -196,16 +222,21 @@ describe("flow script executor — redaction of a bash step", () => {
          printf '%${reasonCeiling}s' '' | tr ' ' 'y' >> "$ARGENT_REASON"
          exit 5`
       );
-      const result = await executor().execute({
-        scriptPath: script,
-        interpreter: "bash",
-        projectRoot: ws.dir,
-        env: { API_KEY: SECRET.value },
-        secrets: [SECRET],
-      });
+      const result = await withPinnedBash(pinned, () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          env: { API_KEY: SECRET.value },
+          secrets: [SECRET],
+        })
+      );
 
       const message = result.failure?.message ?? "";
       expect(result.failure?.kind).toBe("exit");
+      // The pin is what puts the whole message past the ceiling, so a pin that
+      // did not apply leaves this case asserting nothing about the branch.
+      expect(message).toContain(pinned);
       expect(message.length).toBeLessThanOrEqual(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
       expect(message).toMatch(/this report keeps the first \d+ characters]$/);
       for (let n = SECRET.value.length; n > 3; n -= 1) {
