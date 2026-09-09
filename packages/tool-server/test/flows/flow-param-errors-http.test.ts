@@ -38,6 +38,34 @@ describe("flow param errors over HTTP", () => {
     expect(res.body.error).toContain("needs the flow's name in `name`");
   });
 
+  it("returns 400 for a run-time env carrying __proto__ in the raw JSON body", async () => {
+    // The only channel where `__proto__` arrives as an OWN property: the body is
+    // parsed with `JSON.parse`, which puts it there without invoking the
+    // accessor. `z.record` then REBUILDS the map without it, so the run would
+    // answer 200 with that one value silently gone — which is why the refusal
+    // lives in the parameter's `z.preprocess`, before the record is built. The
+    // two tool tests for this name call `execute` directly and never run the
+    // schema, so what they observe is the `describeScriptEnvProblem` backstop,
+    // and the backstop cannot see a name the rebuild already dropped.
+    //
+    // A body LITERAL, not an object: a `__proto__` key written in JS source is
+    // the accessor, not an entry.
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const { app } = createHttpApp(registry);
+
+    const res = await request(app)
+      .post("/tools/flow-execute")
+      .set("Content-Type", "application/json")
+      .send(
+        `{"project_root":${JSON.stringify(tmpDir)},"name":"demo","env":{"__proto__":"x","A":"y"}}`
+      );
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("`env`");
+    expect(res.body.message).toContain("holds __proto__");
+  });
+
   it("renders the 400 body as prose that names the caller's own keys, not raw Zod JSON", async () => {
     const registry = new Registry();
     registry.registerTool({
