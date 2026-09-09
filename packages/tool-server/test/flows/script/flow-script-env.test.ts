@@ -631,6 +631,43 @@ describe("serialization", () => {
     }
   });
 
+  it("says the script already ran when a PARSE-stage env fault refuses its append", async () => {
+    // The third recorder, and the one where the wording costs most: the script
+    // has run and nothing it did is rolled back, so "check the script's changes
+    // before you retry" sends the author over a script that did exactly what it
+    // was asked. Its append tested only the output-reference stage, while both
+    // siblings answer the two parse stages as well.
+    //
+    // The window is real and this file already accounts for it: the pre-run
+    // read catches a header that is on disk BEFORE the call, so only an edit
+    // landing WHILE the script runs reaches the append — which is the same
+    // window the `envDrifted` check below the append exists for.
+    await write(
+      "scripts/slow.mjs",
+      "await new Promise((r) => setTimeout(r, 1200));\noutput.ok = true;"
+    );
+    for (const [name, header] of [
+      ["script-parse-reserved", 'env:\n  NODE_OPTIONS: "--inspect"\nsteps: []\n'],
+      ["script-parse-number", "env:\n  RETRIES: 5\nsteps: []\n"],
+      ["script-output-ref", 'env:\n  TOKEN: "{{output:1.token}}"\nsteps: []\n'],
+    ] as const) {
+      await flowStartRecordingTool.execute({}, { name, project_root: root });
+
+      const rejection = flowAddScriptTool.execute({}, {
+        name,
+        project_root: root,
+        path: "../../scripts/slow.mjs",
+      } as never);
+      // The hand edit, landing while the script is still running.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await write(`.argent/flows/${name}.yaml`, header);
+
+      await expect(rejection).rejects.toThrow(/passed, but the step was not recorded/);
+      await expect(rejection).rejects.toThrow(/already in the file, not in this script/);
+      await expect(rejection).rejects.not.toThrow(/Check the script's changes before you retry/);
+    }
+  }, 30_000);
+
   it("truncates a checked-in `env:` with the rest of the file", async () => {
     // The reset replaces the file, and the header is part of the file: no
     // recording tool writes an `env:`, so nothing here can put one back. An

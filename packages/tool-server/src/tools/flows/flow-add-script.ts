@@ -406,7 +406,21 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       // starts, and a `script` step spells no other field that scan reads.
       // Saying "recording it failed" would send the author back over the one
       // call that did nothing wrong, and never name the edit to undo.
-      const refusedTheFile = getFailureSignal(err)?.failure_stage === "flow_output_reference";
+      //
+      // Three stages, not one, and each is read off the file BEFORE this step
+      // joins it. The output reference is one; every other `env:` fault a hand
+      // edit can leave — a reserved name, a non-string value, a tagged map, a
+      // name that is not one — arrives as `flow_file_parse` or
+      // `flow_file_parse_step`. The two sibling recorders answer all three; this
+      // is the recorder where the wording costs most, because the script has
+      // already run and nothing it did is rolled back, so "check the script's
+      // changes before you retry" sends the author over a script that did
+      // exactly what it was asked.
+      const stage = getFailureSignal(err)?.failure_stage;
+      const refusedTheFile =
+        stage === "flow_output_reference" ||
+        stage === "flow_file_parse" ||
+        stage === "flow_file_parse_step";
       throw wrapFailure(
         err,
         {
