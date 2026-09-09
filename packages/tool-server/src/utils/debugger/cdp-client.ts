@@ -441,12 +441,20 @@ export class CDPClient {
       const timer = setTimeout(() => {
         this.pendingBindings.delete(id);
         reject(
-          new FailureError(`Binding response for requestId=${id} timed out`, {
-            error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
-            failure_stage: "debugger_cdp_binding",
-            failure_area: "tool_server",
-            error_kind: "timeout",
-          })
+          new FailureError(
+            `Binding response for requestId=${id} timed out — the runtime took the script ` +
+              `but never called back over the binding. It may be paused at a breakpoint ` +
+              `(the script is dispatched without awaiting it, so a paused runtime still ` +
+              `accepts it and never runs the callback), or frozen. Check the debugger and ` +
+              `resume it; if nothing is paused, restart the app. Do not retry in a loop — ` +
+              `each attempt waits out the full timeout.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+              failure_stage: "debugger_cdp_binding",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+            }
+          )
         );
       }, timeout);
 
