@@ -742,6 +742,13 @@ describe("what a failing bash step says", () => {
   // reaches the runner as well as the jobs it was aimed at. Ended there, the
   // runner never read `$ARGENT_OUTPUT` and never sent a verdict, and the parent
   // described the SIGTERM on ITS OWN child as one the script did not choose.
+  //
+  // Which of the two verdicts follows is the bash's own, the same split the
+  // SIGQUIT case below records: GNU bash 5.x dies with the group and the step
+  // reports the `kill 0` guidance, Apple's 3.2 — the bash a stock Mac offers,
+  // and one `flow-script-interpreter.ts` accepts — does not, and the step
+  // passes on the document it wrote. Neither is the parent calling this a
+  // signal from the host, which is what this pins.
   onPosix(
     "reads a group-wide kill as the script's own answer, not as a signal from the host",
     async () => {
@@ -754,10 +761,14 @@ describe("what a failing bash step says", () => {
        printf '{"seeded":true}' > "$ARGENT_OUTPUT.t"
        mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
       );
-      expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toContain("process group was sent SIGTERM");
-      expect(result.failure?.message).toContain("kill 0");
-      expect(result.failure?.message).not.toContain("did not stop itself");
+      expect(result.failure?.message ?? "").not.toContain("did not stop itself");
+      if (result.ok) {
+        expect(result.output).toEqual({ seeded: true });
+      } else {
+        expect(result.failure?.kind).toBe("exit");
+        expect(result.failure?.message).toContain("process group was sent SIGTERM");
+        expect(result.failure?.message).toContain("kill 0");
+      }
     },
     30_000
   );
@@ -866,6 +877,10 @@ describe("what a failing bash step says", () => {
   // libuv's signal pipe with no order between them, so the unchanged script
   // landed on the `signal` side about once in thirty runs on an idle machine
   // and about once in twelve under load. One run cannot see that; these can.
+  //
+  // ONE verdict, not a named one: which it is belongs to the bash, as above.
+  // The race is what puts a second kind in the set, and `signal` is the side it
+  // lands on.
   onPosix(
     "reads a group-wide kill the same way on every run",
     async () => {
@@ -897,7 +912,8 @@ describe("what a failing bash step says", () => {
         for (const kind of verdicts) kinds.add(kind);
       }
 
-      expect(kinds).toEqual(new Set(["exit"]));
+      expect(kinds.size).toBe(1);
+      expect(kinds.has("signal")).toBe(false);
     },
     180_000
   );
