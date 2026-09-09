@@ -240,7 +240,7 @@ Use a local `.mjs` or `.sh` script only when the user requests one. A flow of sc
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js`. For a symlink, the extension of the target file decides. If the target has no extension, the extension in the step decides.
+The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js` in the step's own `path`. For a symlink, the target decides only when the target ends in `.mjs` or `.sh`. A target named `tool.bash`, `tool.py`, or one with no extension, keeps the extension the step wrote: a `.sh` step runs it under bash, and a `.mjs` step hands it to Node, which refuses it with a loader error that names the target.
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 

@@ -275,7 +275,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script is a local `.mjs` or `.sh` file.
 
-The extension selects the interpreter. An `.mjs` file runs under Node.js, and a `.sh` file runs under bash. There is no `language` key. Argent reads the extension of the file the path resolves to, so a symlink takes the interpreter of its target. A target that has no extension keeps the extension you wrote in the step. See [Bash scripts](#bash-scripts).
+The extension selects the interpreter. An `.mjs` file runs under Node.js, and a `.sh` file runs under bash. There is no `language` key. For a symlink, the target decides only when the target itself ends in `.mjs` or `.sh`. A target with any other extension, or with none, keeps the extension you wrote in the step: a `.sh` step whose target is `tool.py` still runs under bash, and a `.mjs` step whose target is `tool.bash` still goes to Node, which then refuses the file. See [Bash scripts](#bash-scripts).
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
