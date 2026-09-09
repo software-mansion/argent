@@ -127,10 +127,12 @@ function protoEnvNameProblem(): string {
  * `z.record` REBUILDS the map, and a JSON body can carry `__proto__` as an own
  * property — `JSON.parse` puts it there without invoking the accessor — so the
  * rebuild dropped it before any rule of argent ran and the call passed with
- * that entry silently gone. Both descriptions said so, and one CLI channel
- * refused the same name outright: `argent flow run --env __proto__=v` exits 2
- * with a paragraph, while `--env-json` reached this schema and exited 0
- * without a word.
+ * that entry silently gone. Both descriptions said so, and the CLI refused the
+ * same name outright: `argent flow run --env __proto__=v` exits 2 with a
+ * paragraph of its own, because it builds the map from `NAME=value` pairs and
+ * has a rule for this one. An MCP or HTTP caller sends a JSON body instead,
+ * which is the only channel the name arrives on as an own property — and that
+ * caller reached this schema and got a 200 without a word.
  *
  * Refused where it is still visible, which is before the record is built. The
  * JSON Schema this parameter publishes is unchanged — `whose` names the map,
