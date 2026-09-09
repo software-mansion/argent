@@ -1251,6 +1251,43 @@ describe("finding the interpreter", () => {
     30_000
   );
 
+  // The executor wires the request's abort into the lookup. Nothing else pinned
+  // that it does: dropping `request.signal` from the call left the whole suite
+  // green, and the `"cancelled" in found` arm beside it reachable through no
+  // test. Aborted DURING the lookup rather than before it, because the check at
+  // the top of `runOne` answers a signal already raised and would pass either
+  // way.
+  onPosix(
+    "cancels a step while it is still looking for bash",
+    async () => {
+      const ws = workspace();
+      const bin = ws.resolve("deafbin");
+      fs.mkdirSync(bin, { recursive: true });
+      const deaf = path.join(bin, "bash");
+      fs.writeFileSync(deaf, `#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n`);
+      fs.chmodSync(deaf, 0o755);
+      const script = ws.write("cancel-lookup.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(), 300);
+
+      const startedAt = Date.now();
+      const result = await withSearchPath(bin, () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          signal: cancel.signal,
+        })
+      );
+
+      expect(result.failure?.kind).toBe("cancelled");
+      // The probe's own timeout plus its force grace is six seconds; without
+      // the signal the step waits all of it and then runs.
+      expect(Date.now() - startedAt).toBeLessThan(4_000);
+    },
+    30_000
+  );
+
   // A global document that cannot be parsed reads as an empty one, so
   // `scripts.bash` looks unset and the step takes the PATH bash - which is the
   // fallback the resolver's first rule says it will not paper a wrong value

@@ -783,6 +783,60 @@ describe("a candidate that will not answer", () => {
     30_000
   );
 
+  // The same, on the branch every ordinary install takes. `scripts.bash` unset
+  // is the PATH search, and the check inside the candidate loop is the one that
+  // ends it: without it the cancellation is swallowed and the resolver reports
+  // success, or - on a host where no candidate answers - reports `spawn`,
+  // "install bash", for a run the user cancelled.
+  onPosix(
+    "stops probing the PATH search when the request is cancelled",
+    async () => {
+      const root = hostWith(undefined);
+      const stubborn = nodeExecutable(
+        root,
+        "bash",
+        'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
+      );
+      execFileMock.mockReturnValue({ stdout: `${stubborn}\n`, stderr: "" });
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort(), 300);
+
+      const startedAt = Date.now();
+      const found = await resolveBashInterpreter(process.env, cancel.signal);
+      const elapsed = Date.now() - startedAt;
+
+      expect(found).toEqual({ cancelled: true });
+      expect(elapsed).toBeLessThan(3_000);
+    },
+    30_000
+  );
+
+  // A signal already raised costs nothing at all. An aborted call replayed is
+  // otherwise a full probe round per replay, plus the detached probe children
+  // each round leaves behind, against a 30 s client budget.
+  onPosix(
+    "probes nothing at all when the request is already cancelled",
+    async () => {
+      const root = hostWith(undefined);
+      const stubborn = nodeExecutable(
+        root,
+        "bash",
+        'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
+      );
+      execFileMock.mockReturnValue({ stdout: `${stubborn}\n`, stderr: "" });
+      const cancel = new AbortController();
+      cancel.abort();
+
+      const startedAt = Date.now();
+      const found = await resolveBashInterpreter(process.env, cancel.signal);
+
+      expect(found).toEqual({ cancelled: true });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(execFileMock).not.toHaveBeenCalled();
+    },
+    30_000
+  );
+
   // The candidate is stopped with everything it started. A shim that
   // backgrounds a job left that job re-parented to pid 1 and running after the
   // call returned - and after the flow run, and after the tool server.
