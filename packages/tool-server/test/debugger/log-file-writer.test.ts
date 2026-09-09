@@ -81,6 +81,39 @@ describe("LogFileWriter", () => {
     expect(clusters[1].count).toBe(1);
   });
 
+  it("merges two messages sharing their first 80 chars, keeping the first arrival's text", () => {
+    const shared = "P".repeat(80);
+    writer.write(makeEntry(0, { message: `${shared}ALPHA` }));
+    writer.write(makeEntry(1, { message: `${shared}BETA` }));
+
+    const clusters = writer.getClusters();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].message).toBe(`${shared}ALPHA`);
+    expect(clusters[0].count).toBe(2);
+  });
+
+  it("truncates the cluster message to 200 chars, still verbatim in the flat line", () => {
+    const long = "L".repeat(311);
+    writer.write(makeEntry(0, { message: long }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe(long.slice(0, 200));
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).toContain(clusters[0].message);
+  });
+
+  it("keeps in the cluster message the newlines the flat line collapses", () => {
+    writer.write(makeEntry(0, { message: "first line\nsecond line" }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe("first line\nsecond line");
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).not.toContain(clusters[0].message);
+    expect(content).toContain("first line second line");
+  });
+
   it("limits clusters to requested count", () => {
     for (let i = 0; i < 30; i++) {
       writer.write(makeEntry(i, { message: `msg-${i}` }));

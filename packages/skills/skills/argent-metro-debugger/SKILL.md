@@ -116,7 +116,7 @@ When reading from the log file:
 - Never `Read` the log file directly. Use `grep` or shell commands with limits using the above file format tips.
 - Default to `-m 50` unless you need more.
 - Use `tail -N` recent entries.
-- `clusters[].message` gives you the exact text which you may look for
+- `clusters[].message` is a truncated, grouped prefix - grep a short fragment of it, not the whole string.
 - Search bracketed text such as `[L:42]` or `[object Object]` with `grep -F`, or escape the brackets (`\[L:42\]`). Unescaped, `[...]` is a character class: `grep '[L:42]'` matches every line in the file.
 
 > **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, the specific patterns you need, and Golden Rule 4's untrusted-data caveat.
