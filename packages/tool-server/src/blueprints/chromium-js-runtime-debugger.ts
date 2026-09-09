@@ -12,7 +12,7 @@ import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
-import { recordReapedSession } from "../utils/reaped-sessions";
+import { recordReapedSession, describeLostHistory } from "../utils/reaped-sessions";
 import {
   type ConsoleLogEntry,
   type ConsoleLogEvents,
@@ -122,12 +122,24 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     return { chromium: `${CHROMIUM_CDP_NAMESPACE}:${_payload}` };
   },
 
-  // Deliberately NO recoverable(): the registry's self-heal disposes the node
-  // before retrying, and dispose unlinks the captured console log. It would
-  // also buy nothing — the only failure window while this node and ChromiumCdp
-  // both stay RUNNING is a tab switch, where CDPClient.reconnect() re-points
-  // the same client object and the cached node heals itself; a genuinely dead
-  // socket arrives instead as ChromiumCdp's terminated cascade.
+  // Deliberately NO recoverable() here. The registry's self-heal disposes the
+  // recovering node before it retries, and this blueprint's dispose closes the
+  // LogFileWriter, ending the capture session whether or not the retry then
+  // succeeds: the registry mints a new one over a new path, and the old file is
+  // either unlinked or — since a self-heal fires on NOT_CONNECTED, which means a
+  // socket that is not OPEN — kept under a breadcrumb for a session that never
+  // died. It would also buy nothing: the one window where a call fails while
+  // this node and its ChromiumCdp dependency stay RUNNING is a tab switch,
+  // where CDPClient.reconnect() rejects in-flight
+  // requests with CONNECTION_CLOSED (late sends with NOT_CONNECTED) but
+  // re-points the SAME client object at the new tab — the cached node heals
+  // itself for the next call without any dispose. The failing call surfaces a
+  // classified error that debugger-status maps to a structured "reconnecting"
+  // result with retry-once guidance. A genuinely dead Chromium socket instead
+  // fires ChromiumCdp's own terminated event, whose teardown cascades into this
+  // dependent — the node leaves RUNNING and the next call re-resolves fresh.
+  // (Same reasoning as debugger-log-registry's missing socket gate — a dispose
+  // buys nothing here and costs the session; see that tool's comment.)
 
   async factory(deps, payload, options) {
     const opts = options as ChromiumJsdFactoryOptions | undefined;
@@ -153,12 +165,20 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // covered by ChromiumCdp's own terminated event cascading into us. Both
     // listeners must come back off in dispose — `cdp.events` outlives us.
     const events = new TypedEventEmitter<ServiceEvents>();
+    // Deliberately NOT where "did the renderer die?" is answered — dispose reads
+    // the socket for that. When the renderer goes away, `ChromiumCdp`'s own
+    // handler for this event runs first and cascades a teardown into us, and
+    // that dispose removes this listener before the emit reaches it, so a latch
+    // set here would still be false on the one path it would exist for.
     const onDisconnected = (error?: Error) => {
       events.emit("terminated", error ?? new Error("Chromium CDP disconnected"));
     };
-    cdp.events.on("disconnected", onDisconnected);
-
     const logWriter = new LogFileWriter(port);
+    // Registered after the writer, whose constructor mkdir -p's ~/.argent/tmp
+    // and throws on an unwritable home: this client belongs to `ChromiumCdp`
+    // and survives a failed factory, so a listener attached before the throw
+    // would stay on it forever.
+    cdp.events.on("disconnected", onDisconnected);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
@@ -190,7 +210,23 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     };
     cdp.events.on("consoleAPICalled", onConsoleAPI);
 
-    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+    // No dispose exists until this factory returns, so a throw here leaves
+    // everything set up above with nothing to ever undo it: the writer's fd, its
+    // file and its keepalive would last as long as the process — the keepalive
+    // holding that file out of `pruneStaleLogs` for exactly that long — and the
+    // two listeners would stay on `ChromiumCdp`'s client, which survives this
+    // failure, feeding console entries into a session that no longer exists —
+    // and, once the rollback below closes the writer, into a closed one. The
+    // client itself is that service's to disconnect, not ours.
+    let consoleServer: Awaited<ReturnType<typeof createConsoleLogServer>>;
+    try {
+      consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+    } catch (err) {
+      cdp.events.off("consoleAPICalled", onConsoleAPI);
+      cdp.events.off("disconnected", onDisconnected);
+      logWriter.close();
+      throw err;
+    }
 
     // Best-effort: no Chromium-capable tool uses evaluateWithBinding today (its
     // only two callers are gated RN-only), so a failure here is not fatal.
@@ -228,27 +264,60 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       dispose: async () => {
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
-        await consoleServer.close();
-        // `logWriter.close()` below unlinks the log file, and this dispose is
-        // routinely triggered by another agent's `stop-all-simulator-servers`
-        // (`ChromiumJsRuntimeDebugger` is in `DEVICE_OWNED_NAMESPACES`). The
-        // breadcrumb is what keeps `debugger-log-registry`'s promise that an
-        // empty result with no note means the app logged nothing. Only one key
-        // to write, unlike Hermes: here `logicalDeviceId` IS `device.id`.
+        // Same breadcrumb the Hermes blueprint leaves, for the same reason:
+        // this dispose ends the capture session, and `ChromiumJsRuntimeDebugger`
+        // being in `DEVICE_OWNED_NAMESPACES` makes it routinely triggered by
+        // another agent's `stop-all-simulator-servers`.
+        // Without it `debugger-log-registry` reports `totalEntries: 0` with no
+        // note, and its description reads a bare zero as "nothing captured
+        // since this session began" — with nothing to say the session changed,
+        // the reader takes that for the one that died. The next resolve always
+        // builds a fresh writer over a new path, so the count restarts at 0
+        // whether or not the old file survives below.
+        //
+        // One id, unlike Hermes: a chromium device's `logicalDeviceId` IS its
+        // `device.id` (set from it in the api above), so there is no second key
+        // to write.
+        //
+        // The socket, not the `disconnected` event, because on the path this
+        // exists for that event never reaches us: a dead renderer closes the
+        // shared client, `ChromiumCdp`'s handler runs before ours and
+        // synchronously cascades a teardown into this service, and the `off`
+        // above then unregisters our handler mid-emit — `TypedEventEmitter`
+        // iterates the live listener set, so it is skipped rather than called.
+        // `CDPClient` nulls its socket before emitting, so the socket is the
+        // durable form of the same fact. Its one ambiguity is a tab switch,
+        // where `reconnect()` also leaves the client briefly socket-less with
+        // the renderer alive; a teardown landing inside that window keeps a file
+        // the pruner reclaims a day later, which is the cheaper way to be wrong.
+        const runtimeDied = !cdp.isConnected();
         const captured = logWriter.getStats().totalEntries;
+        const keptAt = runtimeDied && logWriter.hasFile() ? logWriter.getFilePath() : undefined;
         if (captured > 0) {
           recordReapedSession(
             "js-runtime-debugger",
             device.id,
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-              `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-              `than the app having logged nothing.`
+            describeLostHistory(captured, keptAt),
+            {
+              cause: runtimeDied ? "runtime-death" : "teardown",
+              keptAt,
+              // The same id, here: a Chromium device's `logicalDeviceId` IS its
+              // `device.id`. Passed all the same, because the store reclaims a
+              // replaced record's file only for an event that carries one.
+              logicalId: device.id,
+            }
           );
         }
-        logWriter.close();
-        // Deliberately no `cdp.disconnect()` (unlike the Hermes blueprint): the
-        // session belongs to ChromiumCdp and its other consumers — screenshot,
-        // describe, gesture-tap, ...
+        // After the socket read, not before it: an await here would let a
+        // teardown's socket close mid-dispose and be reported as a death.
+        await consoleServer.close();
+        // Gated on `captured` for the same reason the breadcrumb is: a death
+        // that logged nothing leaves an empty file no breadcrumb names and
+        // nothing reclaims for a day.
+        logWriter.close({ keepFile: runtimeDied && captured > 0 });
+        // Do NOT disconnect the cdp — it belongs to the ChromiumCdp service.
+        // Disposing this blueprint must leave the underlying CDP session alive
+        // for other consumers (screenshot, describe, gesture-tap, ...).
       },
       events,
     };

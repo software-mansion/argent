@@ -514,6 +514,12 @@ describe("debugger-status not-connected results", () => {
     // re-resolve the failing service — the guidance must not send agents there.
     expect(result.guidance).not.toMatch(/\(launch-app\)/);
     expect(result.guidance).toContain("--remote-debugging-port");
+    // And it points at the kept log. debugger-status carries no note of its
+    // own, and on Chromium this is the only not-connected reason a dead
+    // renderer produces — a non-OPEN socket reads as reconnecting — so an
+    // agent that follows this guidance straight to a relaunch is the whole
+    // route, with nothing else on it to mention the file.
+    expect(result.guidance).toContain("debugger-log-registry's note names it");
     expect(setup.failed).toEqual([]);
     expect(outcomeCalls()[0][1]).toMatchObject({ outcome: "cdp_unreachable" });
   });

@@ -61,6 +61,8 @@ const LEVEL_DISPLAY: Record<string, string> = {
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
+let nextWriterSeq = 0;
+
 export class LogFileWriter {
   private filePath: string;
   private fd: number | null = null;
@@ -71,12 +73,23 @@ export class LogFileWriter {
   private clusters = new Map<string, ClusterState>();
   private ready = false;
   private closed = false;
+  private keepalive: NodeJS.Timeout | null = null;
 
   constructor(port: number) {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
-    this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
+    pruneStaleLogs(dir);
+    // pid and sequence, not just port and start time: two devices share one
+    // Metro, and two connects to it do the same discovery and handshake in
+    // lockstep, so they reach this line in the same millisecond often enough to
+    // measure. Sharing a path costs more than interleaved lines now that a file
+    // outlives its session — the note would hand out this path with this
+    // session's count beside another session's lines, its `open()` having
+    // truncated ours, and that session's ordinary teardown would unlink the
+    // file the breadcrumb still names.
+    const unique = `${process.pid}-${nextWriterSeq++}`;
+    this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}-${unique}.log`);
     this.open();
   }
 
@@ -85,8 +98,32 @@ export class LogFileWriter {
       this.fd = fs.openSync(this.filePath, "w");
       this.ready = true;
       this.flushBuffer();
+      // What makes `pruneStaleLogs`' age test a liveness test. mtime otherwise
+      // only moves when an entry is written, so a session that has captured
+      // nothing for a day — or one past MAX_ENTRIES, where `write` stops
+      // touching the file at all — would look exactly like an orphan while its
+      // fd is still open, and the next connect from any tool-server would
+      // unlink it out from under the tool that had already handed out its path.
+      this.keepalive = setInterval(() => this.touch(), KEEPALIVE_MS);
+      this.keepalive.unref();
     } catch {
-      // ignore
+      // Nothing reopens the file: `write` buffers instead, and `hasFile` is how
+      // a caller finds out there is nothing on disk to read.
+    }
+  }
+
+  /**
+   * Mark the file live for the pruner. Through the fd because that is what this
+   * writer owns: nothing stops the path being unlinked under a live writer, and
+   * `utimesSync` would throw there while the fd goes on working.
+   */
+  private touch(): void {
+    if (this.fd === null) return;
+    const now = new Date();
+    try {
+      fs.futimesSync(this.fd, now, now);
+    } catch {
+      // unlinked, or a filesystem that refuses — the writer keeps working
     }
   }
 
@@ -160,6 +197,16 @@ export class LogFileWriter {
     return this.filePath;
   }
 
+  /**
+   * Whether {@link getFilePath} names something a reader can open. `open()`
+   * swallows its failure and buffers instead, so entries can be counted for a
+   * file that was never created — and a breadcrumb built from the count alone
+   * would send the reader at a path that has never existed.
+   */
+  hasFile(): boolean {
+    return fs.existsSync(this.filePath);
+  }
+
   getStats(): LogStats {
     return {
       file: this.filePath,
@@ -210,9 +257,32 @@ export class LogFileWriter {
     return { entries: filtered, total };
   }
 
-  close(): void {
+  /**
+   * Close the handle. There is nothing to flush — writes reach the fd as they
+   * arrive, and the buffer only ever holds what an `open()` failure left with
+   * nowhere to go. `keepFile` leaves the log on disk: the caller is shutting
+   * the writer down because the JS runtime died, and the entries captured
+   * before it died are the reason a developer would look. Two things reclaim
+   * it: the breadcrumb store, when a later crash under the same ids AND the same
+   * runtime-assigned id files a kept file of its own while this one's record
+   * still sits unread, and `pruneStaleLogs` from this class's constructor, on
+   * the next debugger connect that finds it a day untouched. A record that has
+   * been read is spent, so a file whose path an agent was handed waits for the
+   * sweep alone. On a host that stops debugging entirely it stays until one of
+   * those runs.
+   */
+  close(opts: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
+    // Before the keepalive goes and the fd with it: mtime is the only thing the
+    // sweep reads, and it otherwise stands at the last hourly tick — up to an
+    // hour before the crash — so a kept file would age out at 23h while every
+    // description of it says a day. A no-op on the unlink path below.
+    this.touch();
+    if (this.keepalive !== null) {
+      clearInterval(this.keepalive);
+      this.keepalive = null;
+    }
     if (this.fd !== null) {
       try {
         fs.closeSync(this.fd);
@@ -221,10 +291,60 @@ export class LogFileWriter {
       }
       this.fd = null;
     }
+    if (opts.keepFile) return;
     try {
       fs.unlinkSync(this.filePath);
     } catch {
       // file may already be gone
+    }
+  }
+}
+
+const STALE_LOG_AGE_MS = 24 * 60 * 60 * 1000;
+/** Comfortably inside STALE_LOG_AGE_MS, so a live file is never a candidate. */
+const KEEPALIVE_MS = 60 * 60 * 1000;
+// Only the names this version mints. A name without the pid-and-sequence pair
+// came from a writer with no keepalive, whose mtime moves only when a line is
+// written — so a live session capturing nothing, or one past MAX_ENTRIES, is
+// indistinguishable from an orphan there, and that writer has no `hasFile()` to
+// report the unlink either. Installs of different versions share this directory
+// and run their servers side by side, so the choice is between an older install's
+// live files being swept by a newer one and the older shape being swept by
+// nobody. This takes the second: it leaves files behind, where the first would
+// delete the log of a live session that is merely between lines — the one case
+// the older shape cannot be told apart from an orphan.
+const LOG_NAME_RE = /^argent-logs-\d+-\d+-\d+-\d+\.log$/;
+
+/**
+ * Drop log files left behind by earlier sessions — the writer keeps its file
+ * when the runtime dies, and a tool-server killed outright never closes its
+ * writer at all, so without this the directory only grows. Age-based rather
+ * than delete-all, because several tool-servers share this directory and none
+ * can enumerate the others' sessions; `touch`'s keepalive is what earns that,
+ * refreshing an open file's mtime whether or not it is being written to, so a
+ * file this stale has no writer behind it in any process that runs this code.
+ * The remaining gap is a filesystem that refuses `futimes` (which `touch`
+ * swallows), which is why the cutoff is a day rather than an hour: the file has
+ * to look abandoned for far longer than a session plausibly sits idle. Opening
+ * a writer is the only thing that runs this, so a host that stops debugging
+ * keeps what it has.
+ */
+function pruneStaleLogs(dir: string): void {
+  const cutoff = Date.now() - STALE_LOG_AGE_MS;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!LOG_NAME_RE.test(name)) continue;
+    const full = path.join(dir, name);
+    try {
+      if (fs.statSync(full).mtimeMs >= cutoff) continue;
+      fs.unlinkSync(full);
+    } catch {
+      // raced with another server, or not ours to remove
     }
   }
 }
