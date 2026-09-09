@@ -50,14 +50,6 @@ const MAX_ENTRIES = 50_000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
-const LEVEL_DISPLAY: Record<string, string> = {
-  log: "LOG  ",
-  warn: "WARN ",
-  error: "ERROR",
-  info: "INFO ",
-  debug: "DEBUG",
-};
-
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
@@ -120,7 +112,7 @@ export class LogFileWriter {
     const flatMessage = entry.message.replace(/\n/g, " ");
     // Pad for alignment but never truncate: CDP types such as "warning" and
     // "assert" exceed 5 chars and must round-trip back through parseFlatLine.
-    const levelDisplay = LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5);
+    const levelDisplay = entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
     if (this.ready && this.fd !== null) {

@@ -99,13 +99,13 @@ Logs are written to a flat log file on disk. Use the **log-registry → grep** p
 
 One entry per line — fields (whitespace-separated, `|` delimiter before message)
 
-| Field         | Example                     | Notes                                               |
-| ------------- | --------------------------- | --------------------------------------------------- |
-| `[L:<id>]`    | `[L:42]`                    | Unique anchor; search it literally (see below)      |
-| `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                            |
-| `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                        |
-| `<source>`    | `src/api/user.ts:42` or `-` | Relative path from source map; `-` if unavailable   |
-| `<message>`   | `Failed login attempt`      | Full message; embedded newlines replaced with space |
+| Field         | Example                                                 | Notes                                                             |
+| ------------- | ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `[L:<id>]`    | `[L:42]`                                                | Unique anchor; search it literally (see below)                    |
+| `<timestamp>` | `2026-03-17T14:30:00.000Z`                              | ISO 8601                                                          |
+| `<LEVEL>`     | `ERROR`, `WARNING`, `LOG  `, `INFO `, `DEBUG`, `ASSERT` | Uppercased CDP level, padded to at least 5 chars, never truncated |
+| `<source>`    | `src/api/user.ts:42` or `-`                             | Relative path from source map; `-` if unavailable                 |
+| `<message>`   | `Failed login attempt`                                  | Full message; embedded newlines replaced with space               |
 
 Source attribution (file + line) is also available in `clusters` returned by `debugger-log-registry`.
 
