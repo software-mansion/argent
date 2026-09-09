@@ -383,10 +383,18 @@ describe("screenshotDiffTool", () => {
   });
 
   it("demands the runner service when a direct caller requests a device live capture", async () => {
+    // outputDir is resolved before the service check, so omitting it would mint
+    // a fallback dir under argent-screenshot-diff that the throw then strands.
+    const outputDir = await makeTempDir("argent-screenshot-diff-norunner-");
     await expect(
       executeScreenshotDiffTool(
         {},
-        { baselinePath: "/tmp/baseline.png", captureCurrent: true, udid: PHYSICAL_UDID }
+        {
+          baselinePath: "/tmp/baseline.png",
+          captureCurrent: true,
+          udid: PHYSICAL_UDID,
+          outputDir,
+        }
       )
     ).rejects.toThrow("requires an iosDeviceRunner service");
   });
@@ -415,6 +423,9 @@ describe("screenshotDiffTool", () => {
     );
 
     const diffHostPath = (result.diffPath as { hostPath: string }).hostPath;
+    // The per-call dir the fallback minted, not the shared argent-screenshot-diff
+    // root above it — that one belongs to any tool-server running alongside.
+    tempDirs.push(path.dirname(diffHostPath));
     expect(diffHostPath.startsWith(outputDir)).toBe(false);
     expect(diffHostPath).toContain("argent-screenshot-diff");
   });
