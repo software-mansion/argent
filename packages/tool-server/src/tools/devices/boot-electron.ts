@@ -374,10 +374,12 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   child.once("error", spawnErrorListener);
 
   if (!child.pid) {
-    // No pid and no async error yet is still possible on some platforms when
-    // spawn fails very early. Detach first so an `error` event delivered after
-    // this throw can't reject an orphan promise and crash the tool-server.
+    // An unresolvable binary reports both ways: spawn() returns without a pid
+    // AND emits ENOENT on the next tick. Swap the rejecting listener for an
+    // absorber so that event neither rejects the promise this throw orphans nor
+    // escapes as an uncaught `error` event and kills the tool-server.
     child.removeListener("error", spawnErrorListener);
+    child.on("error", () => {});
     spawnErrorReject = null;
     throw new FailureError(
       `Electron boot: spawn returned without a pid (binary: ${launcher.command}).`,

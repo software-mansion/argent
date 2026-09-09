@@ -227,8 +227,9 @@ describe("bootElectronApp — spawn error handling", () => {
   });
 
   it("still rejects when spawn returns a child with no pid (early-fail path)", async () => {
-    // Some platforms produce a child without a pid AND no async error event.
-    // The synchronous "no pid" guard catches that case.
+    // `spawn()` reports an unresolvable binary synchronously as a missing pid,
+    // before any deferred `error` event can arrive. The "no pid" guard turns
+    // that into the rejection.
     spawnMock.mockReturnValue(makeFakeChild({ pid: undefined }));
 
     await expect(
@@ -382,12 +383,13 @@ describe("bootElectronApp — spawn error handling", () => {
     }
   });
 
-  it("detaches the error listener after the no-pid throw — a deferred 'error' must not become an unhandled rejection", async () => {
-    // Real-world regression scenario: a hostile platform returns a Child with
-    // no pid AND fires a deferred 'error' event after spawn returns. Before
-    // the fix, the error listener would still be attached and would call
-    // reject() on a promise that nobody is awaiting — Node's default
-    // --unhandled-rejections=throw would then crash the tool-server.
+  it("swallows the deferred 'error' that follows the no-pid throw — no uncaught exception, no unhandled rejection", async () => {
+    // Node reports an unresolvable binary both ways: `spawn()` returns a child
+    // with no pid AND emits ENOENT on the next tick, after the "no pid" guard
+    // has already thrown. That event must reach a listener that neither
+    // rejects the promise the throw orphaned nor lets EventEmitter escalate it
+    // to an uncaught exception — either one kills the whole tool-server,
+    // taking every other session's device connections with it.
     const child = makeFakeChild({ pid: undefined });
     spawnMock.mockReturnValue(child);
 
@@ -406,18 +408,12 @@ describe("bootElectronApp — spawn error handling", () => {
         })
       ).rejects.toThrow(/spawn returned without a pid/);
 
-      // After the synchronous throw, no listener should remain on the child.
-      expect(child.listenerCount("error")).toBe(0);
-
       // Fire the deferred error now — like Node would.
       const err = new Error("late ENOENT") as NodeJS.ErrnoException;
       err.code = "ENOENT";
-      // emit() with no listener on a stock EventEmitter would throw, but the
-      // test fake-child uses a vanilla EventEmitter, so emit just no-ops when
-      // there are no listeners on a non-'error' channel. For 'error' events
-      // specifically Node DOES throw — so guard the emit to confirm the
-      // listener was actually detached.
-      expect(() => child.emit("error", err)).toThrow(/late ENOENT/);
+      // An 'error' event with no listener is rethrown synchronously out of
+      // emit(); in the tool-server that surfaces as the uncaught exception.
+      expect(() => child.emit("error", err)).not.toThrow();
 
       // Give microtasks a tick to surface any unhandled rejection.
       await new Promise((r) => setImmediate(r));
