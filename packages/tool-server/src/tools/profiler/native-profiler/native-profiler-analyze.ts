@@ -44,6 +44,9 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
       `Failed to analyze native profile: ${failureSignal.error_code}`,
   },
   capability,
+  // Parsing a trace from a recording up to RECORDING_CAP_MS long routinely exceeds
+  // the 30s MCP fetch timeout, and an aborted call is replayed, not cancelled.
+  longRunning: true,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
 iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Android: queries the Perfetto .pftrace via the in-process Perfetto trace-processor engine for CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal.

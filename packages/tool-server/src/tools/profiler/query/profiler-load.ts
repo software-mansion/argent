@@ -505,6 +505,9 @@ Fails if the session_id is not found or required XML files are missing from disk
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   capability: RN_ONLY_TOOL_CAPABILITY,
+  // load_native re-parses the whole export, which can outlast the 30s MCP fetch
+  // timeout; an aborted call is replayed, not cancelled.
+  longRunning: true,
   services: (params) => {
     const svcs: Record<string, ServiceRef> = {};
     if (params.mode === "load_native") {

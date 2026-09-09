@@ -66,6 +66,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
   },
+  // The Android branch re-queries the .pftrace, so a cold trace-processor engine
+  // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
+  // rather than cancels.
+  longRunning: true,
   services: (params) => ({
     nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

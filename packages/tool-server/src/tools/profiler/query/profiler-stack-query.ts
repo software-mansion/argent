@@ -447,6 +447,10 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
     apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
   },
+  // The Android branch re-queries the .pftrace, so a cold trace-processor engine
+  // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
+  // rather than cancels.
+  longRunning: true,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
