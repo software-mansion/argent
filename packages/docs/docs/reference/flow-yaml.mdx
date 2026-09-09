@@ -328,12 +328,16 @@ Argent runs the file as `bash <file>`. The file needs no execute bit, and Argent
 
 The exit code is the verdict. A non-zero code fails the step. Exit code 0 passes the step, unless the output document is unusable. Exit code 126 means that bash cannot read the file, or that a command in the file is not executable. Exit code 127 means that bash did not find a command.
 
-`$ARGENT_OUTPUT` names the output document of the step, as a file. Argent puts the document the flow holds into that file before the step, and reads the file back after exit code 0. The content must be a JSON object, in UTF-8, of at most 1 MiB. Write a sibling file and `mv` it into place:
+`$ARGENT_OUTPUT` names the output document of the step, as a file. Argent seeds the file with `{}` before the step, and reads the file back after exit code 0. The content must be a JSON object, in UTF-8, of at most 1 MiB. A script that writes nothing leaves the seed, and the step passes with an empty document. Write a sibling file and `mv` it into place:
 
 ```bash
+set -euo pipefail
+id="$(date +%s)"
 printf '{"order":{"id":"%s"}}\n' "$id" > "$ARGENT_OUTPUT.new"
 mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"
 ```
+
+Every value the script uses has to come from the script itself, from a file, or from the allowlist above. The allowlist removes each other name, so an undefined name expands to the empty string and the step still passes: without `set -u`, the example above writes `{"order":{"id":""}}`.
 
 A redirection into `$ARGENT_OUTPUT` empties the file before the command that fills it runs, and Argent fails a step whose document is empty. These four cases fail a script that exited 0: an empty file, a file that is gone, a file that is not a regular file, and a document that is not valid UTF-8. A script that leaves the file as Argent seeded it also fails when a sibling one carriage return past the name exists, which is the silent symptom of CRLF line endings.
 
@@ -349,8 +353,8 @@ macOS ships bash 3.2 at `/bin/bash`. Set `scripts.bash` to use bash 4 features.
 
 Rules for the script file:
 
-- **Use LF line endings.** The usual CRLF symptom is `$'\r': command not found` and exit code 127. Add `*.sh text eol=lf` to `.gitattributes`
-- **Commands resolve against the PATH of the tool-server**, not against the PATH of your shell. A command that is absent from that PATH exits 127. Restart the tool-server after you change the PATH. On Windows, the bash of Git for Windows puts its own directories first, so `curl` and `sed` resolve to its copies
+- **Use LF line endings.** Argent discards what the script prints, so the `$'\r': command not found` line bash writes never reaches you. What you see instead is a step that failed on an exit code the script did not choose, or a step that failed because the redirection landed one carriage return past the name `$ARGENT_OUTPUT` holds. Add `*.sh text eol=lf` to `.gitattributes`
+- **Commands resolve against the PATH of the tool-server**, not against the PATH of your shell. A command that is absent from that PATH exits 127. Argent runs the file as `bash <file>` with no `-e`, so only the exit code of the last line reaches the step: a missing command earlier in the file leaves the step passing on a seed it never filled. Start each file with `set -euo pipefail`. Restart the tool-server after you change the PATH. On Windows, the bash of Git for Windows puts its own directories first, so `curl` and `sed` resolve to its copies
 - **A background job ends with the step on macOS and Linux.** Argent stops the process group of the step, which holds bash and every job bash started. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job, so stop it yourself. `setsid` is absent on macOS
 - **On Windows a background job outlives a step that passed.** Windows has no process group. Argent walks the process tree there instead, and it can only walk it while the step is still running - which is the case when Argent stops a step, and not the case when the script exits on its own. Stop each job in the script
 - **Do not reap jobs with `trap 'kill 0' EXIT`.** `kill 0` also kills bash, and the step fails. Signal the pid of each job instead

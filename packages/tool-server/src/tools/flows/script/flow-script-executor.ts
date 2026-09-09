@@ -1318,8 +1318,11 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
 /**
  * The document goes in, and the same file is what comes back out — which is
  * what makes the merge rule in a later PR identical for both languages, and
- * what lets a script that wants to ADD one key read what it was given first.
- * `reason.txt` is created empty so a script can append to it without a test.
+ * what will let a script that wants to ADD one key read what it was given
+ * first. Nothing hands a document in yet: `flow-script-step.ts` passes
+ * `output: {}` on every step, so what a `.sh` reads back today is always the
+ * empty seed. `reason.txt` is created empty so a script can append to it
+ * without a test.
  *
  * Both files carry the document, and the document may hold values derived from
  * a secret, so both are written 0600 rather than left to the umask. The barrier
