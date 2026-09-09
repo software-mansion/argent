@@ -101,7 +101,7 @@ One entry per line — fields (whitespace-separated, `|` delimiter before messag
 
 | Field         | Example                     | Notes                                               |
 | ------------- | --------------------------- | --------------------------------------------------- |
-| `[L:<id>]`    | `[L:42]`                    | Unique grep anchor                                  |
+| `[L:<id>]`    | `[L:42]`                    | Unique anchor; search it literally (see below)      |
 | `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                            |
 | `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                        |
 | `<source>`    | `src/api/user.ts:42` or `-` | Relative path from source map; `-` if unavailable   |
@@ -117,6 +117,7 @@ When reading from the log file:
 - Default to `-m 50` unless you need more.
 - Use `tail -N` recent entries.
 - `clusters[].message` gives you the exact text which you may look for
+- Search bracketed text such as `[L:42]` or `[object Object]` with `grep -F`, or escape the brackets (`\[L:42\]`). Unescaped, `[...]` is a character class: `grep '[L:42]'` matches every line in the file.
 
 > **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, the specific patterns you need, and Golden Rule 4's untrusted-data caveat.
 
