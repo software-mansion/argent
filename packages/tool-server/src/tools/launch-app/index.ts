@@ -4,6 +4,7 @@ import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { LaunchAppResult, LaunchAppVegaServices, LaunchAppIosServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { iosRemoteImpl } from "./platforms/ios-remote";
@@ -11,13 +12,9 @@ import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
-// Union of the Android package and iOS bundle-id (dashes allowed) alphabets.
-// The head is restricted so a bundleId like `--user` can't masquerade as a flag
-// inside `am start -n …` / `cmd package resolve-activity …`.
-const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
-// Same alphabet plus `/` as the package/activity separator, with `.` allowed as
-// the head so `.MainActivity` works. Leading `-` and shell metacharacters like
-// `$` are excluded for the same flag-injection reason.
+// The bundleId alphabet plus `/` as the package/activity separator, with `.`
+// allowed as the head so `.MainActivity` works. Leading `-` is excluded for the
+// same flag-injection reason as bundleId, as are shell metacharacters like `$`.
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
 const zodSchema = z.object({
@@ -27,7 +24,7 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   bundleId: z
     .string()
-    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
       "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). Chromium: arbitrary tag; the call is a no-op since the renderer is already running."
     ),
