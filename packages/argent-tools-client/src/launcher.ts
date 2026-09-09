@@ -842,15 +842,23 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     //   • bundlePath === ours — never a different version's server, which may be
     //     healthy and serving another project's session;
     //   • a command-line identity match, re-confirmed by terminatePid right
-    //     before each signal.
+    //     before each signal — only where `ps` exists. On Windows the check
+    //     always fails, so the kill stays unguarded there rather than leaving
+    //     the wedged server running, untracked, on a leaked port. The two
+    //     guards above still hold, so this site takes on less pid-reuse risk
+    //     than the other two kills that go unguarded on Windows.
+    const guarded = process.platform !== "win32";
     if (
       state &&
       state.managed === "autospawn" &&
       state.bundlePath === paths.bundlePath &&
       isProcessAlive(state.pid) &&
-      processCommandMatches(state.pid, state.bundlePath)
+      (!guarded || processCommandMatches(state.pid, state.bundlePath))
     ) {
-      await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
+      await terminatePid(
+        state.pid,
+        guarded ? () => processCommandMatches(state.pid, state.bundlePath) : undefined
+      );
     }
     // Retire only OUR OWN record — another install's must survive so its server
     // stays reachable by its owner. The sweep then clears per-bundle files whose

@@ -184,6 +184,55 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
   );
 
   it(
+    "still terminates the wedged server it respawns over where `ps` cannot identify it",
+    { timeout: 30_000 },
+    async () => {
+      // Windows has no `ps`, so processCommandMatches returns false for every
+      // pid. Gating the kill on it there would leave the wedged autospawned
+      // server holding its port after its record is unlinked, with nothing left
+      // to find it by. Its command line does not match the recorded bundle, so
+      // the guard would reject it on a platform that does have `ps`.
+      const wedged = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], {
+        stdio: "ignore",
+      });
+      const wedgedPid = wedged.pid!;
+      spawnedPids.push(wedgedPid);
+      expect(launcher.isToolsServerProcessAlive(wedgedPid)).toBe(true);
+
+      await launcher.writeToolsServerState({
+        port: 1, // nothing listens here -> health check fails fast
+        pid: wedgedPid,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        host: "127.0.0.1",
+        token: "wedged-token",
+        managed: "autospawn",
+      });
+
+      const realPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      let handle: Awaited<ReturnType<typeof launcher.ensureToolsServer>>;
+      try {
+        handle = await launcher.ensureToolsServer(fakePaths());
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: realPlatform,
+          configurable: true,
+        });
+      }
+
+      await waitForDeath(wedgedPid);
+      expect(launcher.isToolsServerProcessAlive(wedgedPid)).toBe(false);
+
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
+      expect(state).not.toBeNull();
+      expect(state!.pid).not.toBe(wedgedPid);
+      spawnedPids.push(state!.pid);
+      expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
+    }
+  );
+
+  it(
     "leaves a CLI-managed (`argent server start`) server alive instead of killing it on respawn",
     { timeout: 30_000 },
     async () => {
