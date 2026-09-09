@@ -69,13 +69,21 @@ on:
       - "packages/tool-server/test/helpers/host-bash.ts"
       - "packages/tool-server/test/helpers/flow-script-workspace.ts"
       # The same rule, applied to the rest of the import graph of those three.
-      # `config-schema.ts` is where `WINDOWS_ROOTED_PATH_RE` and the win32 arm
-      # of `asAbsolutePath` live, and `flow-script-interpreter.ts` reads that
-      # same regex back - so a change to the one rule the two sides share
-      # touched none of the paths above and was never exercised against a real
-      # Windows host, a real `where.exe` or a real Git-for-Windows `bash.exe`.
-      - "packages/configuration-core/src/config-schema.ts"
-      - "packages/configuration-core/src/config-access.ts"
+      # Resolving every import of the three test files transitively gives a
+      # 33-file graph, and naming files one by one left 18 of them out. Two of
+      # those decided a Windows outcome: `configuration-core/src/paths.ts` holds
+      # the `USERPROFILE` branch that `flow-script-interpreter.test.ts` asserts
+      # the global config path against, and `registry/src/file-inputs.ts` is
+      # where `SCRIPT_FILE_NAME_PATTERN` gained `sh` - so the change that admits
+      # `.sh` steps at all could be edited without this job running. Both
+      # packages are small and wholly inside the graph, so each is taken whole
+      # rather than file by file, which is also what stops the list rotting.
+      # `config-schema.ts` in the first of them is where `WINDOWS_ROOTED_PATH_RE`
+      # and the win32 arm of `asAbsolutePath` live, and `flow-script-interpreter.ts`
+      # reads that same regex back.
+      - "packages/configuration-core/src/**"
+      - "packages/registry/src/**"
+      - "packages/tool-server/src/utils/capability.ts"
       - "packages/tool-server/src/utils/electron-env.ts"
       - "packages/tool-server/src/utils/format-error.ts"
       - "packages/tool-server/src/utils/secrets.ts"
