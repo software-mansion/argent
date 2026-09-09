@@ -90,7 +90,7 @@ const env = {
   ctx: { artifacts: new ArtifactStore() },
 } as unknown as ActionEnv;
 
-let tmpDir: string;
+let tmpDir = "";
 let osTmpdir: string;
 let restoreTmpdir: () => void = () => {};
 
