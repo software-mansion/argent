@@ -332,26 +332,31 @@ describe("scripts.bash, read from the global config file", () => {
     }
   );
 
-  // The marker is the LAST thing the probe prints, so a window on the head of
-  // the candidate's output is a window the answer falls out of. A wrapper that
-  // greets before `exec`ing a real bash is the shape the leading newline in
-  // `BASH_PROBE_COMMAND` already exists for; past 4 KiB of greeting that
-  // mitigation was undone and the wrapper was refused as "not a bash".
-  it.skipIf(realPlatform === "win32" || hostBashPath === undefined)(
-    "reads the version of a candidate that greets with more than the probe keeps",
-    async () => {
+  // A window on the candidate's output is a window the answer falls out of,
+  // whichever end it is on, and a wrapper prints on both: one that greets
+  // before `exec`ing a real bash, and one that RUNS bash and then prints - to
+  // clean up, or to exit with bash's own status. A head window lost the first
+  // past 4 KiB; a tail window lost the second at 4059 trailing characters and
+  // took 4058, deterministically.
+  const onWrapper = it.skipIf(realPlatform === "win32" || hostBashPath === undefined);
+  const WRAPPERS = [
+    ["greets before it execs a real bash", `printf '%s\\n' '<noise>'\nexec <bash> "$@"`],
+    ["runs a real bash and prints after it", `<bash> "$@"\nst=$?\nprintf '%s' '<noise>'\nexit $st`],
+  ] as const;
+  for (const [at, [shape, body]] of WRAPPERS.entries()) {
+    onWrapper(`reads the version of a candidate that ${shape}`, async () => {
       const root = hostWith(undefined);
-      const wrapper = path.join(root, "greeting-bash");
+      const wrapper = path.join(root, `wrapping-bash-${at}`);
       fs.writeFileSync(
         wrapper,
-        `#!/bin/sh\nprintf '%s\\n' '${"B".repeat(64 * 1024)}'\nexec ${hostBashPath} "$@"\n`
+        `#!/bin/sh\n${body.replaceAll("<noise>", "B".repeat(64 * 1024)).replaceAll("<bash>", hostBashPath!)}\n`
       );
       fs.chmodSync(wrapper, 0o755);
       pinGlobalConfig({ scripts: { bash: wrapper } });
 
       expect(await resolveBashInterpreter()).toEqual({ path: wrapper });
-    }
-  );
+    });
+  }
 
   // The guard is a comparison of strings, and Windows gives one file several
   // names. `\\?\` is the extended-length prefix, which `path.resolve` keeps —

@@ -29,7 +29,7 @@ const BASH_CONFIG_KEY = "scripts.bash";
  */
 const BASH_PROBE_COMMAND = 'printf \'\\n%s%s\\n\' "argent-bash-version:" "${BASH_VERSION}"';
 
-const BASH_PROBE_MARKER = /^argent-bash-version:\S/m;
+const BASH_PROBE_MARKER = /^argent-bash-version:\S/;
 
 const BASH_PROBE_TIMEOUT_MS = 5_000;
 
@@ -56,12 +56,20 @@ const BASH_PROBE_FORCE_GRACE_MS = 1_000;
 const BASH_PROBE_SETTLE_MS = 250;
 
 /**
- * How much of the candidate's standard output is kept - the LAST of it, not the
- * first. `BASH_PROBE_COMMAND` prints the marker last, after whatever the
- * candidate greeted with, so a window on the head is a window the answer falls
- * out of: a wrapper that printed 4 KiB of banner before `exec`ing a real bash
- * was refused as "not a bash", while the same wrapper one character shorter ran
- * the step. A window on the tail holds the marker whatever precedes it.
+ * How much of ONE line of the candidate's standard output is kept.
+ *
+ * A window on the whole output is a window the answer falls out of, whichever
+ * end it is on, because a wrapper can print on either side of the bash it runs:
+ * a head window lost the marker to a wrapper that greeted with 4 KiB before
+ * `exec`ing a real bash, and a tail window lost it to a wrapper that RUNS bash
+ * and then prints — to clean up, or to exit with bash's own status — where 4058
+ * trailing characters passed and 4059 was refused as "not a bash". On the
+ * search path the same cut is silent: the step ran under the NEXT candidate,
+ * which on a Mac is Apple's 3.2.
+ *
+ * So nothing is windowed. `BASH_PROBE_COMMAND` puts the marker alone on a line
+ * of its own, the lines are read as they arrive, and only the unfinished last
+ * line is held — capped here, at its head, which is where a marker would be.
  */
 const BASH_PROBE_MAX_CHARS = 4 * 1024;
 
@@ -170,7 +178,7 @@ async function notBashProblem(
   signal?: AbortSignal
 ): Promise<string | null> {
   const answer = await askForBashVersion(candidate, probeEnv, signal);
-  if (BASH_PROBE_MARKER.test(answer.stdout)) return null;
+  if (answer.answered) return null;
   if (answer.signal) {
     // Which of the two happened, because the remedy is not the same one. A
     // candidate this check stopped is a slow or hanging one; a candidate that
@@ -200,20 +208,20 @@ async function notBashProblem(
  * input is the null device, the same end of file the step gives the script — without it
  * the wrapper this check exists for reads an open pipe until the timeout, and
  * answers in five seconds what it can answer at once. Its standard output is
- * kept only up to the marker's own length, so a candidate that streams costs
- * the timeout rather than the heap, and the window is on the END of the output,
- * where the answer is. A candidate still alive at the timeout is
- * asked to stop and then killed, rather than asked once and waited on. And the
- * answer is taken at the candidate's OWN exit, with a short window for the read
- * behind it, rather than at the close of a pipe whatever it started still
- * holds.
+ * read a line at a time and nothing but the answer is kept, so a candidate that
+ * streams costs the timeout rather than the heap and no amount of output on
+ * either side of the answer can push it out. A candidate still alive at the
+ * timeout is asked to stop and then killed, rather than asked once and waited
+ * on. And the answer is taken at the candidate's OWN exit, with a short window
+ * for the read behind it, rather than at the close of a pipe whatever it
+ * started still holds.
  */
 function askForBashVersion(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
   signal_?: AbortSignal
 ): Promise<{
-  stdout: string;
+  answered: boolean;
   signal: NodeJS.Signals | null;
   stoppedByCheck: boolean;
   failure?: string;
@@ -242,10 +250,14 @@ function askForBashVersion(
         windowsHide: true,
       });
     } catch (err) {
-      resolve({ stdout: "", signal: null, stoppedByCheck: false, failure: firstLine(err) });
+      resolve({ answered: false, signal: null, stoppedByCheck: false, failure: firstLine(err) });
       return;
     }
-    let stdout = "";
+    // The unfinished last line, and whether the answer has been seen. Never the
+    // output: a candidate is an arbitrary program, and how much it prints is
+    // its own business.
+    let pending = "";
+    let answered = false;
     let settled = false;
     let killedWith: NodeJS.Signals | null = null;
     const timers: NodeJS.Timeout[] = [];
@@ -260,7 +272,10 @@ function askForBashVersion(
       // the tool server's own loop alive for it.
       child.stdout?.destroy();
       child.unref();
-      resolve({ stdout, signal, stoppedByCheck, ...(failure === undefined ? {} : { failure }) });
+      // The last line, which a candidate that exits without a trailing newline
+      // leaves here.
+      if (BASH_PROBE_MARKER.test(pending)) answered = true;
+      resolve({ answered, signal, stoppedByCheck, ...(failure === undefined ? {} : { failure }) });
     };
     // The abort the request carries, which this lookup is the one place a `.sh`
     // step can wait before it has a process to time out. Without it a flow of N
@@ -275,7 +290,15 @@ function askForBashVersion(
     signal_?.addEventListener("abort", onAbort, { once: true });
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
-      stdout = (stdout + chunk).slice(-BASH_PROBE_MAX_CHARS);
+      const lines = (pending + chunk).split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (BASH_PROBE_MARKER.test(line)) answered = true;
+      }
+      // The HEAD of an unfinished line, because that is where a marker starts.
+      if (pending.length > BASH_PROBE_MAX_CHARS) {
+        pending = pending.slice(0, BASH_PROBE_MAX_CHARS);
+      }
     });
     child.on("error", (err) => answer(null, firstLine(err)));
     child.on("exit", (_code, signal) => {
