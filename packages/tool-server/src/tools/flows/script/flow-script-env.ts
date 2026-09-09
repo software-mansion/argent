@@ -207,20 +207,6 @@ function describeValueType(value: unknown): string {
 }
 
 /**
- * The environment values a script step runs with, layered in the one order the
- * runner uses. A later map replaces an earlier one, and the host allowlist the
- * executor builds sits under all of them:
- *
- * 1. the root flow's `env`
- * 2. each active nested flow's `env`, outermost first
- * 3. the `flow-execute` run-time `env`
- * 4. the script step's own `env`
- *
- * A flow-level map is a DEFAULT at any depth, which is why the run-time map
- * outranks even the innermost fragment's. A step-level map is not a default: it
- * is part of that one invocation, so nothing outside it wins.
- */
-/**
  * The key one environment NAME is the same variable under.
  *
  * Windows carries one variable per name however it is spelled, so `Path` and
@@ -238,13 +224,27 @@ export function envNameKey(name: string): string {
   return process.platform === "win32" ? name.toLowerCase() : name;
 }
 
+/**
+ * The environment values a script step runs with, layered in the one order the
+ * runner uses. A later map replaces an earlier one, and the host allowlist the
+ * executor builds sits under all of them:
+ *
+ * 1. the root flow's `env`
+ * 2. each active nested flow's `env`, outermost first
+ * 3. the `flow-execute` run-time `env`
+ * 4. the script step's own `env`
+ *
+ * A flow-level map is a DEFAULT at any depth, which is why the run-time map
+ * outranks even the innermost fragment's. A step-level map is not a default: it
+ * is part of that one invocation, so nothing outside it wins.
+ */
 export function mergeScriptEnv(
   ...maps: Array<Readonly<Record<string, string>> | undefined>
 ): Record<string, string> {
   const merged: Record<string, string> = {};
   // Windows carries ONE variable per name however it is spelled, so two layers
   // spelling it differently are two layers setting the same thing and the order
-  // above has to decide between them here. Keeping both left the child
+  // listed above has to decide between them here. Keeping both left the child
   // environment to dedupe them by folding case, so ASCII order rather than this
   // list decided which value the script read. See the same account in
   // `buildChildEnv`.
