@@ -2973,13 +2973,33 @@ function configuredEnvAllowNames(
         ? getAtPath(document as Record<string, unknown>, SCRIPT_ENV_ALLOW_KEY)
         : undefined;
     if (Array.isArray(raw)) {
+      // An entry that is not a string, or a blank one, is gone by the time the
+      // four notes below run: the key's own parser drops it. So the raw array
+      // in hand here is the last place that can name it, and without a note the
+      // drop was the same silence the notes around it exist to end — a nested
+      // list, the natural mis-grouping for a pair of names, took both of them
+      // out of every script's reach and the run said nothing.
+      const unreadable: string[] = [];
       // Trimmed, because `asStringArray` trims before the names are judged, so
       // an untrimmed key would never be found again.
       for (const entry of raw) {
-        if (typeof entry !== "string" || entry.trim() === "") continue;
+        if (typeof entry !== "string" || entry.trim() === "") {
+          unreadable.push(JSON.stringify(entry) ?? String(entry));
+          continue;
+        }
         const files = listedIn.get(entry.trim()) ?? [];
         files.push(file);
         listedIn.set(entry.trim(), files);
+      }
+      if (unreadable.length > 0) {
+        const many = unreadable.length > 1;
+        say(
+          `${SCRIPT_ENV_ALLOW_KEY} in ${file} holds ${unreadable.join(", ")}, which argent reads ` +
+            `no name from — an entry is a string naming one variable. ` +
+            `${many ? "Those entries were" : "That entry was"} ignored and the script ran ` +
+            `without ${many ? "them" : "it"}. A nested list is the usual way in: write ` +
+            `["AWS_PROFILE", "AWS_REGION"], not [["AWS_PROFILE", "AWS_REGION"]].`
+        );
       }
       continue;
     }

@@ -1052,6 +1052,31 @@ describe("the host allowlist extension", () => {
     expect(reason).toContain("__proto__, which argent cannot carry");
   });
 
+  it("names an allowlist entry that is not a name at all", async () => {
+    // The key's own parser drops a non-string entry and a blank one, so the
+    // four buckets below never see them — and a nested list, the natural
+    // mis-grouping for a pair of names, took both out of every script's reach
+    // with nothing said. The run re-reads the raw file for exactly this class
+    // of note, so the entry is still in hand when it is dropped.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({
+        scripts: { env: { allow: ["DB_URL", ["AWS_PROFILE", "AWS_REGION"], 42, ""] } },
+      })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("badentries", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("badentries");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.ok).toBe(true);
+    expect(reason).toContain("scripts.env.allow");
+    expect(reason).toContain('["AWS_PROFILE","AWS_REGION"]');
+    expect(reason).toContain("42");
+    expect(reason).toContain("Those entries were ignored");
+  });
+
   it("names a reserved allowlist entry reserved, not malformed", async () => {
     // The same ordering, on the allowlist channel: `scripts.env.allow` asked
     // the name pattern first, so npm's own hyphenated spelling landed in the
