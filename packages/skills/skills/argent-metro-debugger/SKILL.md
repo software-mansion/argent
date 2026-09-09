@@ -45,12 +45,12 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                                                                                                                                       |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Pruned tree of the on-screen React components: name, text/accessibilityLabel, testID, and a normalized tap center. Carries no per-node geometry; for size, overlap or clipping use `describe`, which returns a bounding rect. |
-| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                                                     |
-| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details. If it returns `status: "not_connected"`, there is **no** `file` — follow its `guidance` instead of grepping.          |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                                                                       |
+| Tool                       | Purpose                                                                                                                                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Pruned tree of the on-screen React components: name, text/accessibilityLabel, testID, and a normalized tap center. Carries no bounding rects; for size, overlap or clipping use `describe`, which does return them.  |
+| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                                            |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details. If it returns `status: "not_connected"`, there is **no** `file` — follow its `guidance` instead of grepping. |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                                                              |
 
 ---
 
