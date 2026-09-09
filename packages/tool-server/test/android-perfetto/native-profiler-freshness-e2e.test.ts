@@ -108,8 +108,8 @@ function staleLine(report: string): string | null {
 }
 
 describe("native-profiler freshness flagging — real analyze/render path", () => {
-  let tempDir: string;
-  let restoreTmpdir: () => void;
+  let tempDir = "";
+  let restoreTmpdir: () => void = () => {};
 
   beforeEach(async () => {
     // The analyze path's dependency gate resolves a real `adb` off PATH,
