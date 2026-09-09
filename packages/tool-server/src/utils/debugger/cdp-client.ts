@@ -31,8 +31,36 @@ export type CDPClientEvents = {
   bindingCalled: (name: string, payload: string) => void;
   scriptParsed: (script: ScriptInfo) => void;
   paused: (params: Record<string, unknown>) => void;
+  resumed: () => void;
   consoleAPICalled: (params: ConsoleAPICalledParams) => void;
 };
+
+/**
+ * Where a `Debugger.paused` stopped the runtime, reduced to what an error needs.
+ */
+interface PausedState {
+  /** First call frame's source location, when the event carried one. */
+  location?: string;
+  /** CDP's own word for why: `other` for a breakpoint, `exception`, … */
+  reason: string;
+}
+
+/**
+ * Methods that need the VM running. Everything else is answered while paused,
+ * including `Debugger.resume`, so guarding more would break the calls that
+ * recover the session.
+ */
+const BLOCKED_WHILE_PAUSED = new Set(["Runtime.evaluate", "Runtime.callFunctionOn"]);
+
+/**
+ * Drop the build configuration Metro appends to a bundle url, about 150
+ * characters of `platform`, `dev` and `transform.*` that help nobody find
+ * where their app stopped. Keeps the original if trimming leaves nothing.
+ */
+function trimBundleQuery(url: string): string {
+  const trimmed = url.split(/[?&]/)[0]!.replace(/\/+$/, "");
+  return trimmed || url;
+}
 
 interface CDPExceptionDetails {
   text?: string;
@@ -97,6 +125,13 @@ export class CDPClient {
   private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
+  /**
+   * Where the runtime is stopped, when it is. Argent sets no breakpoints, so a
+   * value here means another debugger on this runtime put it there.
+   *
+   * @see {@linkcode pausedAt}
+   */
+  private paused: { callFrames: unknown; reason: string } | undefined;
   private wsUrl: string;
   private sendOrigin: boolean;
 
@@ -214,6 +249,67 @@ export class CDPClient {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /** Where the runtime is stopped, or `undefined` when it is running. */
+  pausedAt(): PausedState | undefined {
+    if (!this.paused) return undefined;
+
+    return {
+      ...(this.locateFrames(this.paused.callFrames) ?? {}),
+      reason: this.paused.reason,
+    };
+  }
+
+  /**
+   * The first call frame that names a place a person could open. Reading
+   * `callFrames[0].url` is not enough, Hermes leaves `url` empty and
+   * identifies scripts by `location.scriptId`. The top frame is often a
+   * synthetic eval whose script nothing announced. Walking down lands in the
+   * app's own bundle.
+   */
+  private locateFrames(callFrames: unknown): { location: string } | undefined {
+    const frames = (callFrames ?? []) as {
+      location?: { lineNumber?: number; scriptId?: string };
+      url?: string;
+    }[];
+
+    for (const frame of frames) {
+      const scriptId = frame.location?.scriptId;
+      const url = frame.url || (scriptId ? this.scripts.get(scriptId)?.url : undefined);
+
+      if (!url) continue;
+
+      const line = frame.location?.lineNumber;
+      const where = trimBundleQuery(url);
+
+      return { location: line === undefined ? where : `${where}:${line + 1}` };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Why a call cannot run, in terms of what the caller can do about it.
+   * Without this the request simply times out, which reads as a broken app and
+   * sends whoever is debugging to the wrong place.
+   */
+  private pausedError(method: string): FailureError {
+    const paused = this.pausedAt()!;
+    const where = paused.location ? ` at ${paused.location}` : "";
+    const why = paused.reason === "exception" ? "on an exception" : "at a breakpoint";
+
+    return new FailureError(
+      `The JS runtime is paused ${why}${where}, so ${method} cannot run. Argent does not set ` +
+        `breakpoints, so another debugger attached to this runtime stopped it. Resume it there ` +
+        `(or clear the breakpoint) and retry.`,
+      {
+        error_code: FAILURE_CODES.JS_RUNTIME_PAUSED,
+        error_kind: "unsupported",
+        failure_area: "tool_server",
+        failure_stage: "js_runtime_debugger_paused",
+      }
+    );
+  }
+
   send(
     method: string,
     params?: Record<string, unknown>,
@@ -230,6 +326,11 @@ export class CDPClient {
           })
         );
       }
+
+      if (this.paused && BLOCKED_WHILE_PAUSED.has(method)) {
+        return reject(this.pausedError(method));
+      }
+
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -457,7 +558,23 @@ export class CDPClient {
     }
 
     if (method === "Debugger.paused") {
+      /**
+       * Kept raw and resolved on demand. A provider replaying this to a client
+       * that attached mid-stop delivers it before `Debugger.enable` has
+       * re-announced the scripts, so resolving now would find an empty map and
+       * lose the location. By the time anyone asks, they have arrived.
+       */
+      this.paused = {
+        callFrames: params.callFrames,
+        reason: (params.reason as string) ?? "unknown",
+      };
+
       this.events.emit("paused", params);
+    }
+
+    if (method === "Debugger.resumed") {
+      this.paused = undefined;
+      this.events.emit("resumed");
     }
 
     this.events.emit("event", method, params);
@@ -473,6 +590,11 @@ export class CDPClient {
   }
 
   private cleanup(): void {
+    // Pause state belongs to the connection that observed it. A still-stopped
+    // runtime re-announces itself on reconnect, so keeping the old value could
+    // only make a resumed one look stuck.
+    this.paused = undefined;
+
     // A request rejected here was already delivered and may have taken effect —
     // callers must not blindly retry side-effectful sends.
     const connectionClosed = () =>

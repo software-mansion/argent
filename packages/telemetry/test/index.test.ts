@@ -80,21 +80,6 @@ vi.mock("@opentelemetry/sdk-logs", () => ({
 const attrsOf = (provider: ProviderInstance, n: number): Record<string, unknown> =>
   (provider.emit.mock.calls[n]![0] as { attributes: Record<string, unknown> }).attributes;
 
-// getConsentState honours two env opt-outs ahead of the config file:
-// DO_NOT_TRACK (the consortium standard) and a falsy ARGENT_TELEMETRY. Either
-// one, exported in the developer's shell, disables consent for every describe
-// below, so these tests would assert what that shell says rather than what
-// markEnabled() does.
-const CONSENT_ENV_KEYS = ["DO_NOT_TRACK", "ARGENT_TELEMETRY"];
-let restoreOptOut: () => void;
-beforeEach(() => {
-  restoreOptOut = snapshotEnv(CONSENT_ENV_KEYS);
-  for (const k of CONSENT_ENV_KEYS) delete process.env[k];
-});
-afterEach(() => {
-  restoreOptOut();
-});
-
 describe("telemetry public surface", () => {
   const { tmp } = scopeHome();
 
@@ -454,7 +439,9 @@ describe("the log record that goes on the wire", () => {
   });
 
   it("omits a null-valued property rather than sending an explicit null", () => {
-    // OTel rejects null attribute values, so toAttributes drops those keys.
+    // The SDK would accept a null attribute and serialize it as an empty OTLP
+    // value, indistinguishable downstream from a property that really was empty;
+    // toAttributes drops the key instead.
     const client = getClient()!;
     client.emit({
       distinctId: "d",
