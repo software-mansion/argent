@@ -98,8 +98,11 @@ wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
 — that tool reports its own shape — so for those, read \`toolResult\`. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
-executionPrerequisite instead. Use flow-add-echo to add labels. Call
-flow-finish-recording when done.
+executionPrerequisite instead. restart-app has no chromium support, so a chromium
+flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to
+the YAML afterward, deleting the executionPrerequisite line if you passed one: a
+flow that starts with a launch must not declare it. Use flow-add-echo to add
+labels. Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to
 remove or reorder steps - after flow-finish-recording, not during the
