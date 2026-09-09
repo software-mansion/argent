@@ -167,7 +167,8 @@ On a physical iOS device, launch-app \`com.apple.springboard\` first to read sys
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
 are normalized [0,1] fractions of the screen / window width/height (not pixels) — the same space as
-gesture-tap / gesture-swipe / gesture-pinch.
+gesture-tap / gesture-swipe / gesture-pinch. On Chromium use gesture-tap / gesture-scroll / gesture-drag
+(gesture-swipe and gesture-pinch are not supported there); a physical iOS device has no gesture-pinch.
 
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it

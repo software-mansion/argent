@@ -277,7 +277,7 @@ describe("formatDescribeTree", () => {
   });
 
   // The header text is part of the agent-visible response, so it must keep
-  // pointing at gesture-tap / gesture-swipe / gesture-pinch and the centre
+  // pointing at the gesture tools the target accepts and at the centre
   // formula. If this drifts again the runtime help is silently misleading.
   it("renders the coordinate-space + tap-formula header on every call", () => {
     const empty: DescribeNode = {
@@ -287,7 +287,7 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(empty, { source: "ax-service" });
     expect(out).toContain("normalized [0,1] fractions of the screen");
-    expect(out).toContain("gesture-tap");
+    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
     expect(out).toContain("tap_x = frame.x + frame.width / 2");
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
@@ -337,6 +337,23 @@ describe("formatDescribeTree", () => {
         "\n" +
         "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n"
     );
+  });
+
+  // gesture-swipe and gesture-pinch declare no chromium capability: naming them
+  // here would send every Chromium caller into a capability-gate rejection.
+  it("names the Chromium-capable gesture tools in the cdp-dom header", () => {
+    const empty: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    const out = formatDescribeTree(empty, { source: "cdp-dom" });
+    expect(out).toContain(
+      "Pass them straight to gesture-tap / gesture-scroll / gesture-drag, which expect this same space. " +
+        "gesture-swipe and gesture-pinch are not supported on Chromium."
+    );
+    expect(out).not.toContain("Pass them straight to gesture-tap / gesture-swipe / gesture-pinch");
+    expect(out).toContain("tap_x = frame.x + frame.width / 2");
   });
 
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate

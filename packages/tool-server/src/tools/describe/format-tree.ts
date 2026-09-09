@@ -167,12 +167,15 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {
-    // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
+    // Name only the gesture tools this platform accepts: agents follow this line verbatim.
     header.push(
       opts.source === "xcuitest-runner"
         ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
             "No two-finger gestures on physical iOS."
-        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+        : opts.source === "cdp-dom"
+          ? "Pass them straight to gesture-tap / gesture-scroll / gesture-drag, which expect this same space. " +
+            "gesture-swipe and gesture-pinch are not supported on Chromium."
+          : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
