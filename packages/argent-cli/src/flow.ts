@@ -1187,21 +1187,29 @@ async function runFlowDirectory(
       // message eleven times and ended `0 passed, 11 failed`, with nothing to
       // say the fault was one argument rather than eleven files. That stops the
       // batch, like every other failure the server did not tie to this flow.
+      const rejected = toolErr?.errorKind === "validation";
       const rejectedThisFlowOnly =
-        toolErr?.errorKind === "validation" &&
-        toolErr.errorCode !== FAILURE_CODES.TOOL_INPUT_INVALID;
+        rejected && toolErr.errorCode !== FAILURE_CODES.TOOL_INPUT_INVALID;
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
       // already carries. The detail goes to stderr, so without this line a
       // redirected stdout log shows this flow's header followed by the next
       // flow's — an entry that reads as if it never ran, while the final tally
       // still counts it failed and names nothing. Verdict before detail, as the
       // single-flow runner prints them, so a merged log reads the same way.
+      //
+      // Keyed on the rejection alone, NOT on whether the batch continues. The
+      // two questions are different: whether this file is the fault decides
+      // what runs next, and whether anything ran decides what to print. Read
+      // off one answer, a `--env NODE_OPTIONS=x` refusal printed "did not
+      // finish (run error)" here and "not run (rejected)" from the single-flow
+      // runner - two vocabularies for one refusal, and the batch's was untrue:
+      // `flow-execute` throws that before it resolves the source, so nothing
+      // ran. It was also the last line pinning a bad `--env` on the first file,
+      // which is the misattribution the exclusion above was written to remove.
       if (!args.json) {
         console.log(
           `  ${STATUS_GLYPH.error} ` +
-            (rejectedThisFlowOnly
-              ? rejectionVerdict(toolErr?.errorCode)
-              : "did not finish (run error)")
+            (rejected ? rejectionVerdict(toolErr.errorCode) : "did not finish (run error)")
         );
       }
       console.error(message);

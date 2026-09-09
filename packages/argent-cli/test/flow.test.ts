@@ -1124,6 +1124,15 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(errs.join("\n").match(/This run's `env`/g)).toHaveLength(1);
     expect(logs.join("\n")).toContain("0 passed, 1 failed, 2 skipped");
+    // The verdict is the single-flow runner's, because the two questions are
+    // different: whether this file is the fault decides what runs next, and
+    // whether anything RAN decides what to print. Read off one answer, this
+    // refusal printed "did not finish (run error)" here and "not run
+    // (rejected)" there - and the batch's was untrue, since `flow-execute`
+    // throws before it resolves the source. It was also the last line pinning a
+    // bad `--env` on the first file.
+    expect(logs.join("\n")).toContain("not run (rejected)");
+    expect(logs.join("\n")).not.toContain("did not finish (run error)");
   });
 
   it("keeps a directory run going when one FILE is refused", async () => {
