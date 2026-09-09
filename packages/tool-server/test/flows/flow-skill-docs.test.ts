@@ -15,6 +15,7 @@ import {
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { reservedScriptEnvNamesForMessage } from "../../src/tools/flows/script/flow-script-executor";
 
 /** One tool's `env` parameter description, as the JSON schema publishes it. */
@@ -316,6 +317,21 @@ describe("create-flow script docs", () => {
     }
     expect(addEnv).toContain("BETWEEN the two layers here");
     expect(flowAddScriptTool.description).toContain("which sit BETWEEN those two");
+  });
+
+  it("keeps the run:-env remedy qualified wherever it is repeated", () => {
+    // `execRunStep` layers a fragment's own `env:` OVER the flow that runs it,
+    // so writing a dropped value into the RECORDING's top-level `env:` does
+    // nothing for a name the fragment declares: the script still reads the
+    // fragment's value, which is the outcome the warning exists to prevent.
+    // `flow-add-step`'s warning carries that qualification and is pinned; the
+    // two places that repeat the remedy dropped it.
+    const qualified = /only for a name that (?:fragment|flow) does not itself declare/;
+    expect(flowFinishRecordingTool.description).toMatch(qualified);
+    expect(flowFinishRecordingTool.description).toMatch(/layers OVER the flow that runs it/);
+    const liveAuthoring = readFileSync(LIVE_AUTHORING, "utf8");
+    expect(liveAuthoring).toMatch(qualified);
+    expect(liveAuthoring).toMatch(/layers OVER the flow that runs it/);
   });
 
   it("lists a script path among what a flow_path run re-anchors", () => {
