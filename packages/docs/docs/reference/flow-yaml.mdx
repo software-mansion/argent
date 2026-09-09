@@ -435,7 +435,7 @@ No recording tool writes the top-level `env:`. `flow-start-recording` resets the
 
 On Windows, Argent refuses two names of one map that differ only in case. Windows reads them as one variable, so a flow file that parses on macOS is refused there.
 
-`BASH_ENV`, `SHELLOPTS` and the other names that steer bash are **not** refused. They steer the interpreter of the script, not the runner, and an author who sets one meant to.
+`BASH_ENV`, `SHELLOPTS` and the other names that steer bash are **not** refused. They steer the interpreter of the script, not the runner, and an author who sets one meant to. Argent asks each bash candidate for its version before it runs a `.sh` step, and it asks without `BASH_ENV`, `ENV`, `SHELLOPTS` and `BASHOPTS`. None of them changes the answer, and a `BASH_ENV` preamble that ends the shell would stop the answer altogether - Argent would then report that this host offers no bash it can use.
 
 ### Secrets in an `env` value
 

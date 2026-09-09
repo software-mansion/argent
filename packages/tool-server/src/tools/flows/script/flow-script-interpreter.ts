@@ -217,6 +217,28 @@ async function notBashProblem(
 }
 
 /**
+ * The names that make bash do something of its own before it reads the command
+ * it was given: `BASH_ENV` and `ENV` each name a file it SOURCES, and
+ * `SHELLOPTS` and `BASHOPTS` turn options on at startup.
+ *
+ * Kept out of the version probe, and only out of it. Not one of them can change
+ * the answer to "does this print a `$BASH_VERSION`", so nothing about the step
+ * is lost by asking without them - and each of them can stop the probe
+ * answering at all, which reads as a host with no usable bash.
+ */
+const BASH_STARTUP_STEERING = ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"];
+
+/** One environment with those names taken out, whatever case they are in. */
+function withoutBashStartupSteering(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const steering = new Set(BASH_STARTUP_STEERING.map((name) => name.toLowerCase()));
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!steering.has(name.toLowerCase())) kept[name] = value;
+  }
+  return kept;
+}
+
+/**
  * One run of the candidate, bounded on every axis — because nothing else here
  * is. This is the only place a `.sh` step can wait before it has a process to
  * time out, so a probe that does not settle is a flow run that never finishes.
@@ -258,7 +280,17 @@ function askForBashVersion(
         // `bash`, and inheriting here handed it the bearer token, the port and
         // every `ARGENT_SECRET_*` value the allowlist exists to keep out of a
         // script's reach.
-        env: probeEnv,
+        //
+        // Minus the startup steering a flow's own `env` may now set, which is
+        // the third direction. The reference blesses those names, and rightly -
+        // they steer the interpreter of the SCRIPT, and an author who sets one
+        // meant to - but this spawn is not the script. A `BASH_ENV` preamble
+        // that ends the shell (`set -e` and a `command -v` finding nothing is
+        // enough) aborts the probe before its marker, and every candidate is
+        // then rejected as "not a bash". The step it refuses would have run:
+        // the exchange is created AFTER this call, so such a preamble sees no
+        // `$ARGENT_OUTPUT` here and does see one there.
+        env: withoutBashStartupSteering(probeEnv),
         stdio: ["ignore", "pipe", "ignore"],
         // A group of the candidate's own on POSIX, so the stops below reach
         // what IT started. A shim that backgrounds a job was re-parented to pid
