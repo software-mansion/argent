@@ -1,3 +1,7 @@
+export function isElectronHostedEnv(): boolean {
+  return Object.keys(process.env).some((name) => name.toLowerCase() === "electron_run_as_node");
+}
+
 /**
  * Environment for a GUI Electron child of the tool-server.
  *
