@@ -45,13 +45,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
+        "Capture the baseline screenshot live before diffing. A physical iPhone captures through the on-device runner, at full resolution and with no scale fallback. Every other device captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead). Cannot be combined with captureCurrent."
       ),
     captureCurrent: z.coerce
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live at full resolution before diffing. Cannot be combined with captureBaseline."
+        "Capture the current screenshot live before diffing. A physical iPhone captures through the on-device runner, at full resolution and with no scale fallback. Every other device captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead). Cannot be combined with captureBaseline."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -64,7 +64,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "Directory where diff artifacts should be written. Optional — defaults to a temp directory; the diff images are returned in the result either way."
+        "Directory where diff artifacts should be written. Optional — defaults to a temp directory, and falls back to one when the tool-server cannot reach the directory given; a directory it reaches but cannot write into ends the call instead. dimension_mismatch writes no images there, having compared nothing."
       ),
   })
   .strict();
@@ -107,13 +107,13 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live capture from a device — full resolution when that capture succeeds, otherwise the tool-server's screenshot scale. Sides whose aspect ratios agree to within about 1% but whose resolutions differ are resampled to the smaller-area side before comparing; the summary reports that as size_normalized, and a clean result there is status resized_no_change rather than unchanged; sides whose aspect ratios differ by more than that are not compared at all, reported as dimension_mismatch. Always provide udid — a live capture resolves the capture backend from it.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
-Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
-Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
+Physical iPhones: live captures go through the on-device runner at full resolution with no scale fallback, are device-wide, and need no registered app. Keep baselines per device model.
+Returns { summary, diffPath, contextDiffPath } — both images are omitted on dimension_mismatch, where nothing was compared. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the diff at the size the comparison ran at and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, the simulator-server / emulator backend is not reachable, or a requested live capture cannot be taken.`,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
@@ -379,11 +379,13 @@ async function captureLiveInput(params: {
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
 }): Promise<string> {
-  // Full-res gives the best diff fidelity, but some Android emulators reject a
-  // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
-  // baselinePath + captureCurrent flow there. The server's default scale captures
-  // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
-  // comparable to a baseline saved at any scale.
+  // Full resolution first, for diff fidelity. Some Android emulators cannot
+  // stream a full-res frame — the simulator-server rejects it with a "wrong data
+  // size" framebuffer mismatch — so any failure retries at getScreenshotScale();
+  // same-aspect normalization in diffPngFiles keeps the size difference that
+  // leaves diffable, until integer rounding moves the aspect ratio. At
+  // ARGENT_SCREENSHOT_SCALE=1.0 the retry re-sends the request that just failed,
+  // so both attempts throw and the second error surfaces.
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(

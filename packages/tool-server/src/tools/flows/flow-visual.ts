@@ -22,7 +22,7 @@ export const DEFAULT_MAX_MISMATCH = 0.5;
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
  * paths — so a client on another machine can materialize them. Absent on a
- * clean pass, so renderers never fetch full-res PNGs nobody needs.
+ * clean pass, so renderers never fetch saved PNGs nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;
@@ -315,8 +315,8 @@ export async function runSnapshot(
       };
     }
 
-    // Scratch dir for the differ's full-res diff and downscaled context diff.
-    // Nothing in it may outlive this call except a file registered as an
+    // Scratch dir for the differ's compared-size diff and downscaled context
+    // diff. Nothing in it may outlive this call except a file registered as an
     // artifact below (its host path is materialized later) — the finally sweeps
     // the rest, or a long-lived tool-server running snapshot flows would
     // accrete argent-flow-diff-* directories forever.
