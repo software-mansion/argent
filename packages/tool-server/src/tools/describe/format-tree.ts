@@ -60,7 +60,10 @@ function formatFlags(n: DescribeNode): string {
   if (n.clickable) flags.push("clickable");
   if (n.longClickable) flags.push("long-clickable");
   if (n.scrollable) flags.push("scrollable");
-  if (n.checkable) flags.push(n.checked ? "checked" : "checkable");
+  // The Chromium walker reports `checked` without `checkable`, so the state
+  // flag cannot be gated on the pair.
+  if (n.checked) flags.push("checked");
+  else if (n.checkable) flags.push("checkable");
   if (n.focused) flags.push("focused");
   if (n.selected) flags.push("selected");
   if (n.disabled) flags.push("disabled");
@@ -80,6 +83,7 @@ function hasContent(n: DescribeNode): boolean {
     n.longClickable ||
     n.scrollable ||
     n.checkable ||
+    n.checked ||
     (typeof n.scrollHidden === "number" && n.scrollHidden > 0)
   );
 }
