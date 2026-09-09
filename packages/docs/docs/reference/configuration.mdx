@@ -170,6 +170,8 @@ The tool-server replaces the placeholder when the step runs. The tool-server res
 | 3     | `<project-root>/.env.local`, then `<project-root>/.env` | Keys with the `ARGENT_SECRET_` prefix only |
 | 4     | `~/.argent/secrets.env`                                 | Every key, for every project               |
 
+`<project-root>` is the `project_root` of the run for a flow `script` step and for the `env` values of the run. A `keyboard` or `paste` call carries no project, so `<project-root>` is the working directory of the tool-server there - whatever started it, often `/` or your home directory. A name that one channel resolves may therefore not resolve in the other. Put the name in `~/.argent/secrets.env`, or export `ARGENT_SECRET_<NAME>` before you start the tool-server, and every channel reads it.
+
 A bare `NAME=value` line in `.env` or `.env.local` stays unresolved. Write `ARGENT_SECRET_NAME=value` in these files.
 
 A change in a secrets file applies to the next tool call. An environment variable reaches only a tool-server that started after you exported the variable.

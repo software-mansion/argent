@@ -307,6 +307,13 @@ describe("create-flow script docs", () => {
     const runEnv = envParameterDescription(createRunFlowTool({} as unknown as Registry));
     expect(runEnv).toContain("OVERRIDE the flow file's own `env` defaults at every depth");
     expect(runEnv).toContain("a `script` step's own `env` still wins over them");
+    // And it may not claim the secret sources are the ones `keyboard` reads.
+    // They are not the same sources: this map is resolved against
+    // `project_root`, and `keyboard`/`paste` carry no project, so they read the
+    // two project files under the tool-server's own working directory — which
+    // is whatever spawned it, and often `/` or a home directory.
+    expect(runEnv).toContain("the same anchor the step resolves under");
+    expect(runEnv).not.toMatch(/same sources `keyboard` uses/);
 
     const addEnv = envParameterDescription(flowAddScriptTool);
     for (const surface of [flowAddScriptTool.description, addEnv]) {
