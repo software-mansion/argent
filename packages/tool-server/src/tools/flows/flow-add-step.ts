@@ -1104,8 +1104,8 @@ async function captureRunTarget(
       };
     }
     // A `run:` step carries no environment of its own, so whatever this call
-    // passed the sub-run is not part of what was recorded — the one lossy
-    // rewrite in this function that used to say nothing.
+    // passed the sub-run is not part of what was recorded. The rewrite is
+    // lossy, and the warning below is what says so.
     const dropped = envNamesInArgs(args.env);
     return {
       flow: `${name}.yaml`,
@@ -1361,21 +1361,21 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         // and "fix the step named below" names no step when the refusal is
         // about the file's own `env:`.
         //
-        // The re-parse refuses on two stages, not one, and only the output
-        // reference was answered. Every other `env:` fault — a reserved name, a
-        // non-string value, a tagged map, a name that is not one — arrives as
-        // `flow_file_parse` and reached the agent as a bare "Invalid flow file",
-        // AFTER the device action had already run. An agent reading that has no
-        // reason not to retry, and runs the action a second time. Both parse
-        // stages are read off the file BEFORE this step joins it, so neither can
-        // ever be this call's fault.
+        // The re-parse refuses on two stages, not one. `flow_output_reference`
+        // is one; every other `env:` fault — a reserved name, a non-string
+        // value, a tagged map, a name that is not one — arrives as
+        // `flow_file_parse`. Both are read off the file BEFORE this step joins
+        // it, so neither can ever be this call's fault, and both have to say so
+        // in a sentence rather than a bare "Invalid flow file": the device
+        // action has already run by this point, and an agent that cannot tell
+        // the two apart has no reason not to retry and runs it a second time.
         //
         // `flow_file_validate` is left out because it is the one stage that
         // says nothing either way: the append validates once inside the
         // pre-push parse and again with the step pushed, so the same stage
         // covers a defect that was already on disk and one this call just
         // added. Re-wording it would blame the file for a leading `launch`
-        // this very call recorded. It stays as it was until the two are told
+        // this very call recorded. It is left alone until the two are told
         // apart.
         const stage = getFailureSignal(err)?.failure_stage;
         const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
