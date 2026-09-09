@@ -3623,13 +3623,10 @@ export function serializeFlow(flow: FlowFile): string {
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar's own
   // chomping decides what its last line keeps, so a value at the document tail
-  // came back changed. Either way parseFlow(serializeFlow(x)) was not the
-  // identity. (The second half used to name `parseFlow`'s `content.trim()`;
-  // that call now trims the LEADING edge only, and the block scalar's chomping
-  // is the whole of it.) Disabling it emits
-  // multi-line values as double-quoted scalars (escape-exact both ways);
-  // single-line values still serialize plain, and legacy files containing block
-  // scalars still parse.
+  // comes back changed. Either way parseFlow(serializeFlow(x)) is not the
+  // identity. Disabling it emits multi-line values as double-quoted scalars
+  // (escape-exact both ways); single-line values still serialize plain, and
+  // legacy files containing block scalars still parse.
   //
   // doubleQuotedMinMultiLineLength: Infinity — "escape-exact both ways" holds
   // only while the double-quoted scalar stays on ONE line. Past the emitter's
@@ -3648,10 +3645,10 @@ export function serializeFlow(flow: FlowFile): string {
   // nothing to say so. Rare and silent, which is the combination this rule
   // exists for; `flow-script-env.test.ts` pins a minimized value that
   // reproduces it, and states the rate its own generator found. Zero disables
-  // folding, so every scalar stays on one
-  // physical line and every break is an escape. The cost is document-wide and
-  // cosmetic: a long `echo` message or `executionPrerequisite` is no longer
-  // wrapped at 80 columns.
+  // folding, so every scalar stays on one physical line and every break is an
+  // escape. The cost is document-wide and cosmetic: a long `echo` message or
+  // `executionPrerequisite` is written on one line rather than wrapped at 80
+  // columns.
   return yamlStringify(doc, {
     blockQuote: false,
     doubleQuotedMinMultiLineLength: Infinity,
