@@ -18,6 +18,7 @@ import {
   setSimulatorClipboardText,
 } from "../src/utils/simulator-client";
 import { resolveDevice } from "../src/utils/device-info";
+import { scopeTempHome } from "./helpers/temp-home";
 
 /**
  * The simulator-server blueprint's attach branch, against a stand-in speaking
@@ -198,6 +199,13 @@ function republishAt(simulatorServer: FakeSimulatorServer): void {
 
   fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
 }
+
+/**
+ * The hook below drops the suite-wide discovery guard, so discovery falls back
+ * to `~/.argent/providers` for as long as a test has published no descriptor
+ * of its own. Scope the home, so that fallback is a directory this run owns.
+ */
+scopeTempHome("argent-external-attach-home-");
 
 beforeEach(() => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-attach-"));
