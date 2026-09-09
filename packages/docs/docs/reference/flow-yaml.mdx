@@ -56,12 +56,12 @@ A selector finds an element on the screen. Write a selector as an explicit map:
 { text: { matches: '^Order #\d+$' } }
 ```
 
-| Field  | Match                                                           |
-| ------ | --------------------------------------------------------------- |
-| `id`   | Exact, case-insensitive. The test id or accessibility id        |
-| `text` | Case-insensitive substring, or `{ matches: <regex> }`           |
-| `role` | Case-insensitive substring of the element role                  |
-| `any`  | Any element. Takes only `true`. Pair it with a relational scope |
+| Field  | Match                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `id`   | Exact, case-insensitive. The test id or accessibility id. Never folded                                               |
+| `text` | Case-insensitive substring of [folded text](#invisible-characters), or `{ matches: <regex> }`, which is never folded |
+| `role` | Case-insensitive substring of the element role, folded like `text`                                                   |
+| `any`  | Any element. Takes only `true`. Pair it with a relational scope                                                      |
 
 All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
 
@@ -69,10 +69,44 @@ A bare string, for example `tap: Save`, is a loose selector. It tries `id` first
 
 When several elements match:
 
-| Directive type                                                                | Chosen element                                                                                                                     |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
-| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+| Directive type                                                                | Chosen element                                                                                                                                                                        |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: a whole-text or exact-id match beats a substring, a literal spelling beats one only folding makes equal, then the smallest frame, then reading order |
+| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match                                                    |
+
+### Invisible characters
+
+The text on screen is not always the text you type. A currency label can hold a non-breaking space. A layout can wrap a name in bidi isolates. A copy-paste can add a zero-width space. You cannot see these characters, but a comparison fails because of them.
+
+Argent folds both strings before every literal comparison: a `text` or `role` selector, `contains` and `equals`. The fold removes the differences you cannot see:
+
+| Difference                                           | Effect of the fold      |
+| ---------------------------------------------------- | ----------------------- |
+| A non-breaking space against a plain space           | Argent makes them equal |
+| A run of spaces or tabs against one space            | Argent makes them equal |
+| A zero-width space, a word joiner, a byte-order mark | Argent removes them     |
+| An LTR bidi wrapper around left-to-right text        | Argent removes it       |
+
+Around right-to-left text, the same wrapper changes the order of the characters. Argent keeps the wrapper there.
+
+Argent does not fold a character that changes which glyphs the screen draws, or their order:
+
+- A bidi control that changes the order.
+- A soft hyphen.
+- An emoji joiner or a variation selector.
+- A line break. No number of spaces matches a line break.
+
+Read a line break from the text that `describe` prints, not from the picture. An element that the screen draws on two lines usually reaches the tree on one line.
+
+Argent folds a character that only moves the position of the line break. Therefore `equals` cannot pin the word segmentation of a Thai, Lao, Khmer or CJK label.
+
+Argent never folds `id`, because an id is a machine key. Argent never folds a `matches` pattern, because a regular expression carries its own precision.
+
+A leading or trailing space in a `contains` needle is significant. The space must match a real space in the label.
+
+A `role` or an `id` that holds only invisible characters folds to nothing. Such a value matches nothing, not every element. A `text` that holds only invisible characters is a parse error: the parser tells you to select by `id` or `role`. Use `any: true` with a relational scope for "any element in there".
+
+When a check fails against two strings that look the same, the failure reason names the code points that differ. The reason also names a typographic variant. A rendered `…` is one character, not three dots. Argent keeps the two apart, because a fold that makes them equal also makes a styled display name equal to the plain name it imitates.
 
 ### Relational scopes
 
@@ -190,11 +224,13 @@ On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like th
 
 The `text` comparators:
 
-| Comparator | Match                           |
-| ---------- | ------------------------------- |
-| `contains` | Case-insensitive substring      |
-| `equals`   | Case-insensitive full match     |
-| `matches`  | Case-sensitive JavaScript regex |
+| Comparator | Match                                                              |
+| ---------- | ------------------------------------------------------------------ |
+| `contains` | Case-insensitive substring of [folded text](#invisible-characters) |
+| `equals`   | Case-insensitive full match on folded text, trimmed at both ends   |
+| `matches`  | Case-sensitive JavaScript regex. Never folded                      |
+
+`contains: "Taps: 3"` also matches `Taps: 30`. Use `equals` or an anchored regex to pin the end. A leading or trailing space in a `contains` needle is significant and must match a real space in the label, so it is not an end-of-text anchor.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 

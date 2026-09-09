@@ -47,8 +47,11 @@ import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recordi
 import {
   createFlowAddStepTool,
   directiveCommandHint,
+  flowAddStepInternals,
   UNHINTED_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-add-step";
+
+const { MAX_PROBE_REASON_CHARS, PROBE_REASON_TAIL_CHARS } = flowAddStepInternals;
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
@@ -1337,9 +1340,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("Lorem ipsum");
     // Bound the ECHOED REASON: the fixed prose around it is longer than this fixture.
     const echoed = echoedReasonOf(warning);
-    expect(echoed.length).toBeLessThanOrEqual(200);
+    expect(echoed.length).toBeLessThanOrEqual(MAX_PROBE_REASON_CHARS);
     const [, tail] = echoed.split(/… \(\d+ more chars\) …/);
-    expect(tail).toHaveLength(60);
+    expect(tail).toHaveLength(PROBE_REASON_TAIL_CHARS);
   });
 
   // The cap bounds what is EMITTED, not what is kept. Budgeting the kept content
@@ -1347,7 +1350,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   it("never emits a reason over the cap, or longer than the reason itself", async () => {
     // The fixed prose around the label is 76 characters.
     const FIXED = 76;
-    for (const reasonLength of [199, 200, 201, 205, 220, 260]) {
+    const CAP = MAX_PROBE_REASON_CHARS;
+    for (const reasonLength of [CAP - 1, CAP, CAP + 1, CAP + 5, CAP + 20, CAP + 60]) {
       const label = `Total ${"z".repeat(reasonLength - FIXED - "Total ".length)}`;
       serveTree(iosRunnerTree([iosLabel(label)]));
       const name = `cap${reasonLength}`;
@@ -1360,9 +1364,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       });
       const echoed = echoedReasonOf(warningOf(result, name) ?? "");
 
-      expect(echoed.length).toBeLessThanOrEqual(200);
+      expect(echoed.length).toBeLessThanOrEqual(CAP);
       expect(echoed.length).toBeLessThanOrEqual(reasonLength);
-      if (reasonLength <= 200) expect(echoed).not.toContain("more chars)");
+      if (reasonLength <= CAP) expect(echoed).not.toContain("more chars)");
       else expect(echoed).toContain("more chars)");
     }
   }, 30_000);
@@ -1396,6 +1400,35 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("more chars)");
     // The note the head-only cap threw away.
     expect(warning).toContain("native devtools went away");
+  });
+
+  // The tail must hold the codepoint note WHOLE. At a 60-character tail the cut
+  // landed on it: the lead stopped at "differ only in i" and the tail was a
+  // headless fragment of one dump, sliced through a `U+0` prefix.
+  it("keeps the whole codepoint note, the one sentence that answers the question", async () => {
+    const CGJ = "\u034F";
+    const wall = "Lorem ipsum dolor sit amet ".repeat(60);
+    serveTree(iosRunnerTree([iosLabel(`${wall}Save${CGJ}Changes`)]));
+    await startRecording("cpnote");
+
+    const result = await recordWait("cpnote", {
+      condition: "text",
+      selector: { text: "Lorem" },
+      expectedText: `${wall}SaveChanges`,
+      textMatch: "equals",
+    });
+    const warning = warningOf(result, "cpnote") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    // The card is still elided, which is what the cap is for.
+    expect(warning).toContain("more chars)");
+    // The diagnosis is not. Lead, both dump labels and the blocking code point.
+    const echoed = echoedReasonOf(warning);
+    expect(echoed).toContain("differ only in invisible characters");
+    expect(echoed).toContain("U+034F");
+    expect(echoed).toMatch(/actual \[.*\] vs expected \[.*\]$/s);
+    // No dump token is cut through its own `U+` prefix.
+    expect(echoed.split(/… \(\d+ more chars\) …/)[1]).not.toMatch(/^\d{3} /);
   });
 
   it("reports a probe that threw outright as indeterminate, not as a verdict", async () => {
