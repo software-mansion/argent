@@ -16,7 +16,7 @@ import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
-import { reservedScriptEnvNamesForMessage } from "../../src/tools/flows/script/flow-script-executor";
+import { reservedScriptEnvNamesForMessage } from "@argent/configuration-core";
 
 /** One tool's `env` parameter description, as the JSON schema publishes it. */
 function envParameterDescription(tool: { zodSchema?: unknown }): string {

@@ -133,6 +133,134 @@ export const SCRIPT_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  */
 export const PROTO_ENV_NAME = "__proto__";
 
+/** The flag the runner preload reads to know which process it should take over. */
+export const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
+
+/** Where a `.sh` step's output document travels in and out. */
+export const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
+
+/** Where a `.sh` step's failure reason comes from. */
+export const BASH_REASON_ENV = "ARGENT_REASON";
+
+export const NPM_CONFIG_ENV_PREFIX = "npm_config_";
+
+/**
+ * npm config keys that reach `NODE_OPTIONS`, and so carry through the
+ * `npm_config_` prefix what the exact name is reserved to keep out.
+ * `node-options` is npm's own spelling of the variable — it hands the key back
+ * as `NODE_OPTIONS` to what it starts — and `userconfig` and `globalconfig`
+ * each name an `.npmrc` npm would read that key from.
+ */
+export const RESERVED_NPM_CONFIG_KEYS: readonly string[] = [
+  "node-options",
+  "userconfig",
+  "globalconfig",
+];
+
+/**
+ * Refused in a caller-supplied environment map, because each steers the
+ * runner's own process: `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID` and
+ * `NODE_CHANNEL_SERIALIZATION_MODE` name and frame the IPC channel the script
+ * protocol runs on, `ELECTRON_RUN_AS_NODE` decides whether the child boots as
+ * Node at all, and the activation flag decides which process the runner preload
+ * takes over.
+ *
+ * `NODE_CHANNEL_SERIALIZATION_MODE` is the sibling that fails most quietly.
+ * Node appends its own copy AFTER the caller's entries and `getenv` answers with
+ * the first, so the author's value wins; the fork never asks for a
+ * `serialization`, so the parent stays on `json` while the child switches. On
+ * `advanced` the child reads argent's JSON bytes as a length prefix and waits
+ * for about two gigabytes that never arrive — `child.send` reports no error, the
+ * script body never runs, and the step burns its whole time limit and is then
+ * reported as the author's script being slow. Any other value crashes the child
+ * inside `node:internal/child_process`, which the step then reports as the
+ * script's own failure. Refused up front instead, like the rest of the table.
+ *
+ * Here rather than in the tool server for the reason
+ * {@link SCRIPT_ENV_NAME_PATTERN} is: `argent flow run --env` is one of the
+ * channels held to this rule and cannot import from it. Held in one place
+ * because the two rules are asked TOGETHER — a name is refused as reserved or
+ * as malformed, never as both — and `npm_config_node-options`, npm's own
+ * spelling and the one every refusal here advertises, is reserved AND fails the
+ * name pattern. Read off two copies, the CLI answered "not an environment
+ * variable name" for the spelling the reference table lists as reserved.
+ */
+export const RESERVED_SCRIPT_ENV_NAMES: readonly string[] = [
+  "NODE_CHANNEL_FD",
+  "NODE_UNIQUE_ID",
+  "NODE_CHANNEL_SERIALIZATION_MODE",
+  "NODE_OPTIONS",
+  "ELECTRON_RUN_AS_NODE",
+  RUNNER_ACTIVATION_ENV,
+  // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
+  // out and `$ARGENT_REASON` is where a failure reason comes from, so either
+  // one set by a caller would steer the runner's own protocol. Reserved
+  // whichever language the step runs — a flow-level map applies to every step
+  // — and set for bash only, since a `.mjs` has `output`.
+  BASH_OUTPUT_ENV,
+  BASH_REASON_ENV,
+];
+
+/**
+ * One npm config has many environment spellings: npm matches the prefix without
+ * regard to case, lowercases the rest, and reads `_` and `-` as the same
+ * character everywhere but the key's first — so `npm_config_node_options`,
+ * `npm_config_node-options` and `NPM_CONFIG_NODE_OPTIONS` are one name to it.
+ * Refusing only the one written out would leave the others open on every
+ * platform, which is why this does not go through the exact list above.
+ */
+function reservedNpmConfigName(name: string): string | undefined {
+  const lower = name.toLowerCase();
+  if (!lower.startsWith(NPM_CONFIG_ENV_PREFIX)) return undefined;
+  const key = lower.slice(NPM_CONFIG_ENV_PREFIX.length).replace(/(?!^)_/g, "-");
+  return RESERVED_NPM_CONFIG_KEYS.includes(key) ? `${NPM_CONFIG_ENV_PREFIX}${key}` : undefined;
+}
+
+/**
+ * The reserved name `name` spells, or undefined when it is free to set.
+ *
+ * Windows environment names are case-insensitive, so a host — and a flow file
+ * authored on one — may surface any of these under non-canonical casing; POSIX
+ * names are exact. The platform is read at CALL time, like the other copies of
+ * that rule, so a test can fake it; the executor passes the answer it already
+ * folded the child environment by.
+ */
+export function reservedScriptEnvName(
+  name: string,
+  caseInsensitive: boolean = process.platform === "win32"
+): string | undefined {
+  return (
+    RESERVED_SCRIPT_ENV_NAMES.find((candidate) =>
+      caseInsensitive ? candidate.toLowerCase() === name.toLowerCase() : candidate === name
+    ) ?? reservedNpmConfigName(name)
+  );
+}
+
+/** One spelling of each reserved name, for the refusal to name them all. */
+export function reservedScriptEnvNamesForMessage(): string {
+  return [
+    ...RESERVED_SCRIPT_ENV_NAMES,
+    ...RESERVED_NPM_CONFIG_KEYS.map((key) => `${NPM_CONFIG_ENV_PREFIX}${key}`),
+  ].join(", ");
+}
+
+/**
+ * Why a reserved name is reserved, as a clause reading after it — `holds
+ * ARGENT_OUTPUT, which ${reason} and cannot be set for a script`.
+ *
+ * The answer rather than the table it is read off: the two bash exchange names
+ * are a FILE the runner reads and writes, not a control over its own process,
+ * and an author cannot see the difference from the name. Deciding it beside the
+ * list is what keeps the reason with it — a name added to
+ * {@link RESERVED_SCRIPT_ENV_NAMES} is a name this function already answers for.
+ */
+export function reservedScriptEnvReason(name: string): string {
+  return name === BASH_OUTPUT_ENV || name === BASH_REASON_ENV
+    ? "names the file a `.sh` step exchanges its output document or its failure reason " +
+        "through, so argent sets it and a script may not"
+    : "steers the runner's own process";
+}
+
 export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
 
 /**

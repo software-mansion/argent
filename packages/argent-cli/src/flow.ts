@@ -7,7 +7,13 @@ import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 // the package both this CLI and the tool server already read their shared
 // script bounds out of — so a `--env` argument is refused here against the
 // same rule the server holds it to, rather than against a copy of it.
-import { PROTO_ENV_NAME, SCRIPT_ENV_NAME_PATTERN } from "@argent/configuration-core";
+import {
+  PROTO_ENV_NAME,
+  SCRIPT_ENV_NAME_PATTERN,
+  reservedScriptEnvName,
+  reservedScriptEnvNamesForMessage,
+  reservedScriptEnvReason,
+} from "@argent/configuration-core";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -203,14 +209,7 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
       );
     }
     const name = assignment.slice(0, eq);
-    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
-      throw new FlagParseException(
-        `--env expects NAME=value, got ${JSON.stringify(assignment)} — ${JSON.stringify(name)} ` +
-          'is not an environment variable name: a name starts with a letter or "_" and ' +
-          'continues with letters, digits or "_"'
-      );
-    }
-    // The one name the pattern above admits and nothing downstream can carry:
+    // The one name the pattern below admits and nothing downstream can carry:
     // it reads as a name, and then `z.record` builds its own object and loses
     // the key before any rule of argent sees it — the run would pass with the
     // variable simply missing and not a word said.
@@ -219,6 +218,27 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
         `--env cannot set ${PROTO_ENV_NAME}: every map on the way to the script copies it through ` +
           `a plain object, where ${PROTO_ENV_NAME} is an accessor rather than an entry — the value ` +
           `would be dropped and the script would run without it, silently. Use a name of your own`
+      );
+    }
+    // Reserved before malformed, because one reserved name is not a name this
+    // pattern accepts: `npm_config_node-options` is npm's own spelling, and the
+    // spelling the reference table and every refusal of argent's advertise.
+    // Asked the other way round, the author who wrote the documented name was
+    // told it is not an environment variable name at all, while the underscore
+    // spelling beside it passed here and was refused by the server with a
+    // message naming the hyphenated one.
+    const reserved = reservedScriptEnvName(name);
+    if (reserved) {
+      throw new FlagParseException(
+        `--env cannot set ${reserved}: it ${reservedScriptEnvReason(reserved)}, so no value ` +
+          `passed here reaches the script (reserved names: ${reservedScriptEnvNamesForMessage()})`
+      );
+    }
+    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
+      throw new FlagParseException(
+        `--env expects NAME=value, got ${JSON.stringify(assignment)} — ${JSON.stringify(name)} ` +
+          'is not an environment variable name: a name starts with a letter or "_" and ' +
+          'continues with letters, digits or "_"'
       );
     }
     // Spread rather than assignment, as a second line behind the refusal above:

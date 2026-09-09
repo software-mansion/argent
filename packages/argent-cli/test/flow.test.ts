@@ -190,6 +190,37 @@ describe("parseRunArgs", () => {
     );
   });
 
+  it("refuses a reserved name here rather than at the server, in every spelling", () => {
+    // `--env` is one of the channels the reserved rule covers, and it is the
+    // one that answered a different question: the CLI kept its own copy of the
+    // NAME pattern and no reserved check at all. So the author who wrote
+    // `npm_config_node-options` — npm's own spelling, and the one the reference
+    // table lists as reserved — was told it is not an environment variable
+    // name, while the underscore spelling beside it passed the CLI and came
+    // back from the server naming the hyphenated one.
+    for (const spelling of [
+      "npm_config_node-options",
+      "npm_config_node_options",
+      "NPM_CONFIG_NODE_OPTIONS",
+    ]) {
+      expect(() => parseRunArgs(["checkout", "--env", `${spelling}=--inspect`]), spelling).toThrow(
+        /--env cannot set npm_config_node-options: it steers the runner's own process/
+      );
+    }
+    expect(() => parseRunArgs(["checkout", "--env", "NODE_OPTIONS=--inspect"])).toThrow(
+      /--env cannot set NODE_OPTIONS/
+    );
+    // The exchange pair earns the other reason the table gives.
+    expect(() => parseRunArgs(["checkout", "--env", "ARGENT_OUTPUT=/tmp/x"])).toThrow(
+      /names the file a `\.sh` step exchanges/
+    );
+    // And a name no reserved entry claims still meets the name rule.
+    expect(() => parseRunArgs(["checkout", "--env", "MY-VAR=x"])).toThrow(
+      /"MY-VAR" is not an environment variable name/
+    );
+    expect(parseRunArgs(["checkout", "--env", "BUILD=1421"]).env).toEqual({ BUILD: "1421" });
+  });
+
   it("accepts -r and --recursive in any position", () => {
     expect(parseRunArgs(["flows", "-r"]).recursive).toBe(true);
     expect(parseRunArgs(["--recursive", "flows"]).recursive).toBe(true);
@@ -1099,9 +1130,14 @@ describe("argent flow run", () => {
 
   it("stops a directory run on a refusal about the call, not about the file", async () => {
     // `--env` is a property of the RUN. Classified as an ordinary validation
-    // rejection it was treated as this-flow-only, so one bad name printed the
+    // rejection it was treated as this-flow-only, so one bad value printed the
     // identical refusal once per flow and ended the batch `0 passed, N failed`
     // — nothing to say the fault was one argument rather than N files.
+    //
+    // An unresolvable `{{secret:}}` rather than a reserved NAME: a reserved name
+    // never reaches the server now, because the CLI holds the same table and
+    // refuses it while parsing the flags. A secret the machine does not define
+    // is the refusal that still has to travel.
     const batchRoot = path.join(tempRoot, "batch-run-env");
     const flowsDir = path.join(batchRoot, ".argent", "flows");
     await fsp.mkdir(flowsDir, { recursive: true });
@@ -1111,18 +1147,18 @@ describe("argent flow run", () => {
       fsp.writeFile(path.join(flowsDir, "c.yaml"), "steps: []\n"),
     ]);
     toolsClientMock.callTool.mockRejectedValue(
-      new ToolInvocationError("This run's `env` holds NODE_OPTIONS, which steers the runner", {
+      new ToolInvocationError('This run\'s env value S: Unknown secret "NOPE"', {
         errorCode: "TOOL_INPUT_INVALID",
         errorKind: "validation",
       })
     );
 
-    await expect(flow(["run", flowsDir, "--env", "NODE_OPTIONS=x"], opts)).rejects.toThrow(
+    await expect(flow(["run", flowsDir, "--env", "S={{secret:NOPE}}"], opts)).rejects.toThrow(
       "process.exit:1"
     );
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-    expect(errs.join("\n").match(/This run's `env`/g)).toHaveLength(1);
+    expect(errs.join("\n").match(/This run's env value S/g)).toHaveLength(1);
     expect(logs.join("\n")).toContain("0 passed, 1 failed, 2 skipped");
     // The verdict is the single-flow runner's, because the two questions are
     // different: whether this file is the fault decides what runs next, and

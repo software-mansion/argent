@@ -13,16 +13,14 @@
 import { z } from "zod";
 import {
   PROTO_ENV_NAME,
+  reservedScriptEnvName,
+  reservedScriptEnvNamesForMessage,
+  reservedScriptEnvReason,
   SCRIPT_ENV_NAME_PATTERN,
   type SecretSourceOptions,
 } from "@argent/configuration-core";
 import { resolveSecretPlaceholders } from "../../../utils/secrets";
-import {
-  reservedScriptEnvName,
-  reservedScriptEnvNamesForMessage,
-  reservedScriptEnvReason,
-  type FlowScriptSecret,
-} from "./flow-script-executor";
+import { type FlowScriptSecret } from "./flow-script-executor";
 
 /**
  * Why `raw` is not a usable `env` map, as a clause that reads after the name of

@@ -23,13 +23,19 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import {
+  BASH_OUTPUT_ENV,
+  BASH_REASON_ENV,
   configFilePath,
   getAtPath,
   getConfigDefinition,
   getConfigValue,
   MIN_SCRIPT_HEAP_LIMIT_MB,
   MIN_SCRIPT_TIMEOUT_MS,
+  NPM_CONFIG_ENV_PREFIX,
   PROTO_ENV_NAME,
+  reservedScriptEnvName,
+  reservedScriptEnvNamesForMessage,
+  RUNNER_ACTIVATION_ENV,
   SCRIPT_ENV_NAME_PATTERN,
   type ConfigDefinition,
 } from "@argent/configuration-core";
@@ -87,27 +93,6 @@ const V8_HEAP_FATAL_RE = /FATAL ERROR:[^\n]*(?:heap limit|heap out of memory|All
 const HEAP_FATAL_WINDOW_CHARS = 256;
 
 const RUNNER_FILE = "flow-script-runner.mjs";
-
-const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
-
-const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
-
-/**
- * Why a reserved name is reserved, as a clause reading after it — `holds
- * ARGENT_OUTPUT, which ${reason} and cannot be set for a script`.
- *
- * The answer rather than the table it is read off: the two bash exchange names
- * are a FILE the runner reads and writes, not a control over its own process,
- * and an author cannot see the difference from the name. Deciding it here keeps
- * the reason beside the list that fixes it — a name added to
- * `RESERVED_ENV_NAMES` is a name this function already answers for.
- */
-export function reservedScriptEnvReason(name: string): string {
-  return name === BASH_OUTPUT_ENV || name === BASH_REASON_ENV
-    ? "names the file a `.sh` step exchanges its output document or its failure reason " +
-        "through, so argent sets it and a script may not"
-    : "steers the runner's own process";
-}
 
 /**
  * One private directory per bash step, under `os.tmpdir()` — 0700 on POSIX
@@ -219,101 +204,16 @@ const ALLOWED_ENV_NAMES: readonly string[] = [
   "CI",
 ];
 
-const NPM_CONFIG_ENV_PREFIX = "npm_config_";
-
 /** Config key holding a project's own additions to the allowlist above. */
 const SCRIPT_ENV_ALLOW_KEY = "scripts.env.allow";
 
+/**
+ * The npm prefix is copied WHOLE out of the host environment, which is why the
+ * reserved table names npm config KEYS as well as exact variables: the three
+ * that reach `NODE_OPTIONS` would otherwise ride in under this prefix. The
+ * reserved check below runs ahead of it for that reason.
+ */
 const ALLOWED_ENV_PREFIXES: readonly string[] = [NPM_CONFIG_ENV_PREFIX];
-
-/**
- * npm config keys that reach `NODE_OPTIONS`, and so carry through the prefix
- * above what the exact name is reserved to keep out. `node-options` is npm's
- * own spelling of the variable — it hands the key back as `NODE_OPTIONS` to
- * what it starts — and `userconfig` and `globalconfig` each name an `.npmrc`
- * npm would read that key from.
- */
-const RESERVED_NPM_CONFIG_KEYS: readonly string[] = ["node-options", "userconfig", "globalconfig"];
-
-/**
- * Refused in a caller-supplied environment map, because each steers the
- * runner's own process: `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID` and
- * `NODE_CHANNEL_SERIALIZATION_MODE` name and frame the IPC channel this
- * protocol runs on, `ELECTRON_RUN_AS_NODE` decides whether the child boots as
- * Node at all, and the activation flag decides which process the runner preload
- * takes over.
- *
- * `NODE_CHANNEL_SERIALIZATION_MODE` is the sibling that fails most quietly.
- * Node appends its own copy AFTER the caller's entries and `getenv` answers with
- * the first, so the author's value wins; the fork here never asks for a
- * `serialization`, so the parent stays on `json` while the child switches. On
- * `advanced` the child reads argent's JSON bytes as a length prefix and waits
- * for about two gigabytes that never arrive — `child.send` reports no error, the
- * script body never runs, and the step burns its whole time limit and is then
- * reported as the author's script being slow. Any other value crashes the child
- * inside `node:internal/child_process`, which the step then reports as the
- * script's own failure. Refused up front instead, like the rest of the table.
- */
-const RESERVED_ENV_NAMES: readonly string[] = [
-  "NODE_CHANNEL_FD",
-  "NODE_UNIQUE_ID",
-  "NODE_CHANNEL_SERIALIZATION_MODE",
-  "NODE_OPTIONS",
-  "ELECTRON_RUN_AS_NODE",
-  RUNNER_ACTIVATION_ENV,
-  // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
-  // out, so a caller setting it would steer the runner's own protocol.
-  // Reserved whichever language the step runs — a flow-level map applies to
-  // every step — and set for bash only, since a `.mjs` has `output`.
-  BASH_OUTPUT_ENV,
-];
-
-/**
- * One npm config has many environment spellings: npm matches the prefix without
- * regard to case, lowercases the rest, and reads `_` and `-` as the same
- * character everywhere but the key's first — so `npm_config_node_options`,
- * `npm_config_node-options` and `NPM_CONFIG_NODE_OPTIONS` are one name to it.
- * Refusing only the one written out would leave the others open on every
- * platform, which is why this does not go through the exact list above.
- */
-function reservedNpmConfigName(name: string): string | undefined {
-  const lower = name.toLowerCase();
-  if (!lower.startsWith(NPM_CONFIG_ENV_PREFIX)) return undefined;
-  const key = lower.slice(NPM_CONFIG_ENV_PREFIX.length).replace(/(?!^)_/g, "-");
-  return RESERVED_NPM_CONFIG_KEYS.includes(key) ? `${NPM_CONFIG_ENV_PREFIX}${key}` : undefined;
-}
-
-/**
- * The reserved name `name` spells, or undefined when it is free to set.
- *
- * Windows environment names are case-insensitive, so a host — and a flow file
- * authored on one — may surface any of these under non-canonical casing; POSIX
- * names are exact.
- */
-function reservedNameFor(name: string, caseInsensitive: boolean): string | undefined {
-  return (
-    RESERVED_ENV_NAMES.find((candidate) =>
-      caseInsensitive ? candidate.toLowerCase() === name.toLowerCase() : candidate === name
-    ) ?? reservedNpmConfigName(name)
-  );
-}
-
-/**
- * The same question the executor answers before a fork, asked by the parser and
- * the tools that accept an `env` map — so a name refused when the step runs is
- * refused when the flow is read, against one table rather than a copy of it.
- */
-export function reservedScriptEnvName(name: string): string | undefined {
-  return reservedNameFor(name, process.platform === "win32");
-}
-
-/** One spelling of each reserved name, for the refusal to name them all. */
-export function reservedScriptEnvNamesForMessage(): string {
-  return [
-    ...RESERVED_ENV_NAMES,
-    ...RESERVED_NPM_CONFIG_KEYS.map((key) => `${NPM_CONFIG_ENV_PREFIX}${key}`),
-  ].join(", ");
-}
 
 export interface FlowScriptSecret {
   name: string;
@@ -2109,17 +2009,18 @@ function byteRunSpans(
   if (spans.length > 0 || !run.cut) return spans;
   // Nothing whole, and the rendering was cut here — so the tail may be the
   // front of a value. Longest first, and shorter than the value, exactly as
-  // {@link quotedCutBefore} reads a cut in text space, and floored at the same
-  // {@link CUT_MIN_PREFIX_CHARS}: below it a match says more about the byte
-  // than about the value.
+  // {@link quotedCutBefore} reads a cut in text space.
   //
-  // The floor also keeps the substitution from GROWING the text at the edge of
-  // the ceiling, which a one-number match did every time: `{{secret:NAME}}` is
-  // longer than the `115` it would stand in for, `redactBounded` re-clamps what
-  // the scrub grew, and the placeholder came back cut. Six bytes buys that back
-  // for an ordinary name and no more — a name as long as
-  // `GOOGLE_APPLICATION_CREDENTIALS_JSON` still outgrows the seventeen
-  // characters six hex bytes occupy. What is left is cosmetic: the re-clamp
+  // Floored only when the cut is ARGENT's, because only that cut sits at the
+  // ceiling. There the substitution can GROW the text — `{{secret:NAME}}` is
+  // longer than the `115` it would stand in for — `redactBounded` re-clamps
+  // what the scrub grew, and the placeholder itself came back cut. A
+  // renderer's ellipsis is under no such pressure, and flooring it there would
+  // leave a byte standing that the pass took before.
+  //
+  // Six bytes buys the growth back for an ordinary name and no more: a name as
+  // long as `GOOGLE_APPLICATION_CREDENTIALS_JSON` still outgrows the seventeen
+  // characters six hex bytes occupy. What is left is cosmetic — the re-clamp
   // cuts text the scrub has already been over.
   //
   // Two ends, because argent's own clamp does not cut where a renderer does. A
@@ -2127,9 +2028,10 @@ function byteRunSpans(
   // falls, so the last number of the run can be half of one — `… 99,\n   5` —
   // and that half decodes to a byte no value has there, which sank the whole
   // tail. Dropping it is the second reading.
+  const floor = CUT_MIN_PREFIX_CHARS;
   for (const end of [decoded.length, decoded.length - 1]) {
     for (const { name, bytes } of needles) {
-      for (let n = Math.min(bytes.length - 1, end); n >= CUT_MIN_PREFIX_CHARS; n--) {
+      for (let n = Math.min(bytes.length - 1, end); n >= floor; n--) {
         if (decoded.compare(bytes, 0, n, end - n, end) !== 0) continue;
         return runSpans(run, end - n, n, name);
       }
@@ -2801,7 +2703,7 @@ export function buildChildEnv(
       caseInsensitive ? name.toLowerCase() : name
     )
   );
-  const reservedName = (name: string) => reservedNameFor(name, caseInsensitive);
+  const reservedName = (name: string) => reservedScriptEnvName(name, caseInsensitive);
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
