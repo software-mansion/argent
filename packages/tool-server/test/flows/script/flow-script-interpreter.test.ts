@@ -514,9 +514,13 @@ describe("bash on PATH", () => {
     }
   });
 
-  // Three of the four Windows rungs are environment names rather than a
-  // derivation, and each one is a whole install layout: the 64-bit installer,
-  // the 32-bit one, and the per-user one that needs no administrator.
+  // Every Windows rung that is an environment name rather than a derivation,
+  // and each one is a whole install layout: the three Git for Windows
+  // installers - 64-bit, 32-bit, and the per-user one that needs no
+  // administrator - and the three Scoop roots, its per-user default, the
+  // override, and the administrator tree. Only the per-user Scoop default was
+  // ever built by a test; the row below is what constructs the other two and
+  // `%ProgramData%\scoop`.
   it.each([
     ["ProgramFiles", "C:\\Program Files", "C:\\Program Files\\Git\\bin\\bash.exe"],
     ["ProgramFiles(x86)", "C:\\Program Files (x86)", "C:\\Program Files (x86)\\Git\\bin\\bash.exe"],
@@ -525,7 +529,14 @@ describe("bash on PATH", () => {
       "C:\\Users\\dev\\AppData\\Local",
       "C:\\Users\\dev\\AppData\\Local\\Programs\\Git\\bin\\bash.exe",
     ],
-  ])("offers the Git for Windows under %s", async (name, value, expected) => {
+    ["SCOOP", "D:\\scoop", "D:\\scoop\\apps\\git\\current\\bin\\bash.exe"],
+    [
+      "SCOOP_GLOBAL",
+      "C:\\ProgramData\\scoop",
+      "C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe",
+    ],
+    ["ProgramData", "C:\\ProgramData", "C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe"],
+  ])("offers the bash the %s layout puts there", async (name, value, expected) => {
     setPlatform("win32");
     const real = { ...process.env };
     for (const key of [
@@ -592,11 +603,15 @@ describe("bash on PATH", () => {
   });
 
   // Each candidate costs a run of it, and in the default layout the git-derived
-  // path and the `%ProgramFiles%` rung are the same file.
+  // path and the `%ProgramFiles%` rung are the same file. Spelled differently
+  // on purpose: Windows gives one file many spellings and `where git` answers
+  // with the one on disk, so two rungs naming the same `bash.exe` are only
+  // byte-identical by luck - and a duplicate is a five second probe paid twice
+  // on the machine where everything is where the installer put it.
   it("offers each candidate once, however many rungs name it", async () => {
     setPlatform("win32");
     const realProgramFiles = process.env.ProgramFiles;
-    process.env.ProgramFiles = "C:\\Program Files";
+    process.env.ProgramFiles = "c:\\program files";
     execFileMock.mockImplementation((_cmd: string, args?: readonly string[]) =>
       args?.[0] === "git"
         ? { stdout: "C:\\Program Files\\Git\\cmd\\git.exe\r\n", stderr: "" }
