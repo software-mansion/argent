@@ -1153,6 +1153,51 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toBe(".argent/flows/linked.yaml");
   });
 
+  it("reports a missing flows directory on stdout, without failing", async () => {
+    const listRoot = path.join(tempRoot, "list-absent-project");
+    await fsp.mkdir(listRoot, { recursive: true });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe("No .argent/flows directory in the current working directory.");
+    expect(errs).toEqual([]);
+  });
+
+  // Skipped as root / on Windows, where a mode-000 directory is still readable —
+  // see canDenyRead.
+  it.skipIf(!canDenyRead)(
+    "fails an unreadable flows directory instead of calling it absent",
+    async () => {
+      const listRoot = path.join(tempRoot, "list-unreadable-project");
+      const flowsDir = path.join(listRoot, ".argent", "flows");
+      await fsp.mkdir(flowsDir, { recursive: true });
+      await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
+      await fsp.chmod(flowsDir, 0o000);
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        process.chdir(previousCwd);
+        // Restore before afterAll's rm walks the tree (see there).
+        await fsp.chmod(flowsDir, 0o700);
+      }
+
+      // Same wording and exit code as `flow run` on the same directory. The
+      // path is matched by its tail: cwd resolves symlinks, and tmpdir is one
+      // on macOS.
+      const line = errs.join("\n");
+      expect(line.startsWith("Could not read flow directory: ")).toBe(true);
+      expect(line.endsWith(path.join("list-unreadable-project", ".argent", "flows"))).toBe(true);
+      expect(logs).toEqual([]);
+    }
+  );
+
   it("prints the no-flows message when no entry in the directory is runnable", async () => {
     const listRoot = path.join(tempRoot, "list-empty-project");
     const flowsDir = path.join(listRoot, ".argent", "flows");
