@@ -445,6 +445,31 @@ describe("environment shape rules", () => {
     await expect(runFlow("named")).rejects.toThrow(/not an environment variable name/);
   });
 
+  it("calls a reserved name reserved, in every spelling npm gives it", async () => {
+    // `npm_config_node-options` does not match the name pattern, and the
+    // pattern used to be asked first — so the author who writes the spelling
+    // npm documents, and that this module advertises in its own reserved list,
+    // was told the name is not a name at all, while the underscore spelling
+    // beside it was refused by a message naming the hyphenated one. Two
+    // contradictory answers about one name.
+    const spellings = [
+      "npm_config_node-options",
+      "npm_config_node_options",
+      "NPM_CONFIG_NODE_OPTIONS",
+    ];
+    for (const [at, name] of spellings.entries()) {
+      // Numbered rather than named after the spelling: a case-insensitive
+      // filesystem reads two of the three as one flow file.
+      await flow(`npmres${at}`, `env: { "${name}": x }\nsteps:\n  - echo: hi\n`);
+      const refused = runFlow(`npmres${at}`);
+      await expect(refused, name).rejects.toThrow(/steers the runner's own process/);
+      await expect(refused, name).rejects.not.toThrow(/not an environment variable name/);
+    }
+    // The name rule still answers a name no reserved entry claims.
+    await flow("stillmalformed", 'env: { "2FA": x }\nsteps:\n  - echo: hi\n');
+    await expect(runFlow("stillmalformed")).rejects.toThrow(/not an environment variable name/);
+  });
+
   it("refuses a {{output:...}} reference in every env channel", async () => {
     // The spelling belongs to a later release. Left alone it reaches the script
     // as literal text and the step PASSES, so a flow written against that
@@ -1025,6 +1050,27 @@ describe("the host allowlist extension", () => {
     // `__proto__` satisfies the name rule to the letter, so it gets its own
     // answer rather than one stating a rule it plainly meets.
     expect(reason).toContain("__proto__, which argent cannot carry");
+  });
+
+  it("names a reserved allowlist entry reserved, not malformed", async () => {
+    // The same ordering, on the allowlist channel: `scripts.env.allow` asked
+    // the name pattern first, so npm's own hyphenated spelling landed in the
+    // malformed bucket and the note stated a rule the reference table's own
+    // spelling of that name breaks.
+    await write(
+      ".argent/config.json",
+      JSON.stringify({ scripts: { env: { allow: ["npm_config_node-options"] } } })
+    );
+    await write("scripts/noop.mjs", "output.ok = true;");
+    await flow("npmallow", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
+
+    const { result } = await runFlow("npmallow");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(result.ok).toBe(true);
+    expect(reason).toContain("npm_config_node-options");
+    expect(reason).toContain("steers the runner's own process rather than reaching the script");
+    expect(reason).not.toContain("is not an environment variable name");
   });
   it("says a note once per run, not once per step", async () => {
     await write(

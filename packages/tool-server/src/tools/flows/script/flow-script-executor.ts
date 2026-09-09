@@ -3031,10 +3031,15 @@ function configuredEnvAllowNames(
   // correctly. Two contradictory answers to one question.
   const unusable: string[] = [];
   for (const name of configured) {
+    // The name PATTERN is asked LAST, because one reserved name does not match
+    // it — `npm_config_node-options`, npm's own spelling and the one every
+    // other refusal here advertises. Asked first, it dropped that entry into
+    // the malformed bucket, which states a rule the reference table's own
+    // spelling of the name breaks.
     if (name === PROTO_ENV_NAME) unusable.push(name);
-    else if (!SCRIPT_ENV_NAME_PATTERN.test(name)) malformed.push(name);
     else if (argentOwnedEnvName(name)) owned.push(name);
     else if (reservedScriptEnvName(name)) reserved.push(name);
+    else if (!SCRIPT_ENV_NAME_PATTERN.test(name)) malformed.push(name);
     else kept.push(name);
   }
   if (owned.length > 0) {

@@ -60,18 +60,24 @@ export function describeScriptEnvProblem(raw: unknown): string | null {
     );
   }
   for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
-      return (
-        `holds ${JSON.stringify(name)}, which is not an environment variable name — a name ` +
-        `starts with a letter or "_" and continues with letters, digits or "_"`
-      );
-    }
     if (name === PROTO_ENV_NAME) return protoEnvNameProblem();
+    // Asked before the name PATTERN, because one reserved name does not match
+    // it: `npm_config_node-options` is npm's own spelling, it is the spelling
+    // this module advertises in every other refusal, and it is the spelling the
+    // reference table lists. Judged the other way round, the author who writes
+    // the documented name is told it is not a name at all, while the underscore
+    // spelling beside it is refused by a message that names the hyphenated one.
     const reserved = reservedScriptEnvName(name);
     if (reserved) {
       return (
         `holds ${reserved}, which ${reservedScriptEnvReason(reserved)} and cannot be set for a ` +
         `script (reserved names: ${reservedScriptEnvNamesForMessage()})`
+      );
+    }
+    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
+      return (
+        `holds ${JSON.stringify(name)}, which is not an environment variable name — a name ` +
+        `starts with a letter or "_" and continues with letters, digits or "_"`
       );
     }
     if (typeof value !== "string") {
