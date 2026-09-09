@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -290,5 +292,41 @@ describe("LogFileWriter", () => {
 
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/api/user.ts");
+  });
+});
+
+// Mode bits do not bite on Windows, nor for uid 0.
+const CAN_MAKE_UNWRITABLE = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be created", () => {
+  let dir: string;
+  let unwritableWriter: LogFileWriter;
+
+  beforeEach(() => {
+    dir = path.join(os.homedir(), ".argent", "tmp");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o555);
+    unwritableWriter = new LogFileWriter(9998);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(dir, 0o755);
+    unwritableWriter.close();
+  });
+
+  it("keeps no copy of a line it could not write", () => {
+    unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
+
+    expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
+    expect(unwritableWriter.readAll()).toEqual([]);
+
+    const retainedLines = Object.values(unwritableWriter as unknown as Record<string, unknown>)
+      .filter((value): value is unknown[] => Array.isArray(value))
+      .flat();
+    expect(retainedLines).toEqual([]);
+
+    // The entry itself is still accounted for, through the counts and clusters.
+    expect(unwritableWriter.getStats().totalEntries).toBe(1);
+    expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
   });
 });
