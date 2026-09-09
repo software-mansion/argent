@@ -1547,10 +1547,12 @@ const MAX_ENTRY_RENDER_CHARS = 200;
 
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
-  // throw and mask the validation message.
+  // throw and mask the validation message. It also returns the *value*
+  // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
+  // declared `string` return type hides.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw);
+    rendered = JSON.stringify(raw) ?? String(raw);
   } catch {
     rendered = "[cyclic entry]";
   }

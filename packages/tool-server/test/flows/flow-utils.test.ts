@@ -252,6 +252,17 @@ describe("parseFlow", () => {
     );
   });
 
+  it.each([
+    ["await.text.in", "steps:\n  - await: { text: { contains: Welcome } }\n"],
+    ["assert.text.in", "steps:\n  - assert: { text: { contains: Welcome } }\n"],
+    ["when.text.in", "steps:\n  - when: { text: { contains: Welcome } }\n    steps: [echo: hi]\n"],
+    ["type.into", "steps:\n  - type: { text: hello }\n"],
+  ])("classifies an omitted %s instead of crashing on the render", (where, content) => {
+    // An absent key reaches badEntry as `undefined`, which JSON.stringify
+    // renders as the value `undefined` rather than a string.
+    expect(entryRejectionMessage(content)).toContain(`Unrecognized flow entry (${where}:`);
+  });
+
   it("sugars a bare-string selector into a loose { text } for tap", async () => {
     const flow = parseFlow("steps:\n  - tap: Settings\n");
     // Bare string ⇒ loose: resolves identifier-first, then falls back to text.
