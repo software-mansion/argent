@@ -3045,30 +3045,21 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
 
 // ── the chromium carve-out on "record a restart-app FIRST" ───────────
 //
-// `restart-app` declares no chromium capability, so the first step a
-// self-contained e2e flow is told to record is rejected on a chromium target.
-// The exception cannot live only on flow-start-recording's
-// `executionPrerequisite` param: the agent recording an e2e flow is told not to
-// pass that param, so it never reads its `.describe()`.
-describe("the record-a-restart-app-first instruction", () => {
-  const oneLine = (text: string) => text.replace(/\s+/g, " ");
-
-  const carriers: [string, string][] = [
-    ["flow-start-recording", flowStartRecordingTool.description!],
-    ["flow-add-step", createFlowAddStepTool({} as unknown as Registry).description!],
-  ];
-
-  it.each(carriers)(
-    "states the chromium exception wherever it appears (%s)",
-    (_id, description) => {
-      const text = oneLine(description);
-      expect(text).toMatch(/FIRST/);
-      expect(text).toContain(
-        "restart-app has no chromium support, so a chromium flow records as a fragment"
-      );
-      expect(text).toContain("`launch: { chromium: <app path> }` line to the YAML afterward");
-    }
-  );
+// flow-start-recording's description is the one place that tells an agent to
+// record a `restart-app` first, and `restart-app` declares no chromium
+// capability, so on a chromium target that first step is rejected. The
+// exception cannot live only on the `executionPrerequisite` param: an agent
+// recording a self-contained e2e flow is told not to pass that param, so it
+// never reads its `.describe()`.
+describe("flow-start-recording's record-a-restart-app-first instruction", () => {
+  it("states the chromium exception alongside it", () => {
+    const text = flowStartRecordingTool.description!.replace(/\s+/g, " ");
+    expect(text).toMatch(/record a restart-app of the app under test as the FIRST step/);
+    expect(text).toContain(
+      "restart-app has no chromium support, so a chromium flow records as a fragment"
+    );
+    expect(text).toContain("`launch: { chromium: <app path> }` line to the YAML afterward");
+  });
 });
 
 // ── summarizeStep rendering ──────────────────────────────────────────
