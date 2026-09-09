@@ -76,10 +76,13 @@ describe("dedicated secrets files", () => {
   it("exposes every key in the global file, which needs no project", () => {
     write(globalSecrets(), "APP_PASSWORD=from-home\n");
     const detached = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-detached-")));
-    expect(
-      lookupSecret("APP_PASSWORD", secretSources({ cwd: detached, homeDir, env: NO_ENV }))
-    ).toBe("from-home");
-    fs.rmSync(detached, { recursive: true, force: true });
+    try {
+      expect(
+        lookupSecret("APP_PASSWORD", secretSources({ cwd: detached, homeDir, env: NO_ENV }))
+      ).toBe("from-home");
+    } finally {
+      fs.rmSync(detached, { recursive: true, force: true });
+    }
   });
 
   it("accepts a redundant ARGENT_SECRET_ prefix on a key", () => {
@@ -173,9 +176,15 @@ describe("degradation", () => {
 
   it("skips project sources when the cwd is not inside a project", () => {
     const detached = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-detached-")));
-    const sources = secretSources({ cwd: detached, homeDir, env: NO_ENV });
-    expect(sources.map((s) => s.label)).toEqual(["environment (ARGENT_SECRET_*)", globalSecrets()]);
-    fs.rmSync(detached, { recursive: true, force: true });
+    try {
+      const sources = secretSources({ cwd: detached, homeDir, env: NO_ENV });
+      expect(sources.map((s) => s.label)).toEqual([
+        "environment (ARGENT_SECRET_*)",
+        globalSecrets(),
+      ]);
+    } finally {
+      fs.rmSync(detached, { recursive: true, force: true });
+    }
   });
 
   it("lists a file shared by both scopes once", () => {

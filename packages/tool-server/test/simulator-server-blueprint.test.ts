@@ -225,8 +225,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     signalReady(fakeProc, 55558);
     const instance = await factoryPromise;
 
-    instance.api.pressKey("Down", 0x29);
-    instance.api.pressKey("Up", 0x29);
+    await instance.api.pressKey("Down", 0x29);
+    await instance.api.pressKey("Up", 0x29);
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");

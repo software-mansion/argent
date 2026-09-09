@@ -102,7 +102,8 @@ executionPrerequisite instead. restart-app has no chromium support, so a chromiu
 flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to
 the YAML afterward, deleting the executionPrerequisite line if you passed one: a
 flow that starts with a launch must not declare it. Use flow-add-echo to add
-labels. Call flow-finish-recording when done.
+labels, and flow-add-script to run a local .mjs file and record it as a
+\`script:\` step. Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to
 remove or reorder steps - after flow-finish-recording, not during the
