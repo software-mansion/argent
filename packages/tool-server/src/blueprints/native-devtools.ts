@@ -962,7 +962,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       } catch (err) {
         // dispose never runs: the registry sets `node.instance` only after
         // factory() resolves.
-        server.close();
+        server!.close();
         throw err;
       }
     } else {
