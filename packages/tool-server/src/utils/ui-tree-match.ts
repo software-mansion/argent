@@ -1499,7 +1499,7 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
   return best?.frame;
 }
 
-const GENERIC_ROLES = new Set([
+export const GENERIC_ROLES = new Set([
   "axgroup",
   "group",
   "view",
@@ -1512,13 +1512,33 @@ const GENERIC_ROLES = new Set([
 ]);
 
 /**
+ * A POSITIONAL id — `profilePager-selector-2`, `tab-selector-0`. The number is
+ * the element's index among its siblings, so the id names a slot rather than a
+ * thing: it survives no re-order and silently addresses a different control
+ * once one is inserted before it. Recording one only ever produced a fragile
+ * step that looked strict — one an author has to notice and replace by hand.
+ *
+ * It matters most where the recorder is least reliable. The flow tree is
+ * flattened and carries no z-order, so a tap inside a full-screen modal can
+ * resolve against a view BEHIND it; observed on Bluesky's edit-profile sheet,
+ * where a tap on the display-name field derived the profile pager's "Media"
+ * tab. An ambiguous or oversized background match is already caught and warned
+ * about, but a positional id on a background node passes every one of those
+ * checks and records silently. Refusing it turns that case back into the
+ * kept-coordinate warning the author is told to act on.
+ */
+const POSITIONAL_ID = /-selector-\d+$/i;
+
+/**
  * The most stable selector identifying a node, used by the recorder to turn a
- * tapped element into a `tap: { selector }` step. Prefers identifier, then
- * text, then a non-generic role. Null when the node has nothing stable to match
- * on — the caller then keeps coordinates.
+ * tapped element into a `tap: { selector }` step. Prefers identifier — unless it
+ * is positional, see {@link POSITIONAL_ID} — then text, then a non-generic role.
+ * Null when the node has nothing stable to match on — the caller then keeps
+ * coordinates.
  */
 export function deriveSelector(node: DescribeNode): Selector | null {
-  if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
+  const id = node.identifier?.trim();
+  if (id && !POSITIONAL_ID.test(id)) return { identifier: node.identifier! };
   // Label OR value individually — never nodeText's joined form: matchNode
   // compares a text selector against label and value separately, so a joined
   // "Volume 50%" would match nothing, not even the node it came from. Label

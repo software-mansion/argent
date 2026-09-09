@@ -39,12 +39,13 @@ import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
-import type { DescribeSource } from "../describe/contract";
+import type { DescribeFrame, DescribeNode, DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
   selectorToFrame,
   frameContains,
+  GENERIC_ROLES,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -128,6 +129,23 @@ const UNSUPPORTED_PLATFORM = {
   divergence: "The recorder and the runner read different projections of the screen.",
   read: "No read-only tool is known to report the runner's projection on this platform — keep the step raw",
 } as const;
+
+/**
+ * The read-only tool that reads the tree the RUNNER resolves against, for the
+ * platforms where one exists. Android is deliberately routed elsewhere (see
+ * {@link runnerSideReadClause}): no read-only tool exposes its runner tree, so
+ * this helper is only ever called here for iOS / Chromium / Vega.
+ *
+ * `native-find-views` declares Apple capability only, so it is named for iOS
+ * alone; iOS `describe` is the AX tree — the RECORDER's side — so it is NOT
+ * listed here, where the point is to name the runner's reader.
+ */
+function treeReaderFor(udid: unknown): string {
+  const platform = platformOf(udid);
+  if (platform === "ios" || platform === "ios-remote") return "`native-find-views`";
+  if (platform === "chromium") return "`describe` (this platform's DOM walker)";
+  return "`describe`";
+}
 
 /**
  * The remedy half of the iOS/Android clause. The advice inverts on `hidden`:
@@ -629,6 +647,92 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 }
 
 /**
+ * A tap target has to be small enough that tapping its CENTRE reproduces the
+ * tap. Frames are normalized to the viewport, so this is a share of the screen.
+ *
+ * The number is a judgement, and the two failures it sits between are both
+ * real and both were observed. Too permissive and a container gets recorded:
+ * a tap on blank space in a drawer resolved to the drawer's whole scroll area
+ * (0.72 of the screen), and replay — which taps a selector's centre — hit the
+ * "Chat" item and reported pass while navigating somewhere the walkthrough
+ * never went. Too strict and ordinary widgets become unrecordable: a feed post
+ * is half the screen and tapping it is a perfectly normal QA step.
+ */
+const MAX_TAP_TARGET_AREA = 0.6;
+
+function isContainerSized(frame: DescribeFrame): boolean {
+  return frame.width * frame.height > MAX_TAP_TARGET_AREA;
+}
+
+/**
+ * A narrower form of a selector that resolved to the WRONG element — the tapped
+ * node's own specific role added to the base. Returned best-first, or empty
+ * when nothing narrower is available.
+ *
+ * A derived selector is the plainest thing that describes the tapped node, so
+ * on a screen with repeats — a "Search" label shared by a field and a tab — it
+ * is ambiguous rather than absent. Ambiguity is not the same failure as "this
+ * element cannot be addressed", and it must not be answered with coordinates:
+ * the runner resolves the narrower form.
+ *
+ * Only the node's OWN role is added, and only when it is specific (not
+ * {@link GENERIC_ROLES}). The identifier is deliberately NOT narrowed on:
+ * {@link deriveSelector} already makes any stable, non-positional id the BASE
+ * selector, so when `base` carries no identifier the node has none left to
+ * add — its id is either absent or POSITIONAL, and a positional id is exactly
+ * what the recorder refuses. There is nothing an identifier branch here could
+ * contribute that deriveSelector has not already used or refused.
+ *
+ * A `within` scope is deliberately NOT derived here either, even though it
+ * would separate one feed row's button from another's: the flow tree is
+ * flattened, so a container can only be found geometrically, and geometry is
+ * z-order blind. With a modal open, the background screen's elements are still
+ * the smallest nodes under the point and the FOREGROUND modal's container is a
+ * perfectly good geometric ancestor — a tap on the composer's text input
+ * recorded as a feed post "inside" the composer, which then failed on any
+ * screen whose feed content differed. The scopes that survive are the ones an
+ * author writes knowingly at polish, against a container they have chosen.
+ */
+function narrowedSelectors(node: DescribeNode, base: Selector): Selector[] {
+  if (base.role !== undefined || !node.role || GENERIC_ROLES.has(node.role.toLowerCase())) {
+    return [];
+  }
+  return [{ ...base, role: node.role }];
+}
+
+/**
+ * Would replaying this selector reproduce the tap?
+ *
+ * Two things have to hold, and it is worth saying why it is not one.
+ *
+ * The frame must CONTAIN the tapped point — otherwise the selector matched
+ * some other element and lost the ranking, so the step targets the wrong
+ * control from the start.
+ *
+ * And the frame must be small enough to be a control rather than a container
+ * (see {@link MAX_TAP_TARGET_AREA}), because replay taps its CENTRE, not the
+ * point recorded here. A tap on blank space inside a drawer resolved to the
+ * drawer's whole scroll area and replayed onto the "Chat" item, reporting
+ * pass while navigating somewhere the walkthrough never went.
+ *
+ * What this deliberately does NOT do is require the centre to resolve back to
+ * the same tree node. That test was tried and is wrong on a FLATTENED tree: a
+ * control's own label is a SIBLING rect sitting on its centre, so a like
+ * button, a search field, a full-width row and every grid cell were refused —
+ * while replaying perfectly, because the touch is still inside the control.
+ * Node identity cannot tell a label from an independent control; size can tell
+ * a control from a container, which is the distinction that matters here.
+ */
+function replayReproducesTap(
+  frame: DescribeFrame,
+  point: { x: number; y: number }
+): "ok" | "container" | "retargets" {
+  if (isContainerSized(frame)) return "container";
+  if (!frameContains(frame, point.x, point.y)) return "retargets";
+  return "ok";
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -653,7 +757,7 @@ async function captureTapSelector(
   session: RecordingSession,
   udid: string,
   point: { x: number; y: number }
-): Promise<{ selector?: Selector; warning?: string }> {
+): Promise<{ selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }> {
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
@@ -663,10 +767,9 @@ async function captureTapSelector(
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
     const node = nodeAtPoint(tree, point);
-    if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
+    if (!node) return { warning: "no element found under the tap" };
     const selector = deriveSelector(node);
-    if (!selector)
-      return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    if (!selector) return { warning: "tapped element has no stable text/id" };
     // Replay resolves through selectorToFrame, whose ranking (exact match →
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
@@ -678,12 +781,44 @@ async function captureTapSelector(
       // under matchNode's semantics, so this should be unreachable. Kept in
       // case derivation and matching drift apart again.
       return {
-        warning: `selector ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
+        warning: `selector ${describeSelector(selector)} matches no element on this screen`,
       };
     }
-    if (!frameContains(resolved, point.x, point.y)) {
+    const verdict = replayReproducesTap(resolved, point);
+    if (verdict === "container") {
+      // The selector resolves to an element covering most of the screen — on
+      // some trees a point on empty margin resolves to the screen root itself,
+      // which is addressable and looks like a perfectly good `{ id: <screen> }`.
+      // At this size the tree cannot tell a container from a genuinely
+      // full-bleed control, and narrowing cannot help: the problem is the
+      // element, not the selector. Kept coordinates either way — for a real
+      // container a centre-tap replay would fire elsewhere, and for a full-bleed
+      // control a coordinate replays as well as a selector would.
       return {
-        warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+        container: true,
+        warning:
+          `the tap landed on ${describeSelector(selector)}, which covers most of the screen — ` +
+          `at that size a container is indistinguishable from a control, and replay taps a ` +
+          `selector's CENTRE, so if it is a container a step recorded with it would fire ` +
+          `somewhere else entirely`,
+      };
+    }
+    if (verdict === "retargets") {
+      // The selector matches the tapped element AND something else, and ranks
+      // the other one first. Narrow it before giving up — the runner resolves
+      // either narrower form, so answering ambiguity with coordinates would
+      // throw away a perfectly good target.
+      for (const candidate of narrowedSelectors(node, selector)) {
+        const frame = selectorToFrame(tree, candidate);
+        if (frame && replayReproducesTap(frame, point) === "ok") {
+          return { selector: candidate, warning: fallbackSourceWarning(source, device.platform) };
+        }
+      }
+      return {
+        ambiguous: true,
+        warning:
+          `selector ${describeSelector(selector)} also matches another element on this screen, ` +
+          `and ranks it first — narrowing by the tapped element's own role did not single it out`,
       };
     }
     const warnings = [
@@ -693,7 +828,7 @@ async function captureTapSelector(
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
     return {
-      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
+      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)})`,
     };
   }
 }
@@ -892,6 +1027,101 @@ export function directiveCommandHint(command: string): string | undefined {
   );
 }
 
+/**
+ * What to do about a tap whose selector could not be captured, now that the
+ * raw point has been kept.
+ *
+ * Three different failures, and they call for different responses: an element
+ * nothing can address, one that several things address equally, and one that
+ * covers most of the screen. Saying "no selector could be derived" for the
+ * second sends the author to re-discover a selector they already have; saying
+ * "an element with no id or label" for the third is simply false — the warning
+ * names the container's own id. The advice rides on the recorded step's warning
+ * because that is the only moment it is read while the screen is still there to
+ * retarget against — a coordinate step replays fine today and breaks on the
+ * first layout change, which is why the skills treat this warning as a stop
+ * rather than a note.
+ */
+function coordinateRemedy(
+  captured: { ambiguous?: boolean; container?: boolean },
+  udid: unknown
+): string {
+  if (captured.ambiguous) {
+    return (
+      `Disambiguate it: give the intended element its own testID, or tap a target whose id is ` +
+      `unique on this screen. At polish, a hand-written \`within\`/\`after\`/\`next\` scope can ` +
+      `also single out the element this point hit.`
+    );
+  }
+  if (captured.container) {
+    return (
+      `Find the specific control under the point with ${treeReaderFor(udid)} and tap ITS centre — ` +
+      `the smallest element that is genuinely the target, not the full-screen container it sits in.`
+    );
+  }
+  return (
+    `Find the real target with ${treeReaderFor(udid)} and tap its centre. If the element ` +
+    `genuinely has no id or label, that is usually worth fixing in the app.`
+  );
+}
+
+function rawCoordinateWarning(
+  command: string,
+  args: Record<string, unknown>,
+  delayMs: number | undefined
+): string | undefined {
+  if (command === "gesture-tap" && delayMs !== undefined) {
+    return (
+      "gesture-tap was kept as a raw coordinate tool step because flow-add-step delayMs prevents " +
+      "selector capture; remove delayMs, add a separate wait step before the tap if the pre-action " +
+      "delay is necessary, then record the tap again"
+    );
+  }
+  if (command === "restart-app" && delayMs !== undefined) {
+    return (
+      "restart-app was kept as a raw tool step because flow-add-step delayMs prevents the launch rewrite; " +
+      "remove delayMs so restart-app records as the leading launch, then record a post-launch " +
+      "await-ui-element readiness gate"
+    );
+  }
+  if (command === "gesture-custom") {
+    return (
+      "gesture-custom was recorded with raw coordinates because it has no selector-capture rewrite; " +
+      "if it contains a tap, record that tap individually with gesture-tap so selector capture can run"
+    );
+  }
+  if (
+    command === "run-sequence" &&
+    Array.isArray(args.steps) &&
+    args.steps.some(
+      (step) =>
+        typeof step === "object" &&
+        step !== null &&
+        (step as { tool?: unknown }).tool === "gesture-tap"
+    )
+  ) {
+    return (
+      "run-sequence contains coordinate taps and was recorded as one opaque raw step; record taps " +
+      "individually so each can become a tap selector"
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Whether this step must be refused rather than recorded, and why.
+ *
+ * `flow-execute` and `run-sequence` report a failed, cancelled or never-run
+ * nested run in their RESULT, not by throwing. If the recorder does not read
+ * that result, a composition that failed everything becomes a step that passed.
+ *
+ * The verdict comes from {@link nestedOrchestratorOutcome}, the reader the
+ * RUNNER scores a nested step with. A step the recorder refuses is a step the
+ * runner would not have passed, so one reader keeps the two in agreement.
+ *
+ * `undefined` means the nested run finished cleanly. A cancel in the trailing
+ * delay after the last declared step is clean: that step ran in full.
+ */
 function nestedRecordRefusal(
   command: string,
   result: unknown,
@@ -1284,7 +1514,9 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         typeof args.x === "number" &&
         typeof args.y === "number";
 
-      let captured: { selector?: Selector; warning?: string } | undefined;
+      let captured:
+        | { selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }
+        | undefined;
       if (isTap) {
         captured = await captureTapSelector(registry, session, args.udid as string, {
           x: args.x as number,
@@ -1394,16 +1626,27 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         step = { kind: "tap", selector: captured.selector, ...tapTimes };
         warning = captured.warning;
       } else if (isTap) {
-        // No stable selector — keep a coordinate tap, but still as a `tap:`
-        // directive so every tap reads uniformly.
+        // No stable selector — keep a coordinate tap (still as a `tap:`
+        // directive so every tap reads uniformly), but recording the point is
+        // not an endorsement of it: say what failed AND what to do instead,
+        // since this warning is the whole of the author's signal that the flow
+        // just took on a step that survives only until the layout moves.
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
-        warning = captured?.warning;
+        warning = captured?.warning
+          ? `${captured.warning}; kept coordinates, which replay at a fixed point and break on ` +
+            `any layout change. ${coordinateRemedy(captured, args.udid)} Keep the point only for ` +
+            `a genuinely unaddressable target (a canvas, a map, an unlabeled image), preceded by ` +
+            `an echo naming what it is.`
+          : undefined;
       } else if (isLaunch) {
         step = { kind: "launch", app: strippedArgs.bundleId as string };
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {
-        warning = waitWarning?.warning ?? runTarget?.warning;
+        warning =
+          waitWarning?.warning ??
+          runTarget?.warning ??
+          rawCoordinateWarning(params.command, args, params.delayMs);
         // The step ran live with the full args (incl. the device id), but the
         // recorded form drops it so the flow stays portable — the runner injects
         // whatever device it resolves at replay.

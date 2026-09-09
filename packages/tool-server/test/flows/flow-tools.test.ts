@@ -4243,4 +4243,114 @@ describe("summarizeStep rendering", () => {
       "4. tool: screenshot {} (after 2000ms)"
     );
   });
+
+  it("warns when delayMs prevents gesture-tap selector capture", async () => {
+    const registry = createMockRegistry({
+      "gesture-tap": { result: { tapped: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "delayed-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "delayed-tap",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: '{"udid":"ABC","x":0.5,"y":0.3}',
+        delayMs: 500,
+      }
+    );
+
+    expect(result.message).toContain("raw coordinate tool step");
+    expect(result.message).toContain("remove delayMs");
+    expect(parseFlow(await onDisk("delayed-tap")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "gesture-tap",
+        args: { x: 0.5, y: 0.3 },
+        delayMs: 500,
+      },
+    ]);
+  });
+
+  it("warns when delayMs prevents restart-app from becoming the leading launch", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "delayed-launch", project_root: tmpDir });
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "delayed-launch",
+        project_root: tmpDir,
+        command: "restart-app",
+        args: '{"udid":"ABC","bundleId":"com.acme.app"}',
+        delayMs: 500,
+      }
+    );
+
+    expect(result.message).toContain("prevents the launch rewrite");
+    expect(result.message).toContain("post-launch await-ui-element");
+    expect(parseFlow(await onDisk("delayed-launch")).steps[0]).toMatchObject({
+      kind: "tool",
+      name: "restart-app",
+      delayMs: 500,
+    });
+  });
+
+  it("warns when gesture-custom records an opaque coordinate gesture", async () => {
+    const registry = createMockRegistry({
+      "gesture-custom": { result: { completed: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "custom-gesture", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "custom-gesture",
+        project_root: tmpDir,
+        command: "gesture-custom",
+        args: '{"udid":"ABC","events":[{"type":"Down","x":0.5,"y":0.3},{"type":"Up","x":0.5,"y":0.3}]}',
+      }
+    );
+
+    expect(result.message).toContain("raw coordinates");
+    expect(result.message).toContain("record that tap individually");
+  });
+
+  it("warns when run-sequence hides coordinate taps in one opaque step", async () => {
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: { completed: 1, total: 1, steps: [{ tool: "gesture-tap", result: {} }] },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-tap",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: '{"udid":"ABC","steps":[{"tool":"gesture-tap","args":{"x":0.5,"y":0.3}}]}',
+      }
+    );
+
+    expect(result.message).toContain("opaque raw step");
+    expect(result.message).toContain("record taps individually");
+  });
 });
