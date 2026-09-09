@@ -232,16 +232,24 @@ describe("scripts.bash, read from the global config file", () => {
   // `.sh` step on a Mac refused with "is not an absolute path" and there was no
   // PATH fallback, because the key was set. `readScopeValue` gates reads on a
   // key's `scopes`, so the file below is not read at all.
-  withBash("ignores a value committed to the project file", async () => {
-    const configured = hostBash()!;
-    const dir = hostWith({ scripts: { bash: configured } });
+  //
+  // NO global value, which is what makes this the scope gate rather than the
+  // merge policy: `merge` is `prioritize-global`, so a global value beside the
+  // committed one wins whatever `scopes` says, and the case passes with the
+  // project scope fully readable. Here there is nothing to win it, and the
+  // search running at all is the assertion.
+  withBash("ignores a value committed to the project file, with none set globally", async () => {
+    const onPath = hostBash()!;
+    const dir = hostWith(undefined);
     committedProjectConfig(dir, {
       scripts: { bash: "C:\\Program Files\\Git\\bin\\bash.exe" },
     });
+    execFileMock.mockReturnValue({ stdout: `${onPath}\n`, stderr: "" });
     const realCwd = process.cwd();
     vi.spyOn(process, "cwd").mockReturnValue(dir);
     try {
-      expect(await resolveBashInterpreter()).toEqual({ path: configured });
+      expect(await resolveBashInterpreter()).toEqual({ path: onPath });
+      expect(execFileMock).toHaveBeenCalled();
     } finally {
       vi.spyOn(process, "cwd").mockReturnValue(realCwd);
     }

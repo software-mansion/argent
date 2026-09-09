@@ -507,6 +507,9 @@ describe("scripts.bash — schema entry", () => {
   // step for whoever did not share the committer's OS. `readScopeValue` gates
   // reads on `scopes` too, so the project file is not merely unwritable - it is
   // unread, and the resolver falls through to its PATH search.
+  //
+  // No global value beside it, which is what makes this the scope gate: `merge`
+  // is `prioritize-global`, so one set here would win whatever `scopes` said.
   it("takes the global scope only, and does not read a committed project value", () => {
     const def = getConfigDefinition("scripts.bash")!;
     expect(def.scopes).toEqual(["global"]);
@@ -518,21 +521,6 @@ describe("scripts.bash — schema entry", () => {
     );
 
     expect(getConfigValueByKey("scripts.bash", opts())).toBeUndefined();
-  });
-
-  // `merge: "prioritize-local"` used to let that committed file shadow a
-  // developer's own working pin, and the refusal then named the bash it was
-  // declining to use.
-  it("keeps the developer's global pin in front of a committed project value", () => {
-    const projectFile = configFilePath("project", opts());
-    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
-    fs.writeFileSync(
-      projectFile,
-      JSON.stringify({ scripts: { bash: path.join(path.sep, "usr", "bin", "bash") } })
-    );
-    setConfigValue("scripts.bash", configured, "global", opts());
-
-    expect(getConfigValueByKey("scripts.bash", opts())).toBe(configured);
   });
 
   it("refuses a write at the project scope", () => {
