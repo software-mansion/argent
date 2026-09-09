@@ -963,8 +963,8 @@ interface BatchFlowResult {
  * Run every discovered flow in `dir` sequentially. Reports failures only (no
  * live step lines), then a flow-level summary. A flow failing its steps — or
  * one the tool-server rejects as invalid — lets the batch continue, while an
- * infra error (transport throw, unclassified failure, non-report result) stops
- * it and counts the remaining flows skipped.
+ * infra error (transport throw, unclassified failure, non-report result, failed
+ * artifact export) stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1033,14 +1033,25 @@ async function runFlowDirectory(
       stopped = true;
       continue;
     }
-    // Key exports by the flow's subdirectory so recursive same-stem flows
-    // cannot clobber each other (exportFailureArtifacts keys by stem only).
-    await exportAndResolveArtifacts(
-      report,
-      outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
-      path.join(dir, rel),
-      baseUrl
-    );
+    try {
+      // Key exports by the flow's subdirectory so recursive same-stem flows
+      // cannot clobber each other (exportFailureArtifacts keys by stem only).
+      await exportAndResolveArtifacts(
+        report,
+        outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
+        path.join(dir, rel),
+        baseUrl
+      );
+    } catch (err) {
+      // A dead tool-server or an unwritable --output directory is the same
+      // wall for every remaining flow, so stop the batch rather than run them
+      // into it.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(message);
+      results.push({ path: rel, status: "fail", error: message });
+      stopped = true;
+      continue;
+    }
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);

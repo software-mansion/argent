@@ -1740,6 +1740,47 @@ describe("argent flow run <dir>", () => {
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
   });
 
+  it("stops the batch on an artifact-export throw instead of losing the tally", async () => {
+    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
+
+    await expect(
+      flow(["run", flowsDir, "-r", "--output", path.join(tempRoot, "out-export-throw")], opts)
+    ).rejects.toThrow("process.exit:1");
+
+    // The flow itself ran — only its export died — so the outcome is one
+    // failed flow and the rest skipped, not a batch that ends mid-loop.
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs.join("\n")).toContain("artifact fetch died");
+    const out = logs.join("\n");
+    expect(out).toContain("· not run (batch stopped)");
+    expect(out).toContain("FAIL — 3 flows: 0 passed, 1 failed, 2 skipped");
+  });
+
+  it("emits the --json aggregate when artifact export throws", async () => {
+    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
+
+    await expect(
+      flow(
+        ["run", flowsDir, "--json", "--output", path.join(tempRoot, "out-export-throw-json")],
+        opts
+      )
+    ).rejects.toThrow("process.exit:1");
+
+    // stdout stays parseable: a consumer piping into `jq` still gets the
+    // ledger, with the export failure as the flow's reason.
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      total: 2,
+      passed: 0,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: "artifact fetch died" },
+        { path: "b-checkout.yaml", status: "skip" },
+      ],
+    });
+  });
+
   it("finds nested flows with --recursive, skipping dot-directories and node_modules", async () => {
     await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
 
