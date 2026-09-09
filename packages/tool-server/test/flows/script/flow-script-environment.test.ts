@@ -12,6 +12,7 @@ import {
   type FlowScriptExecutorOptions,
 } from "../../../src/tools/flows/script/flow-script-executor";
 import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 const workspaces: ScriptWorkspace[] = [];
 const restoreEnv: Array<() => void> = [];
@@ -649,6 +650,32 @@ describe("an environment near the operating system's limit", () => {
     expect(died.ok).toBe(false);
     expect(said).toMatch(/ARG_MAX/);
     expect(said).toMatch(/100\d{4} bytes/);
+  }, 60_000);
+
+  it("names the environment's size for a .sh step too", async () => {
+    // A `.sh` step touches the child environment EARLIER than a `.mjs` one: the
+    // bash-version probe spawns each candidate, and that spawn is the one the
+    // operating system refuses. Every candidate then failed the probe, and the
+    // step's reason condemned the host's bash installation and pointed the
+    // author at `scripts.bash` — a different subsystem, and one that is
+    // working. The case above covers `.mjs`, which reaches the fork.
+    const found = await resolveHostBash();
+    if (!("path" in found)) return;
+    const ws = workspace();
+    const script = ws.write("noop.sh", "printf '{}' > \"$ARGENT_OUTPUT\"");
+
+    const refused = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(1_400_000) },
+    });
+
+    expect(refused.failure?.kind).toBe("spawn");
+    expect(refused.failure?.message).toContain("E2BIG");
+    expect(refused.failure?.message).toContain("ARG_MAX");
+    expect(refused.failure?.message).not.toContain("scripts.bash");
+    expect(refused.failure?.message).not.toContain("is not a bash");
   }, 60_000);
 
   it("says nothing about the environment when an ordinary one dies early", async () => {

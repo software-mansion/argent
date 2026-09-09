@@ -699,8 +699,26 @@ export class FlowScriptExecutor {
         );
       }
       if (!("path" in found)) {
+        // The one refusal that is not about bash at all. The probe SPAWNS each
+        // candidate, so an environment past this operating system's limit is
+        // refused there first — before the fork a `.mjs` step reaches — and
+        // every candidate then fails for that reason. The message returned
+        // condemned the host's bash installation and pointed the author at
+        // `scripts.bash`: a different subsystem, and one that is working.
+        //
+        // `env` is the channel this branch adds, so it is also the first thing
+        // that can make an environment big enough to hit this.
         return emptyResult(
-          { kind: "spawn", message: found.problem },
+          {
+            kind: "spawn",
+            message: /\bE2BIG\b/.test(found.problem)
+              ? redactBounded(
+                  spawnFailureMessage(new Error("spawn E2BIG"), env),
+                  request.secrets ?? [],
+                  SCRIPT_MAX_FAILURE_MESSAGE_CHARS
+                )
+              : found.problem,
+          },
           { notes, durationMs: Date.now() - startedAt }
         );
       }
