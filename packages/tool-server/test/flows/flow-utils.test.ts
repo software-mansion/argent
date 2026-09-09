@@ -965,6 +965,22 @@ describe("parseFlow", () => {
     }
   });
 
+  it("accepts a bare `env:` header with no entries under it", async () => {
+    // Every entry commented out is an ordinary authoring state, so a header
+    // with nothing under it is a map with no entries rather than a malformed
+    // one. YAML resolves it to `null`, and `null` is not `undefined` — so it
+    // reaches `describeScriptEnvProblem`, whose first line takes it. Without
+    // that line the walk asks `Object.getPrototypeOf(null)` inside `isPlainMap`
+    // and the whole file dies on "Cannot convert undefined or null to object",
+    // which names neither the key nor the file, for every caller of `parseFlow`.
+    const flow = parseFlow("env:\nsteps:\n  - echo: hi\n");
+    expect(flow.env).toEqual({});
+    expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+    // And it is the same environment `env: {}` spells, so the two headers
+    // cannot drift apart.
+    expect(flow).toEqual(parseFlow("env: {}\nsteps:\n  - echo: hi\n"));
+  });
+
   it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
     // Written as escapes: the characters are invisible in a source file, and
     // one of them silently reformatted is a test that stops testing anything.
