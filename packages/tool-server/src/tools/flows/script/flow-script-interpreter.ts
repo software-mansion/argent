@@ -364,8 +364,11 @@ function withoutRepeats(candidates: string[]): string[] {
  * The two shape rules — absolute, and rooted on a drive under Windows — are the
  * ones `argent config set scripts.bash` applies before it writes, through the
  * same {@link WINDOWS_ROOTED_PATH_RE}. The filesystem checks below are this
- * side's alone: the file has to exist on the host that RUNS the step, and a
- * project `.argent/config.json` is shared by hosts that do not all have it.
+ * side's alone: the write gate never touches the disk, and the value it stored
+ * is read back on the host that RUNS the step, which may have gained or lost
+ * the file since — a home directory restored onto a new machine is the ordinary
+ * way. These checks also cover every candidate the PATH search offers, which no
+ * write gate ever saw.
  */
 function interpreterProblem(candidate: string): string | null {
   if (candidate === "") return "is empty";

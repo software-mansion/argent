@@ -222,11 +222,12 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-local",
     example: "~/Movies/argent",
   },
-  // The two bounds below are global-scope only: a checked-in
-  // `.argent/config.json` must not raise the ceiling on how much of the machine
-  // a script step may occupy. `merge` is nominal there — the project scope of a
-  // global-only key is never read. `scripts.bash` after them is not a bound and
-  // takes both scopes.
+  // All three `scripts.` keys below are global-scope only, for two reasons. The
+  // two bounds: a checked-in `.argent/config.json` must not raise the ceiling on
+  // how much of the machine a script step may occupy. `scripts.bash`: the value
+  // is an absolute path judged against `process.platform`, so no one spelling
+  // suits a mixed-OS team. `merge` is nominal for all three — the project scope
+  // of a global-only key is never read.
   {
     key: "scripts.maxTimeoutMs",
     description:

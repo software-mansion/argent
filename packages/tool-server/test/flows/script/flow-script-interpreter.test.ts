@@ -140,11 +140,11 @@ const withBash = it.skipIf(hostBashPath === undefined);
 
 /**
  * A home directory of the test's own. The resolver reads `scripts.bash` from
- * BOTH scopes, and `test/setup/clear-argent-env.ts` strips `ARGENT_*` variables
- * and not `~/.argent/config.json` — so on a machine that took this PR's own
- * advice and pinned a bash globally, the fixtures below were read past and two
- * of these tests failed. The global scope lives under the home directory, which
- * is the one place a test can move it.
+ * the global scope, and `test/setup/clear-argent-env.ts` strips `ARGENT_*`
+ * variables and not `~/.argent/config.json` — so on a machine whose owner took
+ * this feature's own advice and pinned a bash globally, the fixtures below were
+ * read past and two of these tests failed. The global scope lives under the
+ * home directory, which is the one place a test can move it.
  */
 let home: string;
 let realHome: { HOME?: string; USERPROFILE?: string };

@@ -554,8 +554,9 @@ describe("scripts.bash — schema entry", () => {
   });
 
   // The refusal says WHICH host the shape is judged against, because the write
-  // gate and the resolver both apply the running platform's rules and the key
-  // lands in a project file a mixed-OS team shares.
+  // gate and the resolver both apply the running platform's rules, and the
+  // global file the key does land in travels: a home directory restored onto a
+  // machine of another family carries a spelling that host refuses.
   it("says what it wants when it refuses one", () => {
     const expected = describeExpectedValue(getConfigDefinition("scripts.bash")!);
     expect(expected).toContain("an absolute path to a bash executable");
