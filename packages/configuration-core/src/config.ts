@@ -27,6 +27,42 @@ export function readConfigObject(
   return {};
 }
 
+/**
+ * Why the document of `scope` could not be read, or `undefined` when there is
+ * nothing to say — the file is absent, or it read and parsed.
+ *
+ * {@link readConfigObject} answers an empty document either way, which is right
+ * for a key that has a default and silent for one that does not: a `chmod`, or
+ * an `updateConfig` an interrupt left half-written, makes every key in the file
+ * read as unset, and the caller cannot tell that from a file nobody has written
+ * yet. Nothing here changes what any key resolves to; it lets a caller SAY the
+ * configuration was lost.
+ */
+export function configDocumentProblem(
+  scope: FlagScope = "global",
+  options: ConfigPathOptions = {}
+): string | undefined {
+  const file = configFilePath(scope, options);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (err) {
+    // Absent is the ordinary state, not a problem: most hosts have no file.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    return `${file} could not be read (${err instanceof Error ? err.message : String(err)})`;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw) as unknown;
+  } catch (err) {
+    return `${file} is not valid JSON (${err instanceof Error ? err.message : String(err)})`;
+  }
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
+    return `${file} does not hold a JSON object`;
+  }
+  return undefined;
+}
+
 // Config keys are dotted paths into the nested document. The helpers below
 // refuse segments through which a crafted key could reach `Object.prototype`.
 

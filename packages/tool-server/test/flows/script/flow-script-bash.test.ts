@@ -91,7 +91,7 @@ async function withGlobalBash<T>(value: string, body: () => Promise<T>): Promise
  * search reads `process.env.PATH` through `commandOnPath` rather than the
  * step's environment.
  */
-async function withSearchPath<T>(dir: string, body: () => Promise<T>): Promise<T> {
+async function withSearchPath<T>(dir: string, body: () => Promise<T>, document = "{}"): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-search-"));
   const real = {
     HOME: process.env.HOME,
@@ -99,7 +99,7 @@ async function withSearchPath<T>(dir: string, body: () => Promise<T>): Promise<T
     PATH: process.env.PATH,
   };
   fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
-  fs.writeFileSync(path.join(home, ".argent", "config.json"), "{}");
+  fs.writeFileSync(path.join(home, ".argent", "config.json"), document);
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   process.env.PATH = `${dir}${path.delimiter}${real.PATH ?? ""}`;
@@ -1247,6 +1247,34 @@ describe("finding the interpreter", () => {
       expect(result.notes.join(" ")).toContain("Finding the bash for this step took");
       expect(result.notes.join(" ")).toContain("outside the step's own 500 ms limit");
       expect(result.durationMs).toBeGreaterThan(1_500);
+    },
+    30_000
+  );
+
+  // A global document that cannot be parsed reads as an empty one, so
+  // `scripts.bash` looks unset and the step takes the PATH bash - which is the
+  // fallback the resolver's first rule says it will not paper a wrong value
+  // over with. It runs, and it says so.
+  onPosix(
+    "says the global configuration was not read when it could not be parsed",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("lost.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+
+      const result = await withSearchPath(
+        path.dirname(hostBash),
+        () =>
+          executor().execute({
+            scriptPath: script,
+            interpreter: "bash",
+            projectRoot: ws.dir,
+          }),
+        '{"scripts":{"bash":"/bin/ba'
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.notes.join(" ")).toContain("global configuration was not read");
+      expect(result.notes.join(" ")).toContain("is not valid JSON");
     },
     30_000
   );

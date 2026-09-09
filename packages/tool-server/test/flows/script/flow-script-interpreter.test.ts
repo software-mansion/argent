@@ -178,6 +178,54 @@ describe("scripts.bash, read from the global config file", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
+  // A file that cannot be read hands `readConfigObject` an empty document, so
+  // every key in it reads as unset - which is indistinguishable from a host
+  // that never wrote one. For `scripts.bash` that meant the step ran under
+  // whatever the PATH offered, with `notes` empty: exactly "a wrong path
+  // papered over by a fallback that happens to exist on this machine", the
+  // outcome the resolver's own first rule says it prevents.
+  withBash("says so when the global document could not be parsed", async () => {
+    hostWith(undefined);
+    fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".argent", "config.json"), '{"scripts":{"bash":"/bin/ba');
+
+    const found = await resolveBashInterpreter();
+
+    expect("path" in found).toBe(true);
+    expect((found as { note?: string }).note).toContain("was not read");
+    expect((found as { note?: string }).note).toContain("is not valid JSON");
+  });
+
+  const onUnreadable = it.skipIf(
+    realPlatform === "win32" || process.getuid?.() === 0 || hostBashPath === undefined
+  );
+  onUnreadable("says so when the global document could not be read", async () => {
+    hostWith(undefined);
+    fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
+    const file = path.join(home, ".argent", "config.json");
+    fs.writeFileSync(file, JSON.stringify({ scripts: { bash: "/nonexistent/bash" } }));
+    fs.chmodSync(file, 0o000);
+    try {
+      const found = await resolveBashInterpreter();
+
+      expect("path" in found).toBe(true);
+      expect((found as { note?: string }).note).toContain("was not read");
+      expect((found as { note?: string }).note).toContain("could not be read");
+    } finally {
+      fs.chmodSync(file, 0o600);
+    }
+  });
+
+  // And nothing to say when there is no file, which is most hosts.
+  withBash("says nothing when the host has no global document", async () => {
+    hostWith(undefined);
+
+    const found = await resolveBashInterpreter();
+
+    expect("path" in found).toBe(true);
+    expect((found as { note?: string }).note).toBeUndefined();
+  });
+
   // The value is an absolute path judged against `process.platform`, so no one
   // spelling suits a mixed-OS team. Read from a project file it travelled to a
   // host that cannot spawn it: with a Windows teammate's committed value, every

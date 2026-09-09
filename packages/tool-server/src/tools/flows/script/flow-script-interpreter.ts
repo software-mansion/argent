@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { win32 as pathWin32 } from "node:path";
 import {
+  configDocumentProblem,
   configFilePath,
   getConfigValueByKey,
   WINDOWS_ROOTED_PATH_RE,
@@ -94,10 +95,14 @@ function configuredBash(): string | undefined {
 /**
  * Where bash comes from, first hit wins:
  *
- * 1. `scripts.bash`, from the global config file. A value that is set but
+ * 1. `scripts.bash`, from the global config file. A value that is READ and is
  *    unusable REFUSES the step rather than falling through — a wrong path
  *    papered over by a fallback that happens to exist on this machine is a flow
- *    that breaks in CI with nothing in the configuration to show why.
+ *    that breaks in CI with nothing in the configuration to show why. A
+ *    document that could not be read at all is a different thing: the key may
+ *    never have been set, so the search runs and the step carries a note
+ *    saying the configuration was lost. Silence was the third outcome, and the
+ *    one this promise denies.
  * 2. `bash` on the tool server's PATH — "the bash your terminal would run",
  *    which on a Mac with Homebrew is 5.x and on a bare one is Apple's 3.2. The
  *    script resolves its own tools against that same PATH on POSIX; on Windows
@@ -113,8 +118,14 @@ function configuredBash(): string | undefined {
 export async function resolveBashInterpreter(
   probeEnv: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
-): Promise<{ path: string } | { problem: string } | { cancelled: true }> {
+): Promise<{ path: string; note?: string } | { problem: string } | { cancelled: true }> {
   if (signal?.aborted) return { cancelled: true };
+  // Asked before the value, not instead of it: a file that cannot be read hands
+  // back an empty document, so `scripts.bash` reads as unset and the step went
+  // to whatever bash the PATH offered with nothing anywhere saying the
+  // configuration had been lost. A `chmod`, and an `updateConfig` an interrupt
+  // left half-written, both land here.
+  const lost = configDocumentProblem("global");
   const configured = configuredBash();
   if (configured !== undefined) {
     const problem =
@@ -149,11 +160,18 @@ export async function resolveBashInterpreter(
     }
     const problem = await notBashProblem(candidate, probeEnv, signal);
     if (signal?.aborted) return { cancelled: true };
-    if (!problem) return { path: candidate };
+    if (!problem) return { path: candidate, ...(lost ? { note: lostConfigNote(lost) } : {}) };
     rejected.push(`${candidate} ${problem}`);
   }
 
-  return { problem: notFoundMessage(rejected) };
+  return { problem: `${notFoundMessage(rejected)}${lost ? ` ${lostConfigNote(lost)}` : ""}` };
+}
+
+function lostConfigNote(problem: string): string {
+  return (
+    `The global configuration was not read, so a ${BASH_CONFIG_KEY} in it did not apply to ` +
+    `this step: ${problem}.`
+  );
 }
 
 /**

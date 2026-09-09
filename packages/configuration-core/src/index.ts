@@ -22,7 +22,14 @@ export {
   type ConfigPathOptions,
 } from "./paths.js";
 
-export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
+export {
+  configDocumentProblem,
+  readConfigObject,
+  updateConfig,
+  getAtPath,
+  setAtPath,
+  deleteAtPath,
+} from "./config.js";
 
 // Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
 // `argent secrets` resolve names through.

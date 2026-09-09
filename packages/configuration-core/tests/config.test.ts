@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { argentHomeDir, configFilePath } from "../src/paths.js";
-import { readConfigObject, updateConfig } from "../src/config.js";
+import { configDocumentProblem, readConfigObject, updateConfig } from "../src/config.js";
 import {
   getRememberedAgent,
   setRememberedAgent,
@@ -114,4 +114,54 @@ describe("remembered agent (lens config)", () => {
     expect(() => clearRememberedAgent()).not.toThrow();
     expect(getRememberedAgent()).toBeNull();
   });
+});
+
+// `readConfigObject` answers an empty document for a file that is absent, one
+// that cannot be read, and one that does not parse — which is right for a key
+// with a default and silent for one without. `scripts.bash` names the program a
+// `.sh` step runs, and the step went to the PATH bash with nothing saying the
+// configuration had been lost.
+describe("configDocumentProblem", () => {
+  it("says nothing for a host that has no document", () => {
+    expect(configDocumentProblem()).toBeUndefined();
+  });
+
+  it("says nothing for a document that reads and parses", () => {
+    updateConfig((config) => ({ ...config, telemetry: { enabled: false } }));
+
+    expect(configDocumentProblem()).toBeUndefined();
+  });
+
+  it("names the file and the parse error for half-written JSON", () => {
+    fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+    fs.writeFileSync(configFilePath(), '{"scripts":{"bash":"/bin/ba');
+
+    const problem = configDocumentProblem();
+
+    expect(problem).toContain(configFilePath());
+    expect(problem).toContain("is not valid JSON");
+    // The read itself is unchanged: still an empty document, still no throw.
+    expect(readConfigObject()).toEqual({});
+  });
+
+  it("refuses a document that is not a JSON object", () => {
+    fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+    fs.writeFileSync(configFilePath(), "[1,2,3]");
+
+    expect(configDocumentProblem()).toContain("does not hold a JSON object");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "names the file and the read error for one it may not open",
+    () => {
+      fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+      fs.writeFileSync(configFilePath(), "{}");
+      fs.chmodSync(configFilePath(), 0o000);
+      try {
+        expect(configDocumentProblem()).toContain("could not be read");
+      } finally {
+        fs.chmodSync(configFilePath(), 0o600);
+      }
+    }
+  );
 });

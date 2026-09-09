@@ -46,7 +46,7 @@ argent config get ios.additionalDeviceSets
 
 Argent reads the three `scripts.` keys from the global file only. A project file cannot raise the limits that one script step runs under. It also cannot set `scripts.bash`: the value is an absolute path that only one operating system spells that way, so a committed value breaks every `.sh` step for each teammate on another OS. Each developer pins their own bash globally.
 
-A `scripts.bash` value that is set but wrong **errors** the `.sh` step. Argent does not fall back to the PATH.
+A `scripts.bash` value that Argent reads and cannot use **errors** the `.sh` step. Argent does not fall back to the PATH. A global file Argent cannot read at all is a different case: wrong permissions, or JSON an interrupted write left half-finished. Argent cannot see the key there, so the step runs under the bash on the PATH, and the report of the step says the configuration was not read.
 
 A path value is absolute, starts with `~`, or is relative. The exception is `scripts.bash`: Argent accepts only an absolute path there. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
 
