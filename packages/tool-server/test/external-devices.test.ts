@@ -45,6 +45,7 @@ import {
   simctlTargetForUdidSync,
   simctlTargetForWithdrawal,
 } from "../src/utils/ios-device-sets";
+import { scopeTempHome } from "./helpers/temp-home";
 
 const ANDROID_SERIAL = "emulator-5554";
 /** A pid nothing can be running under, so `kill(0)` fails with ESRCH. */
@@ -135,6 +136,17 @@ function useDescriptors(...files: string[]): void {
   process.env.ARGENT_DEVICE_PROVIDERS = files.join(",");
 }
 
+/**
+ * The hook below drops both the suite-wide discovery guard and
+ * `ARGENT_DEVICE_PROVIDERS`, so a test that writes no descriptor of its own
+ * discovers whatever `providersDirectory()` holds. Scoping the home makes that
+ * a directory this run owns rather than the developer's `~/.argent/providers`,
+ * where a provider they are running publishes its real devices.
+ */
+const HOME_PREFIX = "argent-external-devices-home-";
+
+scopeTempHome(HOME_PREFIX);
+
 beforeEach(() => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-providers-"));
   delete process.env.ARGENT_DEVICE_PROVIDERS;
@@ -206,6 +218,15 @@ describe("the contract's tool-server facade", () => {
    */
   it("resolves the same providers directory as the shared config paths do", () => {
     expect(providersDirectory()).toBe(path.join(argentHomeDir(), "providers"));
+  });
+
+  /**
+   * The precondition every "nothing claims this device" assertion in the file
+   * rests on: an empty providers directory, which only a scoped home gives.
+   */
+  it("discovers against a providers directory this run owns", () => {
+    expect(providersDirectory()).toContain(HOME_PREFIX);
+    expect(discoverProviders()).toEqual([]);
   });
 
   /**
