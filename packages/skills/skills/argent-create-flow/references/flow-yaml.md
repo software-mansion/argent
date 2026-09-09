@@ -267,7 +267,7 @@ If a script fails, check its changes before you retry.
 - Check the file out with LF line endings, and add `*.sh text eol=lf` to `.gitattributes`. Argent discards what the script prints, so bash's own `$'\r': command not found` line never reaches you. You see an exit code the script did not choose, or the stray-carriage-return failure above.
 - On macOS and Linux, Argent stops the process group of the step when bash exits, so a background job dies with the step. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job: it runs on after the flow ends, and you must stop it yourself. `setsid` is absent on macOS.
 - On Windows there is no process group. A background job outlives a step that passed, so stop each job in the script.
-- Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` also kills bash, and the step fails. Signal the pid of the job.
+- Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` signals the whole process group, which holds bash itself. Under bash 5 that ends bash and the step fails; under the bash 3.2 of `/bin/bash` it does not, and the step passes - so the same flow passes on one host and fails on another. Signal the pid of the job.
 
 ## Snapshots and standalone runs
 
