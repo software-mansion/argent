@@ -379,6 +379,35 @@ describe("flow script executor — redaction of a bash step", () => {
       }
     }
   }, 30_000);
+
+  // The same trim, on a SINGLE-LINE value. The multi-line case above is
+  // answered by the LINE spellings `encodedSpellings` adds for a value holding
+  // a newline — its last line is empty and the one before it matches whole — so
+  // it passes with `withTrimmedSpellings` removed. A one-line value stored with
+  // the padding a `.env` line carries every day has no line spelling to fall
+  // back on, and nothing else in the list is the value minus its own edge
+  // whitespace.
+  it("replaces a one-line secret whose own trailing space the reason trim ate", async () => {
+    const padded: FlowScriptSecret = { name: "PADDED", value: "sk-live-9d3f0a1bcdef " };
+    const ws = workspace();
+    const script = ws.write(
+      "padded-reason.sh",
+      `printf %s "$PADDED" > "$ARGENT_REASON"
+       exit 1`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { PADDED: padded.value },
+      secrets: [padded],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(message).toContain("{{secret:PADDED}}");
+    expect(message).not.toContain(padded.value.trimEnd());
+  }, 30_000);
 });
 
 describe("flow script executor — the heap verdict", () => {
