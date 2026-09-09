@@ -37,7 +37,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx tsc --build
+      - run: npm run build
 
       - run: npm run build -w @swmansion/argent
 
@@ -73,6 +73,9 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/project.pbxproj
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/xcshareddata/xcschemes/ArgentRunner.xcscheme
+      - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunnerUITests/ArgentRunnerSession.swift
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json
@@ -82,6 +85,12 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      # Flow `script` runner + watchdogs, flat in dist/ beside tool-server.cjs.
+      # flow-script-executor.ts resolves the runner there via __dirname, and the
+      # runner resolves both watchdogs against its own import.meta.url.
+      - run: test -f packages/argent/dist/flow-script-runner.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-lifeline.mjs
+      - run: test -f packages/argent/dist/flow-script-watchdog-deadline.mjs
 
       - name: Pack npm package
         run: |
