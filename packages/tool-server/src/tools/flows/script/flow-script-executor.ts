@@ -2056,12 +2056,19 @@ function byteRuns(text: string, numbers: RegExp, radix: number, dropped?: Uint8A
     const gap = end < 0 ? "" : keptGap(text, end, token.index, dropped);
     const joined = end < 0 || gap.length === token.index - end;
     end = token.index + token[0].length;
+    // The GAP is read before the token is judged, because a run ends for the
+    // reason its gap gives whatever follows it. Judged the other way round, a
+    // token that is no byte closed the run with `cut: false` and threw away the
+    // ellipsis that had just closed it with `cut: true` — and the token after
+    // an ellipsis is a COUNT, which is no byte whenever it has the wrong number
+    // of digits. `<Buffer …> … 200 more bytes` is that shape, and it is Node's
+    // own rendering of any value over 50 bytes.
+    if (/[A-Za-z]/.test(gap)) close(false);
+    else if (GAP_CUT_RE.test(gap)) close(true);
     if (byteToken(token[0], radix) === undefined) {
       close(false);
       continue;
     }
-    if (/[A-Za-z]/.test(gap)) close(false);
-    else if (GAP_CUT_RE.test(gap)) close(true);
     run.tokens.push({ from: token.index, to: end, text: token[0], joined });
   }
   close(false);
@@ -2104,9 +2111,16 @@ function byteRunSpans(
   // front of a value. Longest first, and shorter than the value, exactly as
   // {@link quotedCutBefore} reads a cut in text space, and floored at the same
   // {@link CUT_MIN_PREFIX_CHARS}: below it a match says more about the byte
-  // than about the value, and a placeholder is LONGER than the one or two
-  // numbers it would stand in for, so a shorter match grew the message past the
-  // ceiling the child applied and the placeholder itself came back cut.
+  // than about the value.
+  //
+  // The floor also keeps the substitution from GROWING the text at the edge of
+  // the ceiling, which a one-number match did every time: `{{secret:NAME}}` is
+  // longer than the `115` it would stand in for, `redactBounded` re-clamps what
+  // the scrub grew, and the placeholder came back cut. Six bytes buys that back
+  // for an ordinary name and no more — a name as long as
+  // `GOOGLE_APPLICATION_CREDENTIALS_JSON` still outgrows the seventeen
+  // characters six hex bytes occupy. What is left is cosmetic: the re-clamp
+  // cuts text the scrub has already been over.
   //
   // Two ends, because argent's own clamp does not cut where a renderer does. A
   // renderer stops between elements; a character ceiling stops wherever it

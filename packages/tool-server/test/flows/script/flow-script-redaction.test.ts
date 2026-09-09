@@ -1033,6 +1033,35 @@ describe("flow script executor — redaction of a value rendered as bytes", () =
     }
   }, 60_000);
 
+  // Node's OWN cut, which every rendering of a real credential meets before
+  // argent's: `util.inspect` writes the first 50 bytes of a `Buffer` and a
+  // `... N more bytes` trailer, and the first 100 elements of a `TypedArray`
+  // with `... N more items`. That trailer's COUNT is the token after the
+  // ellipsis, and it is no byte whenever it has the wrong number of digits —
+  // three at radix 16, or over 255 at radix 10 — so the rule that drops a
+  // non-byte token has to read the GAP first, or it throws away the ellipsis
+  // that had just marked the run as cut and the visible prefix stands.
+  //
+  // The two cases above pass `maxArrayLength: Infinity`, which removes the
+  // trailer, so neither exercises the shape an ordinary `util.inspect` writes.
+  it("replaces the visible prefix of a value Node's own renderer cut", async () => {
+    const long: FlowScriptSecret = { name: "K", value: `sk-live-${"a9f3b1c7d5e2".repeat(20)}xy` };
+    for (const render of [
+      "util.inspect(Buffer.from(process.env.K))",
+      "util.inspect(new Uint8Array(Buffer.from(process.env.K)))",
+    ]) {
+      const text = await failWith(
+        `import util from "node:util";
+         throw new Error(${render});`,
+        long
+      );
+      // The trailer is Node's own wording and stays, so the reader still knows
+      // how much was dropped.
+      expect(text).toMatch(/\.\.\. \d+ more (bytes|items)/);
+      expectNoValue(text, long);
+    }
+  }, 60_000);
+
   // `assert.deepStrictEqual(Buffer.from(k), expected)` renders the two buffers
   // INTERLEAVED, one byte per line, with the diff's own `+` and `-` down the
   // left and a line both sides agree on carrying neither. Read whole, the run
