@@ -8,18 +8,18 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 ## Critical
 
 - A TV is **focus-driven, not touch-driven.** Drive every interaction with `describe` + `tv-remote` + `keyboard`; never use `gesture-*` / coordinate taps — they don't apply on any TV platform.
-- **Always `describe` before navigating** to find the live cursor and your target — never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
+- **`describe` reads focus; the screenshot only confirms it.** `tv-remote` returns a screenshot of the screen after the press, so you can see where the highlight moved without another call — but labels and frames still come from `describe`. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
 - Pass the `udid` from `list-devices` — an Apple TV simulator UDID or an Android TV / Vega `serial`. Dispatch is automatic from the id; the same tools drive all three.
 
 ## The navigation loop
 
 1. `describe` — find the cursor and your target (returns the focused element + all focusable ones, not a tap tree).
-2. `tv-remote` — move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the frames to build the path.
-3. `describe` again to confirm. On a miss, repeat.
+2. `tv-remote` — move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the frames to build the path, so one call covers the whole route instead of one press per turn.
+3. Check the returned screenshot. If it shows focus where you meant it to land, keep going; `describe` again only when you need labels or frames you do not already have.
 
 ## Tools
 
-- `describe {udid}` — focus view: the focused / `[selected]` element + focusable elements with labels and normalized frames. The discovery tool — call before and after navigating. Empty tree → see the per-platform notes.
+- `describe {udid}` — focus view: the focused / `[selected]` element + focusable elements with labels and normalized frames. The discovery tool. Empty tree → see the per-platform notes.
 - `tv-remote {udid, button}` — D-pad / remote. `button` is one key **or a whole path** (run in one call). Keys: `up`/`down`/`left`/`right`, `select`, `back`, `menu`, `home`, `playPause`, plus media keys `rewind`/`fastForward`/`next`/`previous`/`volumeUp`/`volumeDown`/`mute`. Single: `{button:"down"}`; repeat: `{button:"down", repeat:3}`; path: `{button:["up","right","select"]}`.
 - `keyboard {udid, text}` — type into the focused field (focus it with `tv-remote` first). One call carries `text` or `key`, never both — to type and then press a key, send two `keyboard` steps in one `run-sequence`. Named `key` presses (e.g. `{key:"enter"}`) work on Vega; on Apple TV / Android TV move focus with `tv-remote` instead.
 - `launch-app` / `restart-app` / `reinstall-app {udid, bundleId}` — `bundleId` from the app manifest. Vega `reinstall-app` takes `appPath` = a `.vpkg`.
@@ -31,6 +31,7 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 
 - Boot like any iOS sim (`boot-device`); the AX + HID daemons auto-start on the first `describe` / `tv-remote` (first call may take a few seconds). Give the RN bundle a few seconds to render before the first `describe`.
 - Media-transport / volume keys are **rejected** — the sim's HID stack ignores them (they work on Android TV / Vega).
+- **`describe` can time out on tvOS.** Measured on a booted Apple TV 4K (tvOS 18.5), home-screen reads returned `tv-control request timed out` after 10.1s, 11.2s and 39.8s, while `screenshot` answered in 0.6s. This is why a `tv-remote` press returns a screenshot but no element tree. When `describe` times out, drive from the screenshot and `tv-remote` rather than retrying it.
 - Dev build: `open-url {udid, url:"<scheme>://expo-development-client/?url=http%3A%2F%2F<HOST_IP>%3A8081"}` (`<HOST_IP>` = your Mac's LAN IP, shown on the launcher).
 
 ### Android TV (leanback emulator)

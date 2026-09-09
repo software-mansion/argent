@@ -72,7 +72,7 @@ Decision order:
 
 - All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
-- Before calling any gesture tool for the first time, use ToolSearch to load its schema.
+- `gesture-pinch`, `gesture-rotate` and `gesture-custom` may be deferred — load their schemas with ToolSearch before the first call. The other gesture tools are always loaded.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.

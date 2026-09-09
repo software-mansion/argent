@@ -188,6 +188,39 @@ describe("shouldAutoDescribe", () => {
     expect(shouldAutoDescribe("screenshot")).toBe(false);
     expect(shouldAutoDescribe("list-devices")).toBe(false);
   });
+
+  // A TV is focus-driven and `tv-remote` is its only navigation primitive, so
+  // a press that reports nothing back costs a round-trip the touch tools no
+  // longer pay. It takes the screenshot — but not the tree: tvOS `describe`
+  // timed out at 10.1s / 11.2s / 39.8s on a booted Apple TV 4K (tvOS 18.5),
+  // and a UUID-shaped id cannot be told apart from an iPhone's here.
+  it("screenshots after tv-remote but does not describe", () => {
+    expect(shouldAutoScreenshot("tv-remote")).toBe(true);
+    expect(shouldAutoDescribe("tv-remote")).toBe(false);
+  });
+
+  it("follows shake, which raises the RN dev menu over the app", () => {
+    expect(shouldAutoDescribe("shake")).toBe(true);
+    expect(shouldAutoScreenshot("shake")).toBe(true);
+  });
+
+  // Both features are opt-out per tool list, so a tool in one set and not the
+  // other is a silent half-capture. `describe` and `tv-remote` are the only
+  // two that may differ, each for a reason stated where the sets are defined.
+  it("gives every other screen-changing tool both a screenshot and a tree", () => {
+    const screenshotOnly = [...AUTO_SCREENSHOT_TOOLS].filter((t) => !AUTO_DESCRIBE_TOOLS.has(t));
+    expect(screenshotOnly.sort()).toEqual(["describe", "tv-remote"]);
+    expect([...AUTO_DESCRIBE_TOOLS].filter((t) => !AUTO_SCREENSHOT_TOOLS.has(t))).toEqual([]);
+  });
+
+  // Every tool in either set must have a settle budget, or it silently takes
+  // the 1400ms default that was never chosen for it.
+  it("gives every captured tool an explicit settle budget", () => {
+    const missing = [...AUTO_SCREENSHOT_TOOLS, ...AUTO_DESCRIBE_TOOLS].filter(
+      (t) => !(t in AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)
+    );
+    expect(missing).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -15,9 +15,11 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-pinch",
   "gesture-rotate",
   "button",
+  "tv-remote",
   "keyboard",
   "paste",
   "rotate",
+  "shake",
   "launch-app",
   "restart-app",
   "open-url",
@@ -43,7 +45,9 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-rotate": 1500,
   "run-sequence": 15000,
   "button": 1500,
+  "tv-remote": 1500,
   "rotate": 1000,
+  "shake": 1500,
   "keyboard": 300,
   "paste": 300,
   "describe": 100,
@@ -58,10 +62,17 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
 }
 
 /**
- * Tools whose result gets the accessibility element tree appended, so the
- * agent has fresh tap frames without a separate `describe` round-trip.
+ * Tools whose result gets the accessibility element tree appended, so the agent
+ * has fresh tap frames without a separate `describe` round-trip.
  * Independent of AUTO_SCREENSHOT_TOOLS; `describe` is absent because its own
  * result already is the tree.
+ *
+ * `tv-remote` is deliberately not here, though it takes the screenshot. tvOS
+ * `describe` does not answer: measured on a booted Apple TV 4K (tvOS 18.5), a
+ * home-screen read returns `tv-control request timed out` after 10.1s, 11.2s
+ * and 39.8s. A UUID-shaped id is an Apple TV or an iPhone indistinguishably at
+ * this layer, so the tree cannot be appended for a TV without risking that wait
+ * on every D-pad press. The screenshot carries focus visually instead.
  */
 export const AUTO_DESCRIBE_TOOLS = new Set([
   "gesture-tap",
@@ -75,6 +86,7 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "keyboard",
   "paste",
   "rotate",
+  "shake",
   "launch-app",
   "restart-app",
   "open-url",
