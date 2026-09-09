@@ -60,18 +60,31 @@ function setPlatform(platform: NodeJS.Platform): void {
 const roots: string[] = [];
 
 /**
- * A project root of its own, with the `.argent` marker `resolveProjectRoot`
- * stops at — so the read lands on this file and not on whatever project the
- * temporary directory happens to sit inside.
+ * A scratch directory for whatever fixtures a case writes — a fake bash, a
+ * shim, a directory to put on PATH — plus `config` written to the GLOBAL config
+ * file inside this test's own home.
+ *
+ * The global file, because `scripts.bash` takes that scope alone: the project a
+ * flow sits in has no say in which bash runs it, so there is no project config
+ * for the resolver to read and no anchor for it to read one against.
  */
-function projectWith(config: Record<string, unknown> | undefined): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-project-"));
-  roots.push(root);
-  fs.mkdirSync(path.join(root, ".argent"), { recursive: true });
-  if (config) {
-    fs.writeFileSync(path.join(root, ".argent", "config.json"), JSON.stringify(config), "utf8");
-  }
-  return root;
+function hostWith(config: Record<string, unknown> | undefined): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-host-"));
+  roots.push(dir);
+  if (config) pinGlobalConfig(config);
+  return dir;
+}
+
+/** Write `config` to the global config file inside this test's own home. */
+function pinGlobalConfig(config: Record<string, unknown>): void {
+  fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".argent", "config.json"), JSON.stringify(config), "utf8");
+}
+
+/** The project config file a committed value would sit in — read by nothing. */
+function committedProjectConfig(dir: string, config: Record<string, unknown>): void {
+  fs.mkdirSync(path.join(dir, ".argent"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".argent", "config.json"), JSON.stringify(config), "utf8");
 }
 
 function notBash(dir: string, name = "bash"): string {
@@ -156,34 +169,39 @@ afterEach(() => {
   while (roots.length) fs.rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-describe("scripts.bash, read against the flow's own project", () => {
+describe("scripts.bash, read from the global config file", () => {
   withBash("honours a configured path and never looks at PATH", async () => {
     const configured = hostBash()!;
-    const root = projectWith({ scripts: { bash: configured } });
+    hostWith({ scripts: { bash: configured } });
 
-    expect(await resolveBashInterpreter(root)).toEqual({ path: configured });
+    expect(await resolveBashInterpreter()).toEqual({ path: configured });
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  // `getConfigValue` resolves the project scope from the cwd it is given, and
-  // the tool server's own cwd is whatever the editor that spawned it chose —
-  // so the bare call would read another project's file, or none.
-  withBash("reads the flow's project, not the tool server's working directory", async () => {
+  // The value is an absolute path judged against `process.platform`, so no one
+  // spelling suits a mixed-OS team. Read from a project file it travelled to a
+  // host that cannot spawn it: with a Windows teammate's committed value, every
+  // `.sh` step on a Mac refused with "is not an absolute path" and there was no
+  // PATH fallback, because the key was set. `readScopeValue` gates reads on a
+  // key's `scopes`, so the file below is not read at all.
+  withBash("ignores a value committed to the project file", async () => {
     const configured = hostBash()!;
-    const flowProject = projectWith({ scripts: { bash: configured } });
-    const serverCwd = projectWith({ scripts: { bash: "/nowhere/else/bash" } });
+    const dir = hostWith({ scripts: { bash: configured } });
+    committedProjectConfig(dir, {
+      scripts: { bash: "C:\\Program Files\\Git\\bin\\bash.exe" },
+    });
     const realCwd = process.cwd();
-    vi.spyOn(process, "cwd").mockReturnValue(serverCwd);
+    vi.spyOn(process, "cwd").mockReturnValue(dir);
     try {
-      expect(await resolveBashInterpreter(flowProject)).toEqual({ path: configured });
+      expect(await resolveBashInterpreter()).toEqual({ path: configured });
     } finally {
       vi.spyOn(process, "cwd").mockReturnValue(realCwd);
     }
   });
 
   it("refuses a relative value rather than falling through to PATH", async () => {
-    const root = projectWith({ scripts: { bash: "bin/bash" } });
-    const found = await resolveBashInterpreter(root);
+    hostWith({ scripts: { bash: "bin/bash" } });
+    const found = await resolveBashInterpreter();
 
     expect("path" in found).toBe(false);
     expect((found as { problem: string }).problem).toContain("scripts.bash");
@@ -197,8 +215,8 @@ describe("scripts.bash, read against the flow's own project", () => {
   // to exist on this machine, which is the outcome `scripts.bash` exists to
   // prevent.
   it("refuses an empty value rather than reading it as an absent key", async () => {
-    const root = projectWith({ scripts: { bash: "   " } });
-    const found = await resolveBashInterpreter(root);
+    hostWith({ scripts: { bash: "   " } });
+    const found = await resolveBashInterpreter();
 
     expect("path" in found).toBe(false);
     expect((found as { problem: string }).problem).toContain("is empty");
@@ -206,67 +224,60 @@ describe("scripts.bash, read against the flow's own project", () => {
   });
 
   it("refuses a value that is not a string, naming what it found", async () => {
-    const root = projectWith({ scripts: { bash: 123 } });
-    const found = await resolveBashInterpreter(root);
+    hostWith({ scripts: { bash: 123 } });
+    const found = await resolveBashInterpreter();
 
     expect((found as { problem: string }).problem).toContain("scripts.bash = 123");
     expect((found as { problem: string }).problem).toContain("not an absolute path");
   });
 
-  it("names the file the value came from, not the project it ran in", async () => {
-    const root = projectWith({ scripts: { bash: "bin/bash" } });
-    const found = await resolveBashInterpreter(root);
+  it("names the global file, never the project the step ran in", async () => {
+    const dir = hostWith({ scripts: { bash: "bin/bash" } });
+    committedProjectConfig(dir, { scripts: { bash: "bin/bash" } });
+    const found = await resolveBashInterpreter();
 
     expect((found as { problem: string }).problem).toContain(
-      path.join(root, ".argent", "config.json")
+      path.join(home, ".argent", "config.json")
+    );
+    expect((found as { problem: string }).problem).not.toContain(
+      path.join(dir, ".argent", "config.json")
     );
   });
 
-  // The other half of `configuredIn`. `getConfigValue` merges the two scopes, so
-  // a stale GLOBAL value refuses every `.sh` step in every project on the
-  // machine — and a message naming a project file the value is not in sends the
-  // author to the wrong file.
-  // The key takes both scopes with `prioritize-local`, so unsetting the file
-  // just named falls through to the OTHER scope's value, not to PATH. Following
-  // the old advice silently swapped the interpreter, and the next failure no
-  // longer mentioned `scripts.bash` at all.
-  it("says what unsetting the project value would fall back to", async () => {
-    const behind = path.join(home, ".argent");
-    fs.mkdirSync(behind, { recursive: true });
-    fs.writeFileSync(
-      path.join(behind, "config.json"),
-      JSON.stringify({ scripts: { bash: "/global/bin/bash" } })
-    );
-    const root = projectWith({ scripts: { bash: path.join("bin", "bash") } });
+  // One scope, so unsetting the file the message names really does fall through
+  // to PATH. While the key took both, that advice was true only where a single
+  // scope held a value: over a global pin, following it swapped the interpreter
+  // silently and the next failure no longer mentioned `scripts.bash` at all.
+  it("says unsetting it falls through to PATH, with no second file to name", async () => {
+    const dir = hostWith({ scripts: { bash: path.join("bin", "bash") } });
+    committedProjectConfig(dir, { scripts: { bash: "/project/bin/bash" } });
 
-    const problem = (await resolveBashInterpreter(root)) as { problem: string };
+    const problem = (await resolveBashInterpreter()) as { problem: string };
 
-    expect(problem.problem).toContain("fall back to /global/bin/bash");
-    expect(problem.problem).toContain("unset it in both files");
+    expect(problem.problem).toContain("unset it to use the one on this host's PATH");
+    expect(problem.problem).not.toContain("unset it in both files");
+    expect(problem.problem).not.toContain("/project/bin/bash");
   });
 
   it("names the global file when the value came from there", async () => {
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
     fs.writeFileSync(
       path.join(home, ".argent", "config.json"),
       JSON.stringify({ scripts: { bash: path.join(home, "no-such-global-bash") } })
     );
 
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
     const problem = (found as { problem: string }).problem;
     expect(problem).toContain(path.join(home, ".argent", "config.json"));
     expect(problem).not.toContain(path.join(root, ".argent", "config.json"));
   });
 
   it("refuses a configured path that does not exist", async () => {
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     const missing = path.join(root, "no-such-bash");
-    fs.writeFileSync(
-      path.join(root, ".argent", "config.json"),
-      JSON.stringify({ scripts: { bash: missing } })
-    );
-    const found = await resolveBashInterpreter(root);
+    pinGlobalConfig({ scripts: { bash: missing } });
+    const found = await resolveBashInterpreter();
 
     expect((found as { problem: string }).problem).toContain("does not exist");
     expect((found as { problem: string }).problem).toContain(missing);
@@ -275,16 +286,13 @@ describe("scripts.bash, read against the flow's own project", () => {
   it.skipIf(process.platform === "win32")(
     "refuses a configured path that is not executable",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const file = path.join(root, "readable-bash");
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o644);
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: file } })
-      );
+      pinGlobalConfig({ scripts: { bash: file } });
 
-      const found = await resolveBashInterpreter(root);
+      const found = await resolveBashInterpreter();
       expect((found as { problem: string }).problem).toContain("is not executable");
     }
   );
@@ -295,14 +303,11 @@ describe("scripts.bash, read against the flow's own project", () => {
   // wrapper that forgets to forward its arguments would report every `.sh` step
   // green while running none of them.
   it("refuses a configured interpreter that answers with no $BASH_VERSION", async () => {
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     const stub = notBash(root);
-    fs.writeFileSync(
-      path.join(root, ".argent", "config.json"),
-      JSON.stringify({ scripts: { bash: stub } })
-    );
+    pinGlobalConfig({ scripts: { bash: stub } });
 
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
     expect("path" in found).toBe(false);
     expect((found as { problem: string }).problem).toContain("is not a bash");
     expect((found as { problem: string }).problem).toContain(stub);
@@ -317,14 +322,11 @@ describe("scripts.bash, read against the flow's own project", () => {
   it.skipIf(realPlatform === "win32")(
     "refuses a shell that answers the marker with an empty version",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const shell = emptyVersionShell(root);
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: shell } })
-      );
+      pinGlobalConfig({ scripts: { bash: shell } });
 
-      const found = await resolveBashInterpreter(root);
+      const found = await resolveBashInterpreter();
       expect("path" in found).toBe(false);
       expect((found as { problem: string }).problem).toContain("printed no $BASH_VERSION");
     }
@@ -338,19 +340,16 @@ describe("scripts.bash, read against the flow's own project", () => {
   it.skipIf(realPlatform === "win32" || hostBashPath === undefined)(
     "reads the version of a candidate that greets with more than the probe keeps",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const wrapper = path.join(root, "greeting-bash");
       fs.writeFileSync(
         wrapper,
         `#!/bin/sh\nprintf '%s\\n' '${"B".repeat(64 * 1024)}'\nexec ${hostBashPath} "$@"\n`
       );
       fs.chmodSync(wrapper, 0o755);
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: wrapper } })
-      );
+      pinGlobalConfig({ scripts: { bash: wrapper } });
 
-      expect(await resolveBashInterpreter(root)).toEqual({ path: wrapper });
+      expect(await resolveBashInterpreter()).toEqual({ path: wrapper });
     }
   );
 
@@ -359,10 +358,10 @@ describe("scripts.bash, read against the flow's own project", () => {
   // so the resolved path never matched the plain `%SystemRoot%`.
   it("refuses the extended-length spelling of the same WSL launcher", async () => {
     setPlatform("win32");
-    const root = projectWith({
+    hostWith({
       scripts: { bash: "\\\\?\\C:\\Windows\\System32\\bash.exe" },
     });
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
 
     expect((found as { problem: string }).problem).toContain("WSL");
   });
@@ -378,8 +377,8 @@ describe("scripts.bash, read against the flow's own project", () => {
     ["a POSIX path", "/usr/bin/bash"],
   ])("refuses %s, naming the character it begins with", async (_label, configured) => {
     setPlatform("win32");
-    const root = projectWith({ scripts: { bash: configured } });
-    const found = await resolveBashInterpreter(root);
+    hostWith({ scripts: { bash: configured } });
+    const found = await resolveBashInterpreter();
 
     const problem = (found as { problem: string }).problem;
     expect(problem).toContain("names no drive");
@@ -388,10 +387,10 @@ describe("scripts.bash, read against the flow's own project", () => {
 
   it("refuses a configured System32 bash, naming WSL", async () => {
     setPlatform("win32");
-    const root = projectWith({
+    hostWith({
       scripts: { bash: "C:\\Windows\\System32\\bash.exe" },
     });
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
 
     expect((found as { problem: string }).problem).toContain("WSL");
     expect((found as { problem: string }).problem).toContain("scripts.bash");
@@ -408,14 +407,14 @@ describe("bash on PATH", () => {
 
   onPosixWithBash("takes the first absolute answer on POSIX", async () => {
     setPlatform(realPlatform);
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     // A path of its own that is really a bash, so the answer is distinguishable
     // from the fixed location the resolver would otherwise fall through to.
     const onPath = path.join(root, "bash");
     fs.symlinkSync(hostBash()!, onPath);
     execFileMock.mockReturnValue({ stdout: `${onPath}\n`, stderr: "" });
 
-    expect(await resolveBashInterpreter(root)).toEqual({ path: onPath });
+    expect(await resolveBashInterpreter()).toEqual({ path: onPath });
     expect(execFileMock).toHaveBeenCalledWith("/bin/sh", ["-c", "command -v bash"]);
   });
 
@@ -565,22 +564,22 @@ describe("bash on PATH", () => {
 
   onPosixWithBash("never offers a relative candidate, whatever the source", async () => {
     setPlatform(realPlatform);
-    const root = projectWith(undefined);
+    hostWith(undefined);
     // A relative PATH entry gives `command -v` a relative answer, which `spawn`
     // would resolve against the runner's own working directory.
     execFileMock.mockReturnValue({ stdout: "bin/bash\n", stderr: "" });
 
-    expect(await resolveBashInterpreter(root)).toEqual({ path: hostBash() });
+    expect(await resolveBashInterpreter()).toEqual({ path: hostBash() });
   });
 
   onPosixWithBash(
     "takes the first candidate that exists, not the first that was listed",
     async () => {
       setPlatform(realPlatform);
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       execFileMock.mockReturnValue({ stdout: `${path.join(root, "gone")}\n`, stderr: "" });
 
-      expect(await resolveBashInterpreter(root)).toEqual({ path: hostBash() });
+      expect(await resolveBashInterpreter()).toEqual({ path: hostBash() });
     }
   );
 });
@@ -606,19 +605,16 @@ describe("a candidate that will not answer", () => {
   onPosix(
     "stops a candidate that ignores SIGTERM instead of waiting on it",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const stubborn = nodeExecutable(
         root,
         "bash",
         'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
       );
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: stubborn } })
-      );
+      pinGlobalConfig({ scripts: { bash: stubborn } });
 
       const startedAt = Date.now();
-      const found = await resolveBashInterpreter(root);
+      const found = await resolveBashInterpreter();
       const elapsed = Date.now() - startedAt;
 
       expect((found as { problem: string }).problem).toContain("SIGKILL");
@@ -638,7 +634,7 @@ describe("a candidate that will not answer", () => {
   // which was handed the token, the port and every `ARGENT_SECRET_*` value the
   // allowlist exists to keep out of a script's reach.
   onPosix("runs the candidate in the environment the step gives bash", async () => {
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     const saw = path.join(root, "saw.json");
     const recorder = nodeExecutable(
       root,
@@ -646,14 +642,11 @@ describe("a candidate that will not answer", () => {
       `require("node:fs").writeFileSync(${JSON.stringify(saw)}, JSON.stringify(process.env));\n` +
         'process.stdout.write("\\nargent-bash-version:5.2.37\\n");\n'
     );
-    fs.writeFileSync(
-      path.join(root, ".argent", "config.json"),
-      JSON.stringify({ scripts: { bash: recorder } })
-    );
+    pinGlobalConfig({ scripts: { bash: recorder } });
     process.env.ARGENT_SECRET_DEMO = "s3cr3t";
     process.env.BASH_ENV = path.join(root, "never-read.sh");
 
-    expect(await resolveBashInterpreter(root, { PATH: process.env.PATH })).toEqual({
+    expect(await resolveBashInterpreter({ PATH: process.env.PATH })).toEqual({
       path: recorder,
     });
 
@@ -672,15 +665,12 @@ describe("a candidate that will not answer", () => {
   // five-second wait was false about it - and it sent an operator whose pinned
   // bash is crashing looking for a slow one.
   onPosix("says a candidate died on its own rather than blaming the wait", async () => {
-    const root = projectWith(undefined);
+    const root = hostWith(undefined);
     const crasher = nodeExecutable(root, "bash", 'process.kill(process.pid, "SIGSEGV");\n');
-    fs.writeFileSync(
-      path.join(root, ".argent", "config.json"),
-      JSON.stringify({ scripts: { bash: crasher } })
-    );
+    pinGlobalConfig({ scripts: { bash: crasher } });
 
     const startedAt = Date.now();
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
     const elapsed = Date.now() - startedAt;
 
     expect((found as { problem: string }).problem).toContain("died from SIGSEGV");
@@ -697,21 +687,18 @@ describe("a candidate that will not answer", () => {
   onPosix(
     "stops probing when the request is cancelled",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const stubborn = nodeExecutable(
         root,
         "bash",
         'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
       );
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: stubborn } })
-      );
+      pinGlobalConfig({ scripts: { bash: stubborn } });
       const cancel = new AbortController();
       setTimeout(() => cancel.abort(), 300);
 
       const startedAt = Date.now();
-      const found = await resolveBashInterpreter(root, process.env, cancel.signal);
+      const found = await resolveBashInterpreter(process.env, cancel.signal);
       const elapsed = Date.now() - startedAt;
 
       expect(found).toEqual({ cancelled: true });
@@ -726,7 +713,7 @@ describe("a candidate that will not answer", () => {
   onPosix(
     "stops what the candidate started, not only the candidate",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const marker = path.join(root, "grandchild.pid");
       const shim = nodeExecutable(
         root,
@@ -736,12 +723,9 @@ describe("a candidate that will not answer", () => {
           `require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(child.pid));\n` +
           'process.on("SIGTERM", () => {});\nsetTimeout(() => {}, 60_000);\n'
       );
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: shim } })
-      );
+      pinGlobalConfig({ scripts: { bash: shim } });
 
-      await resolveBashInterpreter(root);
+      await resolveBashInterpreter();
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const grandchild = Number(fs.readFileSync(marker, "utf8"));
@@ -754,7 +738,7 @@ describe("a candidate that will not answer", () => {
   onPosix(
     "answers when the candidate exits, not when the last holder of its pipe does",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const brief = nodeExecutable(
         root,
         "bash",
@@ -766,13 +750,10 @@ describe("a candidate that will not answer", () => {
           'process.stdout.write("\\nargent-bash-version:5.2.37\\n");\n' +
           "process.exit(0);\n"
       );
-      fs.writeFileSync(
-        path.join(root, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: brief } })
-      );
+      pinGlobalConfig({ scripts: { bash: brief } });
 
       const startedAt = Date.now();
-      const found = await resolveBashInterpreter(root);
+      const found = await resolveBashInterpreter();
       const elapsed = Date.now() - startedAt;
 
       expect(found).toEqual({ path: brief });
@@ -788,11 +769,11 @@ describe("no bash anywhere", () => {
   it.skipIf(realPlatform === "win32")(
     "names PATH and both fixed locations, and says to install bash",
     async () => {
-      const root = projectWith(undefined);
+      hostWith(undefined);
       execFileMock.mockReturnValue(new Error("command -v found nothing"));
       hideFixedLocations = true;
 
-      const problem = (await resolveBashInterpreter(root)) as { problem: string };
+      const problem = (await resolveBashInterpreter()) as { problem: string };
       expect(problem.problem).toContain("PATH, /bin/bash and /usr/bin/bash");
       expect(problem.problem).toContain("Install bash");
       expect(problem.problem).not.toContain("Git for Windows");
@@ -805,12 +786,12 @@ describe("no bash anywhere", () => {
   it.skipIf(realPlatform === "win32")(
     "names the candidate it refused rather than telling the host to install bash",
     async () => {
-      const root = projectWith(undefined);
+      const root = hostWith(undefined);
       const stub = notBash(root);
       execFileMock.mockReturnValue({ stdout: `${stub}\n`, stderr: "" });
       hideFixedLocations = true;
 
-      const problem = (await resolveBashInterpreter(root)) as { problem: string };
+      const problem = (await resolveBashInterpreter()) as { problem: string };
 
       expect(problem.problem).toContain(stub);
       expect(problem.problem).toContain("is not a bash");
@@ -820,10 +801,10 @@ describe("no bash anywhere", () => {
 
   it("reports a spawn refusal naming what it looked at and each remedy", async () => {
     setPlatform("win32");
-    const root = projectWith(undefined);
+    hostWith(undefined);
     execFileMock.mockReturnValue(new Error("INFO: Could not find files"));
 
-    const found = await resolveBashInterpreter(root);
+    const found = await resolveBashInterpreter();
     const problem = (found as { problem: string }).problem;
 
     expect(problem).toContain("No bash was found");

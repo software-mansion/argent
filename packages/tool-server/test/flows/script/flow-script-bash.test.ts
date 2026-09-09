@@ -57,6 +57,33 @@ function workspace(): ScriptWorkspace {
   return ws;
 }
 
+/**
+ * A home directory of this case's own, holding `scripts.bash`. The key takes
+ * the GLOBAL scope alone — a project `.argent/config.json` naming it is not
+ * read — and the global document hangs off the home directory, which is the one
+ * place a test can move it without writing the developer's real config file.
+ */
+async function withGlobalBash<T>(value: string, body: () => Promise<T>): Promise<T> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-home-"));
+  const real = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, ".argent", "config.json"),
+    JSON.stringify({ scripts: { bash: value } })
+  );
+  try {
+    return await body();
+  } finally {
+    for (const [name, previous] of Object.entries(real)) {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 const strays: number[] = [];
 
 afterEach(() => {
@@ -940,25 +967,22 @@ describe("what a failing bash step says", () => {
     async () => {
       const ws = workspace();
       const project = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bad-bash-"));
-      fs.mkdirSync(path.join(project, ".argent"), { recursive: true });
       const vanishing = path.join(project, "bash");
       fs.writeFileSync(
         vanishing,
         "#!/bin/sh\nprintf '\\nargent-bash-version:5.2.0-stub\\n'\nrm -f \"$0\"\n"
       );
       fs.chmodSync(vanishing, 0o755);
-      fs.writeFileSync(
-        path.join(project, ".argent", "config.json"),
-        JSON.stringify({ scripts: { bash: vanishing } })
-      );
       const script = ws.write("never-runs.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
 
       try {
-        const result = await executor().execute({
-          scriptPath: script,
-          interpreter: "bash",
-          projectRoot: project,
-        });
+        const result = await withGlobalBash(vanishing, () =>
+          executor().execute({
+            scriptPath: script,
+            interpreter: "bash",
+            projectRoot: project,
+          })
+        );
 
         expect(result.failure?.kind).toBe("spawn");
         expect(result.failure?.message).toContain(vanishing);
@@ -1378,19 +1402,16 @@ describe("what a step reports before anything is forked", () => {
   it("marks an unusable scripts.bash as a failure from before the fork", async () => {
     const ws = workspace();
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "argent-nobash-"));
-    fs.mkdirSync(path.join(project, ".argent"), { recursive: true });
-    fs.writeFileSync(
-      path.join(project, ".argent", "config.json"),
-      JSON.stringify({ scripts: { bash: path.join(project, "no-such-bash") } })
-    );
     const script = ws.write("never-runs.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
 
     try {
-      const result = await executor().execute({
-        scriptPath: script,
-        interpreter: "bash",
-        projectRoot: project,
-      });
+      const result = await withGlobalBash(path.join(project, "no-such-bash"), () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: project,
+        })
+      );
 
       expect(result.failure?.kind).toBe("spawn");
       expect(result.failure?.beforeFork).toBe(true);

@@ -42,9 +42,9 @@ argent config get ios.additionalDeviceSets
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                                                  |
 | `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100`                        |
 | `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to the Node process of a flow `script` step. Default `512`. Argent refuses a value below `32`. The limit does not apply to a bash script |
-| `scripts.bash`             | project, global | project wins     | The absolute path of the bash that runs a `.sh` script step. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)                                                            |
+| `scripts.bash`             | global          | global wins      | The absolute path of the bash that runs a `.sh` script step. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)                                                            |
 
-Argent reads `scripts.maxTimeoutMs` and `scripts.heapLimitMb` from the global file only. A project file cannot raise the limits that one script step runs under.
+Argent reads the three `scripts.` keys from the global file only. A project file cannot raise the limits that one script step runs under. It also cannot set `scripts.bash`: the value is an absolute path that only one operating system spells that way, so a committed value breaks every `.sh` step for each teammate on another OS. Each developer pins their own bash globally.
 
 A `scripts.bash` value that is set but wrong **errors** the `.sh` step. Argent does not fall back to the PATH.
 

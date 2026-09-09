@@ -14,11 +14,8 @@ import * as path from "node:path";
 import { win32 as pathWin32 } from "node:path";
 import {
   configFilePath,
-  getConfigDefinition,
-  getConfigValue,
-  getConfigValueAtScope,
+  getConfigValueByKey,
   WINDOWS_ROOTED_PATH_RE,
-  type ConfigDefinition,
 } from "@argent/configuration-core";
 import { commandOnPath } from "../../../utils/command-on-path";
 
@@ -71,25 +68,26 @@ const BASH_PROBE_MAX_CHARS = 4 * 1024;
 const POSIX_FIXED_LOCATIONS = ["/bin/bash", "/usr/bin/bash"];
 
 /**
- * A configuration value read against the FLOW's project, not against the tool
- * server's own working directory — which is whatever the editor that spawned it
- * chose, so the bare call would read another project's `.argent/config.json`, or
- * none. `getConfigValue` resolves the project scope from `options.cwd`.
+ * The configured bash, or `undefined` when the key is unset.
  *
- * Every project-scoped script key needs this same anchor, so a second one takes
- * this rather than making its own bare call.
+ * No project anchor, and no working directory: `scripts.bash` takes the GLOBAL
+ * scope alone, and the global document hangs off the home directory rather than
+ * off any project. `readScopeValue` gates reads on a key's `scopes`, so a
+ * committed project `.argent/config.json` naming this key is not read — which
+ * is the point of the scope. The value is an absolute path judged against
+ * `process.platform`, so no one spelling suits a mixed-OS team: a committed one
+ * refused every `.sh` step for whoever did not share the committer's OS, and
+ * shadowed the working bash they had pinned themselves.
  */
-function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined): T | undefined {
-  const def = getConfigDefinition(key) as ConfigDefinition<T> | undefined;
-  if (!def) return undefined;
-  return getConfigValue(def, anchor ? { cwd: anchor } : {});
+function configuredBash(): string | undefined {
+  return getConfigValueByKey(BASH_CONFIG_KEY) as string | undefined;
 }
 
 /**
  * Where bash comes from, first hit wins:
  *
- * 1. `scripts.bash`, read against the flow's own project. A value that is set
- *    but unusable REFUSES the step rather than falling through — a wrong path
+ * 1. `scripts.bash`, from the global config file. A value that is set but
+ *    unusable REFUSES the step rather than falling through — a wrong path
  *    papered over by a fallback that happens to exist on this machine is a flow
  *    that breaks in CI with nothing in the configuration to show why.
  * 2. `bash` on the tool server's PATH — "the bash your terminal would run",
@@ -105,22 +103,21 @@ function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined):
  * `$ARGENT_OUTPUT` do not exist, and it is early on every PATH.
  */
 export async function resolveBashInterpreter(
-  anchor: string | undefined,
   probeEnv: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<{ path: string } | { problem: string } | { cancelled: true }> {
   if (signal?.aborted) return { cancelled: true };
-  const configured = projectAnchoredConfigValue<string>(BASH_CONFIG_KEY, anchor);
+  const configured = configuredBash();
   if (configured !== undefined) {
     const problem =
       interpreterProblem(configured) ?? (await notBashProblem(configured, probeEnv, signal));
     if (signal?.aborted) return { cancelled: true };
-    const source = configuredSource(configured, anchor);
     return problem
       ? {
           problem:
-            `The configured bash (${BASH_CONFIG_KEY} = ${configured}, from ${source.file}) ` +
-            `${problem}. Point ${BASH_CONFIG_KEY} at a bash executable, or ${unsetAdvice(source)}.`,
+            `The configured bash (${BASH_CONFIG_KEY} = ${configured}, from ` +
+            `${configFilePath("global")}) ${problem}. Point ${BASH_CONFIG_KEY} at a bash ` +
+            `executable, or unset it to use the one on this host's PATH.`,
         }
       : { path: configured };
   }
@@ -325,45 +322,6 @@ function stopCandidate(child: ChildProcess, signal: NodeJS.Signals): void {
 
 function firstLine(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).split("\n")[0] ?? "";
-}
-
-/**
- * Which file to edit, and what is behind it. `getConfigValue` merges the two
- * scopes, so a stale GLOBAL value makes every `.sh` step in every project on the
- * machine refuse with a message about a file the project does not contain.
- *
- * The other scope's value is read too, because the key takes both: unsetting
- * the file named here falls through to that value, not to PATH.
- */
-function configuredSource(
-  configured: string,
-  anchor: string | undefined
-): { file: string; behindIt?: { value: string; file: string } } {
-  const options = anchor ? { cwd: anchor } : {};
-  const project = getConfigValueAtScope(BASH_CONFIG_KEY, "project", options);
-  const inProject = project === configured;
-  const behind = inProject ? getConfigValueAtScope(BASH_CONFIG_KEY, "global", options) : undefined;
-  return {
-    file: configFilePath(inProject ? "project" : "global", options),
-    ...(typeof behind === "string"
-      ? { behindIt: { value: behind, file: configFilePath("global", options) } }
-      : {}),
-  };
-}
-
-/**
- * What unsetting the file above really does. `scripts.bash` takes both scopes
- * with `prioritize-local`, so "unset it to use the one on this host's PATH" was
- * true only where one scope held a value: with a project value over a global
- * one, following that advice silently swapped the interpreter to the global
- * value instead - and the next failure no longer mentions `scripts.bash` at all,
- * which is the situation this key exists to make visible.
- */
-function unsetAdvice(source: { behindIt?: { value: string; file: string } }): string {
-  return source.behindIt
-    ? `unset it there to fall back to ${source.behindIt.value}, which ` +
-        `${source.behindIt.file} sets — unset it in both files to use the one on this host's PATH`
-    : "unset it to use the one on this host's PATH";
 }
 
 /**

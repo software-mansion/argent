@@ -21,7 +21,7 @@ import { resolveBashInterpreter } from "../../src/tools/flows/script/flow-script
  * Windows, the platform they were listed for.
  */
 export async function resolveHostBash(): Promise<{ path: string } | { problem: string }> {
-  const found = await resolveBashInterpreter(undefined, buildChildEnv(undefined));
+  const found = await resolveBashInterpreter(buildChildEnv(undefined));
   // No abort signal is passed, so nothing cancels this lookup.
   if ("cancelled" in found) return { problem: "the bash lookup was cancelled" };
   if (!("path" in found) && process.env.CI) {

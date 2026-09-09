@@ -599,11 +599,7 @@ export class FlowScriptExecutor {
       // to the probe's own timeout plus its force grace, the step's declared
       // limit bounds none of it, and a flow of N bash steps was un-cancellable
       // for about six seconds each.
-      const found = await resolveBashInterpreter(
-        request.projectRoot ?? request.flowDir,
-        env,
-        request.signal
-      );
+      const found = await resolveBashInterpreter(env, request.signal);
       if ("cancelled" in found) {
         return emptyResult(
           { kind: "cancelled", message: "The run was cancelled before the script started." },

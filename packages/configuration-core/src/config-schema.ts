@@ -268,10 +268,10 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "Absolute path to the bash a flow `script` step runs a `.sh` file with. Unset ⇒ the " +
       "first bash on the tool server's PATH, then /bin/bash and /usr/bin/bash (on Windows, " +
       "Git for Windows' bash.exe; the WSL launcher under %SystemRoot% is skipped). Each " +
-      "candidate is run once and has to answer with a $BASH_VERSION. Project scope is allowed " +
-      "here: which bash a project's own `.sh` files were written for is the project's own " +
-      "fact, and it raises no ceiling on the host.",
-    scopes: ["global", "project"],
+      "candidate is run once and has to answer with a $BASH_VERSION. Global scope only: the " +
+      "value names a path on the host running the tool server, so a committed project file " +
+      "cannot hold one a mixed-OS team can all use.",
+    scopes: ["global"],
     // Deliberately permissive: `readScopeValue` hands back `undefined` for a
     // value its `parse` rejected, which is indistinguishable from an absent key
     // — so a schema that refused a relative path, an empty string or a number
@@ -285,7 +285,7 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     expected:
       "an absolute path to a bash executable, spelled the way the host running the tool server " +
       "spells one (`/bin/bash` on macOS and Linux, `C:\\...\\bash.exe` on Windows)",
-    merge: "prioritize-local",
+    merge: "prioritize-global",
     // Host-specific for the same reason the check above is: the example is
     // printed back as a command to run, and one this host would refuse is a
     // command that reproduces the error it is offered to fix. So both strings
@@ -293,7 +293,7 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // `/usr/bin/bash` at all, and `/opt/homebrew/bin/bash` exists only on an
     // arm64 Mac with Homebrew. `asAbsolutePath` checks shape and never
     // existence, so a spelling this host lacks is written and only fails later,
-    // at every `.sh` step - and a project file travels to teammates.
+    // at every `.sh` step.
     example: process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash",
   },
 ] as const;

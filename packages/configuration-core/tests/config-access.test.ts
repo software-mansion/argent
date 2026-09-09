@@ -501,16 +501,45 @@ describe("scripts.bash — schema entry", () => {
     expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: configured } });
   });
 
-  // Not a bound on the host, unlike its two siblings: which bash a project's
-  // own `.sh` files were written for is the project's own fact.
-  it("takes both scopes, with the project's own value winning", () => {
+  // Global only, like its two siblings, though for a different reason: the
+  // value is an absolute path judged against `process.platform`, so no single
+  // spelling satisfies a mixed-OS team and a committed one broke every `.sh`
+  // step for whoever did not share the committer's OS. `readScopeValue` gates
+  // reads on `scopes` too, so the project file is not merely unwritable - it is
+  // unread, and the resolver falls through to its PATH search.
+  it("takes the global scope only, and does not read a committed project value", () => {
     const def = getConfigDefinition("scripts.bash")!;
-    expect(def.scopes).toEqual(["global", "project"]);
-    const projectBash = path.join(path.sep, "usr", "bin", "bash");
-    setConfigValue("scripts.bash", configured, "global", opts());
-    setConfigValue("scripts.bash", projectBash, "project", opts());
+    expect(def.scopes).toEqual(["global"]);
+    const projectFile = configFilePath("project", opts());
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(
+      projectFile,
+      JSON.stringify({ scripts: { bash: "C:\\Program Files\\Git\\bin\\bash.exe" } })
+    );
 
-    expect(getConfigValueByKey("scripts.bash", opts())).toBe(projectBash);
+    expect(getConfigValueByKey("scripts.bash", opts())).toBeUndefined();
+  });
+
+  // `merge: "prioritize-local"` used to let that committed file shadow a
+  // developer's own working pin, and the refusal then named the bash it was
+  // declining to use.
+  it("keeps the developer's global pin in front of a committed project value", () => {
+    const projectFile = configFilePath("project", opts());
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(
+      projectFile,
+      JSON.stringify({ scripts: { bash: path.join(path.sep, "usr", "bin", "bash") } })
+    );
+    setConfigValue("scripts.bash", configured, "global", opts());
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBe(configured);
+  });
+
+  it("refuses a write at the project scope", () => {
+    expect(() => setConfigValue("scripts.bash", configured, "project", opts())).toThrow(
+      ConfigScopeError
+    );
+    expect(readConfigObject("project", opts())).toEqual({});
   });
 
   // Both host-specific strings are printed back as a value to type, so a path
