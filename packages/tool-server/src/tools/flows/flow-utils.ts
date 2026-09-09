@@ -3160,10 +3160,10 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
       return;
     case "script":
-      // An `env` value is where a `{{output:` reference will belong once PR 4
-      // lands, so it is refused here for the reason every other field is: the
+      // An `env` value is where a `{{output:` reference will belong in a later
+      // release, so it is refused here for the reason every other field is: the
       // spelling reaches the script as literal text today, and a flow written
-      // against a later release must not pass quietly on this one.
+      // against that release must not pass quietly on this one.
       for (const [name, value] of Object.entries(step.env ?? {})) {
         yield { where: `script.env.${name}`, value };
       }
