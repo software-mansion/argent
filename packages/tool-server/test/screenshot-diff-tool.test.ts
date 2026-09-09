@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const tempDirs: string[] = [];
 
@@ -411,21 +412,30 @@ describe("screenshotDiffTool", () => {
     // Parent does not exist on this host — a remote client's own directory.
     const outputDir = path.join(dir, "no-such-parent", "nested", "diff-out");
 
-    const result = await executeScreenshotDiffTool(
-      {},
-      { baselinePath, currentPath, udid: "ABC", outputDir },
-      {
-        artifacts: new ArtifactStore(),
-        fileInputs: {
-          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
-        },
-      }
-    );
+    // resolveOutputDir mints the fallback under os.tmpdir() before anything
+    // validates the call, so a throw downstream would strand it with the path
+    // known only to the code that threw. Point os.tmpdir() at the dir already
+    // registered for removal and the sweep takes it either way — never the
+    // shared argent-screenshot-diff root, which belongs to any tool-server
+    // running alongside.
+    const restoreTmpdir = redirectTmpdir(dir);
+    let result;
+    try {
+      result = await executeScreenshotDiffTool(
+        {},
+        { baselinePath, currentPath, udid: "ABC", outputDir },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+          },
+        }
+      );
+    } finally {
+      restoreTmpdir();
+    }
 
     const diffHostPath = (result.diffPath as { hostPath: string }).hostPath;
-    // The per-call dir the fallback minted, not the shared argent-screenshot-diff
-    // root above it — that one belongs to any tool-server running alongside.
-    tempDirs.push(path.dirname(diffHostPath));
     expect(diffHostPath.startsWith(outputDir)).toBe(false);
     expect(diffHostPath).toContain("argent-screenshot-diff");
   });
