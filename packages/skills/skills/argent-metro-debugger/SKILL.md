@@ -67,9 +67,16 @@ Both can point to source files, but `inspect-element` is purpose-built for sourc
 
 ### `includeSkipped` guidance
 
-Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+**`debugger-component-tree`** — appends a bounded summary (about a dozen lines, whatever the app size) of what was pruned: total fibers walked, JS-side skip counts by component name, and TS-side filter-pass totals. It adds no node to the tree and never names the component you are looking for, so it tells you which filter removed things, not what was removed.
 
-> **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
+When a component you expect is missing from the tree:
+
+- scrolled or otherwise positioned off-canvas (`TS-side removed → Off-screen`) — re-run with `onScreenOnly: false`, which is the parameter that decides what the tree contains.
+- pruned JS-side (host views with no `testID`, framework wrappers, inactive navigation stacks) — no parameter brings it back. Give it a `testID`, or use `debugger-inspect-element` at its coordinates.
+
+**`debugger-inspect-element`** — filtered items stay in the result carrying `skipped: true` and a `skipReason`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the hierarchy (not just an overview).
+
+> **Warning:** Output can be very large. Always combine with `maxItems` and increase it incrementally (e.g., start at 35, then grow). Do not use `includeSkipped` without a limit on large apps.
 
 ---
 
