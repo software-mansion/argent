@@ -75,7 +75,13 @@ export class LogFileWriter {
   constructor(port: number) {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // An unwritable ~/.argent must not fail the debugger connection this
+      // writer belongs to: a missing directory makes open() fail below, and
+      // entries buffer in memory as they do for an unwritable ~/.argent/tmp.
+    }
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
     this.open();
   }

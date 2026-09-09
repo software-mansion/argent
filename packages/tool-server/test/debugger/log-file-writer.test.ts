@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -259,3 +261,34 @@ describe("LogFileWriter", () => {
     expect(clusters[0].sourceFile).toBe("src/api/user.ts");
   });
 });
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "LogFileWriter under an unwritable ~/.argent",
+  () => {
+    let argentDir: string;
+
+    beforeEach(() => {
+      argentDir = path.join(os.homedir(), ".argent");
+      fs.mkdirSync(argentDir, { recursive: true });
+      fs.chmodSync(argentDir, 0o500);
+    });
+
+    afterEach(() => {
+      fs.chmodSync(argentDir, 0o700);
+    });
+
+    it("buffers in memory instead of throwing when the log directory cannot be created", () => {
+      let unwritable: LogFileWriter | undefined;
+      expect(() => {
+        unwritable = new LogFileWriter(9998);
+      }).not.toThrow();
+      const w = unwritable as LogFileWriter;
+
+      expect(fs.existsSync(path.dirname(w.getFilePath()))).toBe(false);
+      expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
+      expect(w.getStats().totalEntries).toBe(1);
+      expect(w.readAll()).toEqual([]);
+      w.close();
+    });
+  }
+);
