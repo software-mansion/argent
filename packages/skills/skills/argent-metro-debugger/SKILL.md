@@ -38,10 +38,10 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
-| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
+| Tool                    | Purpose                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `debugger-reload-metro` | Reload the JS bundle in the one app `device_id` resolved, via CDP `Page.reload`. Needs a CDP target. Falls back to Metro's `/reload` broadcast (the "press r" behaviour, hitting every connected app) when the runtime has no `Page.reload`; the returned `method` (`"cdp"` / `"http"`) says which ran. With several devices on one Metro port, call it once per device. |
+| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection.                                                                                                                                                                                                                                                                            |
 
 ### Inspection & console
 
