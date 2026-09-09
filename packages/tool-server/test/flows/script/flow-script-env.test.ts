@@ -752,6 +752,34 @@ describe("the host allowlist extension", () => {
     }
   });
 
+  it("drops an ARGENT_ name written in another case, and says so", async () => {
+    // Windows environment names are case-insensitive, so `Argent_Auth_Token` in
+    // the list IS the host's own `ARGENT_AUTH_TOKEN` — `buildChildEnv` folds
+    // both sides there for exactly that reason. The bucket that judges a
+    // configured name has to read it in the same case space, or the extension is
+    // a way back into the set the built-in allowlist exists to keep out: the
+    // bearer token, the port, every `ARGENT_SECRET_` value. Its twin in
+    // `reservedNameFor` is pinned; this one was not.
+    process.env.Argent_Auth_Token = "host-token";
+    try {
+      await write(
+        ".argent/config.json",
+        JSON.stringify({ scripts: { env: { allow: ["Argent_Auth_Token"] } } })
+      );
+      await write("scripts/probe.mjs", reporter("mixedcase", ["Argent_Auth_Token"]));
+      await flow("mixedcase", "steps:\n  - script: { path: ../../scripts/probe.mjs }\n");
+
+      const { result } = await runFlow("mixedcase");
+
+      expect(result.ok).toBe(true);
+      expect(seen("mixedcase")).toEqual({ Argent_Auth_Token: null });
+      expect(result.steps[0].reason).toContain("Argent_Auth_Token");
+      expect(result.steps[0].reason).toContain("scripts.env.allow");
+    } finally {
+      delete process.env.Argent_Auth_Token;
+    }
+  });
+
   it("reads the list from the global scope as well, and takes the union", async () => {
     // The key is read from BOTH scopes because it names a project input rather
     // than a limit on the host, and the two are merged by union. `scopeTempHome`
