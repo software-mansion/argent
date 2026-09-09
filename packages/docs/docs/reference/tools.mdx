@@ -94,24 +94,24 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## Profiling
 
-| Tool                              | Description                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`           | Check the profiler session state without side effects                        |
-| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`          | Collect component render counts and durations from the live fiber tree       |
-| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
-| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
-| `native-profiler-stop`            | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
-| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+| Tool                              | Description                                                                   |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime  |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                    |
+| `react-profiler-status`           | Check the profiler session state without side effects                         |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report              |
+| `react-profiler-renders`          | List mounted component instances with self durations from the live fiber tree |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                          |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                               |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status                  |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android               |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                    |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                       |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                       |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it     |
+| `profiler-commit-query`           | Query React commit data for iterative render investigation                    |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                             |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                    |
 
 ## Flows
 
