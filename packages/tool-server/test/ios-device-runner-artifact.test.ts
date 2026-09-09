@@ -107,8 +107,9 @@ describe("ensureRunnerArtifact", () => {
   });
 
   /**
-   * Run `fn` with HOME moved under a per-test dir (so the build dir stays
-   * inside the fixture tree), PATH narrowed to `binDir` (empty by default, so
+   * Run `fn` with HOME — and USERPROFILE, which `os.homedir()` reads on
+   * Windows — moved under a per-test dir (so the build dir stays inside the
+   * fixture tree), PATH narrowed to `binDir` (empty by default, so
    * nothing reaches the real Xcode), and the project override pointed at
    * `project` (the shared empty fake by default), the env-swap fixture
    * pattern launchRunner's tests established.
@@ -120,10 +121,13 @@ describe("ensureRunnerArtifact", () => {
   ): Promise<T> {
     const saved = {
       HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
       PATH: process.env.PATH,
       PROJECT: process.env.ARGENT_IOS_RUNNER_PROJECT,
     };
-    process.env.HOME = path.join(tmpRoot, `ensure-home-${name}`);
+    const home = path.join(tmpRoot, `ensure-home-${name}`);
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
     process.env.PATH = opts.binDir ?? emptyBin;
     process.env.ARGENT_IOS_RUNNER_PROJECT = opts.project ?? fakeProject;
     try {
@@ -157,6 +161,16 @@ describe("ensureRunnerArtifact", () => {
       return { xctestrunPath, derivedDataPath, fromCache: false };
     };
   }
+
+  // ensureRunnerArtifact builds under os.homedir(), which reads USERPROFILE on
+  // Windows and HOME elsewhere. Pinning one name leaves the fixture inert on
+  // the other platform and the build dir lands in the developer's real home.
+  it("redirects os.homedir() under both names it consults", async () => {
+    await withEnsureEnv("homedir-names", async () => {
+      expect(process.env.USERPROFILE).toBe(process.env.HOME);
+      expect(os.homedir()).toBe(path.join(tmpRoot, "ensure-home-homedir-names"));
+    });
+  });
 
   it("reports fromCache honestly and rebuilds the same key only when forced", async () => {
     await withEnsureEnv("hit-and-force", async () => {
