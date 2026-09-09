@@ -1202,6 +1202,27 @@ describe("secret placeholders in an env value", () => {
     expect(result.steps[0].reason).toContain('Unknown secret "MISSING"');
   });
 
+  it("resolves a RUN-level secret against the run's project, not the server's cwd", async () => {
+    // The run's own map is resolved once up front, to refuse an unknown name as
+    // caller input before a directory run repeats it per file. That resolve
+    // needs the SAME anchor the step's does: the tool server's cwd is a
+    // snapshot from whatever spawned it — an editor sets it to `/` or `$HOME` —
+    // so left to the default this project's `.argent/secrets.env` is never read
+    // and a name that resolves perfectly well is refused as unknown, stopping
+    // the whole run before it starts. The case above passes a name NO source
+    // defines, which is refused under either anchor, so only a resolvable one
+    // tells the two apart.
+    expect(path.resolve(process.cwd()).startsWith(root)).toBe(false);
+    await writeProjectSecret("RUN_TOKEN", "sk-run-4b21");
+    await write("scripts/probe.mjs", reporter("runanchor", ["AUTH"]));
+    await flow("runanchor", "steps:\n  - script: { path: ../../scripts/probe.mjs }\n");
+
+    const { result } = await runFlow("runanchor", { env: { AUTH: "{{secret:RUN_TOKEN}}" } });
+
+    expect(result.ok).toBe(true);
+    expect(seen("runanchor")).toEqual({ AUTH: "sk-run-4b21" });
+  });
+
   it("refuses an unpaired surrogate in an env value", async () => {
     // `describeScriptEnvProblem` refuses a NUL because an environment cannot
     // carry one; a lone surrogate is the same rule one character class further
