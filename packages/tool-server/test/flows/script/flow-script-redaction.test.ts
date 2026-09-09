@@ -909,6 +909,83 @@ describe("flow script executor — redaction of a re-framed, wrapped or cut valu
 });
 
 /**
+ * `util.inspect` prints a `Buffer` or a `TypedArray` as its NUMBERS, so no
+ * spelling of the value is in the text at all and only the byte-space pass can
+ * answer. Every other case in this file reaches that pass through an ENCODER —
+ * `.toString("base64")` or `.toString("hex")` — which is `repairEncodedRuns`,
+ * a different function; nothing here produced the numeric rendering
+ * `repairByteRenderings` exists for, so both of the shapes below printed the
+ * credential in full while the suite stayed green.
+ */
+describe("flow script executor — redaction of a value rendered as bytes", () => {
+  const KEY: FlowScriptSecret = { name: "KEY", value: "sec-9d3f-topvalue-abcdef" };
+
+  async function failWith(source: string, secret: FlowScriptSecret): Promise<string> {
+    const ws = workspace();
+    const script = ws.write("bytes.mjs", source);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: secret.value },
+      secrets: [secret],
+    });
+    expect(result.ok).toBe(false);
+    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+  }
+
+  /** No run of six or more characters of the value survives, in any spelling. */
+  function expectNoValue(text: string, secret: FlowScriptSecret): void {
+    expect(text).toContain(`{{secret:${secret.name}}}`);
+    for (let n = secret.value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= secret.value.length; at += 1) {
+        const part = secret.value.slice(at, at + n);
+        expect(text).not.toContain(part);
+        // And not as the bytes the rendering wrote it in either.
+        const bytes = Buffer.from(part, "utf8");
+        expect(text).not.toContain(bytes.toString("hex").replace(/../g, "$& ").trim());
+        expect(text).not.toContain([...bytes].join(", "));
+      }
+    }
+  }
+
+  // `<Buffer 73 65 …>` is followed by ordinary prose, and the first word of it
+  // opens with hex characters of its own: `did`, `expected`, `and` and `from`
+  // all contribute an odd-length prefix that is no byte at radix 16. Only a
+  // LETTER ended a run, and the `>` between them is none — so that prefix
+  // joined the run, the run stopped decoding, and every byte of the credential
+  // printed.
+  it("replaces a Buffer rendering the next word's hex prefix runs into", async () => {
+    for (const word of ["did", "expected", "and", "from"]) {
+      const text = await failWith(
+        `import util from "node:util";
+         throw new Error(util.inspect(Buffer.from(process.env.K)) + " ${word} not match the digest");`,
+        KEY
+      );
+      expect(text).toContain(`${word} not match the digest`);
+      expectNoValue(text, KEY);
+    }
+  }, 60_000);
+
+  // Over 255 elements a rendering prints its own COUNT immediately in front of
+  // the bytes — `Uint8Array(298) [` — and `(`, `)` and `[` are not letters
+  // either. The count joined the run, no byte is written as 298, and the whole
+  // run was rejected at decimal radix. A PEM block, a service-account JSON and
+  // a long JWT are all past that length, and all are shapes `env` is documented
+  // to carry.
+  it("replaces a rendering whose element count precedes the bytes", async () => {
+    const long: FlowScriptSecret = { name: "PEM", value: `sk-live-${"a9f3b1c7d5e2".repeat(24)}` };
+    expect(long.value.length).toBeGreaterThan(255);
+    const text = await failWith(
+      `import util from "node:util";
+       throw new Error("digest mismatch " + util.inspect(new Uint8Array(Buffer.from(process.env.K)), { maxArrayLength: Infinity }));`,
+      long
+    );
+    expect(text).toContain("digest mismatch");
+    expectNoValue(text, long);
+  }, 30_000);
+});
+
+/**
  * Two defects the frame widening and the loosened cut anchor introduced, each
  * the mirror of the other: one replaced too little and disclosed a credential,
  * one replaced too much and corrupted argent's own text.

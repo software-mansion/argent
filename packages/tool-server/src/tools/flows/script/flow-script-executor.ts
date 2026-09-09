@@ -1845,7 +1845,7 @@ function repairByteRenderings(text: string, secrets: readonly FlowScriptSecret[]
   if (needles.length === 0) return text;
   const spans: Array<{ from: number; to: number; name: string }> = [];
   for (const { radix, numbers } of BYTE_VIEWS) {
-    const runs = byteRuns(text, numbers);
+    const runs = byteRuns(text, numbers, radix);
     for (let at = 0; at < runs.length; at++) {
       spans.push(...byteRunSpans(runs[at]!, radix, needles));
       spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
@@ -1913,17 +1913,36 @@ interface ByteRun {
 }
 
 /**
- * Maximal sequences of numbers separated by anything that is not a letter.
+ * Maximal sequences of numbers separated by anything that is not a letter, and
+ * holding only numbers this radix writes a byte as.
  *
  * A letter between two numbers ends the run: a rendering's own numbers are
  * separated by punctuation and whitespace only, so this is what tells
  * `Uint8Array(8) [` from the bytes it introduces. An ellipsis ends one too, and
  * says why — the renderer cut there, and what precedes it is a prefix.
  *
+ * A number that is NO byte at this radix ends the run as well, and is dropped
+ * rather than carried into it. Extra bytes cost a run nothing — the search
+ * inside it is a substring search, so a byte the rendering did not write is
+ * simply a byte no value starts at — but a number that does not decode sinks
+ * the WHOLE run, and the two shapes that produce one both sit flush against a
+ * rendering:
+ *
+ *   - the element count a `Buffer`/`TypedArray` over 255 bytes prints in front
+ *     of its own bytes, `Uint8Array(298) [`, which no separator rule keeps out
+ *     because `(`, `)` and `[` are not letters;
+ *   - the leading hex characters of the first WORD after a `<Buffer …>`, whose
+ *     `>` is not a letter either — `did`, `expected`, `and` and `from` all open
+ *     with an odd-length hex prefix, which is no byte at radix 16.
+ *
+ * Both left the run undecodable, so no span was produced and the credential the
+ * rendering spelled reached the step reason, the `--json` report and the MCP
+ * call log in full.
+ *
  * A lone number is no rendering, so a run of one is dropped: it costs two
  * decodes and can only match a one-byte value, which the raw scrub already has.
  */
-function byteRuns(text: string, numbers: RegExp): ByteRun[] {
+function byteRuns(text: string, numbers: RegExp, radix: number): ByteRun[] {
   const runs: ByteRun[] = [];
   let run: ByteRun = { tokens: [], cut: false };
   let end = -1;
@@ -1933,10 +1952,14 @@ function byteRuns(text: string, numbers: RegExp): ByteRun[] {
   };
   for (const token of text.matchAll(numbers)) {
     const gap = end < 0 ? "" : text.slice(end, token.index);
+    end = token.index + token[0].length;
+    if (byteToken(token[0], radix) === undefined) {
+      close(false);
+      continue;
+    }
     if (/[A-Za-z]/.test(gap)) close(false);
     else if (GAP_CUT_RE.test(gap)) close(true);
-    run.tokens.push({ from: token.index, to: token.index + token[0].length, text: token[0] });
-    end = token.index + token[0].length;
+    run.tokens.push({ from: token.index, to: end, text: token[0] });
   }
   close(false);
   return runs;
@@ -1984,17 +2007,27 @@ function byteRunSpans(
 }
 
 /**
- * The run's bytes, or nothing when it is no rendering at this radix. Decimal
- * takes one to three digits below 256; hex takes exactly the two a byte is
- * always written as, so a decimal run is not read as hex by accident.
+ * The byte one number spells at this radix, or nothing when it spells none.
+ * Decimal takes one to three digits below 256; hex takes exactly the two a byte
+ * is always written as, so a decimal run is not read as hex by accident.
+ */
+function byteToken(text: string, radix: number): number | undefined {
+  if (radix === 16 && text.length !== 2) return undefined;
+  if (radix === 10 && text.length > 3) return undefined;
+  const code = parseInt(text, radix);
+  return code >= 0 && code <= 255 ? code : undefined;
+}
+
+/**
+ * The run's bytes. Every token was read as one byte when the run was built, so
+ * this cannot fail; the guard stands for the caller that decodes a run it did
+ * not build.
  */
 function decodeByteRun(run: ByteRun, radix: number): Buffer | undefined {
   const codes: number[] = [];
   for (const { text } of run.tokens) {
-    if (radix === 16 && text.length !== 2) return undefined;
-    if (radix === 10 && text.length > 3) return undefined;
-    const code = parseInt(text, radix);
-    if (!(code >= 0 && code <= 255)) return undefined;
+    const code = byteToken(text, radix);
+    if (code === undefined) return undefined;
     codes.push(code);
   }
   return Buffer.from(codes);
