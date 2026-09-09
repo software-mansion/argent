@@ -1781,7 +1781,10 @@ function repairByteRenderings(
       // front. Nothing in the text says so — the marker is gone — so the caller
       // does.
       const last = runs[runs.length - 1];
-      if (cutAtEnd && last) last.cut = true;
+      if (cutAtEnd && last) {
+        last.cut = true;
+        last.argentCut = true;
+      }
       for (let at = 0; at < runs.length; at++) {
         spans.push(...byteRunSpans(runs[at]!, radix, needles));
         spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
@@ -1911,6 +1914,11 @@ interface ByteRun {
   }>;
   /** The run stopped at an ellipsis, so its last bytes may be a cut value. */
   cut: boolean;
+  /**
+   * The cut was ARGENT's own clamp rather than a renderer's ellipsis. Only that
+   * one is under the ceiling, so only that one has to floor what it matches.
+   */
+  argentCut?: boolean;
 }
 
 /**
@@ -2028,14 +2036,27 @@ function byteRunSpans(
   // falls, so the last number of the run can be half of one — `… 99,\n   5` —
   // and that half decodes to a byte no value has there, which sank the whole
   // tail. Dropping it is the second reading.
-  const floor = CUT_MIN_PREFIX_CHARS;
+  //
+  // The LONGEST prefix across every needle, not the first needle that answers
+  // at any length. Read the other way round — needle first, then length — a
+  // spelling that happens to open with the run's last byte answered at one
+  // byte and returned, and the value's own hundred-byte prefix behind it was
+  // never asked for. Bounded by the best length so far, as
+  // {@link quotedCutBefore} bounds its own descent, and gated on the last byte
+  // before the compare so a needle that cannot end here costs one lookup.
+  const floor = run.argentCut ? CUT_MIN_PREFIX_CHARS : 1;
   for (const end of [decoded.length, decoded.length - 1]) {
+    if (end < floor) continue;
+    let best: { from: number; count: number; name: string } | undefined;
     for (const { name, bytes } of needles) {
-      for (let n = Math.min(bytes.length - 1, end); n >= floor; n--) {
+      for (let n = Math.min(bytes.length - 1, end); n > (best?.count ?? floor - 1); n--) {
+        if (bytes[n - 1] !== decoded[end - 1]) continue;
         if (decoded.compare(bytes, 0, n, end - n, end) !== 0) continue;
-        return runSpans(run, end - n, n, name);
+        best = { from: end - n, count: n, name };
+        break;
       }
     }
+    if (best) return runSpans(run, best.from, best.count, best.name);
   }
   return spans;
 }
