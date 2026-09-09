@@ -5,7 +5,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import type { CDPClient } from "../utils/debugger/cdp-client";
+import type { CDPClient, ScriptInfo } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import {
   FIBER_ROOT_TRACKER_SCRIPT,
@@ -119,14 +119,15 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
 
     await cdp.send("Profiler.enable").catch(warnOnError("Profiler.enable"));
 
-    cdp.events.on("scriptParsed", (script) => {
+    const onScriptParsed = (script: ScriptInfo) => {
       if (script.sourceMapURL) {
         state.scriptSources.set(script.scriptId, {
           url: script.url,
           sourceMapURL: script.sourceMapURL,
         });
       }
-    });
+    };
+    cdp.events.on("scriptParsed", onScriptParsed);
 
     // Idempotent — guarded in JS
     await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(warnOnError("FIBER_ROOT_TRACKER_SCRIPT"));
@@ -173,7 +174,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       warnOnError("Hermes version probe")(err);
     }
 
-    cdp.events.on("disconnected", (error) => {
+    const onDisconnected = (error?: Error) => {
       // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
@@ -188,11 +189,17 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
             error_kind: "network",
           })
       );
-    });
+    };
+    cdp.events.on("disconnected", onDisconnected);
 
     return {
       api: state,
       dispose: async () => {
+        // `cdp.events` belongs to the JsRuntimeDebugger dependency and
+        // outlives every dispose but its own teardown; `react-profiler-stop`
+        // disposes only this node, once per run.
+        cdp.events.off("scriptParsed", onScriptParsed);
+        cdp.events.off("disconnected", onDisconnected);
         // `react-profiler-stop` stops the renderers and the sampler before
         // disposing; a dispose from `stop-all-simulator-servers` arrives
         // mid-run instead, leaving the in-app DevTools backend recording every
