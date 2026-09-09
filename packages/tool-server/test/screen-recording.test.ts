@@ -192,12 +192,8 @@ const androidDevice: DeviceInfo = {
   kind: "emulator",
 } as DeviceInfo;
 
-// startCapture names its output join(os.tmpdir(),
-// `argent-screen-recording-${deviceId}-${Date.now()}.mp4`). The device ids are
-// fixtures, and vi.useFakeTimers() seeds its clock from the real time rather
-// than a constant, so the millisecond two runs start in is the only thing
-// separating their paths — and each test ends by deleting the path it derived.
-// Scoping the tmpdir per test removes that window instead of leaving it narrow.
+// startCapture names its output under os.tmpdir(). Scoping that per test keeps
+// the mp4s these runs derive (and delete) out of the shared temp directory.
 let restoreTmpdir: () => void;
 let scratch: string;
 
@@ -451,6 +447,35 @@ describe("screen recording capture", () => {
     expect(api.recordingActive).toBe(true);
     expect(api.captureProcess).toBe(child as unknown as ChildProcess);
     expect(getActiveScreenRecordings()).toHaveLength(1);
+  });
+
+  it("names the output file after the recording process, not the device alone", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild();
+
+    const result = await startAndSettle(api);
+
+    // A second tool-server on the same host is invisible to the in-process
+    // session guard, so the pid is what keeps its mp4 off this one's path.
+    expect(path.basename(result.outputFile)).toContain(`-${process.pid}-`);
+  });
+
+  it("keeps two device ids that sanitize alike on separate output paths", async () => {
+    // Both ids sanitize to `emulator-5554`, so the device segment alone cannot
+    // tell the two captures apart.
+    const outputs: string[] = [];
+    for (const id of ["emulator:5554", "emulator-5554"]) {
+      // Pin the clock: the readiness grace startAndSettle waits out advances it
+      // between the two starts, and the collision is a same-millisecond one.
+      vi.setSystemTime(1_700_000_000_000);
+      const api = await makeSession({ ...androidDevice, id });
+      fakeStream();
+      fakeChild();
+      outputs.push((await startAndSettle(api)).outputFile);
+    }
+
+    expect(outputs[0]).not.toBe(outputs[1]);
   });
 
   it("stamps the watermark in the same pass when the flag is on", async () => {

@@ -287,9 +287,13 @@ async function startCaptureLocked(
     );
   }
 
+  // The pid and the random suffix are what keep two captures apart: the
+  // in-process session guard says nothing about a second tool-server on the
+  // same host, and the device sanitizer is not injective (`emulator:5554` and
+  // `emulator-5554` collapse onto one segment).
   const outputFile = path.join(
     os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
+    `argent-screen-recording-${process.pid}-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`
   );
 
   const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
