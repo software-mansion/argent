@@ -2,10 +2,23 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -67,7 +80,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("returns only the summary and diff artifact paths", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-tool-"));
+    const dir = await makeTempDir("argent-screenshot-diff-tool-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -103,7 +116,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures one live side at full resolution and copies it into outputDir", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-live-"));
+    const dir = await makeTempDir("argent-screenshot-diff-live-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -147,7 +160,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("falls back to the default scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fallback-"));
+    const dir = await makeTempDir("argent-screenshot-diff-fallback-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -182,7 +195,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("propagates the error when both the full-res capture and the fallback fail", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-bothfail-"));
+    const dir = await makeTempDir("argent-screenshot-diff-bothfail-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
     const captureScreenshot = vi.fn(
@@ -203,7 +216,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-unique-"));
+    const dir = await makeTempDir("argent-screenshot-diff-unique-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -253,7 +266,7 @@ describe("screenshotDiffTool", () => {
   // exactly like a remote client's own directory and was silently redirected to
   // a temp dir. A directory we can create next to an existing parent is ours.
   it("creates and honors an outputDir that does not exist yet on this host", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fresh-"));
+    const parent = await makeTempDir("argent-screenshot-diff-fresh-");
     const baselinePath = path.join(parent, "baseline.png");
     const currentPath = path.join(parent, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -283,7 +296,7 @@ describe("screenshotDiffTool", () => {
   // reaches mkdir as EEXIST. That is the directory the caller asked for, not a
   // reason to redirect them to a temp dir.
   it("honors an outputDir that raced into existence after the probe", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-race-"));
+    const parent = await makeTempDir("argent-screenshot-diff-race-");
     const baselinePath = path.join(parent, "baseline.png");
     const currentPath = path.join(parent, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -337,7 +350,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures the live side through the runner on a physical iPhone and ignores rotation", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-device-"));
+    const dir = await makeTempDir("argent-screenshot-diff-device-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
     const run = vi.fn(async () => ({
@@ -371,10 +384,18 @@ describe("screenshotDiffTool", () => {
   });
 
   it("demands the runner service when a direct caller requests a device live capture", async () => {
+    // outputDir is resolved before the service check, so omitting it would mint
+    // a fallback dir under argent-screenshot-diff that the throw then strands.
+    const outputDir = await makeTempDir("argent-screenshot-diff-norunner-");
     await expect(
       executeScreenshotDiffTool(
         {},
-        { baselinePath: "/tmp/baseline.png", captureCurrent: true, udid: PHYSICAL_UDID }
+        {
+          baselinePath: "/tmp/baseline.png",
+          captureCurrent: true,
+          udid: PHYSICAL_UDID,
+          outputDir,
+        }
       )
     ).rejects.toThrow("requires an iosDeviceRunner service");
   });
@@ -382,7 +403,7 @@ describe("screenshotDiffTool", () => {
   // The remote case must still fall back: a client-side path whose parent does
   // not exist here cannot be created, so diffs go to a temp dir as before.
   it("falls back to a temp dir when outputDir is not creatable on this host", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-remote-"));
+    const dir = await makeTempDir("argent-screenshot-diff-remote-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -391,16 +412,28 @@ describe("screenshotDiffTool", () => {
     // Parent does not exist on this host — a remote client's own directory.
     const outputDir = path.join(dir, "no-such-parent", "nested", "diff-out");
 
-    const result = await executeScreenshotDiffTool(
-      {},
-      { baselinePath, currentPath, udid: "ABC", outputDir },
-      {
-        artifacts: new ArtifactStore(),
-        fileInputs: {
-          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
-        },
-      }
-    );
+    // resolveOutputDir mints the fallback under os.tmpdir() before anything
+    // validates the call, so a throw downstream would strand it with the path
+    // known only to the code that threw. Point os.tmpdir() at the dir already
+    // registered for removal and the sweep takes it either way — never the
+    // shared argent-screenshot-diff root, which belongs to any tool-server
+    // running alongside.
+    const restoreTmpdir = redirectTmpdir(dir);
+    let result;
+    try {
+      result = await executeScreenshotDiffTool(
+        {},
+        { baselinePath, currentPath, udid: "ABC", outputDir },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+          },
+        }
+      );
+    } finally {
+      restoreTmpdir();
+    }
 
     const diffHostPath = (result.diffPath as { hostPath: string }).hostPath;
     expect(diffHostPath.startsWith(outputDir)).toBe(false);

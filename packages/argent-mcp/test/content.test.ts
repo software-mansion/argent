@@ -162,8 +162,17 @@ describe("toMcpContent", () => {
 });
 
 describe("screenshotDiffToMcpContent", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it("returns a context image followed by the summary text", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
@@ -578,11 +587,14 @@ describe("toMcpContent with artifact ctx", () => {
 
 describe("flowRunToMcpContent", () => {
   let originalFetch: typeof globalThis.fetch;
+  // The failure cases below drive the real materializeArtifacts, which writes
+  // under artifactsRoot() — tmpdir()/argent-artifacts unless pinned, a path no
+  // test would then own or remove.
   let root: string;
 
   beforeEach(async () => {
     originalFetch = globalThis.fetch;
-    root = await mkdtemp(join(tmpdir(), "content-flow-"));
+    root = await mkdtemp(join(tmpdir(), "content-flow-artifacts-"));
     process.env.ARGENT_ARTIFACTS_DIR = root;
   });
 
@@ -866,6 +878,8 @@ describe("flowRunToMcpContent", () => {
     );
     expect(artifactText?.text).toContain("home-baseline.png");
     expect(artifactText?.text).toContain("home-current.png");
+    // Under the pinned root, not artifactsRoot()'s shared default.
+    expect(artifactText?.text).toContain(`diff: ${root}`);
     expect(artifactText?.text).toMatch(/diff: .*home-diff\.png/);
 
     // Exactly one inline image — the diff, not the full-res baseline/current.

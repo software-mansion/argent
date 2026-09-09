@@ -92,16 +92,11 @@ describe("create-flow selector-scope docs", () => {
 
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
-// warn-instead-of-fail change: the two agent-facing descriptions of `idle`
-// have to agree with what it does, and the numbers the prose quotes have to be
-// the ones the parser enforces.
+// warn-instead-of-fail change: the reference has to agree with what `idle`
+// does, and the numbers the prose quotes have to be the ones the parser
+// enforces.
 describe("create-flow idle docs", () => {
-  it("the flow-execute description and the reference agree that idle warns rather than fails", () => {
-    const description = createRunFlowTool({} as unknown as Registry).description;
-    expect(description).toContain("idle: true");
-    expect(description).toMatch(/never\s+fails a run/);
-    expect(description).not.toMatch(/FAILS on timeout/i);
-
+  it("the reference says idle warns rather than fails", () => {
     const reference = readFileSync(FLOW_YAML, "utf8");
     expect(reference).toContain("It **never fails a run.**");
     // The one outcome that does stop a run is the window, never the app - and
@@ -109,10 +104,6 @@ describe("create-flow idle docs", () => {
     // leaves a selector-less gesture passing with a warning of its own.
     expect(reference).toMatch(/Only a tree source this step could not read stops the run/);
     expect(reference).toMatch(/stops no \[selector-less gesture\]/);
-    // Both surfaces have to carry that caveat: the description is what an
-    // authoring agent reads, and "never fails a run" on its own is not true
-    // of a tree nobody could read.
-    expect(description).toMatch(/unreadable|cannot be read|could not be read/);
   });
 
   it("the reference's idle defaults and settle span are the ones the parser enforces", () => {
@@ -235,38 +226,10 @@ describe("create-flow directive-answer docs", () => {
 });
 
 /**
- * The `script` account in the flow-execute description is the only agent-facing
- * statement of what the step needs and where its path points, so the two claims
- * an author acts on are pinned here rather than left to prose review.
+ * `project_root` is the only agent-facing statement of where a `script:` path
+ * resolves from, so that claim is pinned here rather than left to prose review.
  */
 describe("create-flow script docs", () => {
-  const description = (): string => {
-    const { description: text } = createRunFlowTool({} as unknown as Registry);
-    expect(text, "flow-execute no longer declares a description").toBeDefined();
-    return text!;
-  };
-
-  it("names every step that still resolves a device beside a deviceless script", () => {
-    // `run` and `when` are the two whose own body can be nothing but scripts
-    // and that resolve one anyway — `run` because the fragment is read at run
-    // time, `when` because the guard reads the device itself. A platform-gated
-    // seed is the natural next thing to write after this sentence, and on a
-    // host with no device of that platform the whole run is refused.
-    for (const kind of ["run", "when"]) {
-      expect(description(), kind).toMatch(
-        new RegExp(`a script-only flow runs with nothing booted[^.]*\`${kind}\``)
-      );
-    }
-  });
-
-  it("shows a script path that reaches the directory scripts really live in", () => {
-    // A path relative to the flow FILE, so a saved flow anchors in
-    // `.argent/flows/`. `scripts/seed.mjs` there names
-    // `.argent/flows/scripts/seed.mjs`, which is two directories from where the
-    // reference page and the skills put a script.
-    expect(description()).toContain("script: { path: ../../scripts/seed.mjs");
-  });
-
   it("lists a script path among what a flow_path run re-anchors", () => {
     // `project_root` still names the script's working directory either way; it
     // is the RESOLUTION that moves to the YAML, and a `script:` path is the
@@ -277,16 +240,5 @@ describe("create-flow script docs", () => {
     const projectRoot = schema.properties.project_root?.description;
     expect(projectRoot, "`project_root` no longer describes itself").toBeDefined();
     expect(projectRoot!).toMatch(/with flow_path[^.]*script:/);
-  });
-
-  it("lets the chromium hoist follow every step a leading launch can sit behind", () => {
-    // The same set `precedesLeadingLaunch` admits. A flow that seeds a backend
-    // before it launches is exactly the shape this PR added, and it boots its
-    // own instance like any other leading launch.
-    for (const kind of ["run:", "echo:", "script:"]) {
-      expect(description(), kind).toMatch(
-        new RegExp(`following a leading[^.]*\`${kind.replace(":", ":")}\``)
-      );
-    }
   });
 });

@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The launcher captures STATE_DIR from `homedir()` at module load. Redirect
 // HOME to a per-file temp dir BEFORE the dynamic import runs so the entire
@@ -11,18 +12,11 @@ let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
 let STATE_DIR: string;
 let LEGACY_STATE_FILE: string;
-const ambientHome: Record<string, string | undefined> = {};
+let restoreHome: () => void;
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-sweep-test-"));
-  // Captured for afterAll, which puts them back before deleting TEST_HOME —
-  // anything left pointing at it resolves to a directory that is gone.
-  for (const name of ["HOME", "USERPROFILE"]) ambientHome[name] = process.env[name];
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   STATE_DIR = launcher.STATE_PATHS.STATE_DIR;
@@ -31,10 +25,9 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  for (const [name, value] of Object.entries(ambientHome)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
+  // Before the rmSync: anything still pointing at TEST_HOME resolves to a
+  // directory that is gone.
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
