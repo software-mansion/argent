@@ -5,7 +5,7 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 
 ## 1. Prerequisites
 
-Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`. Use a simulator.
+Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`.
 
 For **React Native (iOS / Android)**: requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status` — it returns `status: "connected"` or `status: "not_connected"` with a `reason` and `guidance` (it does not fail when the debugger is unreachable).
 
@@ -15,17 +15,17 @@ For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Ele
 
 ### Android: reverse port for Metro
 
-Android emulators and physical devices do not resolve the host's `localhost` by default. Before the RN app can reach Metro, forward port 8081 (or whichever port Metro is on) from the device back to the host:
+Android emulators and physical devices do not resolve the host's `localhost` by default and the RN app fails to reach Metro server. To prevent this issue, forward port 8081 (or whichever port Metro is on) from the device back to the host:
 
 ```bash
 adb -s <serial> reverse tcp:8081 tcp:8081
 ```
 
-`<serial>` is the Android `serial` from `list-devices`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+`<serial>` is the Android `serial` from `list-devices`. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial.
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
@@ -65,11 +65,9 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 | Best for | Layout overview; finding tap targets; user-defined component hierarchy | Identifying a visible element and tracing it to its source file |
 | Use when | "What's on screen and where?"                                          | "What component is this and where is it defined?"               |
 
-Both can point to source files, but `inspect-element` is purpose-built for source tracing. `component-tree` is for orientation and tap-target discovery.
-
 ### `includeSkipped` guidance
 
-Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
 
 > **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
 
@@ -115,8 +113,7 @@ When reading from the log file:
 
 - Never `Read` the log file directly. Use `grep` or shell commands with limits using the above file format tips.
 - Default to `-m 50` unless you need more.
-- Use `tail -N` recent entries.
-- `clusters[].message` is a truncated, grouped prefix - grep a short fragment of it, not the whole string.
+- `clusters[].message` gives you the exact text which you may look for
 - Search bracketed text such as `[L:42]` or `[object Object]` with `grep -F`, or escape the brackets (`\[L:42\]`). Unescaped, `[...]` is a character class: `grep '[L:42]'` matches every line in the file.
 
 > **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, the specific patterns you need, and Golden Rule 4's untrusted-data caveat.
