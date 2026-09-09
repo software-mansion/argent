@@ -199,6 +199,8 @@ describe("resolveFileInputs", () => {
       }
     );
 
+    cleanups.push(cleanup);
+
     const materialized = args.b as string;
     expect(await fs.readFile(materialized, "utf8")).toBe("uploaded bytes");
 

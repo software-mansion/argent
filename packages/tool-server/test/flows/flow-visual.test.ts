@@ -91,6 +91,7 @@ const env = {
 } as unknown as ActionEnv;
 
 let tmpDir: string;
+let restoreTmpdir: () => void = () => {};
 
 /** Minimal PNG stand-in: runSnapshot reads only the IHDR width/height bytes. */
 async function writeFakePng(file: string, w = 390, h_ = 844): Promise<void> {
@@ -155,6 +156,13 @@ const baselinePath = () => path.join(tmpDir, "__baselines__", "checkout", "home_
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-visual-"));
+  // runSnapshot mkdtemps its crop and diff scratch dirs under os.tmpdir() and
+  // deliberately leaves whichever file it registered as an artifact in place —
+  // from there the dir belongs to whoever consumes the artifact. Here that is
+  // the test, so os.tmpdir() points inside tmpDir and the sweep below takes it.
+  const osTmpdir = path.join(tmpDir, "os-tmpdir");
+  await fs.mkdir(osTmpdir);
+  restoreTmpdir = redirectTmpdir(osTmpdir);
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
   h.writeContextDiff = false;
@@ -169,6 +177,7 @@ beforeEach(async () => {
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
+  restoreTmpdir();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 

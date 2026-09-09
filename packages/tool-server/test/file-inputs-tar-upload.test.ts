@@ -224,6 +224,8 @@ describe("resolveFileInputs — tar-upload kind", () => {
       (id) => (id === uploadId ? entry : undefined)
     );
 
+    cleanups.push(cleanup);
+
     // tar should already be removed by resolveOne after extraction
     await expect(fs.stat(tarPath)).rejects.toThrow();
     await cleanup();
