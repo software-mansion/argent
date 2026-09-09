@@ -95,10 +95,11 @@ on:
       # The tools `flow-script-env.test.ts` drives, for the same reason as the
       # helpers below: editing one changes what this job asserts without
       # touching any file listed above it. The env cases there record through
-      # all three.
+      # all four - `flow-add-script.ts` is the fifth, already listed above.
       - "packages/tool-server/src/tools/flows/flow-start-recording.ts"
       - "packages/tool-server/src/tools/flows/flow-finish-recording.ts"
       - "packages/tool-server/src/tools/flows/flow-insert-echo.ts"
+      - "packages/tool-server/src/tools/flows/flow-add-step.ts"
       # The barrel `flow-script-environment.test.ts` reads the script bounds and
       # the env-name rule through.
       - "packages/configuration-core/src/index.ts"
