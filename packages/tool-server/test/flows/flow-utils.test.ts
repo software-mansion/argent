@@ -950,6 +950,10 @@ describe("parseFlow", () => {
       parseFlow("steps:\r\n  - script:\r\n      path: seed.mjs\r\n      env:\r\n        TOK: abc\r")
         .steps
     ).toEqual([{ kind: "script", path: "seed.mjs", env: { TOK: "abc" } }]);
+    // The same conversion applied twice ends the file in two.
+    expect(parseFlow("steps:\r\n  - echo: hello\r\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
     // The file that kept its LF was never affected, and still is not.
     expect(parseFlow("steps:\r\n  - echo: hello\r\n").steps).toEqual([
       { kind: "echo", message: "hello" },

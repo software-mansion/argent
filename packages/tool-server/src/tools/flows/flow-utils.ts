@@ -3730,19 +3730,28 @@ function readFlowHead(content: string): YamlFlowFile | undefined {
   // always covered: a file whose first line opens with a TAB, which YAML refuses
   // as indentation and this accepted before.
   //
-  // A lone CR at the very end is taken off FIRST, because it is the half of a
-  // CRLF whose LF a line-ending conversion dropped — the document's own last
-  // break, not a character of the last value. Without that the trailing rule
-  // never fires (it is anchored on a break, and this file has none), and a
-  // CRLF-authored flow that lost its final LF read one character longer than
-  // the author wrote: a block-style `echo` came back `"hello\r"` and a `TOK:`
-  // value `"abc\r"`, while the flow-style spelling of the same file stopped
-  // parsing at all — "Unexpected scalar at node end". No value can end a file
-  // with a raw CR: YAML reads one as a break, and the serializer writes a CR
-  // inside a value as the two characters `\r`.
+  // A trailing CR is taken off FIRST, because it is the half of a CRLF whose LF
+  // a line-ending conversion dropped — the document's own last break, not a
+  // character of the last value. Without that the trailing rule never fires (it
+  // is anchored on a break, and this file has none), and a CRLF-authored flow
+  // that lost its final LF read one character longer than the author wrote: a
+  // block-style `echo` came back `"hello\r"` and a `TOK:` value `"abc\r"`,
+  // while the flow-style spelling of the same file stopped parsing at all —
+  // "Unexpected scalar at node end".
+  //
+  // No file argent WRITES can end in a raw CR, which is what makes this safe:
+  // `serializeFlow` escapes a CR inside a value as the two characters `\r` and
+  // ends the document with a newline. The parser itself is no help here — it
+  // keeps a raw CR as ordinary content, so it cannot tell the two apart — which
+  // leaves one shape this costs: a HAND-authored plain scalar that is the
+  // file's last value and really does end in a literal CR. That character is a
+  // line ending far more often than it is a value, and the shape it comes from
+  // is a half-applied conversion.
+  //
+  // `+`, because the same conversion applied twice ends a file in two.
   const body = content
     .replace(/^\s+/, "")
-    .replace(/\r$/, "")
+    .replace(/\r+$/, "")
     .replace(/\n\s+$/, "\n");
   if (body.length === 0) return undefined;
 
