@@ -11,7 +11,7 @@ import {
   offscreenHint,
   type ActionEnv,
 } from "./flow-actions";
-import { describeSelector, type FlowSelector } from "./flow-utils";
+import { describeSelector, SELECTOR_RELATIONS, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -57,18 +57,31 @@ async function pngDimensions(file: string): Promise<{ w: number; h: number }> {
 }
 
 /**
- * Crop identity for a selector's own fields, in fixed order: the key is immune
- * to YAML key order, and to describeSelector's format (owned by failure prose).
- * `loose` counts — it changes resolution (identifier-first fallback).
+ * Crop identity for a selector, in fixed order: the key is immune to YAML key
+ * order, and to describeSelector's format (owned by failure prose). `loose`
+ * counts — it changes resolution (identifier-first fallback). A scoped
+ * selector appends `any` and its whole relation tree, so two crops differing
+ * only by `within`/`after`/`next` select different elements and key apart; a
+ * relation-free selector keeps the flat five-field tuple, so baselines
+ * committed for unscoped crops keep their filenames.
  */
-function cropIdentity(s: FlowSelector): string {
-  return JSON.stringify([
+function cropIdentityParts(s: FlowSelector): unknown[] {
+  const own = [
     s.text ?? null,
     s.textMatches ?? null,
     s.identifier ?? null,
     s.role ?? null,
     s.loose ?? false,
-  ]);
+  ];
+  const scopes = SELECTOR_RELATIONS.map((relation) => {
+    const nested = s[relation];
+    return nested === undefined ? null : cropIdentityParts(nested);
+  });
+  return scopes.every((scope) => scope === null) ? own : [...own, s.any ?? false, ...scopes];
+}
+
+function cropIdentity(s: FlowSelector): string {
+  return JSON.stringify(cropIdentityParts(s));
 }
 
 function baselineDir(flowsDir: string, flowName: string): string {
@@ -208,8 +221,8 @@ export async function runSnapshot(
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
   // cropped dimensions — a function of layout — would destroy. A cropOn key
-  // additionally hashes the selector's own fields, so same-name snapshots
-  // cropping different elements do not share a baseline file.
+  // additionally hashes the selector, so same-name snapshots cropping
+  // different elements do not share a baseline file.
   const { w, h } = await pngDimensions(shot.image.hostPath);
   const cropSuffix =
     opts.cropOn === undefined
