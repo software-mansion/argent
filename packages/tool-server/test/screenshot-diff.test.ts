@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { diffPngFiles, type Rgb } from "../src/tools/screenshot-diff/screenshot-diff";
 
 const analyzeScreenshotTextChangesMock = vi.hoisted(() =>
@@ -430,6 +431,39 @@ describe("diffPngFiles", () => {
     await expect(fs.stat(result.diffPath!)).resolves.toMatchObject({ size: expect.any(Number) });
     await expect(fs.stat(result.contextDiffPath!)).resolves.toMatchObject({
       size: expect.any(Number),
+    });
+  });
+
+  it.each([
+    [
+      "non-PNG bytes under a .png name",
+      async (bad: string) => fs.writeFile(bad, Buffer.from("\xff\xd8\xff\xe0JFIF", "binary")),
+    ],
+    [
+      "a truncated PNG",
+      async (bad: string, valid: string) =>
+        fs.writeFile(bad, (await fs.readFile(valid)).subarray(0, 40)),
+    ],
+    ["a directory", async (bad: string) => fs.mkdir(bad)],
+  ])("classifies %s and names the side that could not be decoded", async (_label, writeBad) => {
+    const dir = await makeTempDir();
+    const currentPath = path.join(dir, "current.png");
+    const baselinePath = path.join(dir, "bad.png");
+    await writePng(currentPath, 4, 4, { r: 0, g: 0, b: 0 });
+    await writeBad(baselinePath, currentPath);
+
+    const error = await diffPngFiles({ baselinePath, currentPath, outputDir: dir }).then(
+      () => undefined,
+      (err: unknown) => err
+    );
+
+    expect(error).toBeInstanceOf(FailureError);
+    expect((error as Error).message).toContain(baselinePath);
+    expect(getFailureSignal(error)).toEqual({
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_decode_failed",
+      failure_area: "tool_server",
+      error_kind: "validation",
     });
   });
 
