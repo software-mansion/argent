@@ -29,7 +29,7 @@ const zodSchema = z.object({
     .string()
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .describe(
-      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). Chromium: arbitrary tag; the call is a no-op since the renderer is already running."
+      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). Chromium: any tag matching the same alphabet (letters, digits, '.', '_' and '-'); the call is a no-op since the renderer is already running."
     ),
   activity: z
     .string()
