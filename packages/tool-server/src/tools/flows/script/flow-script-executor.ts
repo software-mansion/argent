@@ -1072,50 +1072,123 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return failed("output", "The script's output was not an object.");
   }
-  const polluted = findOwnProtoKey(parsed as Record<string, unknown>);
-  if (polluted !== undefined) {
-    return failed(
-      "output",
-      `${polluted} has an own "__proto__" key; output must be JSON-compatible data.`
-    );
-  }
+  const problem = documentProblem(parsed as Record<string, unknown>);
+  if (problem !== undefined) return failed("output", problem);
   return { ok: true, output: parsed as Record<string, unknown> };
 }
 
 /**
- * The runner refuses this before it encodes, and the parent re-checks for the
- * same reason it re-checks the size and the failure-text ceilings: the loader
- * resolves whichever `.mjs` sits beside the compiled executor, so a stale or
- * mismatched runner copy reaches this path. `JSON.parse` makes `__proto__` an
- * own key, and committing one hands whatever merges the document into flow
- * state a prototype to write rather than a property.
+ * How deep a document may nest. The size cap does not bound this: nested arrays
+ * cost two bytes a level, so a document inside the 1 MiB ceiling reaches half a
+ * million of them.
+ *
+ * The value sits in the gap between two stack-derived ceilings, measured on
+ * Node 20, 22, 24 and 26 (`{"a":` repeated, binary search):
+ *
+ * - the runner's own `walk` is recursive, so a `.mjs` document deeper than
+ *   ~3450-3925 never reaches this file at all — `encodeOutput`'s try/catch
+ *   reports it. Above that ceiling, so a `.mjs` step is refused nothing it
+ *   used to return.
+ * - `JSON.stringify` is recursive in V8 up to Node 24 and throws `RangeError`
+ *   at ~6100. Below that ceiling, because `renderOutput` in
+ *   `flow-add-script.ts` is a bare `JSON.stringify` reached AFTER the step has
+ *   been appended to the flow file.
+ *
+ * A number rather than a try/catch around a trial encode, because a trial
+ * encode answers differently per host — Node 26 encodes any depth a 1 MiB
+ * document can reach — and a verdict that follows the host's Node rather than
+ * the document is one a flow file cannot be written against.
+ */
+const MAX_OUTPUT_DEPTH = 4096;
+
+/** Enough of a path to place a value. A 4096-deep one is its own repetition. */
+const MAX_PROBLEM_PATH_CHARS = 80;
+
+function clampPath(at: string): string {
+  return at.length <= MAX_PROBLEM_PATH_CHARS ? at : `${at.slice(0, MAX_PROBLEM_PATH_CHARS)}…`;
+}
+
+/**
+ * Every rule the parent applies to a document it did not encode itself, or
+ * `undefined` for one it accepts.
+ *
+ * The `__proto__` rule is a re-check: the runner refuses it before it encodes,
+ * and the parent asks again for the same reason it re-checks the size and the
+ * failure-text ceilings — the loader resolves whichever `.mjs` sits beside the
+ * compiled executor, so a stale or mismatched runner copy reaches this path.
+ * `JSON.parse` makes `__proto__` an own key, and committing one hands whatever
+ * merges the document into flow state a prototype to write rather than a
+ * property.
+ *
+ * The other two rules are this side's alone. A `.sh` document is JSON *text*,
+ * so it never meets the runner's `walk`, and the two things `walk` refuses
+ * arrived here unchecked:
+ *
+ * - A number JSON can spell but JavaScript cannot hold. `1e999` parses to
+ *   `Infinity`, and the step passed carrying a value that every later encode
+ *   turns into `null` — `{"n":1e999}` reached the report as `{"n":null}`, while
+ *   the same `.mjs` document was refused with "output numbers must be finite".
+ * - {@link MAX_OUTPUT_DEPTH}. `renderOutput` in `flow-add-script.ts` is a bare
+ *   `JSON.stringify`, reached AFTER the step has been appended to the flow
+ *   file, so an over-deep document made the recorder write the step and then
+ *   die with an uncaught `RangeError` on every Node up to 24 — telling the
+ *   agent the tool failed for a script that succeeded.
  *
  * Iterative for the reason `scrubDocument` is: the document came from a child
  * that ran arbitrary code, and a deep one would overflow the stack inside a
  * call that owes its caller a verdict, not a throw.
  */
-function findOwnProtoKey(root: Record<string, unknown>): string | undefined {
-  const pending: Array<{ node: unknown; at: string }> = [{ node: root, at: "output" }];
+function documentProblem(root: Record<string, unknown>): string | undefined {
+  const pending: Array<{ node: unknown; at: string; depth: number }> = [
+    { node: root, at: "output", depth: 1 },
+  ];
   while (pending.length > 0) {
-    const { node, at } = pending.pop()!;
+    const { node, at, depth } = pending.pop()!;
+    if (depth > MAX_OUTPUT_DEPTH) {
+      return (
+        `${clampPath(at)} nests deeper than ${MAX_OUTPUT_DEPTH} levels; output must be a ` +
+        "document a later step can read back."
+      );
+    }
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
-        const value = node[i];
-        if (value !== null && typeof value === "object") {
-          pending.push({ node: value, at: `${at}[${i}]` });
-        }
+        const problem = childProblem(node[i], `${at}[${i}]`, depth, pending);
+        if (problem !== undefined) return problem;
       }
       continue;
     }
     if (node === null || typeof node !== "object") continue;
     const record = node as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      if (key === "__proto__") return at;
-      const value = record[key];
-      if (value !== null && typeof value === "object") {
-        pending.push({ node: value, at: `${at}${memberPath(key)}` });
+      if (key === "__proto__") {
+        return `${at} has an own "__proto__" key; output must be JSON-compatible data.`;
       }
+      const problem = childProblem(record[key], `${at}${memberPath(key)}`, depth, pending);
+      if (problem !== undefined) return problem;
     }
+  }
+  return undefined;
+}
+
+/**
+ * One value under a node: refused here, queued for the walk, or neither. The
+ * wording for a number follows the runner's own, so the two interpreters answer
+ * the same document with the same sentence.
+ */
+function childProblem(
+  value: unknown,
+  at: string,
+  depth: number,
+  pending: Array<{ node: unknown; at: string; depth: number }>
+): string | undefined {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    // The runner's own `describeValue` spelling. JSON has no `NaN` literal, so
+    // only the two infinities reach here through `JSON.parse`.
+    const spelled = Number.isNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity";
+    return `${clampPath(at)} is ${spelled}; output numbers must be finite.`;
+  }
+  if (value !== null && typeof value === "object") {
+    pending.push({ node: value, at, depth: depth + 1 });
   }
   return undefined;
 }

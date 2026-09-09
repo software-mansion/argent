@@ -349,6 +349,61 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("__proto__");
   }, 30_000);
 
+  // JSON spells a number JavaScript cannot hold, and `1e999` parses to
+  // `Infinity`. A `.sh` document never meets the runner's `walk`, which is what
+  // refuses this from a `.mjs`, so the step passed carrying a value that every
+  // later encode turns into `null`: `JSON.stringify(output)` was
+  // `{"n":null,"neg":null}`.
+  it("refuses a number JSON can spell and JavaScript cannot hold", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "infinite",
+      `printf '%s' '{"n":1e999,"neg":-1e999}' > "$ARGENT_OUTPUT.n"
+     mv "$ARGENT_OUTPUT.n" "$ARGENT_OUTPUT"`
+    );
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("output.n is Infinity");
+    expect(result.failure?.message).toContain("must be finite");
+  }, 30_000);
+
+  // The size cap does not bound depth - nested arrays cost two bytes a level -
+  // and the consumer is unguarded: `renderOutput` in `flow-add-script.ts` is a
+  // bare `JSON.stringify` reached AFTER the step has been written to the flow
+  // file, and V8's encoder is recursive up to Node 24. So the recorder wrote
+  // the step and then died with an uncaught `RangeError` for a script that
+  // succeeded.
+  it("refuses a document nested past the depth a later step can encode", async () => {
+    const ws = workspace();
+    const deep = ws.write("deep.json", `${'{"a":'.repeat(5_000)}1${"}".repeat(5_000)}`);
+    const result = await runBash(
+      ws,
+      "deep",
+      `cp ${JSON.stringify(deep)} "$ARGENT_OUTPUT.n"
+     mv "$ARGENT_OUTPUT.n" "$ARGENT_OUTPUT"`
+    );
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("nests deeper than");
+    // The path is 5000 identical segments, and the message is not that.
+    expect(result.failure!.message.length).toBeLessThan(200);
+  }, 30_000);
+
+  // The bound sits above the ceiling the runner's own recursive `walk` has
+  // (~3450-3925 across Node 20 to 26), so it refuses nothing a `.mjs` step
+  // returns and nothing an author writes.
+  it("takes a document nested deeply enough for any author", async () => {
+    const ws = workspace();
+    const deep = ws.write("ok.json", `${'{"a":'.repeat(3_000)}1${"}".repeat(3_000)}`);
+    const result = await runBash(
+      ws,
+      "deep-ok",
+      `cp ${JSON.stringify(deep)} "$ARGENT_OUTPUT.n"
+     mv "$ARGENT_OUTPUT.n" "$ARGENT_OUTPUT"`
+    );
+    expect(result.failure).toBeUndefined();
+    expect(result.ok).toBe(true);
+  }, 30_000);
+
   // `toString("utf8")` substitutes U+FFFD for an invalid byte sequence, and
   // nothing downstream re-validates: the size, `JSON.parse`, object-ness and an
   // own `__proto__` all pass a substituted character, so the bytes the script

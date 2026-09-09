@@ -446,15 +446,22 @@ describe("flow script executor — the runner's reporting path survives the scri
   });
 });
 
+function nestedDocument(depth: number, leaf: string): string {
+  let json = JSON.stringify(leaf);
+  for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+  return json;
+}
+
 describe("flow script executor — redacting a document from a runner", () => {
+  // Deeper than a recursive walk survives - the runner's own `walk` gives out
+  // between about 3450 and 3925 across Node 20 to 26 - and inside the depth the
+  // parent admits, so the scrub is what has to hold here.
   it("scrubs a document too deep for a recursive walk", async () => {
-    const depth = 20_000;
-    let json = JSON.stringify("token sk-live-9d3f0a1b2c3d4e5f");
-    for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+    const depth = 4_000;
     const result = await withFakeRunner(
       `process.on("message", () => {
          process.send({ type: "started" });
-         process.send({ type: "result", outputJson: ${JSON.stringify(json)} }, () => process.exit(0));
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(depth, "token sk-live-9d3f0a1b2c3d4e5f"))} }, () => process.exit(0));
        });`,
       { secrets: [{ name: "TOKEN", value: "sk-live-9d3f0a1b2c3d4e5f" }] }
     );
@@ -463,6 +470,21 @@ describe("flow script executor — redacting a document from a runner", () => {
     let node: unknown = result.output;
     for (let i = 0; i < depth; i++) node = (node as Record<string, unknown>).nested;
     expect(node).toBe("token {{secret:TOKEN}}");
+  }, 30_000);
+
+  // Past the bound the parent applies. A verdict, because that is what `execute`
+  // owes its caller: nothing on this path may throw, however deep the document a
+  // mismatched or hostile runner sends.
+  it("answers a document past the depth bound with a verdict, not a throw", async () => {
+    const result = await withFakeRunner(
+      `process.on("message", () => {
+         process.send({ type: "started" });
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(20_000, "deep"))} }, () => process.exit(0));
+       });`
+    );
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("nests deeper than");
   }, 30_000);
 });
 
