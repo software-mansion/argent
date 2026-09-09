@@ -84,6 +84,36 @@ async function withGlobalBash<T>(value: string, body: () => Promise<T>): Promise
   }
 }
 
+/**
+ * A home holding an empty configuration, and `dir` first on the tool server's
+ * own PATH — the two things the bash SEARCH path needs to be the one taken. A
+ * developer who pinned a bash globally would otherwise never reach it, and the
+ * search reads `process.env.PATH` through `commandOnPath` rather than the
+ * step's environment.
+ */
+async function withSearchPath<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-search-"));
+  const real = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    PATH: process.env.PATH,
+  };
+  fs.mkdirSync(path.join(home, ".argent"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".argent", "config.json"), "{}");
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.PATH = `${dir}${path.delimiter}${real.PATH ?? ""}`;
+  try {
+    return await body();
+  } finally {
+    for (const [name, previous] of Object.entries(real)) {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 const strays: number[] = [];
 
 afterEach(() => {
@@ -1180,6 +1210,57 @@ describe("the runner's own channels in bash mode", () => {
     );
     expect(result.failure?.kind).toBe("exit");
     expect(result.failure?.message).toContain("code 9");
+  }, 30_000);
+});
+
+describe("finding the interpreter", () => {
+  // The lookup sits between the step's `startedAt` and the timer `runChild`
+  // arms, so its time is inside `durationMs` and outside `timeoutMs`, and
+  // `queuedMs` does not carry it either: a step declared at 500 ms took 3.3
+  // seconds behind a candidate slow only for the version probe, with `notes`
+  // empty. The reference names the queue as the one source of an over-run and
+  // requires the step to report it; this is the second source.
+  onPosix(
+    "says how long finding bash took when it outlasts the step's own limit",
+    async () => {
+      const ws = workspace();
+      const bin = ws.resolve("slowbin");
+      fs.mkdirSync(bin, { recursive: true });
+      const slow = path.join(bin, "bash");
+      fs.writeFileSync(
+        slow,
+        `#!/bin/sh\ncase "$*" in *argent-bash-version*) sleep 2 ;; esac\nexec ${hostBash} "$@"\n`
+      );
+      fs.chmodSync(slow, 0o755);
+      const script = ws.write("quick.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+
+      const result = await withSearchPath(bin, () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          timeoutMs: 500,
+        })
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.notes.join(" ")).toContain("Finding the bash for this step took");
+      expect(result.notes.join(" ")).toContain("outside the step's own 500 ms limit");
+      expect(result.durationMs).toBeGreaterThan(1_500);
+    },
+    30_000
+  );
+
+  // And nothing to say on a host where the first candidate answers at once,
+  // which is every ordinary one.
+  it("says nothing about the lookup when bash answers at once", async () => {
+    const ws = workspace();
+    const result = await runBash(ws, "quiet", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`, {
+      timeoutMs: 5_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.notes.join(" ")).not.toContain("Finding the bash");
   }, 30_000);
 });
 

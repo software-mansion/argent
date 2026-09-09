@@ -606,7 +606,9 @@ export class FlowScriptExecutor {
       // to the probe's own timeout plus its force grace, the step's declared
       // limit bounds none of it, and a flow of N bash steps was un-cancellable
       // for about six seconds each.
+      const lookupStartedAt = Date.now();
       const found = await resolveBashInterpreter(env, request.signal);
+      noteInterpreterLookup(Date.now() - lookupStartedAt, timeoutMs, notes);
       if ("cancelled" in found) {
         return emptyResult(
           { kind: "cancelled", message: "The run was cancelled before the script started." },
@@ -1669,6 +1671,35 @@ function describeEnvNameProblem(name: string): string | null {
   if (name.includes("\0")) return "contains a NUL character";
   return null;
 }
+
+/**
+ * What the bash lookup cost, when it cost enough to explain a step that ran
+ * longer than its own `timeout`.
+ *
+ * The lookup sits between `startedAt` and the timer `runChild` arms, so its
+ * time is inside `durationMs` and outside `timeoutMs`, and the queue's
+ * `queuedMs` does not carry it either — a step declared at 500 ms took 3.3
+ * seconds behind a slow candidate, and 6.1 behind one that ignores SIGTERM,
+ * with nothing anywhere saying why. `flow-yaml.mdx` names the queue as the one
+ * source of an over-run and requires the step to report it; this is the second
+ * source, and a `.mjs` step has no equivalent — everything between those two
+ * points there is a `statSync` and a `JSON.stringify`.
+ *
+ * Reported against the step's own limit rather than at a fixed number of
+ * milliseconds, so an ordinary lookup on an ordinary host stays silent and one
+ * that is worth a sentence beside a short `timeout` gets one.
+ */
+function noteInterpreterLookup(lookupMs: number, timeoutMs: number, notes: string[]): void {
+  if (lookupMs < Math.max(INTERPRETER_LOOKUP_NOTE_FLOOR_MS, timeoutMs / 2)) return;
+  notes.push(
+    `Finding the bash for this step took ${lookupMs} ms, which is outside the step's own ` +
+      `${timeoutMs} ms limit: each candidate is run once and asked for its version. Set ` +
+      `scripts.bash to the bash you want, and the search stops at it.`
+  );
+}
+
+/** Below this the lookup is not worth a sentence, however short the `timeout`. */
+const INTERPRETER_LOOKUP_NOTE_FLOOR_MS = 250;
 
 function clampTimeout(
   requested: number | undefined,

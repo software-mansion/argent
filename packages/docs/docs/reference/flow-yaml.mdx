@@ -314,7 +314,9 @@ The split holds only when the `timeout` is generous. Argent needs about a second
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+`timeout` bounds the run of the script, not the duration of the step. Two waits sit outside it, and the step reports each one. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+
+A `.sh` step also finds bash before its limit starts. Argent runs each candidate once and asks it for its version, so a slow or hanging candidate costs seconds per candidate. Set `scripts.bash` and the search stops at it.
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the Node process. The heap limit does not apply to a bash script. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
