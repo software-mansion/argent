@@ -8,6 +8,12 @@ on:
     branches:
       - main
 
+# Supersede a PR's in-flight run rather than let it hold a runner for a verdict
+# nobody wants. A push to main keeps its run: that is the commit's only record.
+concurrency:
+  group: knip-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   knip:
     name: Knip
@@ -22,6 +28,7 @@ jobs:
         with:
           # Matches what lint, lockfile and repo-hygiene pin.
           node-version: "24"
+          cache: npm
 
       # Knip reads manifests and source only, so install scripts are pure cost
       # here — and skipping them keeps the job immune to a bump that ships no
