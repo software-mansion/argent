@@ -127,5 +127,5 @@ Steps:
 | `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                  |
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                 |
+| `argent-metro-debugger`            | Console logs, JS evaluation, component inspection        |
 | `argent-create-flow`               | Record a test sequence as a replayable flow              |
