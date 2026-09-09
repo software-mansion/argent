@@ -341,6 +341,44 @@ describe("flow script executor — redaction of a bash step", () => {
     },
     30_000
   );
+
+  // `printf %q` is bash's own quoter and the idiomatic way for a `.sh` step to
+  // report the argument it sent. It backslashes a SPACE, and no spelling in the
+  // list rewrites one: the JSON, single-quoted and backtick bodies all leave a
+  // space alone, and the URI encoders write `%20` or `+`. So `sk live …`
+  // arrived as `sk\ live\ …` and the whole-value scrub matched nothing.
+  // `repairBackslashEscapes` is the only pass that answers it, and the `.mjs`
+  // case that names an escaper holds quotes and a backslash — which the
+  // backtick spelling already covers, so it passes with that repair removed.
+  it("replaces a value bash's own printf %q backslashed", async () => {
+    const spaced: FlowScriptSecret = { name: "SPACED", value: "sk live 9d3f0a1bcdef" };
+    const ws = workspace();
+    const script = ws.write(
+      "quoted-reason.sh",
+      `printf %q "$SPACED" > "$ARGENT_REASON"
+       exit 1`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { SPACED: spaced.value },
+      secrets: [spaced],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(message).toContain("{{secret:SPACED}}");
+    // Raw and in the spelling the quoter wrote: the escaping is one `sed` away
+    // from reversed, so leaving it is disclosure rather than obfuscation.
+    for (let n = spaced.value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= spaced.value.length; at += 1) {
+        const part = spaced.value.slice(at, at + n);
+        expect(message).not.toContain(part);
+        expect(message).not.toContain(part.replace(/ /g, "\\ "));
+      }
+    }
+  }, 30_000);
 });
 
 describe("flow script executor — the heap verdict", () => {
