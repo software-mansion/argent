@@ -501,6 +501,25 @@ describe("serialization", () => {
     expect(round.steps[0]).toEqual({ kind: "script", path: "seed.mjs", env: {} });
   });
 
+  it("keeps a top-level `env: {}` through the round trip", () => {
+    // The case above holds an empty map on the STEP; the FILE's own `env` there
+    // is non-empty, so the file-level spread had no case of its own and the two
+    // halves of one round-trip rule were covered asymmetrically. `parseFlow`
+    // sets `env` from the KEY's presence, not from its size — so a serializer
+    // that emitted the header only for a non-empty map would delete an
+    // `env: {}` an author wrote, on the next recorder append, with nothing said.
+    const parsed = parseFlow("env: {}\nsteps:\n  - echo: hi\n");
+    expect(parsed.env).toEqual({});
+
+    const text = serializeFlow(parsed);
+    expect(text).toContain("env: {}");
+    expect(parseFlow(text)).toEqual(parsed);
+
+    // The same header written the other way — a bare `env:` — lands on the same
+    // map and the same serialized form.
+    expect(serializeFlow(parseFlow("env:\nsteps:\n  - echo: hi\n"))).toBe(text);
+  });
+
   // A minimized real failure: the emitter FOLDS a long double-quoted scalar,
   // and a fold placed between an escaped space and an escaped newline eats the
   // space — `…aaa  a \n…` came back `…aaa  a\n…`, one character shorter than
