@@ -490,13 +490,19 @@ function bashOutcome(request, code, signal) {
     // and the group is the step's own: nothing outside it knows the number.
     // That is the script's answer, not something the host did to it, so it is
     // an `exit` — the kind that reads "it stopped its own process".
+    //
+    // The document is not read on this path, so the message says what the STEP
+    // does rather than what the file holds: a script that finished its write
+    // before the signal arrived left a complete document, and telling its
+    // author it was never written sends them to the wrong line.
     if (heldSignals.has(signal)) {
       return {
         type: "failure",
         failureType: "exit",
         message:
           `The step's process group was sent ${signal}, which killed bash before it exited ` +
-          `(bash: ${request.interpreterPath}), so the step returned no output document. ` +
+          `(bash: ${request.interpreterPath}), so the step fails on the signal and reports no ` +
+          "document — whatever the script had written to $ARGENT_OUTPUT before it. " +
           "`kill 0` reaches bash itself, not only the background jobs it is usually written " +
           "for: signal each job's own pid instead.",
       };
