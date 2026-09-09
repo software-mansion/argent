@@ -257,7 +257,6 @@ export function serializeCpuSampleIndex(index: CpuSampleIndex): SerializedCpuSam
   };
 }
 
-/** One of the three parallel sample arrays, checked down to the element. */
 function isSampleArray(value: unknown, sampleCount: number): value is number[] {
   return (
     Array.isArray(value) &&
@@ -267,10 +266,9 @@ function isSampleArray(value: unknown, sampleCount: number): value is number[] {
 }
 
 export function deserializeCpuSampleIndex(raw: SerializedCpuSampleIndex): CpuSampleIndex {
-  // Validate rather than coerce. The three sample arrays are read at the same index
-  // and nothing downstream fails loudly: a missing or short one reads `undefined`
-  // and a non-numeric element reads NaN, which reach the user as NaN in every
-  // column, or as a confident "all of them were idle" (#950).
+  // The three sample arrays are read at the same index, and a bad one reaches the
+  // user as an answer rather than an error: `undefined` from a short array turns
+  // every column NaN, a string node id turns every sample "idle" (#950).
   const sampleCount = Array.isArray(raw?.timestampsMs) ? raw.timestampsMs.length : -1;
   if (
     raw?.version !== 2 ||
