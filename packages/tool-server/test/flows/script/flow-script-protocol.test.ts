@@ -455,7 +455,7 @@ function nestedDocument(depth: number, leaf: string): string {
 
 describe("flow script executor — a document from a runner", () => {
   // The document came from a child that ran arbitrary code, so the parent's own
-  // walk over it — `findOwnProtoKey`, the last check before the document is
+  // walk over it — `documentProblem`, the last check before the document is
   // committed — must be iterative: a megabyte of `{"nested":` is legal JSON,
   // and a recursive walk would overflow the stack inside a call that owes its
   // caller a verdict rather than a throw.
@@ -464,9 +464,11 @@ describe("flow script executor — a document from a runner", () => {
   // script's answer, read by later steps for the value it holds, and the only
   // redaction a step gets is over its failure text.
   //
-  // The depth here is deeper than a recursive walk survives - the runner's own
-  // `walk` gives out between about 3450 and 3925 across Node 20 to 26 - and
-  // inside the depth the parent admits, so the scrub is what has to hold.
+  // The depth sits between two ceilings, which is what makes this case about
+  // the parent's walk and nothing else: past the ~3450-3925 where the runner's
+  // own recursive `walk` gives out across Node 20 to 26, so a document this
+  // deep can only have arrived as JSON text, and inside `MAX_OUTPUT_DEPTH`, so
+  // the parent still admits it. The case past that bound is the one below.
   it("commits a document too deep for a recursive walk, as the script wrote it", async () => {
     const depth = 4_000;
     const result = await withFakeRunner(
