@@ -233,28 +233,40 @@ describe("serialized index", () => {
     expect(() => deserializeCpuSampleIndex({ version: 2 } as never)).toThrow(/unsupported/i);
   });
 
-  it("rejects an index whose sample arrays disagree in length", () => {
-    // A v2 file missing `intervalStartsMs` reads `undefined` per interval start,
-    // and `Math.max(startMs, undefined)` turns selfMs, totalMs and coverage into
-    // NaN for every window instead of failing.
-    const partial = {
-      version: 2,
-      timestampsMs: [1, 2, 3],
-      intervalStartsMs: [0, 1, 2],
-      sampleNodeIds: [2, 2, 2],
-      nodes: NODES,
-      durationMs: 3,
-    };
+  // A sample array that is absent, short, or holds a non-number reaches the user as
+  // a plausible answer, never as an error: interval starts turn selfMs, totalMs and
+  // coverage into NaN in every column, node ids turn samples into "idle" — which
+  // `profiler-cpu-query` reports as "the JS thread was not executing" (#950).
+  const VALID_INDEX = {
+    version: 2,
+    timestampsMs: [1, 2, 3],
+    intervalStartsMs: [0, 1, 2],
+    sampleNodeIds: [2, 2, 2],
+    nodes: NODES,
+    durationMs: 3,
+  };
 
-    for (const broken of [
-      { ...partial, intervalStartsMs: undefined },
-      { ...partial, intervalStartsMs: [0, 1] },
-      { ...partial, sampleNodeIds: undefined },
-      { ...partial, sampleNodeIds: [2] },
-    ]) {
-      expect(() => deserializeCpuSampleIndex(broken as never)).toThrow(/unsupported/i);
-    }
+  it.each([
+    ["intervalStartsMs absent", { intervalStartsMs: undefined }],
+    ["intervalStartsMs short", { intervalStartsMs: [0, 1] }],
+    ["sampleNodeIds absent", { sampleNodeIds: undefined }],
+    ["sampleNodeIds short", { sampleNodeIds: [2] }],
+    // JSON has no NaN literal — `JSON.stringify` writes a non-finite float out as
+    // `null`, which `new Float64Array` reads back as a silent 0.
+    ["intervalStartsMs holds null", { intervalStartsMs: [0, null, 2] }],
+    ["timestampsMs holds NaN", { timestampsMs: [1, NaN, 3] }],
+    ["timestampsMs holds strings", { timestampsMs: ["1", "2", "3"] }],
+    ["sampleNodeIds hold strings", { sampleNodeIds: ["2", "2", "2"] }],
+    ["intervalStartsMs holds objects", { intervalStartsMs: [{}, {}, {}] }],
+    ["nodes are absent", { nodes: undefined }],
+    ["version predates the interval-start clock fix", { version: 1 }],
+  ])("rejects an index whose %s", (_label, override) => {
+    expect(() => deserializeCpuSampleIndex({ ...VALID_INDEX, ...override } as never)).toThrow(
+      /unsupported/i
+    );
+  });
 
-    expect(() => deserializeCpuSampleIndex(partial as never)).not.toThrow();
+  it("accepts an index whose three sample arrays agree", () => {
+    expect(() => deserializeCpuSampleIndex(VALID_INDEX as never)).not.toThrow();
   });
 });

@@ -257,20 +257,27 @@ export function serializeCpuSampleIndex(index: CpuSampleIndex): SerializedCpuSam
   };
 }
 
+/** One of the three parallel sample arrays, checked down to the element. */
+function isSampleArray(value: unknown, sampleCount: number): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === sampleCount &&
+    value.every((entry) => Number.isFinite(entry))
+  );
+}
+
 export function deserializeCpuSampleIndex(raw: SerializedCpuSampleIndex): CpuSampleIndex {
-  // Validate rather than coerce: `new Float64Array(undefined)` is zero-length, so a
-  // truncated or stale index would deserialize into a profile with no samples and
-  // answer every query with "no hotspots". The three sample arrays are read in
-  // lockstep, so a short one yields `undefined` per sample: NaN in every figure
-  // from interval starts, "all idle" from node ids.
+  // Validate rather than coerce. The three sample arrays are read at the same index
+  // and nothing downstream fails loudly: a missing or short one reads `undefined`
+  // and a non-numeric element reads NaN, which reach the user as NaN in every
+  // column, or as a confident "all of them were idle" (#950).
+  const sampleCount = Array.isArray(raw?.timestampsMs) ? raw.timestampsMs.length : -1;
   if (
     raw?.version !== 2 ||
-    !Array.isArray(raw.timestampsMs) ||
     !Array.isArray(raw.nodes) ||
-    !Array.isArray(raw.intervalStartsMs) ||
-    !Array.isArray(raw.sampleNodeIds) ||
-    raw.intervalStartsMs.length !== raw.timestampsMs.length ||
-    raw.sampleNodeIds.length !== raw.timestampsMs.length
+    !isSampleArray(raw.timestampsMs, sampleCount) ||
+    !isSampleArray(raw.intervalStartsMs, sampleCount) ||
+    !isSampleArray(raw.sampleNodeIds, sampleCount)
   ) {
     throw new Error("unsupported CPU sample index format");
   }
