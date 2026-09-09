@@ -191,7 +191,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       'hidden "] outer Touchable"',
       'id=total contains "Total"',
       '"Nested touchables" (up)',
-      "into id=email",
+      'into id=email ← "a@b.c"',
       '"home"',
     ]);
   });

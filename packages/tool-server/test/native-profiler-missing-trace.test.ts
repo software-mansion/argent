@@ -86,8 +86,11 @@ describe("native-profiler-analyze: missing trace file", () => {
       // The warning should mention the CPU category and reference the file.
       expect(result.report).toMatch(/-\s*\*\*cpu\*\*:[^\n]*missing_cpu\.xml/i);
       // Word it so the user understands the file is missing/unreadable, not
-      // that the export was simply empty.
-      expect(result.report).toMatch(/missing|not found|unreadable/i);
+      // that the export was simply empty. The wording has to land before the
+      // backticked path (`[^`\n]*` cannot cross into it): the path carries
+      // "missing" in the fixture's own name, so a match allowed to reach it
+      // holds for any wording at all.
+      expect(result.report).toMatch(/-\s*\*\*cpu\*\*:[^`\n]*(?:missing|not found|unreadable)/i);
     } finally {
       if (dir) await rm(dir, { recursive: true, force: true });
     }

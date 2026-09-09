@@ -7,7 +7,9 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
+import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
+import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
 import {
@@ -192,13 +194,61 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       await proxyStart(deviceId, port);
     }
 
-    const metro = await discoverMetro(port);
+    /**
+     * Mechanism gate for provider-supplied devices. Every tool that speaks CDP
+     * to the app's JS runtime (the debugger family, the React profiler and the
+     * network inspector via its declared dependency on this service) resolves
+     * this blueprint, so one check here covers them all. A no-op for every
+     * device Argent booted itself.
+     */
+    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, deviceId, "js-debugger");
+
+    const metro = await discoverMetro(port).catch((error: unknown) => {
+      /**
+       * An explicit `port` outranks the one a provider publishes, so a caller
+       * that passed `8081` out of habit lands here with no way to guess why.
+       */
+      const published = publishedMetroPort(deviceId, port);
+
+      if (published !== undefined && error instanceof FailureError) {
+        error.message +=
+          ` The provider offering this device publishes Metro on port ${published} — ` +
+          `omit the 'port' parameter to use it.`;
+      }
+
+      throw error;
+    });
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
     });
 
-    const cdp = new CDPClient(selected.webSocketUrl);
+    /**
+     * React Native's inspector-proxy keeps one debugger per device and
+     * terminates the incumbent to admit a new one. Connecting to Metro's
+     * target would therefore evict a provider already debugging this runtime,
+     * and the two would reconnect in a loop. A provider avoids that by
+     * re-serving its own connection and publishing the socket.
+     *
+     * Only the socket comes from the provider. `selected` still supplies the
+     * session's identity below, so names, alias and source-map roots are the
+     * same either way.
+     *
+     * Taken only while this session is on the bundler the provider published.
+     * `publishedMetroPort` answers with that port exactly when it is not the
+     * one in use, which is the caller having named another bundler. Its runtime
+     * is not the one the provider re-serves, so the socket belongs to a
+     * different app than the target metadata above. Sending CDP down it would
+     * drive one runtime while reporting another, silently, across the debugger,
+     * the network inspector and the profiler alike.
+     *
+     * A provider that published a socket but no `metroPort` names no bundler to
+     * disagree with, so its socket still stands.
+     */
+    const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
+    const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
+
+    const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
 
     const sourceMaps = new SourceMapsRegistry();
@@ -213,13 +263,32 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
     };
 
-    await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
+    /**
+     * Through a provider's socket Argent is one of several clients on a single
+     * connection, so this setup splits by what it touches.
+     *
+     * These four are per-runtime, not per-client. On a shared session they reach
+     * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
+     * exception breakpoints a user set, from a tool they did not run. The client
+     * that owns the session owns its global state.
+     *
+     * The rest are unconditional. Enables are idempotent, and a binding only
+     * adds one. Other clients can ignore it by name.
+     */
+    if (!proxied) {
+      await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
+    }
+
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
     await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
-    await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-    await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
-    await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+
+    if (!proxied) {
+      await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+      await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+    }
+
     await cdp.addBinding("__argent_callback");
 
     await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));

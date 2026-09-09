@@ -68,8 +68,8 @@ export function sendTouchEvent(
   y: number,
   x2?: number,
   y2?: number
-): void {
-  sendCommand(api, {
+): Promise<void> {
+  return sendCommand(api, {
     cmd: "touch",
     type,
     x,
