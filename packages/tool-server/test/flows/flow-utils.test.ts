@@ -931,6 +931,31 @@ describe("parseFlow", () => {
     }
   });
 
+  it("still parses a CRLF file whose final LF a conversion dropped", async () => {
+    // The trailing trim is anchored on a line BREAK, so a file that ends
+    // without one never reaches it — and a CRLF flow that lost its final LF
+    // ends on the CR of that break. The character then read as the last one of
+    // the last value: a block-style `echo` came back `"hello\r"` and a `TOK:`
+    // value `"abc\r"`, one character longer than the author wrote, while the
+    // flow-style spelling of the same file stopped parsing at all. A
+    // half-applied line-ending conversion is the ordinary way in, and it
+    // applies to every flow file rather than only the ones that use `env`.
+    expect(parseFlow("steps:\r\n  - echo: hello\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+    expect(parseFlow("steps: [{ echo: hello }]\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+    expect(
+      parseFlow("steps:\r\n  - script:\r\n      path: seed.mjs\r\n      env:\r\n        TOK: abc\r")
+        .steps
+    ).toEqual([{ kind: "script", path: "seed.mjs", env: { TOK: "abc" } }]);
+    // The file that kept its LF was never affected, and still is not.
+    expect(parseFlow("steps:\r\n  - echo: hello\r\n").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+  });
+
   it("keeps a trailing non-ASCII space in the last scalar when a stray line follows it", async () => {
     // The two edges at once, and the case that says the trailing trim stops at
     // the line break rather than eating everything whitespace: the value keeps
