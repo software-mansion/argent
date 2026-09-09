@@ -1141,6 +1141,27 @@ describe("flow script executor — redaction of a value argent's own clamp cut",
       ).toString("utf8")
     );
   }, 30_000);
+
+  // `repairEncodedRuns` had no cut branch at all — the only cut guard on its
+  // path is `partialSecretTail`, which searches for a prefix of a SPELLING, and
+  // that works only while the encoding is character-local. Base64 is the
+  // encoding that is not, which is the reason the pass exists.
+  it("replaces the front of a value left standing in a cut base64 payload", async () => {
+    const message = await clampedAt(
+      `"Basic " + Buffer.from("api:" + process.env.K).toString("base64") + " and more text"`,
+      62
+    );
+
+    expect(message).toContain("{{secret:LIVEKEY}}");
+    // Every base64 run in the report, decoded at each frame offset it can
+    // start on — the reading that recovers a credential from a cut payload.
+    expectNoFragment(message, (text) =>
+      [...text.matchAll(/[A-Za-z0-9+/]{8,}/g)]
+        .flatMap((match) => [0, 1, 2, 3].map((offset) => match[0].slice(offset)))
+        .map((run) => Buffer.from(run, "base64").toString("utf8"))
+        .join("\n")
+    );
+  }, 30_000);
 });
 
 /**

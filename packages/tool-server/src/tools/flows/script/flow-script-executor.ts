@@ -2230,7 +2230,11 @@ function repairBackslashEscapes(text: string, secrets: readonly FlowScriptSecret
  * puts a chance hit past one in four billion per position, and a credential
  * shorter than that is not one.
  */
-function repairEncodedRuns(text: string, secrets: readonly FlowScriptSecret[]): string {
+function repairEncodedRuns(
+  text: string,
+  secrets: readonly FlowScriptSecret[],
+  cutAtEnd = false
+): string {
   const needles = secrets
     .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
     .filter(({ bytes }) => bytes.length >= ENCODED_RUN_MIN_BYTES)
@@ -2238,10 +2242,61 @@ function repairEncodedRuns(text: string, secrets: readonly FlowScriptSecret[]): 
   if (needles.length === 0) return text;
   const spans: Array<{ from: number; to: number; name: string }> = [];
   for (const view of ENCODED_VIEWS) {
-    for (const run of encodedRuns(text, view.runs))
-      spans.push(...encodedRunSpans(run, view, needles));
+    for (const run of encodedRuns(text, view.runs)) {
+      const found = encodedRunSpans(run, view, needles);
+      // A run that reaches the END of a text argent cut may hold the FRONT of a
+      // value rather than the whole of it, and this pass had no branch for one:
+      // `partialSecretTail` is the only cut guard on the path, and it searches
+      // for a prefix of a SPELLING — which works only while the encoding is
+      // character-local, and base64 is the encoding that is not. So the idiom
+      // this pass exists for, `"Basic " + base64("api:" + key)`, left a
+      // decodable prefix of the credential standing whenever argent's own 8 KiB
+      // ceiling cut inside the payload.
+      spans.push(...found);
+      if (found.length === 0 && cutAtEnd && endsTheText(run, text)) {
+        spans.push(...encodedCutSpans(run, view, needles));
+      }
+    }
   }
   return spliceSpans(text, spans);
+}
+
+/** Whether this run runs to the last character of the text. */
+function endsTheText(run: EncodedRun, text: string): boolean {
+  return run.at[run.at.length - 1] === text.length - 1;
+}
+
+/**
+ * Where a run that argent's clamp cut spells the FRONT of a value.
+ *
+ * Longest first, and shorter than the value, exactly as {@link byteRunSpans}
+ * reads a cut run and {@link quotedCutBefore} reads one in text space. Read at
+ * every frame offset for the same reason the whole-value search is: a payload
+ * does not have to start on one.
+ *
+ * Floored at {@link ENCODED_RUN_MIN_BYTES}, like the needles themselves — a
+ * shorter tail says more about the alphabet than about the value, and this
+ * branch asks about one position rather than every position in the run.
+ */
+function encodedCutSpans(
+  run: EncodedRun,
+  view: (typeof ENCODED_VIEWS)[number],
+  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
+): Array<{ from: number; to: number; name: string }> {
+  for (let offset = 0; offset < view.chars && offset < run.chars.length; offset++) {
+    const decoded = Buffer.from(run.chars.slice(offset), view.encoding);
+    for (const { name, bytes } of needles) {
+      const longest = Math.min(bytes.length - 1, decoded.length);
+      for (let n = longest; n >= ENCODED_RUN_MIN_BYTES; n--) {
+        if (decoded.compare(bytes, 0, n, decoded.length - n, decoded.length) !== 0) continue;
+        const first = offset + Math.floor((decoded.length - n) / view.bytes) * view.chars;
+        return first < run.at.length
+          ? [{ from: run.at[first]!, to: run.at[run.at.length - 1]! + 1, name }]
+          : [];
+      }
+    }
+  }
+  return [];
 }
 
 const ENCODED_RUN_MIN_BYTES = 4;
