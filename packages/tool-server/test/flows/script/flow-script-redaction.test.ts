@@ -966,6 +966,34 @@ describe("flow script executor — redaction of a value rendered as bytes", () =
     }
   }, 60_000);
 
+  // `assert.deepStrictEqual(Buffer.from(k), expected)` renders the two buffers
+  // INTERLEAVED, one byte per line, with the diff's own `+` and `-` down the
+  // left and a line both sides agree on carrying neither. Read whole, the run
+  // holds the script's bytes with the expected side's mixed through it, so no
+  // contiguous stretch spells the value and every byte printed — while the
+  // neighbouring shapes all redacted correctly, which is what made the gap easy
+  // to miss. Keeping the lines the expected side does not own recovers the
+  // credential exactly, so that is the reading the repair has to make too.
+  it("replaces a value an assert diff interleaved with the other side's bytes", async () => {
+    const text = await failWith(
+      `import assert from "node:assert";
+       assert.deepStrictEqual(Buffer.from(process.env.K, "utf8"), Buffer.from("expected", "utf8"));`,
+      KEY
+    );
+    expect(text).toContain("Expected values to be strictly deep-equal");
+    expectNoValue(text, KEY);
+    // The bytes of the value, read off the lines the expected side does not own
+    // — the recovery the reviewer's own repro performed.
+    const kept = text
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("-"))
+      .join("\n");
+    const numbers = [...kept.matchAll(/\d+/g)].map((match) => Number(match[0]));
+    expect(Buffer.from(numbers.filter((code) => code <= 255)).toString("utf8")).not.toContain(
+      KEY.value
+    );
+  }, 30_000);
+
   // Over 255 elements a rendering prints its own COUNT immediately in front of
   // the bytes — `Uint8Array(298) [` — and `(`, `)` and `[` are not letters
   // either. The count joined the run, no byte is written as 298, and the whole

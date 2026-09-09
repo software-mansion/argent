@@ -1844,14 +1844,73 @@ function repairByteRenderings(text: string, secrets: readonly FlowScriptSecret[]
     .sort((a, b) => b.bytes.length - a.bytes.length);
   if (needles.length === 0) return text;
   const spans: Array<{ from: number; to: number; name: string }> = [];
+  const sides = diffSides(text);
   for (const { radix, numbers } of BYTE_VIEWS) {
-    const runs = byteRuns(text, numbers, radix);
-    for (let at = 0; at < runs.length; at++) {
-      spans.push(...byteRunSpans(runs[at]!, radix, needles));
-      spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
+    for (const dropped of sides) {
+      const runs = byteRuns(text, numbers, radix, dropped);
+      for (let at = 0; at < runs.length; at++) {
+        spans.push(...byteRunSpans(runs[at]!, radix, needles));
+        spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
+      }
     }
   }
   return spliceSpans(text, spans);
+}
+
+/**
+ * The readings of one text a DIFF asks for: the text whole, and then each side
+ * of it with the other side's lines gone.
+ *
+ * `assert.deepStrictEqual(Buffer.from(k), expected)` renders the two buffers
+ * INTERLEAVED, one byte per line, each line carrying the `+` or `-` of the side
+ * it belongs to and a line both sides agree on carrying neither. Read whole,
+ * the run holds one side's bytes with the other's mixed through it, so no
+ * contiguous stretch of it spells the value and every byte of the credential
+ * printed. {@link stitchedSpans} does not answer it either: it joins a run's
+ * tail to the next run's head, and an interleaving is not one break but one per
+ * line.
+ *
+ * Read with the `-` lines dropped, the same run is exactly what the script's
+ * own buffer held. Dropping them at the CHARACTER level rather than dropping
+ * their tokens is what makes that work — `- Buffer(8) [Uint8Array] [` is a line
+ * of the other side, and its letters would otherwise end the run in the middle
+ * of the value.
+ *
+ * Only when the text carries both markers, which is the shape a diff has and
+ * ordinary prose with a hyphen at a line start does not. Everything else reads
+ * once, exactly as before.
+ */
+function diffSides(text: string): Array<Uint8Array | undefined> {
+  const marks = lineMarkers(text);
+  if (!marks) return [undefined];
+  return [undefined, marks.minus, marks.plus];
+}
+
+/**
+ * A mask per side, marking every character on a line that side owns, or nothing
+ * when the text is no diff. A line's side is its first non-blank character.
+ */
+function lineMarkers(text: string): { minus: Uint8Array; plus: Uint8Array } | undefined {
+  const minus = new Uint8Array(text.length);
+  const plus = new Uint8Array(text.length);
+  let sawMinus = false;
+  let sawPlus = false;
+  for (let from = 0; from <= text.length; ) {
+    const brk = text.indexOf("\n", from);
+    const to = brk < 0 ? text.length : brk + 1;
+    let at = from;
+    while (at < to && (text[at] === " " || text[at] === "\t")) at++;
+    const mark = at < to ? text[at] : undefined;
+    if (mark === "-" || mark === "+") {
+      const side = mark === "-" ? minus : plus;
+      side.fill(1, from, to);
+      if (mark === "-") sawMinus = true;
+      else sawPlus = true;
+    }
+    if (brk < 0) break;
+    from = to;
+  }
+  return sawMinus && sawPlus ? { minus, plus } : undefined;
 }
 
 /**
@@ -1897,17 +1956,25 @@ function stitchedSpans(
       if (rest > tail.length) continue;
       if (head.compare(bytes, 0, n, head.length - n, head.length) !== 0) continue;
       if (tail.compare(bytes, n, bytes.length, 0, rest) !== 0) continue;
-      return [
-        { from: run.tokens[head.length - n]!.from, to: run.tokens[head.length - 1]!.to, name },
-        { from: next.tokens[0]!.from, to: next.tokens[rest - 1]!.to, name },
-      ];
+      return [...runSpans(run, head.length - n, n, name), ...runSpans(next, 0, rest, name)];
     }
   }
   return [];
 }
 
 interface ByteRun {
-  tokens: Array<{ from: number; to: number; text: string }>;
+  tokens: Array<{
+    from: number;
+    to: number;
+    text: string;
+    /**
+     * Whether the text between this token and the one before it is entirely in
+     * the reading that built the run. False where a dropped diff line lies
+     * between them, which is where a span has to break: the placeholder stands
+     * for the bytes, and the other side's lines are not them.
+     */
+    joined: boolean;
+  }>;
   /** The run stopped at an ellipsis, so its last bytes may be a cut value. */
   cut: boolean;
 }
@@ -1942,7 +2009,7 @@ interface ByteRun {
  * A lone number is no rendering, so a run of one is dropped: it costs two
  * decodes and can only match a one-byte value, which the raw scrub already has.
  */
-function byteRuns(text: string, numbers: RegExp, radix: number): ByteRun[] {
+function byteRuns(text: string, numbers: RegExp, radix: number, dropped?: Uint8Array): ByteRun[] {
   const runs: ByteRun[] = [];
   let run: ByteRun = { tokens: [], cut: false };
   let end = -1;
@@ -1951,7 +2018,9 @@ function byteRuns(text: string, numbers: RegExp, radix: number): ByteRun[] {
     run = { tokens: [], cut: false };
   };
   for (const token of text.matchAll(numbers)) {
-    const gap = end < 0 ? "" : text.slice(end, token.index);
+    if (dropped?.[token.index]) continue;
+    const gap = end < 0 ? "" : keptGap(text, end, token.index, dropped);
+    const joined = end < 0 || gap.length === token.index - end;
     end = token.index + token[0].length;
     if (byteToken(token[0], radix) === undefined) {
       close(false);
@@ -1959,10 +2028,18 @@ function byteRuns(text: string, numbers: RegExp, radix: number): ByteRun[] {
     }
     if (/[A-Za-z]/.test(gap)) close(false);
     else if (GAP_CUT_RE.test(gap)) close(true);
-    run.tokens.push({ from: token.index, to: end, text: token[0] });
+    run.tokens.push({ from: token.index, to: end, text: token[0], joined });
   }
   close(false);
   return runs;
+}
+
+/** The text between two tokens, with the other side's lines taken out of it. */
+function keptGap(text: string, from: number, to: number, dropped?: Uint8Array): string {
+  if (!dropped) return text.slice(from, to);
+  let gap = "";
+  for (let at = from; at < to; at++) if (!dropped[at]) gap += text[at];
+  return gap;
 }
 
 /** Where in `text` this run spells a value, read at one radix. */
@@ -1973,11 +2050,6 @@ function byteRunSpans(
 ): Array<{ from: number; to: number; name: string }> {
   const decoded = decodeByteRun(run, radix);
   if (!decoded) return [];
-  const span = (first: number, count: number, name: string) => ({
-    from: run.tokens[first]!.from,
-    to: run.tokens[first + count - 1]!.to,
-    name,
-  });
   const spans: Array<{ from: number; to: number; name: string }> = [];
   let at = 0;
   while (at < decoded.length) {
@@ -1990,7 +2062,7 @@ function byteRunSpans(
       at += 1;
       continue;
     }
-    spans.push(span(at, hit.bytes.length, hit.name));
+    spans.push(...runSpans(run, at, hit.bytes.length, hit.name));
     at += hit.bytes.length;
   }
   if (spans.length > 0 || !run.cut) return spans;
@@ -2000,9 +2072,36 @@ function byteRunSpans(
   for (const { name, bytes } of needles) {
     for (let n = Math.min(bytes.length - 1, decoded.length); n > 0; n--) {
       if (decoded.compare(bytes, 0, n, decoded.length - n, decoded.length) !== 0) continue;
-      return [span(decoded.length - n, n, name)];
+      return runSpans(run, decoded.length - n, n, name);
     }
   }
+  return spans;
+}
+
+/**
+ * Where a stretch of one run's tokens sits in the text, as one span per piece
+ * that is really contiguous there.
+ *
+ * A run read with one side of a diff dropped holds tokens the other side's
+ * lines sit between, and a span says the text it covers spells a value — so one
+ * span across the whole stretch would swallow the other side's bytes into the
+ * placeholder. Broken at each token the reading skipped instead, which leaves
+ * the diff readable and still replaces every byte of the value.
+ */
+function runSpans(
+  run: ByteRun,
+  first: number,
+  count: number,
+  name: string
+): Array<{ from: number; to: number; name: string }> {
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  let start = first;
+  for (let at = first + 1; at < first + count; at++) {
+    if (run.tokens[at]!.joined) continue;
+    spans.push({ from: run.tokens[start]!.from, to: run.tokens[at - 1]!.to, name });
+    start = at;
+  }
+  spans.push({ from: run.tokens[start]!.from, to: run.tokens[first + count - 1]!.to, name });
   return spans;
 }
 
