@@ -144,7 +144,7 @@ if [[ "$PHASE" == "preinstall" ]]; then
   out="$WORK/a2.log"
   (cd "$project" && HOME="$home" node "$CLI" init --global --no-telemetry </dev/null) >"$out" 2>&1
   exit_is "$?" 2
-  contains "$out" "stdin is not a terminal"
+  contains "$out" "no terminal on stdin"
   contains "$out" "--yes"
   absent "$out" "How would you like to proceed"
   if [[ -e "$project/node_modules" || -e "$home/.npmrc" ]]; then

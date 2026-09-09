@@ -109,9 +109,17 @@ interface InstallerCommandMeta {
   aliasOf?: InstallerCommand;
 }
 
+// init always has a question to ask; update only has one when an install is
+// pending or a global and a local install coexist, and runs to completion
+// without a terminal when it has neither.
 const NON_INTERACTIVE_OPTION: InstallerOption = {
   flag: "--yes, -y",
   description: "Run without prompts, accepting defaults. Required with no terminal on stdin.",
+};
+const UPDATE_NON_INTERACTIVE_OPTION: InstallerOption = {
+  flag: "--yes, -y",
+  description:
+    "Run without prompts, accepting defaults. Required with no terminal if the run has a question to ask.",
 };
 const NO_TELEMETRY_OPTION: InstallerOption = {
   flag: "--no-telemetry",
@@ -164,7 +172,7 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
     ],
     usage: "argent update [options]",
     options: [
-      NON_INTERACTIVE_OPTION,
+      UPDATE_NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
       {
         flag: "--version <version>",

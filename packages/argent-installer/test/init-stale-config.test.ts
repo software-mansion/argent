@@ -372,13 +372,14 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(cursorGlobal)).toBe(false);
   });
 
-  it("skips (and warns about) cross-project removals in a non-interactive run", async () => {
+  it("skips (and warns about) cross-project removals when nobody can confirm them", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
-    // No confirmer = --yes. Removing state that reaches beyond this project on
-    // a fallible PATH probe is not a decision a non-interactive run may make.
+    // No confirmer = --yes, or no terminal. Removing state that reaches beyond
+    // this project on a fallible PATH probe is not a decision an unattended run
+    // may make.
     const result = await cleanupStaleMcpConfigs({
       writtenAdapters: [cursor],
       detectedAdapters: [cursor],
@@ -389,7 +390,7 @@ describe("cleanupStaleMcpConfigs", () => {
 
     expect(result.removedCount).toBe(0);
     expect(result.warnedCount).toBe(1);
-    expect(result.lines.join("\n")).toContain("non-interactive");
+    expect(result.lines.join("\n")).toContain("nobody to confirm it");
     expect(fs.existsSync(cursorGlobal)).toBe(true);
   });
 

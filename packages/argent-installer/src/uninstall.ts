@@ -369,9 +369,12 @@ export async function uninstall(args: string[]): Promise<void> {
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
+    const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
+
     if (!nonInteractive) {
       if (!canPromptUser()) {
-        p.log.error(noTerminalMessage("argent uninstall"));
+        p.log.error(noTerminalMessage("argent uninstall", "to remove without confirming."));
         await finalizeUninstallTelemetry(false, false, UNINSTALL_NEEDS_TERMINAL);
         process.exit(2);
       }
@@ -389,9 +392,6 @@ export async function uninstall(args: string[]): Promise<void> {
         process.exit(0);
       }
     }
-
-    const projectRoot = resolveProjectRoot(process.cwd());
-    installMode = resolveInstallMode(projectRoot);
 
     // Decided before anything is mutated, so an invalid flag or a cancelled
     // coexistence prompt aborts cleanly.

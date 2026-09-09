@@ -59,10 +59,10 @@ export async function init(args: string[]): Promise<void> {
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
     // Without --yes every path below has a prompt in it, so a run with nobody
-    // to ask is refused before it installs or configures anything. Nothing is
-    // tracked: the consent that would govern it is itself one of the prompts.
+    // to ask is refused before it installs or configures anything — and before
+    // consent is resolved, which is why the refusal itself is not tracked.
     if (!parsed.nonInteractive && !canPromptUser()) {
-      p.log.error(noTerminalMessage("argent init"));
+      p.log.error(noTerminalMessage("argent init", "to take the defaults without being asked."));
       process.exit(2);
     }
 

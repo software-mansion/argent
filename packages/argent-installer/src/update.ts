@@ -413,7 +413,9 @@ export async function update(args: string[]): Promise<void> {
 
       if (!nonInteractive) {
         if (!canPromptUser()) {
-          p.log.error(noTerminalMessage("argent update"));
+          p.log.error(
+            noTerminalMessage("argent update", "to take the defaults without being asked.")
+          );
           await trackPackageAction("update_failed", updateStartTime, false, UPDATE_NEEDS_TERMINAL);
           return { failed: UPDATE_NEEDS_TERMINAL };
         }
@@ -638,7 +640,9 @@ export async function update(args: string[]): Promise<void> {
     let targets: InstallMode[];
     if (decision.kind === "prompt") {
       if (!canPromptUser()) {
-        p.log.error(noTerminalMessage("argent update"));
+        p.log.error(
+          noTerminalMessage("argent update", "to take the defaults without being asked.")
+        );
         await trackPackageAction("update_failed", updateStartTime, false, UPDATE_NEEDS_TERMINAL);
         await failUpdateTelemetry(UPDATE_NEEDS_TERMINAL);
         p.outro(pc.red("Update failed."));
@@ -808,8 +812,8 @@ export async function update(args: string[]): Promise<void> {
         // An update with nobody to ask — --yes, or no terminal — passes no
         // confirmer and the sweep reports instead of removing: an unattended
         // run must never delete cross-project state on a fallible PATH probe.
-        // A terminal-less run gets this far whenever it had nothing to install,
-        // which is the only question asked before here.
+        // A terminal-less run reaches here only with nothing to install and no
+        // coexisting pair to pick between; both of those questions refuse.
         confirmCrossProjectRemovals:
           nonInteractive || !canPromptUser()
             ? undefined
