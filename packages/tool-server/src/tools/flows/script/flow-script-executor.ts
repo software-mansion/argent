@@ -889,7 +889,7 @@ export class FlowScriptExecutor {
     lifeline?.destroy?.();
     if (child.connected) child.disconnect();
 
-    const log = capture.text;
+    const { text: log, truncated: logTruncated } = capture.finish();
     const outcome = classifyOutcome({
       exit,
       spawnProblem,
@@ -938,7 +938,7 @@ export class FlowScriptExecutor {
     return {
       ...verdict,
       log,
-      logTruncated: capture.truncated,
+      logTruncated,
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
@@ -1508,26 +1508,39 @@ export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret
  */
 function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
   const secrets = scriptSecretSpellings(raw);
-  // Whole values first, then the prefixes a cut somewhere else left behind. The
-  // order is what keeps the second pass off a value the first one already took:
-  // it searches only for prefixes SHORTER than the value they came from.
-  // `cutAtEnd` says the part ENDS at a cut, which nothing in the text can say
-  // any more: the marker is argent's own and is taken off before the scrub
-  // runs, so the head handed over holds no ellipsis and every repair that reads
-  // one saw an uncut text. The repair that answers a foreign cut was then off
-  // on the one cut argent itself makes — a `<Buffer …>` rendering came back
-  // repaired when NODE cut it and in the clear when argent did, from the same
-  // value and the same rendering.
-  const scrub = (part: string, cutAtEnd: boolean) =>
-    SCRUB_REPAIRS.reduce(
-      (carried, repair) => repair(carried, secrets, cutAtEnd),
-      scrubSecretValues(part, secrets)
-    );
+  // The part ENDS at a cut, which nothing in the text can say any more: the
+  // marker is argent's own and is taken off before the scrub runs, so the head
+  // handed over holds no ellipsis and every repair that reads one saw an uncut
+  // text. The repair that answers a foreign cut was then off on the one cut
+  // argent itself makes — a `<Buffer …>` rendering came back repaired when NODE
+  // cut it and in the clear when argent did, from the same value and the same
+  // rendering.
   const omission = OMISSION_RE.exec(text);
-  if (!omission) return scrub(text, false);
-  const head = scrub(text.slice(0, omission.index), true);
+  if (!omission) return scrubScriptPart(text, secrets, false);
+  const head = scrubScriptPart(text.slice(0, omission.index), secrets, true);
   const partial = partialSecretTail(head, secrets);
   return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
+}
+
+/**
+ * Every spelling replaced, then every repair: the whole-text pass a failed
+ * step's message, its stack and its log all get. `cutAtEnd` says the text ends
+ * at a cut argent made, which the repairs that answer a cut prefix have to be
+ * told.
+ *
+ * Whole values first, then the prefixes a cut somewhere else left behind. The
+ * order is what keeps the second pass off a value the first one already took:
+ * it searches only for prefixes SHORTER than the value they came from.
+ */
+function scrubScriptPart(
+  part: string,
+  spellings: FlowScriptSecret[],
+  cutAtEnd: boolean
+): string {
+  return SCRUB_REPAIRS.reduce(
+    (carried, repair) => repair(carried, spellings, cutAtEnd),
+    scrubSecretValues(part, spellings)
+  );
 }
 
 /**
@@ -3280,17 +3293,24 @@ interface StreamState {
  * Redaction runs on the live stream, ahead of both limits: a value can straddle
  * two pipe chunks and a per-chunk replacement sees neither half, and one
  * straddling the truncation cut would leave a prefix that a whole-value
- * replacement never matches.
+ * replacement never matches. The live scrub takes every spelling the failure
+ * text is scrubbed for; the repairs that need the whole text run once, in
+ * {@link finish}.
  */
 class ScriptLogCapture {
   private readonly parts: string[] = [];
   private readonly streams = new Map<string, StreamState>();
   private stepRemaining: number;
+  private charged = 0;
   private truncatedFlag = false;
   private cut = false;
   private heapFatalFlag = false;
   private heapFatalTail = "";
   private stderrLastLine = "";
+  private spelledFrom: readonly FlowScriptSecret[] | undefined;
+  private spelledCount = -1;
+  private spelled: FlowScriptSecret[] = [];
+  private finished: { text: string; truncated: boolean } | undefined;
 
   constructor(
     private readonly secrets: () => readonly FlowScriptSecret[],
@@ -3322,12 +3342,36 @@ class ScriptLogCapture {
     this.streams.clear();
   }
 
-  get text(): string {
-    return scrubSecretValues(this.parts.join(""), this.secrets());
-  }
-
-  get truncated(): boolean {
-    return this.truncatedFlag;
+  /**
+   * The log as the report carries it, once the streams have ended.
+   *
+   * The live scrub took every spelling whole, across chunks as well. What is
+   * left is what only the whole text shows: a rendering of the bytes, a
+   * re-encoding at an offset, a prefix the log's own limit cut. So the repairs
+   * run here, once, over the bounded text, told whether it ends at that cut,
+   * and the half of a value the cut left at the end is taken off.
+   *
+   * A repair can make the text LONGER — a short value's placeholder is longer
+   * than the value — so the result is held to the bytes the log was charged.
+   * The run budget is not given back when the text gets shorter.
+   */
+  finish(): { text: string; truncated: boolean } {
+    if (this.finished) return this.finished;
+    let text = this.parts.join("");
+    let truncated = this.truncatedFlag;
+    const spellings = this.spellings();
+    if (spellings.length > 0) {
+      text = scrubScriptPart(text, spellings, this.cut);
+      if (this.cut) text = text.slice(0, text.length - partialSecretTail(text, spellings));
+      const buffer = Buffer.from(text, "utf8");
+      if (buffer.length > this.charged) {
+        const kept = withoutPartialMarker(buffer, utf8SafeCut(buffer, this.charged));
+        text = buffer.subarray(0, kept).toString("utf8");
+        truncated = true;
+      }
+    }
+    this.finished = { text, truncated };
+    return this.finished;
   }
 
   get heapFatalSeen(): boolean {
@@ -3337,6 +3381,29 @@ class ScriptLogCapture {
   /** The last line stderr carried that was not blank; see {@link LastLineTracker}. */
   get lastStderrLine(): string {
     return this.stderrLastLine;
+  }
+
+  /**
+   * Every spelling of every value the step may print, for the live scrub. Read
+   * once per chunk, so it is worked out again only when the list changes.
+   */
+  private spellings(): FlowScriptSecret[] {
+    const raw = this.secrets();
+    if (raw !== this.spelledFrom || raw.length !== this.spelledCount) {
+      this.spelledFrom = raw;
+      this.spelledCount = raw.length;
+      this.spelled = raw.length === 0 ? [] : scriptSecretSpellings(raw);
+    }
+    return this.spelled;
+  }
+
+  /** Whether nothing more may reach the log: it was cut, or its budget is spent. */
+  private closed(): boolean {
+    if (this.cut) return true;
+    const runRemaining = this.runBudget
+      ? this.runBudget.remainingBytes
+      : Number.POSITIVE_INFINITY;
+    return Math.min(this.stepRemaining, runRemaining) <= 0;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -3375,7 +3442,16 @@ class ScriptLogCapture {
     // Ahead of the scrub and the limits, which shape the log and not this: a
     // script that floods stderr and then says why it failed still says it.
     state.lastLine?.write(text);
-    const secrets = this.secrets();
+    // Past the cut nothing more reaches the log, so there is nothing left to
+    // scrub: with every spelling of every secret, the scrub is what a flood past
+    // the limit would otherwise spend its time on.
+    if (this.closed()) {
+      if (text) this.truncatedFlag = true;
+      state.holdback = "";
+      state.holdbackAt = undefined;
+      return;
+    }
+    const secrets = this.spellings();
     const held = state.holdback;
     const pending = held + text;
     const { emit, held: keep } = scrubSecretChunk(pending, secrets, final);
@@ -3393,7 +3469,7 @@ class ScriptLogCapture {
       this.append(state.collapser ? state.collapser.write(emit) : emit);
       return;
     }
-    const head = scrubSecretValues(released, this.secrets());
+    const head = scrubSecretValues(released, this.spellings());
     const headText = emit.startsWith(head) ? head : "";
     this.append(state.collapser ? state.collapser.write(headText) : headText, at);
     const tailText = emit.slice(headText.length);
@@ -3428,6 +3504,7 @@ class ScriptLogCapture {
       const kept = taken === buffer.length ? text : buffer.subarray(0, taken).toString("utf8");
       if (at === undefined) this.parts.push(kept);
       else this.parts[at] += kept;
+      this.charged += taken;
       this.stepRemaining -= taken;
       if (this.runBudget) this.runBudget.remainingBytes -= taken;
     }
