@@ -2442,8 +2442,12 @@ function isHeapAbort(
   return process.platform === "win32" && exit.code !== null && WINDOWS_ABORT_CODES.has(exit.code);
 }
 
-/** `abort()` through the CRT, and the fast-fail path V8 takes instead of it. */
-const WINDOWS_ABORT_CODES = new Set([3, 0xc0000409]);
+/**
+ * `abort()` through the CRT, the fast-fail path V8 takes instead of it, and
+ * Node's own abort, which on Windows exits with 134. That last one is what a
+ * heap exhaustion reports there, and `process.abort()` as well.
+ */
+const WINDOWS_ABORT_CODES = new Set([3, 134, 0xc0000409]);
 
 function describeExit(exit: { code: number | null; signal: NodeJS.Signals | null }): string {
   if (exit.signal) return `signal ${exit.signal}`;

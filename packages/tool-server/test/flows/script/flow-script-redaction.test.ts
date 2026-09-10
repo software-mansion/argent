@@ -409,6 +409,25 @@ describe("flow script executor — the heap verdict", () => {
     expect(result.failure?.kind).toBe("heap");
     expect(result.failure?.message).toContain("64 MiB");
   }, 30_000);
+
+  // A real exhaustion, not a banner the script wrote. Node reports one with
+  // SIGABRT on POSIX and with exit code 134 and no signal on Windows, and this
+  // file runs on the Windows job, so both are read here.
+  it("recognises a real heap exhaustion", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "oom.mjs",
+      `const held = []; for (;;) held.push("x".repeat(1024 * 1024));`
+    );
+    const result = await executor({ heapLimitMb: 64 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      timeoutMs: 20_000,
+    });
+
+    expect(result.failure?.kind).toBe("heap");
+    expect(result.failure?.message).toContain("64 MiB");
+  }, 30_000);
 });
 
 describe("flow script executor — redaction", () => {
