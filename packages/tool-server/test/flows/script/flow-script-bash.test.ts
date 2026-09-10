@@ -700,6 +700,28 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // A job that chatters on stdout and says one thing on stderr a second after
+  // bash exited: stderr had gone quiet after the script's own last line, so the
+  // job's later line is in the log but not in the reason.
+  onPosix(
+    "leaves out a stderr line a job writes after stderr went quiet",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "late-job-line",
+        `( for i in $(seq 1 10); do echo "[mock] GET /health 200"; sleep 0.1; done
+           echo "mock-server: listening on :8080" >&2
+           while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
+         echo "seed failed: orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. seed failed: orders API answered 503$/);
+      expect(result.log).toContain("mock-server: listening on :8080");
+    },
+    30_000
+  );
+
   // A cancel is the caller giving up on the run. Past the script's own exit the
   // wait is for what the script left running, and a cancelled run has no use
   // for it: it ends at once rather than at its limit.

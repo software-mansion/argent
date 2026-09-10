@@ -906,14 +906,29 @@ export class FlowScriptExecutor {
     // process exited ends it at once. One cancelled before that was stopped
     // already, and what it left holding the streams is waited for as any
     // other is.
+    //
+    // Beside it, the line stderr stood on when it first went quiet for a settle
+    // after the script's process exited, which the reason takes: see below.
+    const exitedAt = Date.now();
+    const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
+    let stderrLineAtQuiet: string | undefined;
+    let stderrQuietTimer: NodeJS.Timeout | undefined;
+    const watchStderr = () => {
+      const quietFor = stderrQuietFor();
+      if (quietFor >= SETTLE_TIMEOUT_MS) stderrLineAtQuiet = capture.stderrLineSoFar;
+      else stderrQuietTimer = setTimeout(watchStderr, SETTLE_TIMEOUT_MS - quietFor);
+    };
+    watchStderr();
     const settled = await settleStreams(
       closed,
       () => lastOutputAt,
       request.signal?.aborted ? undefined : request.signal
     );
-    // Before the stop, which a job that logs its shutdown answers on stderr.
-    const stderrLineBeforeStop = capture.stderrLineSoFar;
-    const stderrStillWriting = settled === "cut" && Date.now() - lastStderrAt < SETTLE_TIMEOUT_MS;
+    clearTimeout(stderrQuietTimer);
+    // Quiet by now, but the settle ended before the watch came round to it.
+    if (stderrLineAtQuiet === undefined && stderrQuietFor() >= SETTLE_TIMEOUT_MS) {
+      stderrLineAtQuiet = capture.stderrLineSoFar;
+    }
     await stop();
     capture.end();
     if (settled === "cut") {
@@ -944,19 +959,21 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
-    // The last line overall when every process that held the streams closed
-    // them on its own. Otherwise something still held them when the settle
-    // ended, and its answer to the stop is not why the script failed, so the
-    // line is the one stderr ended on before the stop - which keeps the
-    // script's own error that a stderr consumer wrote late. Only when stderr
-    // itself was still being written as the settle gave up did it never go
-    // quiet, and then nothing written there after bash exited counts; a job
-    // chattering on stdout alone leaves the stderr line as it stood.
-    let stderrLine = capture.lastStderrLine;
-    if (settled !== "closed") {
-      stderrLine = stderrStillWriting
-        ? (stderrLineAtVerdict ?? stderrLineBeforeStop)
-        : stderrLineBeforeStop;
+    // After bash exits, stderr carries two kinds of line: the script's own,
+    // late - a consumer in front of stderr still working through its backlog -
+    // and those of a job the script left running. The first come as one run
+    // from the moment bash exits; a job writes whenever it writes. So the line
+    // is the one stderr stood on when it first went quiet for a settle after
+    // bash exited: that run counts, a later line does not, and neither does a
+    // job's answer to the stop. Streams that closed while stderr was still
+    // running on count in full. Stderr that never went quiet is a job still
+    // writing, and then the line is the one bash exited on.
+    let stderrLine = stderrLineAtQuiet;
+    if (stderrLine === undefined) {
+      stderrLine =
+        settled === "closed"
+          ? capture.lastStderrLine
+          : (stderrLineAtVerdict ?? capture.lastStderrLine);
     }
     const verdict = redactSecrets(
       run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
