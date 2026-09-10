@@ -1523,6 +1523,40 @@ describe("finding the interpreter", () => {
     30_000
   );
 
+  // A version-manager shim picks its bash from the directory it starts in, so
+  // the probe asks it there. From the tool server's own directory the shim
+  // found no pin and was refused, and the step ran under the next candidate -
+  // on a Mac, Apple's 3.2 at /bin/bash.
+  onPosix(
+    "probes a PATH bash in the directory the step runs in",
+    async () => {
+      const ws = workspace();
+      ws.write(".tool-versions", "bash host\n");
+      const bin = ws.resolve("shimbin");
+      fs.mkdirSync(bin, { recursive: true });
+      const shim = path.join(bin, "bash");
+      fs.writeFileSync(
+        shim,
+        `#!/bin/sh\nif [ -f .tool-versions ]; then export ARGENT_TEST_SHIM=1; exec ${hostBash} "$@"; fi\n` +
+          `echo "No version is set for command bash" >&2\nexit 126\n`
+      );
+      fs.chmodSync(shim, 0o755);
+      const script = ws.write(
+        "pinned.sh",
+        `printf '{"shim":"%s"}' "\${ARGENT_TEST_SHIM:-}" > "$ARGENT_OUTPUT"`
+      );
+
+      const result = await withSearchPath(bin, () =>
+        executor().execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir })
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.output).toEqual({ shim: "1" });
+      expect(result.notes.join(" ")).not.toContain("refused");
+    },
+    30_000
+  );
+
   // And nothing to say on a host where the first candidate answers at once,
   // which is every ordinary one.
   it("says nothing about the lookup when bash answers at once", async () => {

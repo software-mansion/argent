@@ -602,13 +602,16 @@ export class FlowScriptExecutor {
       // a probe that inherited it refused a bash the step would have run under,
       // and an arbitrary executable named `bash` was handed the tool server's
       // token, port and secrets on the way.
+      // The step's own directory too: a version-manager shim picks its bash
+      // from the directory it starts in, so a shim probed anywhere else was
+      // refused while the step would have run it as the bash the project pins.
       // The request's abort too, because this lookup is the one place a `.sh`
       // step waits before it has a process to time out: each candidate costs up
       // to the probe's own timeout plus its force grace, the step's declared
       // limit bounds none of it, and a flow of N bash steps was un-cancellable
       // for about six seconds each.
       const lookupStartedAt = Date.now();
-      const found = await resolveBashInterpreter(env, request.signal);
+      const found = await resolveBashInterpreter(env, request.signal, cwd);
       noteInterpreterLookup(Date.now() - lookupStartedAt, timeoutMs, notes);
       if ("cancelled" in found) {
         return emptyResult(

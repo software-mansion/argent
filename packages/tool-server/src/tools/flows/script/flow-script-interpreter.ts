@@ -74,6 +74,13 @@ const BASH_PROBE_SETTLE_MS = 250;
  */
 const BASH_PROBE_MAX_CHARS = 4 * 1024;
 
+/**
+ * How much of the last line a refused candidate wrote to stderr the refusal
+ * quotes. A version-manager shim says there why it ran no bash - "No version is
+ * set for command bash" - and that names the remedy the refusal cannot.
+ */
+const BASH_PROBE_STDERR_CHARS = 300;
+
 const POSIX_FIXED_LOCATIONS = ["/bin/bash", "/usr/bin/bash"];
 
 /**
@@ -117,7 +124,8 @@ function configuredBash(): string | undefined {
  */
 export async function resolveBashInterpreter(
   probeEnv: NodeJS.ProcessEnv = process.env,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  probeCwd?: string
 ): Promise<{ path: string; note?: string } | { problem: string } | { cancelled: true }> {
   if (signal?.aborted) return { cancelled: true };
   // Asked before the value, not instead of it: a file that cannot be read hands
@@ -129,7 +137,8 @@ export async function resolveBashInterpreter(
   const configured = configuredBash();
   if (configured !== undefined) {
     const problem =
-      interpreterProblem(configured) ?? (await notBashProblem(configured, probeEnv, signal));
+      interpreterProblem(configured) ??
+      (await notBashProblem(configured, probeEnv, signal, probeCwd));
     if (signal?.aborted) return { cancelled: true };
     return problem
       ? {
@@ -158,13 +167,29 @@ export async function resolveBashInterpreter(
       }
       continue;
     }
-    const problem = await notBashProblem(candidate, probeEnv, signal);
+    const problem = await notBashProblem(candidate, probeEnv, signal, probeCwd);
     if (signal?.aborted) return { cancelled: true };
-    if (!problem) return { path: candidate, ...(lost ? { note: lostConfigNote(lost) } : {}) };
+    if (!problem) {
+      // A refusal the step would otherwise never mention: it ran under the
+      // candidate that came next, which on a Mac is Apple's 3.2 at /bin/bash.
+      const notes = [
+        ...(rejected.length > 0 ? [refusedFirstNote(candidate, rejected)] : []),
+        ...(lost ? [lostConfigNote(lost)] : []),
+      ];
+      return { path: candidate, ...(notes.length > 0 ? { note: notes.join(" ") } : {}) };
+    }
     rejected.push(`${candidate} ${problem}`);
   }
 
   return { problem: `${notFoundMessage(rejected)}${lost ? ` ${lostConfigNote(lost)}` : ""}` };
+}
+
+function refusedFirstNote(ran: string, rejected: readonly string[]): string {
+  return (
+    `The script ran under ${ran}, because the search refused what it found first: ` +
+    `${rejected.join("; ")}. Fix that candidate, or set ${BASH_CONFIG_KEY} to the absolute ` +
+    `path of the bash to use.`
+  );
 }
 
 function lostConfigNote(problem: string): string {
@@ -193,9 +218,10 @@ function lostConfigNote(problem: string): string {
 async function notBashProblem(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  cwd?: string
 ): Promise<string | null> {
-  const answer = await askForBashVersion(candidate, probeEnv, signal);
+  const answer = await askForBashVersion(candidate, probeEnv, signal, cwd);
   if (answer.answered) return null;
   if (answer.signal) {
     // Which of the two happened, because the remedy is not the same one. A
@@ -212,7 +238,8 @@ async function notBashProblem(
   return (
     "is not a bash: running it printed no $BASH_VERSION, so a `.sh` step would report the " +
     "document it was seeded with rather than the one the script writes" +
-    (answer.failure ? ` (${answer.failure})` : "")
+    (answer.failure ? ` (${answer.failure})` : "") +
+    (answer.stderr ? ` (it wrote to stderr: ${answer.stderr})` : "")
   );
 }
 
@@ -237,12 +264,14 @@ async function notBashProblem(
 function askForBashVersion(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
-  signal_?: AbortSignal
+  signal_?: AbortSignal,
+  cwd?: string
 ): Promise<{
   answered: boolean;
   signal: NodeJS.Signals | null;
   stoppedByCheck: boolean;
   failure?: string;
+  stderr?: string;
 }> {
   return new Promise((resolve) => {
     let child: ChildProcess;
@@ -259,7 +288,15 @@ function askForBashVersion(
         // every `ARGENT_SECRET_*` value the allowlist exists to keep out of a
         // script's reach.
         env: probeEnv,
-        stdio: ["ignore", "pipe", "ignore"],
+        // The step's own directory, for the same reason: a version-manager
+        // shim picks its bash from the directory it starts in - asdf reads
+        // `.tool-versions` there - so a shim probed from the tool server's own
+        // directory was refused while the step would have run it as bash 5,
+        // and the search went on to /bin/bash.
+        cwd,
+        // stderr for the refusal to quote, because that is where a shim says
+        // why it ran no bash.
+        stdio: ["ignore", "pipe", "pipe"],
         // A group of the candidate's own on POSIX, so the stops below reach
         // what IT started. A shim that backgrounds a job was re-parented to pid
         // 1 and outlived the whole flow run otherwise; on Windows there is no
@@ -276,6 +313,10 @@ function askForBashVersion(
     // its own business.
     let pending = "";
     let answered = false;
+    // The head of the last stderr line that was not blank, and of the line
+    // still arriving.
+    let lastErr = "";
+    let pendingErr = "";
     let settled = false;
     let killedWith: NodeJS.Signals | null = null;
     const timers: NodeJS.Timeout[] = [];
@@ -289,11 +330,19 @@ function askForBashVersion(
       // still running is one nothing waits for any more, and either would keep
       // the tool server's own loop alive for it.
       child.stdout?.destroy();
+      child.stderr?.destroy();
       child.unref();
       // The last line, which a candidate that exits without a trailing newline
       // leaves here.
       if (BASH_PROBE_MARKER.test(pending)) answered = true;
-      resolve({ answered, signal, stoppedByCheck, ...(failure === undefined ? {} : { failure }) });
+      const stderr = (pendingErr.trim() ? pendingErr : lastErr).trim();
+      resolve({
+        answered,
+        signal,
+        stoppedByCheck,
+        ...(failure === undefined ? {} : { failure }),
+        ...(stderr ? { stderr } : {}),
+      });
     };
     // The abort the request carries, which this lookup is the one place a `.sh`
     // step can wait before it has a process to time out. Without it a flow of N
@@ -317,6 +366,13 @@ function askForBashVersion(
       if (pending.length > BASH_PROBE_MAX_CHARS) {
         pending = pending.slice(0, BASH_PROBE_MAX_CHARS);
       }
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      const lines = (pendingErr + chunk).split("\n");
+      pendingErr = (lines.pop() ?? "").slice(0, BASH_PROBE_STDERR_CHARS);
+      const said = lines.filter((line) => line.trim()).pop();
+      if (said !== undefined) lastErr = said.slice(0, BASH_PROBE_STDERR_CHARS);
     });
     child.on("error", (err) => answer(null, firstLine(err)));
     child.on("exit", (_code, signal) => {

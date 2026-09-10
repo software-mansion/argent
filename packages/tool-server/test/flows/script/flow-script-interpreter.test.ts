@@ -479,6 +479,24 @@ describe("bash on PATH", () => {
     expect(execFileMock).toHaveBeenCalledWith("/bin/sh", ["-c", "command -v bash"]);
   });
 
+  // A refused PATH bash does not end the search, so the step runs under the
+  // next candidate - /bin/bash, Apple's 3.2 on a Mac. The step says so, with
+  // the refusal, instead of running a bash 4 script under 3.2 in silence.
+  onPosixWithBash("says so when it refused the PATH bash and ran a later one", async () => {
+    setPlatform(realPlatform);
+    const root = hostWith(undefined);
+    const shim = path.join(root, "bash");
+    fs.writeFileSync(shim, '#!/bin/sh\necho "No version is set for command bash" >&2\nexit 126\n');
+    fs.chmodSync(shim, 0o755);
+    execFileMock.mockReturnValue({ stdout: `${shim}\n`, stderr: "" });
+
+    const found = (await resolveBashInterpreter()) as { path: string; note?: string };
+    expect(found.path).toBe(hostBash());
+    expect(found.note).toContain(`The script ran under ${hostBash()}`);
+    expect(found.note).toContain(`${shim} is not a bash`);
+    expect(found.note).toContain("No version is set for command bash");
+  });
+
   // `System32\bash.exe` is the WSL launcher, and it is early on every PATH: it
   // runs the file inside a Linux distribution where the project path and
   // $ARGENT_OUTPUT do not exist. Pinned on the candidate list rather than on the
@@ -734,6 +752,47 @@ describe("a candidate that will not answer", () => {
       delete process.env.ARGENT_SECRET_DEMO;
       delete process.env.BASH_ENV;
     }
+  });
+
+  // A version-manager shim picks its bash from the directory it starts in: asdf
+  // reads `.tool-versions` there. Probed from the tool server's own directory,
+  // such a shim was refused while the step would have run it as bash 5, and the
+  // search went on to /bin/bash - Apple's 3.2 on a Mac.
+  onPosix("runs the candidate in the directory the step runs in", async () => {
+    const root = hostWith(undefined);
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-project-"));
+    roots.push(project);
+    const saw = path.join(root, "cwd.txt");
+    const recorder = nodeExecutable(
+      root,
+      "bash",
+      `require("node:fs").writeFileSync(${JSON.stringify(saw)}, process.cwd());\n` +
+        'process.stdout.write("\\nargent-bash-version:5.2.37\\n");\n'
+    );
+    pinGlobalConfig({ scripts: { bash: recorder } });
+
+    expect(await resolveBashInterpreter(process.env, undefined, project)).toEqual({
+      path: recorder,
+    });
+    expect(fs.readFileSync(saw, "utf8")).toBe(fs.realpathSync(project));
+  });
+
+  // Where a shim says why it ran no bash. A refusal that drops it blames the
+  // candidate for not being a bash, when the shim only lacked a version pin.
+  onPosix("quotes what a refused candidate wrote to stderr", async () => {
+    const root = hostWith(undefined);
+    const shim = path.join(root, "bash");
+    fs.writeFileSync(
+      shim,
+      '#!/bin/sh\necho "starting" >&2\necho "No version is set for command bash" >&2\nexit 126\n'
+    );
+    fs.chmodSync(shim, 0o755);
+    pinGlobalConfig({ scripts: { bash: shim } });
+
+    const found = (await resolveBashInterpreter()) as { problem: string };
+    expect(found.problem).toContain("is not a bash");
+    expect(found.problem).toContain("(it wrote to stderr: No version is set for command bash)");
+    expect(found.problem).not.toContain("starting");
   });
 
   // The other way a probed candidate dies by a signal. It answers in
