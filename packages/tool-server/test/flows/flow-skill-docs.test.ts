@@ -103,6 +103,26 @@ describe("bash script exchange docs", () => {
     expect(text).toMatch(/\$ARGENT_OUTPUT\.new/);
     expect(text).toMatch(/mv .\$ARGENT_OUTPUT\.new/);
   });
+
+  // The runner sets no reason file. A doc that names one teaches a variable
+  // that expands to the empty string, and the explanation written to it is lost.
+  it.each([REFERENCE, FLOW_YAML, LIVE_AUTHORING, SKILL])("names no reason file in %s", (file) => {
+    expect(readFileSync(file, "utf8")).not.toContain("ARGENT_REASON");
+  });
+
+  // A bash step explains a non-zero exit through stderr alone: the reason ends
+  // with the last non-blank line the script wrote there, and stdout never
+  // reaches it. Read inside the bash section, so a mention elsewhere on the
+  // page cannot stand in for it.
+  it.each([
+    [REFERENCE, "### Bash scripts", "\n## The `argent flow` command"],
+    [FLOW_YAML, "### Bash scripts", "\n## Snapshots and standalone runs"],
+  ])("teaches the stderr failure reason in %s", (file, start, end) => {
+    const section = between(file, start, end);
+    expect(section).toMatch(/last non-blank[^.]*stderr/);
+    expect(section).toMatch(/echo "[^"]+" >&2(?:;|\n)\s*exit 1/);
+    expect(section).toMatch(/reason[^.]*stdout|stdout[^.]*reason/);
+  });
 });
 
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
