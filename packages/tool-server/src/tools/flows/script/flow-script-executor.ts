@@ -1590,9 +1590,8 @@ async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise
  *
  * A tree can also run deeper than the longest path the system takes - 1 024
  * bytes on macOS - and no call by full path gets past that, `fs.promises.rm`
- * included, where the `rmSync` this replaced walked the tree by descriptor. So
- * a directory whose path has grown long is moved up under `top` before it is
- * walked, which shortens every path below it.
+ * included. So a directory whose path has grown long is moved up under `top`
+ * before it is walked, which shortens every path below it.
  */
 async function removeTree(target: string, top = target): Promise<void> {
   // Never through a link at the top: `opendir` follows one, and the directory
@@ -1652,10 +1651,12 @@ async function removeTree(target: string, top = target): Promise<void> {
 
 /**
  * How long a path {@link removeTree} descends into before it moves the
- * directory up. A name adds at most 255 bytes, so every path it hands the
- * system stays well inside the 1 024 that macOS takes.
+ * directory up. A name can add 765 bytes - APFS takes 255 characters, of up to
+ * three bytes each in UTF-8 - and a path macOS takes is at most 1 023 bytes,
+ * so a directory is moved while its own path is short enough for any name
+ * below it to fit.
  */
-const REMOVE_TREE_HOIST_AT_BYTES = 512;
+const REMOVE_TREE_HOIST_AT_BYTES = 257;
 
 let hoistedDirectories = 0;
 

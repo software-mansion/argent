@@ -69,6 +69,7 @@ vi.mock("node:fs", async () => {
   };
 });
 
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -76,6 +77,16 @@ import {
   exchangeDirPrefix,
   FlowScriptExecutor,
 } from "../../../src/tools/flows/script/flow-script-executor";
+
+/**
+ * `rm -rf`, which walks a tree by descriptor. What a regressed remove leaves
+ * behind can run past the longest path `fs.rmSync` takes on Node 20, and a
+ * throw from a `finally` would hide the failure that left it there.
+ */
+function removeLeftovers(dir: string): void {
+  spawnSync("chmod", ["-R", "u+rwx", dir]);
+  spawnSync("rm", ["-rf", dir]);
+}
 import { createScriptWorkspace } from "../../helpers/flow-script-workspace";
 import { resolveHostBash } from "../../helpers/host-bash";
 
@@ -170,11 +181,10 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
 describe("removing an exchange directory deeper than a path can name", () => {
   // A tree the script leaves can run deeper than the longest path the system
   // takes - 1 024 bytes on macOS, 4 096 on Linux - and no call by full path
-  // gets through it. The `rmSync` the batched remove replaced walked it by
-  // descriptor; a remove that stopped at the limit left it behind for good,
-  // because every later sweep stopped at the same place. Long names rather
-  // than many levels, because bash takes quadratic time to `cd` down a chain
-  // of short ones: 2 500 levels took 22 s to build, 25 of these take 0.1 s.
+  // gets through it. A remove that stopped at the limit left it behind for
+  // good, because every later sweep stopped at the same place. Long names
+  // rather than many levels, because bash takes quadratic time to `cd` down a
+  // chain of short ones: 2 500 levels took 22 s to build, 25 of these 0.1 s.
   it("removes a tree whose paths run past the longest the system takes", async () => {
     const ws = createScriptWorkspace("bash-deep-rm");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-deep-rm-root-"));
@@ -199,10 +209,48 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
       expect(result.notes.join(" ")).not.toContain("could not be removed");
       expect(fs.readdirSync(exchangeRoot)).toEqual([]);
     } finally {
-      fs.rmSync(exchangeRoot, { recursive: true, force: true });
+      removeLeftovers(exchangeRoot);
       ws.cleanup();
     }
   }, 90_000);
+
+  // APFS takes 255 characters in a name, and a character can take three bytes
+  // in UTF-8, so one name alone can carry a path past the 1 024 macOS takes.
+  // macOS only: Linux file systems cap a name at 255 bytes.
+  it.skipIf(process.platform !== "darwin")(
+    "removes names that are long in bytes",
+    async () => {
+      const ws = createScriptWorkspace("bash-mb-rm");
+      const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-mb-rm-root-"));
+      const script = ws.write(
+        "mb.sh",
+        `set -euo pipefail
+cd "$(dirname "$ARGENT_OUTPUT")"
+a=$(printf 'a%.0s' $(seq 1 190))
+wide=$(printf '字%.0s' $(seq 1 200))
+mkdir -p "$a/$a" && cd "$a/$a"
+touch "x$wide"
+mkdir "$wide" && (cd "$wide" && touch "$wide")
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+      );
+      try {
+        const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          timeoutMs: 20_000,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.notes.join(" ")).not.toContain("could not be removed");
+        expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+      } finally {
+        removeLeftovers(exchangeRoot);
+        ws.cleanup();
+      }
+    },
+    30_000
+  );
 });
 
 describe("an exchange directory that could not be filled", () => {
