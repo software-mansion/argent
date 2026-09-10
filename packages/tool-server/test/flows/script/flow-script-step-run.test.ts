@@ -51,6 +51,27 @@ function flow(name: string, yaml: string): Promise<string> {
   return write(path.join(".argent", "flows", `${name}.yaml`), yaml);
 }
 
+function markPath(mark: string): string {
+  return path.join(root, `${mark}.mark`);
+}
+
+function markingScript(relative: string, mark: string, expression?: string): Promise<string> {
+  return write(
+    relative,
+    `import fs from "node:fs";\n` +
+      `fs.writeFileSync(${JSON.stringify(markPath(mark))}, ` +
+      `String(${expression ?? JSON.stringify(mark)}));`
+  );
+}
+
+function readMark(mark: string): string | undefined {
+  try {
+    return fsSync.readFileSync(markPath(mark), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 function boundaryCtx(flowPath: string): ToolContext {
   return {
     artifacts: new ArtifactStore(),

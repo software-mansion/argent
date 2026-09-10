@@ -371,7 +371,7 @@ type ChildRun = {
   outputJson: string;
   scriptPath: string;
   timeoutMs: number;
-  stderrWatch: StderrSignalWatch;
+  capture: ScriptLogCapture;
 } & (
   | { interpreter: "node" }
   | { interpreter: "bash"; interpreterPath: string; exchange: ExchangeFiles }
@@ -652,7 +652,7 @@ export class FlowScriptExecutor {
       outputJson,
       scriptPath,
       timeoutMs,
-      stderrWatch,
+      capture,
     };
     try {
       // The signal again, because the bash block above is the only place this
@@ -686,7 +686,7 @@ export class FlowScriptExecutor {
   }
 
   private async runChild(run: ChildRun): Promise<FlowScriptResult> {
-    const { request, bounds, notes, startedAt, cwd, env, scriptPath, timeoutMs, stderrWatch } = run;
+    const { request, bounds, notes, startedAt, cwd, env, scriptPath, timeoutMs, capture } = run;
 
     let child: ChildProcess;
     try {
