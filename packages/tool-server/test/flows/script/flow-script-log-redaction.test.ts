@@ -254,6 +254,37 @@ describe("script log redaction - a value an encoder rewrote", () => {
     expect(result.log).toContain("key: '{{secret:PEM}}\\n' +");
     expectRedacted(result.log, PEM);
   }, 30_000);
+
+  // A service-account key is pretty-printed JSON, so its first and last lines
+  // are `{` and `}`, and a value can hold a whitespace-only line. As spellings
+  // of their own they took every brace and every run of spaces the script
+  // printed, and the rescan in `finish` then took the braces of the
+  // placeholders it had just written. Only a line long enough to be a fragment
+  // of the credential is a spelling.
+  it("leaves text alone that only a short line of a multi-line value matches", async () => {
+    const serviceAccount: FlowScriptSecret = {
+      name: "SA_JSON",
+      value:
+        '{\n  "type": "service_account",\n  "private_key_id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9"\n}',
+    };
+    const gapped: FlowScriptSecret = {
+      name: "GAPPED",
+      value: "line-one-abcdef\n  \nline-three-uvwxyz",
+    };
+    const result = await runScript(
+      "short-lines.mjs",
+      `console.log(JSON.stringify({ status: "ok", items: [1, 2, 3] }));
+       console.log("a  b  c");
+       console.log({ key: process.env.SA_JSON });
+       throw new Error('request failed with body {"code": 500}');`,
+      [serviceAccount, gapped]
+    );
+
+    expect(result.log).toContain('{"status":"ok","items":[1,2,3]}\na  b  c\n');
+    expect(result.failure?.message).toContain('request failed with body {"code": 500}');
+    expectRedacted(result.log, serviceAccount);
+    expectWholeMarkers(result.log, "SA_JSON");
+  }, 30_000);
 });
 
 /**

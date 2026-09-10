@@ -461,7 +461,7 @@ An encoder can write the value differently on its way into that text. Argent rep
 - The JSON-quoted and `util.inspect` forms. `node:assert` prints its diff through `util.inspect`, and a thrown object goes through a JSON encoder
 - The percent-encoded forms, such as a value in a URL query
 - The base64 and hex forms, such as a `Basic` authorization header
-- Each line of a multi-line value, such as a PEM key. `util.inspect` writes one quoted chunk per line
+- Each line of a multi-line value, such as a PEM key. `util.inspect` writes one quoted chunk per line. Argent does not hide a line with fewer than six characters other than whitespace, such as the `{` that opens a JSON value
 
 When a length limit cuts a value, Argent also hides the part of the value that is left. This applies to the failure text and to the log.
 

@@ -1361,12 +1361,20 @@ function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptS
  * The LINES of a multi-line value are spellings of their own, because
  * `util.inspect` writes a long one as one quoted chunk per line joined by
  * `' +`, and no whole-value match survives the glue between them. A PEM key and
- * a service-account blob are the shapes this feature is documented for. It is
- * also what puts a short line of such a value into the scrub — the same
- * over-redaction {@link withTrimmedSpellings} accepts, and the same answer:
- * over-redacting a step's own text is the lesser fault against reporting a
- * credential in the clear. A single-line value, which is nearly all of them,
- * gains no line spelling at all.
+ * a service-account blob are the shapes this feature is documented for. A
+ * single-line value, which is nearly all of them, gains no line spelling at
+ * all.
+ *
+ * Only a line holding at least {@link CUT_MIN_PREFIX_CHARS} characters that
+ * are not whitespace, which is the shortest fragment of a credential this file
+ * treats as a disclosure anywhere else. A service-account key is pretty-printed
+ * JSON whose first and last lines are `{` and `}`, so without the floor every
+ * brace any JSON-printing script wrote became a placeholder. The rescan in
+ * {@link ScriptLogCapture.finish} then took the braces inside the placeholders
+ * it had just written, nesting them, and the growth pushed a real log past its
+ * limit and cut its last line. A whitespace-only line did the same to every
+ * run of spaces. A line that short says nothing about the value, and the lines
+ * above the floor still take every `util.inspect` chunk that carries one.
  *
  * A value the URI encoders refuse — a lone surrogate is the one way in — simply
  * contributes no spelling for them. Throwing here would take down the verdict
@@ -1408,7 +1416,10 @@ function encodedSpellings(value: string): string[] {
   // apostrophe on a line that also holds both other quotes; a line free of all
   // of them is why the raw spelling covers LF-only values today.
   if (value.includes("\n")) {
-    for (const line of value.split("\n")) spellings.push(line, ...quotedSpellings(line));
+    for (const line of value.split("\n")) {
+      if (line.trim().length < CUT_MIN_PREFIX_CHARS) continue;
+      spellings.push(line, ...quotedSpellings(line));
+    }
   }
   return spellings;
 }
