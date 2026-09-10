@@ -82,7 +82,11 @@ function registryServing(queries: Query[]): Registry {
 
 /** The tree a flow reads on `device`, with the launched app pinned. */
 async function readTree(device: DeviceInfo, queries: Query[]) {
-  return fetchFlowTree(registryServing(queries), device, { bundleId: APP, pinned: true });
+  return fetchFlowTree(registryServing(queries), device, {
+    bundleId: APP,
+    pinned: true,
+    probeAnswered: false,
+  });
 }
 
 let queries: Query[];
@@ -117,15 +121,15 @@ describe("a flow reads the full view hierarchy on a remote simulator", () => {
   });
 
   it("asks for the same depth and fields a local simulator asks for", async () => {
-    // The read itself must not diverge either: 40 is the depth a deep React
-    // Native screen needs, and the fields carry the label and identifier a
-    // selector resolves against.
+    // The read itself must not diverge either: 100 is the depth cap a deeply
+    // nested React Native screen needs, and the fields carry the label and
+    // identifier a selector resolves against.
     const localQueries: Query[] = [];
     await readTree(resolveDevice(IOS), localQueries);
     await readTree(resolveDevice(REMOTE), queries);
 
     expect(queries).toEqual(localQueries);
-    expect(queries[0][2]).toMatchObject({ maxDepth: 40 });
+    expect(queries[0][2]).toMatchObject({ maxDepth: 100 });
     expect(queries[0][2].fields).toEqual(expect.arrayContaining(["label", "identifier"]));
   });
 

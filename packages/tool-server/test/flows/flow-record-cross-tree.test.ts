@@ -1240,16 +1240,16 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
    * build that reason with the real function. A hand-copied one is what let the
    * caveat go on describing a message production had stopped emitting.
    */
-  async function realIosTargetingFailure(): Promise<Error> {
+  async function realIosTargetingFailure(udid = IOS): Promise<Error> {
     // Seed the device set so `terminateCommand` answers from the memo instead of
     // probing simctl.
-    rememberDeviceSet(IOS, null);
+    rememberDeviceSet(udid, null);
     const api = {
       listConnectedBundleIds: () => [] as string[],
       getAppState: vi.fn(),
     } as unknown as NativeDevtoolsApi;
     const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
-    return (await queryFullHierarchyTree(registry, resolveDevice(IOS)).catch(
+    return (await queryFullHierarchyTree(registry, resolveDevice(udid)).catch(
       (err: unknown) => err
     )) as Error;
   }
@@ -1321,8 +1321,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // sim-remote tunnel (`supportsFlowTree`). So a silent read there is an
     // outage like any other, and the iOS remedy is the one that repairs it.
     expect(supportsFlowTree("ios-remote")).toBe(true);
+    const failure = await realIosTargetingFailure(IOS_REMOTE);
     fetchRunnerTree = async () => {
-      throw new Error("no connected app; provide bundleId explicitly");
+      throw failure;
     };
     await startRecording("remoteblind");
 
@@ -1333,10 +1334,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     });
     const warning = warningOf(result, "remoteblind");
 
-    // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice.
+    // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice,
+    // which the iOS source writes into the reason it throws.
     expect(warning).toContain("is UNKNOWN, not known-bad");
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
     expect(warning).toContain("no directive takes a bundleId");
-    expect(warning).toContain("`launch-app`");
     expect(await recordedSteps("remoteblind")).toHaveLength(1);
   });
 
