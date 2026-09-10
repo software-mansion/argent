@@ -971,7 +971,7 @@ describe("a candidate that leaves a job holding stderr", () => {
         root,
         "bash",
         'require("node:child_process")\n' +
-          '  .spawn(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], {\n' +
+          '  .spawn(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"], {\n' +
           '    stdio: ["ignore", "ignore", "inherit"],\n' +
           "  })\n" +
           "  .unref();\n" +
@@ -987,6 +987,33 @@ describe("a candidate that leaves a job holding stderr", () => {
       expect(found).toEqual({ path: brief });
       // The settle is 250 ms, and the answer comes well inside it.
       expect(answeredAt - Number(fs.readFileSync(stamp, "utf8"))).toBeLessThan(200);
+    },
+    30_000
+  );
+
+  // A refusal is the one answer stderr matters to, so a refused candidate is
+  // not answered at its exit: a wrapper that sends stderr through `tee`, or
+  // hands it to a job, has its reason written after it is gone.
+  onPosix(
+    "still quotes a refused candidate's reason written after it exits",
+    async () => {
+      const root = hostWith(undefined);
+      const late = nodeExecutable(
+        root,
+        "bash",
+        'require("node:child_process")\n' +
+          '  .spawn(process.execPath, ["-e", "setTimeout(() => process.stderr.write(\\"No version is set for command bash\\\\n\\"), 50)"], {\n' +
+          '    stdio: ["ignore", "ignore", "inherit"],\n' +
+          "  })\n" +
+          "  .unref();\n" +
+          "process.exit(126);\n"
+      );
+      pinGlobalConfig({ scripts: { bash: late } });
+
+      const found = (await resolveBashInterpreter()) as { problem: string };
+
+      expect(found.problem).toContain("is not a bash");
+      expect(found.problem).toContain("(it wrote to stderr: No version is set for command bash)");
     },
     30_000
   );

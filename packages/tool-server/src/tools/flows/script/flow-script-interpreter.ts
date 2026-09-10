@@ -376,13 +376,19 @@ function askForBashVersion(
       firstErr = lines.find((line) => line.trim())?.slice(0, BASH_PROBE_STDERR_CHARS) ?? "";
     });
     child.on("error", (err) => answer(null, firstLine(err)));
-    // The answer is on stdout, so the candidate's exit and the end of its
-    // stdout settle it. `close` waits for stderr too, which a job the candidate
-    // started can hold - and stderr only feeds the refusal's quote.
+    // The answer is on stdout, so a candidate that exited with its stdout ended
+    // and the marker on it is answered at once: `close` waits for stderr too,
+    // which a job the candidate started can hold. A candidate with no marker is
+    // being refused, and the refusal quotes stderr, so it still waits for
+    // `close` or the settle - a line that a `tee` in front of its stderr writes
+    // after the candidate exits is read, not cut off.
     let exitSignal: NodeJS.Signals | null | undefined;
     let stdoutEnded = false;
     const answerIfDone = () => {
-      if (exitSignal !== undefined && stdoutEnded) setImmediate(() => answer(exitSignal ?? null));
+      if (exitSignal === undefined || !stdoutEnded) return;
+      if (answered || BASH_PROBE_MARKER.test(pending)) {
+        setImmediate(() => answer(exitSignal ?? null));
+      }
     };
     child.stdout?.on("end", () => {
       stdoutEnded = true;
