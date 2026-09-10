@@ -1,6 +1,7 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
 import { isGloballyInstalled } from "./utils.js";
+import { npmGlobalPackageRoot } from "./global-prefix.js";
 import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
 
 interface StaleConfigCleanupResult {
@@ -11,8 +12,8 @@ interface StaleConfigCleanupResult {
 }
 
 // A removal in a GLOBAL config file, executed only after the caller's
-// one-shot confirmation — the "dead" verdict is a PATH probe in this shell,
-// which version managers (nvm) can fool.
+// one-shot confirmation — the "dead" verdict rests on what this shell's PATH
+// and npm's global directory can see, which version managers (nvm) can fool.
 interface PendingCrossProjectRemoval {
   adapterName: string;
   location: string;
@@ -27,7 +28,7 @@ interface PendingCrossProjectRemoval {
 //
 // Scope precedence can't be trusted to make the fresh entry win, so: remove
 // hidden-scope findings the adapter marks autoRemove; remove bare-`argent`
-// entries when no global argent is on PATH, behind one confirmation (see
+// entries when no global install exists at all, behind one confirmation (see
 // confirmCrossProjectRemovals); warn with the exact location about anything
 // else, never touch it (may be hand-tuned or backed by a working global
 // install).
@@ -46,9 +47,8 @@ export async function cleanupStaleMcpConfigs(args: {
    * Asked ONCE, with one "<client>: <path>" line per planned removal in a
    * global config file, before any is executed; project-confined removals
    * never prompt. Omit for non-interactive runs — those removals are then
-   * skipped and reported as warnings, since no human is there to catch a PATH
-   * probe an nvm-style split fooled. Returning false also keeps every listed
-   * entry.
+   * skipped and reported as warnings, since no human is there to catch a probe
+   * an nvm-style split fooled. Returning false also keeps every listed entry.
    */
   confirmCrossProjectRemovals?: (items: string[]) => Promise<boolean>;
 }): Promise<StaleConfigCleanupResult> {
@@ -56,17 +56,22 @@ export async function cleanupStaleMcpConfigs(args: {
   const lines: string[] = [];
   let removedCount = 0;
   let warnedCount = 0;
-  // Hoisted: one PATH probe (a `which`/`where` subprocess) per run.
+  // Hoisted: at most one `which`/`where` and one npm query, however many
+  // entries the sweep walks.
   const globalArgentOnPath = isGloballyInstalled();
+  // An install this shell's PATH cannot reach is still an install: a prefix
+  // move lands one in a bin directory no shell profile names yet. Asked only
+  // once PATH has come up empty.
+  const globalArgentInstalled = globalArgentOnPath || npmGlobalPackageRoot() !== null;
 
-  // No env that could make it resolvable inside the client (a custom PATH is
-  // exactly what an nvm user adds) — so it is dead in every environment that
-  // resolves PATH like this shell. Legacy argent-authored env doesn't count
-  // (see hasCustomizingEnv).
+  // Nothing on PATH, nothing in npm's global directory, and no env that could
+  // make it resolvable inside the client (a custom PATH is exactly what an nvm
+  // user adds) — so there is no install anywhere for it to run. Legacy
+  // argent-authored env doesn't count (see hasCustomizingEnv).
   const isProvablyDead = (entry: McpServerEntry | null): boolean =>
     entry !== null &&
     entry.command === MCP_BINARY_NAME &&
-    !globalArgentOnPath &&
+    !globalArgentInstalled &&
     !hasCustomizingEnv(entry);
 
   const removed = (adapterName: string, location: string, what: string): void => {
@@ -141,7 +146,7 @@ export async function cleanupStaleMcpConfigs(args: {
         pending.push({
           adapterName: adapter.name,
           location: globalPath,
-          what: `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is no longer on PATH)`,
+          what: `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is not installed)`,
           exec: () => adapter.remove(globalPath),
         });
       } else if (entry.command !== MCP_BINARY_NAME) {
@@ -154,14 +159,20 @@ export async function cleanupStaleMcpConfigs(args: {
             "if it is a leftover, remove it or its settings may leak into this install"
         );
       } else if (!globalArgentOnPath) {
-        // The env (an nvm PATH, classically) may make it resolve inside the
-        // client even though this shell can't, so never remove it.
         warned(
           adapter.name,
           globalPath,
-          "a global-scope argent entry with custom env vars also exists; its env may make " +
-            "it work in your client even though `argent` is not on this shell's PATH — " +
-            "if it is a leftover, remove it"
+          hasCustomizingEnv(entry)
+            ? // The env (an nvm PATH, classically) may make it resolve inside
+              // the client even though this shell can't, so never remove it.
+              "a global-scope argent entry with custom env vars also exists; its env may make " +
+                "it work in your client even though `argent` is not on this shell's PATH — " +
+                "if it is a leftover, remove it"
+            : // Not dead: with no customizing env, isProvablyDead saying false
+              // means npm holds an install this shell's PATH cannot reach.
+              "a global-scope argent entry also exists, and argent is installed globally but " +
+                "not on this shell's PATH; add the global bin directory to your PATH, or " +
+                "remove the entry if it is a leftover"
         );
       }
       // Bare `argent` that IS on PATH: a working global install the user
@@ -193,8 +204,8 @@ export async function cleanupStaleMcpConfigs(args: {
   }
 
   // Execute the cross-project removals, only ever with explicit confirmation
-  // — deleting cross-project state on a fallible PATH probe is not a decision
-  // --yes may make on the user's behalf.
+  // — deleting cross-project state on a fallible probe is not a decision --yes
+  // may make on the user's behalf.
   if (pending.length > 0) {
     if (!args.confirmCrossProjectRemovals) {
       for (const item of pending) {
