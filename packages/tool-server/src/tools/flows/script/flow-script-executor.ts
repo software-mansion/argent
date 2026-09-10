@@ -1532,11 +1532,7 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
  * order is what keeps the second pass off a value the first one already took:
  * it searches only for prefixes SHORTER than the value they came from.
  */
-function scrubScriptPart(
-  part: string,
-  spellings: FlowScriptSecret[],
-  cutAtEnd: boolean
-): string {
+function scrubScriptPart(part: string, spellings: FlowScriptSecret[], cutAtEnd: boolean): string {
   return SCRUB_REPAIRS.reduce(
     (carried, repair) => repair(carried, spellings, cutAtEnd),
     scrubSecretValues(part, spellings)
@@ -3122,8 +3118,8 @@ function configuredEnvAllowNames(
   if (reserved.length > 0) {
     // One clause for the whole list, and it is the one
     // {@link reservedScriptEnvReason} gives each of these names: the bash
-    // exchange pair is the only reserved name with a different reason, and both
-    // spellings start with `ARGENT_`, so they were taken by the bucket above.
+    // output file is the only reserved name with a different reason, and its
+    // name starts with `ARGENT_`, so it was taken by the bucket above.
     // A reserved name added later WITHOUT that prefix and with a reason of its
     // own belongs there too, or this sentence will speak for it wrongly.
     say(
@@ -3351,9 +3347,11 @@ class ScriptLogCapture {
    * run here, once, over the bounded text, told whether it ends at that cut,
    * and the half of a value the cut left at the end is taken off.
    *
-   * A repair can make the text LONGER — a short value's placeholder is longer
-   * than the value — so the result is held to the bytes the log was charged.
-   * The run budget is not given back when the text gets shorter.
+   * A repair can make the text LONGER - a short value's placeholder is longer
+   * than the value. The growth is paid from what the step and the run have
+   * left, and the text is cut where that runs out. A log the limit already cut
+   * gets no more room: it is held to the bytes it was charged. The budget is
+   * not given back when the text gets shorter.
    */
   finish(): { text: string; truncated: boolean } {
     if (this.finished) return this.finished;
@@ -3364,10 +3362,21 @@ class ScriptLogCapture {
       text = scrubScriptPart(text, spellings, this.cut);
       if (this.cut) text = text.slice(0, text.length - partialSecretTail(text, spellings));
       const buffer = Buffer.from(text, "utf8");
-      if (buffer.length > this.charged) {
-        const kept = withoutPartialMarker(buffer, utf8SafeCut(buffer, this.charged));
+      const runRemaining = this.runBudget
+        ? Math.max(0, this.runBudget.remainingBytes)
+        : Number.POSITIVE_INFINITY;
+      const room = this.cut ? 0 : Math.max(0, Math.min(this.stepRemaining, runRemaining));
+      let kept = buffer.length;
+      if (kept > this.charged + room) {
+        kept = withoutPartialMarker(buffer, utf8SafeCut(buffer, this.charged + room));
         text = buffer.subarray(0, kept).toString("utf8");
         truncated = true;
+      }
+      const grown = kept - this.charged;
+      if (grown > 0) {
+        this.charged += grown;
+        this.stepRemaining -= grown;
+        if (this.runBudget) this.runBudget.remainingBytes -= grown;
       }
     }
     this.finished = { text, truncated };
@@ -3400,9 +3409,7 @@ class ScriptLogCapture {
   /** Whether nothing more may reach the log: it was cut, or its budget is spent. */
   private closed(): boolean {
     if (this.cut) return true;
-    const runRemaining = this.runBudget
-      ? this.runBudget.remainingBytes
-      : Number.POSITIVE_INFINITY;
+    const runRemaining = this.runBudget ? this.runBudget.remainingBytes : Number.POSITIVE_INFINITY;
     return Math.min(this.stepRemaining, runRemaining) <= 0;
   }
 
@@ -3446,7 +3453,13 @@ class ScriptLogCapture {
     // scrub: with every spelling of every secret, the scrub is what a flood past
     // the limit would otherwise spend its time on.
     if (this.closed()) {
-      if (text) this.truncatedFlag = true;
+      // Text refused here makes the log end at a cut, even when the budget ran
+      // out exactly at the end of the chunk before, so finish reads its end as
+      // the front of a value that may have been cut.
+      if (text || state.holdback) {
+        this.truncatedFlag = true;
+        this.cut = true;
+      }
       state.holdback = "";
       state.holdbackAt = undefined;
       return;
@@ -3487,6 +3500,7 @@ class ScriptLogCapture {
     // character, a partial marker — are room enough to admit some of it.
     if (this.cut || allowed <= 0) {
       this.truncatedFlag = true;
+      this.cut = true;
       return;
     }
     const buffer = Buffer.from(text, "utf8");

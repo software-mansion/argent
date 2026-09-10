@@ -122,6 +122,20 @@ describe("flow script executor — cutting the log", () => {
     expect(Buffer.byteLength(result.log, "utf8")).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
   }, 30_000);
 
+  // Filling the limit to the byte is not a cut: nothing the script wrote was
+  // refused.
+  it("reports a log that fills the limit exactly and then ends as whole", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "exact.mjs",
+      `process.stdout.write("x".repeat(${SCRIPT_STEP_LOG_LIMIT_BYTES}));`
+    );
+    const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
+
+    expect(Buffer.byteLength(result.log)).toBe(SCRIPT_STEP_LOG_LIMIT_BYTES);
+    expect(result.logTruncated).toBe(false);
+  }, 30_000);
+
   it("never cuts a redaction marker in half", async () => {
     const ws = workspace();
     const secret: FlowScriptSecret = { name: "VERY_LONG_SECRET_NAME", value: "s3cr3t-value" };
