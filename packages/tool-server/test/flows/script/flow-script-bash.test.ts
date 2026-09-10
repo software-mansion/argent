@@ -1082,15 +1082,16 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // The OTHER spelling of the same mistake, and the one the split above cannot
-  // see. A `kill 0` in the body of the script — with bash still to run the rest
-  // of it — kills bash and reaches nothing else: measured on macOS, neither the
-  // runner nor a plain `sleep` in the same process group receives the signal,
-  // while the same kill under a `trap "" TERM` that lets bash survive reaches
-  // both. So this arrives exactly as a host's SIGTERM on bash alone would, and
-  // the report says so rather than leaving the author with a bare signal.
+  // The OTHER spelling of the same mistake. A `kill 0` in the body of the
+  // script — with bash still to run the rest of it — kills bash, and where else
+  // it lands is the platform's to decide. Measured on macOS, neither the runner
+  // nor a plain `sleep` in the same process group receives it, so it arrives
+  // exactly as a host's SIGTERM on bash alone would; on Linux the runner that
+  // leads the group receives it too, and reports the group signal. Either way
+  // the report names `kill 0` and the remedy rather than leaving the author
+  // with a bare signal, which is what this pins.
   onPosix(
-    "names a self-sent group kill in the message when it cannot be told from the host's",
+    "names a self-sent group kill in the message, whichever process it reached",
     async () => {
       const ws = workspace();
       const result = await runBash(
@@ -1099,10 +1100,16 @@ describe("what a failing bash step says", () => {
         `kill -TERM 0
        sleep 30`
       );
-      expect(result.failure?.kind).toBe("signal");
-      expect(result.failure?.message).toContain("killed by SIGTERM");
-      expect(result.failure?.message).toContain("`kill 0` in the body of the script");
-      expect(result.failure?.message).toContain("signal each job's own pid instead");
+      const message = result.failure?.message ?? "";
+      if (result.failure?.kind === "signal") {
+        expect(message).toContain("killed by SIGTERM");
+        expect(message).toContain("`kill 0` in the body of the script");
+      } else {
+        expect(result.failure?.kind).toBe("exit");
+        expect(message).toContain("process group was sent SIGTERM");
+        expect(message).toContain("`kill 0` reaches bash itself");
+      }
+      expect(message).toContain("signal each job's own pid instead");
     },
     30_000
   );
@@ -1781,7 +1788,10 @@ describe("the private exchange directory", () => {
       const result = await runBash(
         ws,
         "modes",
-        `mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+        // GNU first: GNU `stat -f` is `--file-system`, which prints the file
+        // system `$1` sits on to stdout before the fallback runs, while BSD
+        // `stat` refuses `-c` with nothing on stdout.
+        `mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
        printf '{"output":"%s","dir":"%s"}' \
          "$(mode "$ARGENT_OUTPUT")" \
          "$(mode "$(dirname "$ARGENT_OUTPUT")")" > "$ARGENT_OUTPUT.t"
