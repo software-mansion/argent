@@ -311,6 +311,8 @@ Argent reports what the script writes to stdout and stderr as the log of the ste
 - `log` in the result of `flow-add-script`. `logTruncated` is `true` when Argent cut the log
 - The output of `argent flow run`, under the line of the step
 
+Argent replaces each value that a `{{secret:NAME}}` resolved to in the log with its placeholder. See [Secrets in an `env` value](#secrets-in-an-env-value).
+
 A failed step stops the flow. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |
@@ -416,18 +418,18 @@ Each script process gets a fresh environment object. A script can change its own
 
 Values are strings. Quote a number, `true` or `false`. A name matches `[A-Za-z_][A-Za-z0-9_]*`. These names are refused in every `env` map, because each one steers the runner itself:
 
-| Name                                                                          | Reason                                                                    |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`        | Name and frame the channel the runner protocol runs on                    |
-| `NODE_OPTIONS`                                                                | Overrides the startup options of the runner                               |
-| `ELECTRON_RUN_AS_NODE`                                                        | Changes the runtime of the child process                                  |
-| `ARGENT_FLOW_SCRIPT_RUNNER`                                                   | The activation flag of the runner preload                                 |
-| `ARGENT_OUTPUT`, `ARGENT_REASON`                                              | Name the files a `.sh` step exchanges its document and its reason through |
-| `npm_config_node-options`, `npm_config_userconfig`, `npm_config_globalconfig` | Each one reaches `NODE_OPTIONS`. Every npm spelling is refused            |
+| Name                                                                          | Reason                                                         |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`        | Name and frame the channel the runner protocol runs on         |
+| `NODE_OPTIONS`                                                                | Overrides the startup options of the runner                    |
+| `ELECTRON_RUN_AS_NODE`                                                        | Changes the runtime of the child process                       |
+| `ARGENT_FLOW_SCRIPT_RUNNER`                                                   | The activation flag of the runner preload                      |
+| `ARGENT_OUTPUT`                                                               | Names the file a `.sh` step exchanges its document through     |
+| `npm_config_node-options`, `npm_config_userconfig`, `npm_config_globalconfig` | Each one reaches `NODE_OPTIONS`. Every npm spelling is refused |
 
 Every channel reads this table, `argent flow run --env` included, so a reserved name is refused the same way wherever you write it. `argent flow run --env npm_config_node-options=x` names that spelling and exits 2 before it contacts the tool-server.
 
-`ARGENT_OUTPUT` and `ARGENT_REASON` are refused whichever language the step runs, because a flow-level map applies to every step. `__proto__` is refused too. It matches the name rule, but every map on the way to the child copies it through a plain object, where the name is an accessor rather than an entry, so the value would be dropped and the step would pass anyway. That refusal covers every channel: the two YAML maps, `--env`, and the two tool parameters, `flow-execute`'s `env` and `flow-add-script`'s, which refuse the name before the schema rebuilds the map without it.
+`ARGENT_OUTPUT` is refused whichever language the step runs, because a flow-level map applies to every step. `__proto__` is refused too. It matches the name rule, but every map on the way to the child copies it through a plain object, where the name is an accessor rather than an entry, so the value would be dropped and the step would pass anyway. That refusal covers every channel: the two YAML maps, `--env`, and the two tool parameters, `flow-execute`'s `env` and `flow-add-script`'s, which refuse the name before the schema rebuilds the map without it.
 
 The map is a plain map. A YAML tag that builds something else — `!!omap` in its sequence form builds a Map, `!!set` a Set, `!!timestamp` a Date — is refused, because Argent reads no entries from any of them and the script would run without every value, silently.
 
@@ -445,9 +447,23 @@ Write a credential as `{{secret:NAME}}`. Argent resolves it on the machine that 
 
 The spelling is exact: lowercase `secret`, a colon, a name, no spaces. `{{ secret: NAME }}`, `{{SECRET:NAME}}` and `{secret:NAME}` are not placeholders. They reach the script as written, the way any other value does. Argent does not detect a near spelling.
 
-When a `script` step fails, Argent replaces each value that a `{{secret:NAME}}` resolved to with that same placeholder, in the message and the stack of the failure. So a script that throws `"401 from " + process.env.API_URL + " for key " + process.env.API_KEY` under the map above reports `401 from https://api.example.com for key {{secret:API_KEY}}`. `API_URL` is not a secret and reads as written.
+Argent replaces each value that a `{{secret:NAME}}` resolved to with that same placeholder. Argent does this in three places, and only in these:
 
-A value that an encoder rewrote on the way into that text is replaced too. `node:assert` prints its diff through `util.inspect`, a thrown object goes through a JSON encoder, and a URL percent-encodes what you put in a query — each writes the value differently, and each is still replaced. A multi-line value, such as a PEM key, is replaced line by line, because `util.inspect` writes one quoted chunk per line.
+- The message of a failed `script` step
+- The stack of a failed `script` step
+- The log of a `script` step, wherever Argent reports it
+
+So a script that throws `"401 from " + process.env.API_URL + " for key " + process.env.API_KEY` under the map above reports `401 from https://api.example.com for key {{secret:API_KEY}}`. `API_URL` is not a secret and reads as written.
+
+An encoder can write the value differently on its way into that text. Argent replaces each of these spellings in all three places:
+
+- The plain value, and the value without the whitespace at its start or end
+- The JSON-quoted and `util.inspect` forms. `node:assert` prints its diff through `util.inspect`, and a thrown object goes through a JSON encoder
+- The percent-encoded forms, such as a value in a URL query
+- The base64 and hex forms, such as a `Basic` authorization header
+- Each line of a multi-line value, such as a PEM key. `util.inspect` writes one quoted chunk per line
+
+When a length limit cuts a value, Argent also hides the part of the value that is left. This applies to the failure text and to the log.
 
 Every other `env` value is flow data. It appears as written in the report, in the file that `flow-finish-recording` returns and in `echo` output. Argent does not check whether a plaintext value is a credential, and does not compare an `env` value against the secrets it can resolve. Write a credential as `{{secret:NAME}}`.
 
