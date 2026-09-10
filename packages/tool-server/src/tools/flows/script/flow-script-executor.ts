@@ -1660,12 +1660,22 @@ const REMOVE_TREE_HOIST_AT_BYTES = 257;
 
 let hoistedDirectories = 0;
 
-/** `dir`, moved to sit directly under `top` first when its path has grown long. */
+/**
+ * `dir`, moved to sit directly under `top` first when its path has grown long.
+ * Where the move is refused - moving a directory to another parent needs write
+ * permission on the directory itself, which an empty read-only one lacks -
+ * `dir` is walked where it is: its own path still fits, and an empty directory
+ * needs nothing below it named.
+ */
 async function hoistIfDeep(dir: string, top: string): Promise<string> {
   if (Buffer.byteLength(dir) <= REMOVE_TREE_HOIST_AT_BYTES) return dir;
   const moved = path.join(top, `.argent-hoisted-${process.pid}-${hoistedDirectories++}`);
-  await fs.promises.rename(dir, moved);
-  return moved;
+  try {
+    await fs.promises.rename(dir, moved);
+    return moved;
+  } catch {
+    return dir;
+  }
 }
 
 let sweptStaleExchangesAt = 0;

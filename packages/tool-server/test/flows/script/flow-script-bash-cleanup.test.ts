@@ -253,6 +253,40 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
   );
 });
 
+describe("removing a read-only directory deep in the tree", () => {
+  // Moving a directory to another parent needs write permission on the
+  // directory itself, so an empty read-only one refuses the move - which the
+  // plain `rmdir` of the recursive remove never asked of it. Such a directory
+  // is removed where it is.
+  it("removes an empty read-only directory whose path has grown long", async () => {
+    const ws = createScriptWorkspace("bash-ro-rm");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-ro-rm-root-"));
+    const script = ws.write(
+      "ro.sh",
+      `set -euo pipefail
+cd "$(dirname "$ARGENT_OUTPUT")"
+long=$(printf 'r%.0s' $(seq 1 200))
+mkdir -p "$long/$long" && chmod 500 "$long/$long"
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    try {
+      const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        timeoutMs: 20_000,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.notes.join(" ")).not.toContain("could not be removed");
+      expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+    } finally {
+      removeLeftovers(exchangeRoot);
+      ws.cleanup();
+    }
+  }, 30_000);
+});
+
 describe("an exchange directory that could not be filled", () => {
   // `mkdtemp` succeeds and then the write of the seeded document does not. The
   // caller is handed a throw with no exchange in it, so the `finally` that owns
