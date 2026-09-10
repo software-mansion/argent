@@ -270,7 +270,8 @@ export function mergeScriptEnv(
 /**
  * `env` with every `{{secret:NAME}}` replaced by its value, plus the secrets
  * that were substituted so the executor can keep them out of the step's failure
- * text — a `.mjs` throw, and the `$ARGENT_REASON` a `.sh` writes.
+ * text and its log — a `.mjs` throw, the stderr line a `.sh` exits on, and
+ * whatever either prints.
  *
  * Only that exact spelling is a placeholder, the one `PLACEHOLDER_RE` accepts:
  * lower-case `secret`, a colon, a name, no spaces. `{{ secret: NAME }}`,

@@ -139,9 +139,6 @@ export const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
 /** Where a `.sh` step's output document travels in and out. */
 export const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
 
-/** Where a `.sh` step's failure reason comes from. */
-export const BASH_REASON_ENV = "ARGENT_REASON";
-
 export const NPM_CONFIG_ENV_PREFIX = "npm_config_";
 
 /**
@@ -193,12 +190,10 @@ export const RESERVED_SCRIPT_ENV_NAMES: readonly string[] = [
   "ELECTRON_RUN_AS_NODE",
   RUNNER_ACTIVATION_ENV,
   // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
-  // out and `$ARGENT_REASON` is where a failure reason comes from, so either
-  // one set by a caller would steer the runner's own protocol. Reserved
-  // whichever language the step runs — a flow-level map applies to every step
-  // — and set for bash only, since a `.mjs` has `output`.
+  // out, so a caller setting it would steer the runner's own protocol.
+  // Reserved whichever language the step runs — a flow-level map applies to
+  // every step — and set for bash only, since a `.mjs` has `output`.
   BASH_OUTPUT_ENV,
-  BASH_REASON_ENV,
 ];
 
 /**
@@ -248,16 +243,16 @@ export function reservedScriptEnvNamesForMessage(): string {
  * Why a reserved name is reserved, as a clause reading after it — `holds
  * ARGENT_OUTPUT, which ${reason} and cannot be set for a script`.
  *
- * The answer rather than the table it is read off: the two bash exchange names
- * are a FILE the runner reads and writes, not a control over its own process,
- * and an author cannot see the difference from the name. Deciding it beside the
- * list is what keeps the reason with it — a name added to
+ * The answer rather than the table it is read off: the bash exchange name is a
+ * FILE the runner reads and writes, not a control over its own process, and an
+ * author cannot see the difference from the name. Deciding it beside the list
+ * is what keeps the reason with it — a name added to
  * {@link RESERVED_SCRIPT_ENV_NAMES} is a name this function already answers for.
  */
 export function reservedScriptEnvReason(name: string): string {
-  return name === BASH_OUTPUT_ENV || name === BASH_REASON_ENV
-    ? "names the file a `.sh` step exchanges its output document or its failure reason " +
-        "through, so argent sets it and a script may not"
+  return name === BASH_OUTPUT_ENV
+    ? "names the file a `.sh` step exchanges its output document through, so argent sets " +
+        "it and a script may not"
     : "steers the runner's own process";
 }
 

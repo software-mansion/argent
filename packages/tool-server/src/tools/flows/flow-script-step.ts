@@ -397,25 +397,22 @@ const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
 const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+) ENOENT/;
 
 /**
- * A `.sh` says it in an exit code, not in words.
+ * A `.sh` says it in an exit code as well as in words.
  *
- * Its stdout and stderr are drained and discarded, so the shell's own
- * `command not found` line never reaches this side unless the script copied it
- * into `$ARGENT_REASON` itself — and a script that meant to run `adb` wrote no
- * error handling for a case it does not know is possible. What always arrives
- * is code 127, which is bash's own name for exactly this. Matched on the
+ * Code 127 is bash's own name for exactly this, and the parent ends the
+ * failure message with the last line the script wrote to stderr — for a
+ * missing command, the shell's own `command not found` line. Matched on the
  * sentence the runner composes rather than on a bare `127`, which is also an
  * ordinary exit code for a script that chose it.
  *
  * And a script may choose it while EXPLAINING itself: `echo "no such tenant"
- * >"$ARGENT_REASON"; exit 127` is a step that said what went wrong, and the
- * exit code alone cannot tell that apart from bash's own. What can is the
- * reason, which the runner appends after its 127 hint — so this captures
- * whatever follows the hint and {@link describeShellEnvironmentLimit} reads it:
- * nothing at all is a script that wrote no reason, and the shell's OWN wording
- * is a script that redirected stderr into `$ARGENT_REASON`, which is how a
- * `.sh` is told to explain itself. Anything else is the script explaining
- * something the remedy does not answer.
+ * >&2; exit 127` is a step that said what went wrong, and the exit code alone
+ * cannot tell that apart from bash's own. What can is the stderr line after the
+ * runner's 127 hint — so this captures whatever follows the hint and
+ * {@link describeShellEnvironmentLimit} reads it: nothing at all is a script
+ * that wrote nothing to stderr, and the shell's OWN wording is the command bash
+ * could not find. Anything else is the script explaining something the remedy
+ * does not answer.
  *
  * The hint's own tail is quoted here, in step with `exitCodeHint` in
  * `flow-script-runner.mjs`, which this file cannot import — a wording that
@@ -455,19 +452,18 @@ function saysCommandNotFound(text: string): boolean {
  */
 function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv): string | null {
   if (result.ok) return null;
-  // The FAILURE only. Nothing a script prints is reported, and a script that
-  // greps an install log, asserts on an error path, or echoes a CI transcript
-  // could carry this phrase back while failing for an unrelated reason.
+  // The FAILURE only, not the log: a script that greps an install log, asserts
+  // on an error path, or echoes a CI transcript could print this phrase while
+  // failing for an unrelated reason.
   const text = result.failure?.message ?? "";
-  // Bash FIRST, and the order is load-bearing. A `.sh` is told to explain
-  // itself by writing `$ARGENT_REASON`, and the way a shell script explains a
-  // failed command is to send stderr there — which puts the shell's own wording
-  // into the same message as the runner's own 127 hint. Tested the other way
-  // round, such a step matched the `.mjs` branch and earned a prefix on top of
-  // a hint that had already named the cause.
+  // Bash FIRST, and the order is load-bearing. The last line a `.sh` wrote to
+  // stderr ends its failure message, and for a missing command that line is
+  // the shell's own wording — in the same message as the runner's own 127
+  // hint. Tested the other way round, such a step matched the `.mjs` branch and
+  // earned a prefix on top of a hint that had already named the cause.
   const bash127 = BASH_EXIT_127.exec(text);
-  // The reason the script wrote, if it wrote one. Judged on its OWN, so the
-  // line-anchored signatures can read it: the runner joins it to the hint with
+  // The stderr line after the hint, if there is one. Judged on its OWN, so the
+  // line-anchored signatures can read it: the parent joins it to the hint with
   // a space, which leaves the shell's line with no line start of its own.
   const wrote = bash127?.[1].trim();
   if (wrote !== undefined && wrote !== "" && !saysCommandNotFound(wrote)) return null;

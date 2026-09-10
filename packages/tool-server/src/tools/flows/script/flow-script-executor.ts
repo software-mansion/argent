@@ -1293,13 +1293,13 @@ function memberPath(key: string): string {
  * A value whose own edge whitespace the child ATE, as spellings to replace
  * beside the value itself.
  *
- * `readReasonFile` in `flow-script-runner.mjs` trims the reason a `.sh` wrote,
- * and a whole-value replacement then finds nothing: a secret sitting at the
- * edge of `$ARGENT_REASON` arrives with its own leading or trailing whitespace
- * gone, which is one character short of the value the scrub looks for. A PEM
- * key and a service-account blob both end in a newline, and
- * `echo "…$KEY" > "$ARGENT_REASON"` is the idiomatic way to write that file —
- * so the shape the redaction promise exists for was the shape that missed it.
+ * The parent trims the stderr line a `.sh` exited on, and a whole-value
+ * replacement then finds nothing: a secret sitting at the edge of that line
+ * arrives with its own leading or trailing whitespace gone, which is one
+ * character short of the value the scrub looks for. A PEM key and a
+ * service-account blob both end in a newline, and `echo "…$KEY" >&2` is the
+ * idiomatic way to report one — so the shape the redaction promise exists for
+ * was the shape that missed it.
  *
  * Each spelling is the value minus whitespace only. That is not a promise that
  * a hit is always the credential: a secret stored with padding around a short
