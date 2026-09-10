@@ -908,10 +908,12 @@ export class FlowScriptExecutor {
     await stop();
     capture.end();
     if (settled === "cut") {
+      // Not "stopped": on Windows the tree stop reaches nothing once the runner
+      // has exited, and on POSIX it cannot reach a job in a group of its own.
+      // What holds everywhere is that Argent stops reading.
       notes.push(
-        `A process the script left running was still writing to the log ` +
-          `${SETTLE_WRITING_LIMIT_MS / 1_000} seconds after the script ended, so Argent stopped ` +
-          `it, and what it would have written next is not in the log. Stop or wait for each ` +
+        `A process the script left running was still writing to the log when Argent stopped ` +
+          `reading it, so the log misses what it wrote after that. Stop or wait for each ` +
           `background job before the script exits.`
       );
     }
