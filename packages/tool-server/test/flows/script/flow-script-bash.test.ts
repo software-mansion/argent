@@ -722,6 +722,52 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // The tool server's loop can be blocked - a synchronous call, a large
+  // parse - just as stderr's quiet mark passes. The timer then runs before the
+  // poll that reads what the consumer wrote meanwhile, and the line the
+  // reason took was the one before the script's error.
+  onPosix(
+    "keeps the late line when the loop stalls across the quiet mark",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "stall.sh",
+        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         touch ${JSON.stringify(exited)}
+         exit 1`
+      );
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
+      await delay(150);
+      // Blocked from before the error arrives until past the quiet mark, and
+      // from an I/O callback, where a synchronous request handler runs: a block
+      // inside a timer callback leaves the loop's clock where it was, and the
+      // quiet timer waits for the next turn, after the poll.
+      await new Promise<void>((resolve) =>
+        fs.stat(exited, () => {
+          const until = Date.now() + 700;
+          while (Date.now() < until) {
+            /* the stall */
+          }
+          resolve();
+        })
+      );
+      const result = await pending;
+
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
   // A cancel is the caller giving up on the run. Past the script's own exit the
   // wait is for what the script left running, and a cancelled run has no use
   // for it: it ends at once rather than at its limit.

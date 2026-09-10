@@ -913,10 +913,19 @@ export class FlowScriptExecutor {
     const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
     let stderrLineAtQuiet: string | undefined;
     let stderrQuietTimer: NodeJS.Timeout | undefined;
+    let watchingStderr = true;
+    // Judged a turn after the timer, for the reason the settle gives: a line
+    // that arrived while the loop was blocked is read before it is missed.
     const watchStderr = () => {
+      if (!watchingStderr) return;
       const quietFor = stderrQuietFor();
       if (quietFor >= SETTLE_TIMEOUT_MS) stderrLineAtQuiet = capture.stderrLineSoFar;
-      else stderrQuietTimer = setTimeout(watchStderr, SETTLE_TIMEOUT_MS - quietFor);
+      else {
+        stderrQuietTimer = setTimeout(
+          () => setImmediate(watchStderr),
+          SETTLE_TIMEOUT_MS - quietFor
+        );
+      }
     };
     watchStderr();
     const settled = await settleStreams(
@@ -924,6 +933,7 @@ export class FlowScriptExecutor {
       () => lastOutputAt,
       request.signal?.aborted ? undefined : request.signal
     );
+    watchingStderr = false;
     clearTimeout(stderrQuietTimer);
     // Quiet by now, but the settle ended before the watch came round to it.
     if (stderrLineAtQuiet === undefined && stderrQuietFor() >= SETTLE_TIMEOUT_MS) {
@@ -1025,6 +1035,10 @@ async function settleStreams(
       if (await Promise.race([isClosed, aborted, sleep(wait).then(() => false)])) {
         return "closed";
       }
+      // A timer that fires after the loop was blocked runs before the poll
+      // that reads what arrived meanwhile, so one turn goes by before the next
+      // look at when output last came.
+      await new Promise((resolve) => setImmediate(resolve));
     }
   } finally {
     signal?.removeEventListener("abort", onAbort);
