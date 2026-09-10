@@ -679,6 +679,27 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // A consumer in front of stderr and a job that keeps writing to stdout: the
+  // settle runs to its limit on the stdout chatter, but stderr went quiet once
+  // the consumer had written the script's error, so that line is the reason.
+  onPosix(
+    "keeps a stderr consumer's last line when a job keeps writing to stdout",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "consumer-and-chatty-stdout",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         ( while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.logTruncated).toBe(true);
+    },
+    30_000
+  );
+
   // A cancel is the caller giving up on the run. Past the script's own exit the
   // wait is for what the script left running, and a cancelled run has no use
   // for it: it ends at once rather than at its limit.

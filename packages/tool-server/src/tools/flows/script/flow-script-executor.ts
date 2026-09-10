@@ -810,12 +810,13 @@ export class FlowScriptExecutor {
     // When the tree last wrote, which the settle below reads to tell a process
     // still working through its output from one that only holds the streams.
     let lastOutputAt = 0;
+    let lastStderrAt = 0;
     child.stdout?.on("data", (chunk: Buffer) => {
       lastOutputAt = Date.now();
       capture.push("stdout", chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      lastOutputAt = Date.now();
+      lastOutputAt = lastStderrAt = Date.now();
       capture.push("stderr", chunk);
     });
 
@@ -905,6 +906,7 @@ export class FlowScriptExecutor {
     const settled = await settleStreams(closed, () => lastOutputAt, request.signal);
     // Before the stop, which a job that logs its shutdown answers on stderr.
     const stderrLineBeforeStop = capture.stderrLineSoFar;
+    const stderrStillWriting = settled === "cut" && Date.now() - lastStderrAt < SETTLE_TIMEOUT_MS;
     await stop();
     capture.end();
     if (settled === "cut") {
@@ -935,15 +937,20 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
-    // The last line overall when every process that held stderr closed it on
-    // its own. Otherwise the stop above ended one, and its answer to the stop is
-    // not why the script failed, so the line is the one stderr ended on before
-    // it - which keeps the script's own error that a stderr consumer wrote late.
-    // A process still writing when the settle gave up never went quiet, so
-    // nothing written after bash exited counts.
+    // The last line overall when every process that held the streams closed
+    // them on its own. Otherwise something still held them when the settle
+    // ended, and its answer to the stop is not why the script failed, so the
+    // line is the one stderr ended on before the stop - which keeps the
+    // script's own error that a stderr consumer wrote late. Only when stderr
+    // itself was still being written as the settle gave up did it never go
+    // quiet, and then nothing written there after bash exited counts; a job
+    // chattering on stdout alone leaves the stderr line as it stood.
     let stderrLine = capture.lastStderrLine;
-    if (settled === "quiet") stderrLine = stderrLineBeforeStop;
-    else if (settled === "cut") stderrLine = stderrLineAtVerdict ?? stderrLineBeforeStop;
+    if (settled !== "closed") {
+      stderrLine = stderrStillWriting
+        ? (stderrLineAtVerdict ?? stderrLineBeforeStop)
+        : stderrLineBeforeStop;
+    }
     const verdict = redactSecrets(
       run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
