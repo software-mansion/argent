@@ -694,9 +694,9 @@ describe("a remote simulator settles like a local one", () => {
     expect(result.steps[0].warning).toContain("native devtools is unavailable");
   }, 20_000);
 
-  it("resolves a selector step there instead of refusing the platform", async () => {
-    // What used to fail with `ui-tree matching is not supported on platform
-    // "ios-remote"` before this platform had a source.
+  it("resolves a selector step there to a frame out of the tree it reads", async () => {
+    // This file stubs the fetch, so this pins the runner's side only. Which
+    // source a remote read dispatches to is pinned in flow-remote-tree.test.ts.
     currentTree = () =>
       screen([{ role: "AXButton", label: "Continue", frame: BUTTON, children: [] }]);
     await writeFlow("tap-remote-selector", {
