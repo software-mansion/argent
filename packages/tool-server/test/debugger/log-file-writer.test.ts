@@ -352,6 +352,7 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter under an unwritable ~/.arge
     const w = unwritable as LogFileWriter;
 
     expect(fs.existsSync(path.dirname(w.getFilePath()))).toBe(false);
+    expect(w.hasFile()).toBe(false);
     expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
     expect(w.getStats().totalEntries).toBe(1);
     expect(w.readAll()).toEqual([]);

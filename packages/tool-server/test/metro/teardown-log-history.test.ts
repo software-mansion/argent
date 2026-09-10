@@ -13,9 +13,12 @@
  * Drives the real Registry → JsRuntimeDebugger → debugger-log-registry path
  * against a mock Metro, disposing the service exactly as the teardown does.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Registry } from "@argent/registry";
 import {
   jsRuntimeDebuggerBlueprint,
@@ -219,6 +222,11 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
       __resetReapedSessionsForTesting();
     });
 
+    // A live CONNECT_ID session keeps LOGICAL_ID aliased onto it for later cases.
+    afterEach(async () => {
+      await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    });
+
     it("explains the loss whichever of the two ids the read uses", async () => {
       const urn = await connectAndCapture(CONNECT_ID, 29);
       const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
@@ -280,3 +288,35 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     });
   });
 });
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "a debugger session under an unwritable ~/.argent",
+  () => {
+    let argentDir: string;
+
+    beforeEach(() => {
+      argentDir = path.join(os.homedir(), ".argent");
+      fs.rmSync(path.join(argentDir, "tmp"), { recursive: true, force: true });
+      fs.mkdirSync(argentDir, { recursive: true });
+      fs.chmodSync(argentDir, 0o500);
+    });
+
+    afterEach(() => {
+      fs.chmodSync(argentDir, 0o700);
+    });
+
+    it("connects, and the registry says its log file does not exist", async () => {
+      await connectAndCapture(LOGICAL_ID, 2);
+
+      const result = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+      })) as { status: string; file: string; totalEntries: number; note?: string };
+
+      expect(result.status).toBe("connected");
+      expect(result.totalEntries).toBe(2);
+      expect(fs.existsSync(result.file)).toBe(false);
+      expect(result.note).toContain(`No log file exists at ${result.file}`);
+    });
+  }
+);

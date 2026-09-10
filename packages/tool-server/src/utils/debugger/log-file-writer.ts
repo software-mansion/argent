@@ -69,9 +69,8 @@ export class LogFileWriter {
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch {
-      // An unwritable ~/.argent must not fail the debugger connection this
-      // writer belongs to: a missing directory makes open() fail below, and
-      // entries buffer in memory as they do for an unwritable ~/.argent/tmp.
+      // An unwritable ~/.argent must not fail the debugger connection: open()
+      // fails below and the writer runs fileless, which hasFile() reports.
     }
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
     this.open();
@@ -145,6 +144,10 @@ export class LogFileWriter {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  hasFile(): boolean {
+    return fs.existsSync(this.filePath);
   }
 
   getStats(): LogStats {
