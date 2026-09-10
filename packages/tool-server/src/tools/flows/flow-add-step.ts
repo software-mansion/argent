@@ -408,9 +408,10 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 // would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
-  // Every remedy below repairs a source that is down. A platform with no flow
-  // tree source at all is not down: no relaunch can produce a tree there, and
-  // "once that tree source is back" is nonsense for one that never left.
+  // This caveat rides on a reason whose remedy repairs a source that is down.
+  // A platform with no flow tree source at all is not down: no relaunch can
+  // produce a tree there, and "once that tree source is back" is nonsense for
+  // one that never left.
   if (!hasRunnerTree(udid)) return "";
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
