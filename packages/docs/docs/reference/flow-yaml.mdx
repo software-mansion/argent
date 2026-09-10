@@ -307,7 +307,7 @@ Argent reports what the script writes to stdout and stderr as the log of the ste
 - `log` in the result of `flow-add-script`. `logTruncated` is `true` when Argent cut the log
 - The output of `argent flow run`, under the line of the step
 
-A command that the script starts can write to the log after the script exits. Argent waits for such a command while it writes, for up to 3 seconds. After that, Argent stops reading the log. Argent then marks the log as cut and adds a note to the step.
+A command that the script starts can write to the log after the script exits. Argent waits for such a command while it writes, for up to 3 seconds. After that, Argent stops waiting for the command. Argent then marks the log as cut and adds a note to the step.
 
 A failed step stops the flow. The verdict names the side that caused the failure.
 
@@ -322,11 +322,11 @@ The split holds only when the `timeout` is generous. Argent needs about a second
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`timeout` bounds the run of the script, not the duration of the step. Three waits sit outside it. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+`timeout` bounds the run of the script, not the duration of the step. Some waits sit outside it. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
 
 A `.sh` step also finds bash before its limit starts. Argent runs each candidate once and asks it for its version, so a slow or hanging candidate costs seconds per candidate. Set `scripts.bash` and the search stops at it.
 
-After the script exits, a step waits while a command that the script started still writes to the log, for up to 3 seconds.
+After the script exits, a step waits for up to 3 seconds while a command that the script starts still writes to the log.
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the Node process. The heap limit does not apply to a bash script. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
@@ -347,7 +347,7 @@ The reason of a step that failed on a non-zero code has two parts:
 
 Argent never puts stdout in the reason. A script that writes nothing to stderr gets only the first part.
 
-A background job can hold stderr after bash exits. A line that such a job writes when Argent stops it goes only to the log. If the job still writes when Argent stops waiting for the log, the second part is the last non-blank line that the script wrote to stderr before bash exited.
+A background job can hold stderr after bash exits. A line that such a job writes when Argent stops it goes only to the log. A job can also still write to stderr when Argent stops waiting. Then the second part is the last non-blank line that the script wrote to stderr before bash exited.
 
 With `set -euo pipefail`, the second part is the error message of the failed command. The script needs no extra code for it. For example, a `curl -fsS` call that gets a 503 answer ends the reason with `curl: (22) The requested URL returned error: 503`. To explain a failure yourself, write the explanation to stderr and exit with a non-zero code:
 
