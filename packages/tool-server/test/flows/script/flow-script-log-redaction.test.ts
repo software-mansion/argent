@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -307,6 +308,290 @@ describe("script log redaction - a value re-framed behind a prefix", () => {
     // The placeholder is shorter than the frames it replaced, so nothing here
     // came near a limit.
     expect(result.logTruncated).toBe(false);
+  }, 30_000);
+});
+
+/**
+ * `xxd`, `hexdump -C` and `od -c` print a value in ROWS: its bytes as hex with
+ * the same bytes as text beside them, or one character to a cell. No spelling
+ * of the value survives that, and every row opens with an offset that ends a
+ * byte run - so the log held the credential in sixteen-character slices. The
+ * dumps are pasted in as the tools printed them, so the cases do not depend on
+ * which tools, or whose builds of them, the host has.
+ */
+describe("script log redaction - a value a dump tool laid out in rows", () => {
+  const KEY: FlowScriptSecret = { name: "KEY", value: "sk-live-51Hq7xK2mN9pR4tV8wY3zA6bC0dE" };
+  /** Multi-byte, with `日` across the row break and an ASCII stretch longer than a run. */
+  const WIDE: FlowScriptSecret = { name: "WIDE", value: "pässwörd-€-日本-9d3f7a2c" };
+  const SHORT: FlowScriptSecret = { name: "SHORT", value: "s3cr3t-9d3f0a1b" };
+  const PUBLIC = "just-a-public-build-id-0042";
+
+  const KEY_XXD = [
+    "00000000: 736b 2d6c 6976 652d 3531 4871 3778 4b32  sk-live-51Hq7xK2",
+    "00000010: 6d4e 3970 5234 7456 3877 5933 7a41 3662  mN9pR4tV8wY3zA6b",
+    "00000020: 4330 6445                                C0dE",
+  ];
+
+  /**
+   * The text as a reader of a dump joins it back up: the blanks and BSD's `**`
+   * cells taken out, so a text column's slices, `od -c`'s cells and `xxd`'s hex
+   * words meet again. `hexDumpView` reads two-digit bytes and no words.
+   */
+  function dumpView(text: string): string {
+    return text.replace(/\s+|\*\*/g, "");
+  }
+
+  function expectNoDumpRun(text: string, secret: FlowScriptSecret): void {
+    expectRedacted(text, secret);
+    const joined = dumpView(text);
+    expect(leakedRuns(joined, secret.value)).toEqual([]);
+    // `xxd -u` writes its hex upper-case.
+    expect(leakedRuns(joined.toLowerCase(), secret.value)).toEqual([]);
+  }
+
+  /** Each line's first field - the offset of a row - in order. */
+  function offsets(text: string): string[] {
+    return text.split("\n").map((line) => line.split(" ")[0]!);
+  }
+
+  /** The log of a step that printed these lines and nothing else. */
+  async function logOf(lines: readonly string[], secret: FlowScriptSecret): Promise<string> {
+    const result = await runScript(
+      "dump.mjs",
+      `process.stdout.write(${JSON.stringify(lines.join("\n"))});`,
+      [secret]
+    );
+    expect(result.ok).toBe(true);
+    return result.log;
+  }
+
+  // The three as macOS prints them - vim's xxd, BSD's hexdump and od - for a
+  // value three rows long.
+  it("replaces a value xxd, hexdump -C and od -c printed, in the hex and in the text column", async () => {
+    const log = await logOf(
+      [
+        "== xxd",
+        ...KEY_XXD,
+        "== hexdump -C",
+        "00000000  73 6b 2d 6c 69 76 65 2d  35 31 48 71 37 78 4b 32  |sk-live-51Hq7xK2|",
+        "00000010  6d 4e 39 70 52 34 74 56  38 77 59 33 7a 41 36 62  |mN9pR4tV8wY3zA6b|",
+        "00000020  43 30 64 45                                       |C0dE|",
+        "00000024",
+        "== od -c",
+        "0000000    s   k   -   l   i   v   e   -   5   1   H   q   7   x   K   2",
+        "0000020    m   N   9   p   R   4   t   V   8   w   Y   3   z   A   6   b",
+        "0000040    C   0   d   E                                                ",
+        "0000044",
+        "",
+      ],
+      KEY
+    );
+
+    expect(log).toBe(
+      [
+        "== xxd",
+        "00000000: {{secret:KEY}}  {{secret:KEY}}",
+        "00000010: {{secret:KEY}}  {{secret:KEY}}",
+        "00000020: {{secret:KEY}}                                {{secret:KEY}}",
+        "== hexdump -C",
+        "00000000  {{secret:KEY}}  |{{secret:KEY}}|",
+        "00000010  {{secret:KEY}}  |{{secret:KEY}}|",
+        "00000020  {{secret:KEY}}                                       |{{secret:KEY}}|",
+        "00000024",
+        "== od -c",
+        "0000000    {{secret:KEY}}",
+        "0000020    {{secret:KEY}}",
+        "0000040    {{secret:KEY}}                                                ",
+        "0000044",
+        "",
+      ].join("\n")
+    );
+    expectNoDumpRun(log, KEY);
+  }, 30_000);
+
+  // The words a value shares with the text in front of it go with it; the
+  // rest of the row stays.
+  it("replaces a value that starts part-way into a row, and nothing in front of it", async () => {
+    const log = await logOf(
+      [
+        "00000000: 4175 7468 6f72 697a 6174 696f 6e3a 2042  Authorization: B",
+        "00000010: 6561 7265 7220 736b 2d6c 6976 652d 3531  earer sk-live-51",
+        "00000020: 4871 3778 4b32 6d4e 3970 5234 7456 3877  Hq7xK2mN9pR4tV8w",
+        "00000030: 5933 7a41 3662 4330 6445                 Y3zA6bC0dE",
+      ],
+      KEY
+    );
+
+    expect(log).toBe(
+      [
+        "00000000: 4175 7468 6f72 697a 6174 696f 6e3a 2042  Authorization: B",
+        "00000010: 6561 7265 7220 {{secret:KEY}}  earer {{secret:KEY}}",
+        "00000020: {{secret:KEY}}  {{secret:KEY}}",
+        "00000030: {{secret:KEY}}                 {{secret:KEY}}",
+      ].join("\n")
+    );
+    expectNoDumpRun(log, KEY);
+  }, 30_000);
+
+  // GNU's od writes one blank less in front of the first cell and pads no row;
+  // `od -t x1` keeps its offsets here, which is what ends a byte run.
+  it("replaces a value GNU and BSD od -t x1, GNU od -c, and xxd -g1 and -u printed", async () => {
+    const dump = [
+      "== GNU od -c",
+      "0000000   s   k   -   l   i   v   e   -   5   1   H   q   7   x   K   2",
+      "0000020   m   N   9   p   R   4   t   V   8   w   Y   3   z   A   6   b",
+      "0000040   C   0   d   E",
+      "0000044",
+      "== GNU od -t x1",
+      "0000000 73 6b 2d 6c 69 76 65 2d 35 31 48 71 37 78 4b 32",
+      "0000020 6d 4e 39 70 52 34 74 56 38 77 59 33 7a 41 36 62",
+      "0000040 43 30 64 45",
+      "0000044",
+      "== BSD od -t x1",
+      "0000000    73  6b  2d  6c  69  76  65  2d  35  31  48  71  37  78  4b  32",
+      "0000020    6d  4e  39  70  52  34  74  56  38  77  59  33  7a  41  36  62",
+      "0000040    43  30  64  45                                                ",
+      "0000044",
+      "== xxd -g1",
+      "00000000: 73 6b 2d 6c 69 76 65 2d 35 31 48 71 37 78 4b 32  sk-live-51Hq7xK2",
+      "00000010: 6d 4e 39 70 52 34 74 56 38 77 59 33 7a 41 36 62  mN9pR4tV8wY3zA6b",
+      "00000020: 43 30 64 45                                      C0dE",
+      "== xxd -u",
+      "00000000: 736B 2D6C 6976 652D 3531 4871 3778 4B32  sk-live-51Hq7xK2",
+      "00000010: 6D4E 3970 5234 7456 3877 5933 7A41 3662  mN9pR4tV8wY3zA6b",
+      "00000020: 4330 6445                                C0dE",
+    ];
+    const log = await logOf(dump, KEY);
+
+    expectNoDumpRun(log, KEY);
+    expect(offsets(log)).toEqual(offsets(dump.join("\n")));
+    expect(log.split("{{secret:KEY}}").length - 1).toBe(3 * 3 + 2 * 3 * 2);
+  }, 30_000);
+
+  // `xxd` and `hexdump -C` render a byte outside printable ASCII as a dot, and
+  // BSD's `od -c` writes a multi-byte character whole in its first cell with
+  // `**` in the rest - across a row break when the character straddles one.
+  // In the C locale both od builds write octal instead.
+  it("replaces a multi-byte value in each layout", async () => {
+    const dump = [
+      "== xxd",
+      "00000000: 70c3 a473 7377 c3b6 7264 2de2 82ac 2de6  p..ssw..rd-...-.",
+      "00000010: 97a5 e69c ac2d 3964 3366 3761 3263       .....-9d3f7a2c",
+      "== hexdump -C",
+      "00000000  70 c3 a4 73 73 77 c3 b6  72 64 2d e2 82 ac 2d e6  |p..ssw..rd-...-.|",
+      "00000010  97 a5 e6 9c ac 2d 39 64  33 66 37 61 32 63        |.....-9d3f7a2c|",
+      "0000001e",
+      "== BSD od -c, UTF-8",
+      "0000000    p   ä  **   s   s   w   ö  **   r   d   -   €  **  **   -  日",
+      "0000020   **  **  本  **  **   -   9   d   3   f   7   a   2   c        ",
+      "0000036",
+      "== BSD od -c, C",
+      "0000000    p 303 244   s   s   w 303 266   r   d   - 342 202 254   - 346",
+      "0000020  227 245 346 234 254   -   9   d   3   f   7   a   2   c        ",
+      "0000036",
+      "== GNU od -c, C",
+      "0000000   p 303 244   s   s   w 303 266   r   d   - 342 202 254   - 346",
+      "0000020 227 245 346 234 254   -   9   d   3   f   7   a   2   c",
+      "0000036",
+    ];
+    const log = await logOf(dump, WIDE);
+
+    expectNoDumpRun(log, WIDE);
+    expect(offsets(log)).toEqual(offsets(dump.join("\n")));
+    // Every cell of every character went, `**` and octal alike.
+    expect(log).not.toMatch(/\*\*|[äö€日本]| [0-7]{3}\b/);
+  }, 30_000);
+
+  // A value short enough for one row is in its text column whole, so the
+  // whole-value scrub takes it there first - and its hex words, which spell it
+  // just as well, are left beside a placeholder.
+  it("replaces the hex words of a value short enough for one xxd row", async () => {
+    const log = await logOf(
+      ["00000000: 7333 6372 3374 2d39 6433 6630 6131 62    s3cr3t-9d3f0a1b"],
+      SHORT
+    );
+
+    expect(log).toBe("00000000: {{secret:SHORT}}    {{secret:SHORT}}");
+    expectNoDumpRun(log, SHORT);
+  }, 30_000);
+
+  // A two-digit rendering is stitched across ONE row break by the byte pass,
+  // so the hex of a value two rows long is taken there. Its text column is
+  // not, and a row whose hex was rewritten no longer reads as a row.
+  it("replaces the text column beside a value two rows long", async () => {
+    const log = await logOf(
+      [
+        "00000000  68 75 6e 74 65 72 32 2d  39 64 33 66 30 61 31 62  |hunter2-9d3f0a1b|",
+        "00000010  37 63 32 65                                       |7c2e|",
+        "00000014",
+        "00000000: 68 75 6e 74 65 72 32 2d 39 64 33 66 30 61 31 62  hunter2-9d3f0a1b",
+        "00000010: 37 63 32 65                                      7c2e",
+      ],
+      PASS
+    );
+
+    expect(log).toBe(
+      [
+        "00000000  {{secret:PASS}}  |{{secret:PASS}}|",
+        "00000010  {{secret:PASS}}                                       |{{secret:PASS}}|",
+        "00000014",
+        "00000000: {{secret:PASS}}  {{secret:PASS}}",
+        "00000010: {{secret:PASS}}                                      {{secret:PASS}}",
+      ].join("\n")
+    );
+    expectNoDumpRun(log, PASS);
+  }, 30_000);
+
+  // Only a spelling's bytes are replaced, so a dump of anything else comes out
+  // as printed - and so does a line that merely opens with digits.
+  it("leaves a dump of a value that is no secret, and prose shaped like a row, as printed", async () => {
+    const kept = [
+      "0000000 files changed, 3 insertions(+)",
+      "00000010: build finished in 4s  ok",
+      "00000000  started 12:00:01  |ok|",
+      "20240611 deploy 7f3a9d2 to production",
+      "0000020  cafe babe  sk-test",
+      "00000000: 6a75 7374 2d61 2d70 7562 6c69 632d 6275  just-a-public-bu",
+      "00000010: 696c 642d 6964 2d30 3034 32              ild-id-0042",
+      "00000000  6a 75 73 74 2d 61 2d 70  75 62 6c 69 63 2d 62 75  |just-a-public-bu|",
+      "00000010  69 6c 64 2d 69 64 2d 30  30 34 32                 |ild-id-0042|",
+      "0000001b",
+      "0000000    j   u   s   t   -   a   -   p   u   b   l   i   c   -   b   u",
+      "0000020    i   l   d   -   i   d   -   0   0   4   2                    ",
+      "0000033",
+    ];
+    const log = await logOf([...kept, "== the key", ...KEY_XXD], KEY);
+
+    expect(log.startsWith(`${kept.join("\n")}\n== the key\n`)).toBe(true);
+    expectNoDumpRun(log, KEY);
+  }, 30_000);
+
+  // The same through whichever of the tools this host has, beside a value that
+  // is no secret dumped the same way - which has to come out as the tool wrote it.
+  it("replaces a value the host's own dump tools printed, and leaves the rest of the dump", async (ctx) => {
+    skipWithoutBash(ctx);
+    const found = await resolveHostBash();
+    if (!("path" in found)) return;
+    const run = (command: string) =>
+      execFileSync(found.path, ["-c", command], { encoding: "utf8" });
+    const tools = ["xxd", "hexdump -C", "od -c"].filter((tool) => {
+      try {
+        run(`command -v ${tool.split(" ")[0]}`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (tools.length === 0) ctx.skip("this host has none of xxd, hexdump and od");
+    const result = await runScript(
+      "dumps.sh",
+      tools.map((tool) => `printf %s "$KEY" | ${tool}\nprintf %s '${PUBLIC}' | ${tool}`).join("\n"),
+      [KEY]
+    );
+
+    expect(result.ok).toBe(true);
+    expectNoDumpRun(result.log, KEY);
+    for (const tool of tools) expect(result.log).toContain(run(`printf %s '${PUBLIC}' | ${tool}`));
   }, 30_000);
 });
 

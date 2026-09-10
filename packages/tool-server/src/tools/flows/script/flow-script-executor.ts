@@ -1610,12 +1610,14 @@ function scrubScriptPart(part: string, spellings: FlowScriptSecret[], cutAtEnd: 
 /**
  * What runs after the whole-value scrub, in order. Each one answers a rendering
  * that leaves no spelling of the value in the text: a prefix another process
- * cut, a rendering of the bytes, an escaper's backslashes, a percent-encoder's
- * escapes, a re-encoding into another alphabet. Each reads the text the ones
- * before it left, so a value that two of them rewrote is still taken.
+ * cut, a dump tool's rows, a rendering of the bytes, an escaper's backslashes,
+ * a percent-encoder's escapes, a re-encoding into another alphabet. Each reads
+ * the text the ones before it left, so a value that two of them rewrote is
+ * still taken.
  */
 const SCRUB_REPAIRS = [
   repairQuotedCuts,
+  repairDumpRows,
   repairByteRenderings,
   repairBackslashEscapes,
   repairPercentEscapes,
@@ -2189,6 +2191,426 @@ function decodeByteRun(run: ByteRun, radix: number): Buffer | undefined {
     codes.push(code);
   }
   return Buffer.from(codes);
+}
+
+/**
+ * A value a DUMP TOOL laid out in rows, read back a row at a time.
+ *
+ * `xxd`, `hexdump -C` (`hd`) and `od -c` are what a `.sh` step types to look at
+ * the bytes it is about to send, and none of them writes a value in a shape the
+ * other passes read. `xxd` and `hexdump -C` print sixteen bytes a row and then
+ * the same bytes as TEXT, in a column on the right, so the credential stands in
+ * the log in plain sixteen-character slices. `od -c` prints it one character to
+ * a cell. `xxd` groups its hex in words of two bytes, which {@link byteToken}
+ * does not read as bytes at all. And every row opens with an offset, which ends
+ * a run for {@link repairByteRenderings}, whose {@link stitchedSpans} joins two
+ * runs and no more. A value longer than two rows came back whole; a value short
+ * enough for one row lost its text column to the whole-value scrub and kept its
+ * hex words, which spell it just as well.
+ *
+ * So each line is read as a row of one layout, and a block of consecutive rows
+ * - each offset the one before plus that row's byte count - is decoded to bytes
+ * in order and searched for every spelling. A hit replaces, row by row, the hex
+ * or the `od` cells of its bytes AND their characters in the text column. One
+ * row is a block too, which is the short value's case.
+ *
+ * Strict, because nothing but the layout says a line is a row: the offset in
+ * the tool's radix and width, the hex in the tool's groups and spacing, and a
+ * text column that renders exactly the bytes the hex spells. The one thing
+ * allowed to differ there is a placeholder the whole-value scrub already wrote,
+ * which stands for some of those bytes. Prose meets none of this, and a line
+ * that does is a dump.
+ *
+ * BEFORE {@link repairByteRenderings}, not after it. That pass stitches the
+ * two-digit layouts across one row break, so it replaces the hex of a value
+ * one or two rows long - and a row whose hex it rewrote no longer parses, so
+ * the text column beside it, which spells the same value, was left standing.
+ *
+ * Linear in the text: a line is tested for a leading offset before anything
+ * else, which ordinary text fails on its first character, a row is one pass
+ * over its line, and a block is one `indexOf` per spelling.
+ */
+function repairDumpRows(text: string, secrets: readonly FlowScriptSecret[]): string {
+  if (!DUMP_OFFSET_RE.test(text)) return text;
+  const needles = secrets
+    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
+    .filter(({ bytes }) => bytes.length > 0);
+  if (needles.length === 0) return text;
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  let block: DumpRow[] = [];
+  for (let from = 0; from <= text.length; ) {
+    const brk = text.indexOf("\n", from);
+    const end = brk < 0 ? text.length : brk;
+    const row = dumpRow(text, from, text[end - 1] === "\r" ? end - 1 : end);
+    const last = block[block.length - 1];
+    if (
+      !row ||
+      (last && (row.layout !== last.layout || row.offset !== last.offset + last.cells.length))
+    ) {
+      spans.push(...dumpBlockSpans(block, needles));
+      block = [];
+    }
+    if (row) block.push(row);
+    if (brk < 0) break;
+    from = brk + 1;
+  }
+  spans.push(...dumpBlockSpans(block, needles));
+  return spliceSpans(text, spans);
+}
+
+/** A line that opens with seven hex digits, as every offset these layouts write does. */
+const DUMP_OFFSET_RE = /^[0-9A-Fa-f]{7}/m;
+
+interface DumpRow {
+  /** Which tool's layout the row is in. A block holds rows of one. */
+  layout: "xxd" | "hexdump -C" | "od -t x1" | "od -c";
+  offset: number;
+  /** One per byte, in order. */
+  cells: DumpCell[];
+  /** The text column `xxd` and `hexdump -C` print beside the hex. */
+  column?: DumpColumn;
+}
+
+interface DumpCell {
+  /**
+   * Where the byte's hex digits sit, or its `od -c` cell. An `xxd` word is one
+   * token, so every byte in it points at the whole word.
+   */
+  from: number;
+  to: number;
+  /** The byte; -1 for a BSD `**`, which is the next byte of the character before it. */
+  byte: number;
+  /** The character a BSD `od -c` cell printed whole, in a UTF-8 locale. */
+  char?: string;
+}
+
+interface DumpColumn {
+  /** Where the column's first character sits, and where its last one ends. */
+  at: number;
+  end: number;
+  /**
+   * How many of the row's bytes render one character each from `at` forward,
+   * and from `end` back. All of them and none, unless the whole-value scrub
+   * wrote a placeholder in between - which then stands for the bytes left.
+   */
+  head: number;
+  tail: number;
+}
+
+/** The row this line is in one of the layouts, or nothing when it is in none. */
+function dumpRow(text: string, from: number, to: number): DumpRow | undefined {
+  return xxdRow(text, from, to) ?? hexdumpRow(text, from, to) ?? odRow(text, from, to);
+}
+
+/**
+ * `xxd`: an offset of eight or more hex digits and a colon, then the hex in
+ * groups of one size - two bytes unless `-g` said otherwise, the last group of
+ * a row shorter - and, after at least two blanks, the text column, padded out
+ * so that it lines up with the rows above it.
+ */
+function xxdRow(text: string, from: number, to: number): DumpRow | undefined {
+  const digits = runEnd(text, from, to, isHexDigit);
+  if (digits - from < 8 || !text.startsWith(": ", digits)) return undefined;
+  const cells: DumpCell[] = [];
+  let size = 0;
+  let short = false;
+  let at = digits + 2;
+  let end: number;
+  for (;;) {
+    end = runEnd(text, at, to, isHexDigit);
+    const width = end - at;
+    // Whole bytes, and no group wider than the first or after a shorter one.
+    if (width === 0 || width % 2 !== 0 || short || (size > 0 && width > size)) return undefined;
+    if (size === 0) size = width;
+    short = width < size;
+    for (let byte = at; byte < end; byte += 2) {
+      cells.push({ from: at, to: end, byte: parseInt(text.slice(byte, byte + 2), 16) });
+    }
+    if (text[end] !== " " || end + 1 >= to || !isHexDigit(text.charCodeAt(end + 1))) break;
+    at = end + 1;
+  }
+  const column = dumpColumn(text, end, to, cells, true);
+  return column && { layout: "xxd", offset: parseInt(text.slice(from, digits), 16), cells, column };
+}
+
+/**
+ * `hexdump -C` and `hd`: an offset of eight or more hex digits, then each byte
+ * as two lower-case hex digits at a FIXED column - two blanks in, three columns
+ * a byte, one more past the eighth - and the text column between bars, the
+ * first of them where a full row's would be.
+ */
+function hexdumpRow(text: string, from: number, to: number): DumpRow | undefined {
+  const digits = runEnd(text, from, to, isHexDigit);
+  const bar = digits + HEXDUMP_BAR_COLUMN;
+  if (digits - from < 8 || text[bar] !== "|" || bar >= to - 1 || text[to - 1] !== "|") {
+    return undefined;
+  }
+  const cells: DumpCell[] = [];
+  for (let at = digits; at < bar; at++) {
+    if (text[at] === " ") continue;
+    const index = cells.length;
+    if (at !== digits + 2 + 3 * index + (index >= 8 ? 1 : 0) || !isLowerHexPair(text, at)) {
+      return undefined;
+    }
+    cells.push({ from: at, to: at + 2, byte: parseInt(text.slice(at, at + 2), 16) });
+    at++;
+  }
+  const column = cells.length > 0 ? dumpColumn(text, bar + 1, to - 1, cells, false) : undefined;
+  return (
+    column && {
+      layout: "hexdump -C",
+      offset: parseInt(text.slice(from, digits), 16),
+      cells,
+      column,
+    }
+  );
+}
+
+/** How far past the offset `hexdump -C` opens its text column: 2 + 16 × 3 + 2. */
+const HEXDUMP_BAR_COLUMN = 52;
+
+/**
+ * `od -t x1` and `od -c`: an offset of seven or more OCTAL digits, then a cell
+ * per byte. No text column, and nothing to check one against - so each cell has
+ * to be one the tool writes, exactly as wide as it writes it.
+ */
+function odRow(text: string, from: number, to: number): DumpRow | undefined {
+  const digits = runEnd(text, from, to, isOctalDigit);
+  if (digits - from < 7 || text[digits] !== " ") return undefined;
+  const offset = parseInt(text.slice(from, digits), 8);
+  const hex = odHexCells(text, digits, to);
+  if (hex) return { layout: "od -t x1", offset, cells: hex };
+  // GNU writes the first cell straight after the offset, BSD one blank later.
+  const chars = odCharCells(text, digits, to) ?? odCharCells(text, digits + 1, to);
+  return chars && { layout: "od -c", offset, cells: chars };
+}
+
+/**
+ * `od -t x1`'s bytes: two lower-case hex digits each, one blank apart from GNU
+ * and two from BSD - which starts two blanks further in and pads a short row.
+ */
+function odHexCells(text: string, at: number, to: number): DumpCell[] | undefined {
+  const cells: DumpCell[] = [];
+  let gap = 0;
+  for (;;) {
+    const start = runEnd(text, at, to, isBlank);
+    if (start === to) break;
+    const blanks = start - at;
+    if (cells.length === 0) gap = blanks === 1 ? 1 : blanks === 4 ? 2 : 0;
+    else if (blanks !== gap) return undefined;
+    const whole = start + 2 >= to || text[start + 2] === " ";
+    if (gap === 0 || !whole || !isLowerHexPair(text, start)) return undefined;
+    cells.push({ from: start, to: start + 2, byte: parseInt(text.slice(start, start + 2), 16) });
+    at = start + 2;
+  }
+  return cells.length > 0 ? cells : undefined;
+}
+
+/**
+ * `od -c`'s cells, four columns each with the character to the right: a
+ * printable one as itself, a blank as four blanks, `\n` and the other C
+ * escapes, three octal digits for anything else. BSD in a UTF-8 locale writes a
+ * multi-byte character whole in its first byte's cell, `**` in the cells of the
+ * rest, and gives a WIDE character one blank fewer.
+ */
+function odCharCells(text: string, at: number, to: number): DumpCell[] | undefined {
+  const cells: DumpCell[] = [];
+  while (at < to) {
+    if (text.startsWith("    ", at)) {
+      cells.push({ from: at, to: at + 4, byte: 0x20 });
+      at += 4;
+      continue;
+    }
+    const start = runEnd(text, at, Math.min(at + 3, to), isBlank);
+    const cell = odCell(text, start, start - at);
+    if (!cell || cell.to > to) return undefined;
+    cells.push(cell);
+    at = cell.to;
+  }
+  return cells.length > 0 ? cells : undefined;
+}
+
+/** One `od -c` cell's content at `at`, behind the blanks that right-align it. */
+function odCell(text: string, at: number, blanks: number): DumpCell | undefined {
+  const code = text.codePointAt(at) ?? 0;
+  if (blanks === 3 && code > 0x20 && code < 0x7f) return { from: at, to: at + 1, byte: code };
+  if (blanks === 2 && code === 0x5c) {
+    const byte = OD_ESCAPES[text.charAt(at + 1)];
+    return byte === undefined ? undefined : { from: at, to: at + 2, byte };
+  }
+  if (blanks === 2 && text.startsWith("**", at)) return { from: at, to: at + 2, byte: -1 };
+  const octal = text.slice(at, at + 3);
+  if (blanks === 1 && /^[0-3][0-7]{2}$/.test(octal)) {
+    return { from: at, to: at + 3, byte: parseInt(octal, 8) };
+  }
+  // U+FFFD is no character a tool wrote: it is a raw byte the log could not
+  // decode, and which byte it was is gone.
+  if ((blanks === 2 || blanks === 3) && code > 0x7f && code !== 0xfffd) {
+    const char = String.fromCodePoint(code);
+    return { from: at, to: at + char.length, byte: -1, char };
+  }
+  return undefined;
+}
+
+/** The byte behind each C escape `od -c` writes, by the letter after the backslash. */
+const OD_ESCAPES: Readonly<Record<string, number>> = {
+  "0": 0,
+  "a": 7,
+  "b": 8,
+  "f": 12,
+  "n": 10,
+  "r": 13,
+  "t": 9,
+  "v": 11,
+};
+
+/**
+ * Where a row's text column sits in `text[from, to)`, or nothing when what is
+ * there is not its bytes' own rendering: a printable ASCII byte as itself, any
+ * other byte as a dot. `padded` says blanks stand in front of the column, as
+ * `xxd` writes them; otherwise the column is the whole range.
+ */
+function dumpColumn(
+  text: string,
+  from: number,
+  to: number,
+  cells: readonly DumpCell[],
+  padded: boolean
+): DumpColumn | undefined {
+  const n = cells.length;
+  let rendered = "";
+  for (const { byte } of cells) {
+    rendered += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
+  }
+  const region = text.slice(from, to);
+  const open = region.indexOf(SECRET_PLACEHOLDER_MARKER);
+  if (open < 0) {
+    const at = to - n;
+    if (padded ? at - from < 2 || runEnd(text, from, at, isBlank) !== at : at !== from) {
+      return undefined;
+    }
+    return text.slice(at, to) === rendered ? { at, end: to, head: n, tail: 0 } : undefined;
+  }
+  const close = region.lastIndexOf("}}") + 2;
+  if (close < open + SECRET_PLACEHOLDER_MARKER.length + 2) return undefined;
+  let at = from;
+  if (padded) {
+    // The blanks in front of the column are the tool's, but the column can
+    // open with blanks of its own: those are the bytes', as many as it has.
+    const first = runEnd(text, from, from + open, isBlank);
+    if (first - from < 2) return undefined;
+    at = first - Math.min(runEnd(rendered, 0, n, isBlank), first - from - 2);
+  }
+  const head = from + open - at;
+  const tail = to - (from + close);
+  if (head + tail >= n) return undefined;
+  const fits =
+    text.slice(at, from + open) === rendered.slice(0, head) &&
+    text.slice(from + close, to) === rendered.slice(n - tail);
+  return fits ? { at, end: to, head, tail } : undefined;
+}
+
+/**
+ * Every place a block's rows spell a value: its bytes decoded in order, one
+ * search per spelling, and each hit mapped back row by row to the hex or the
+ * cells of its bytes and to their characters in the text column.
+ */
+function dumpBlockSpans(
+  block: DumpRow[],
+  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
+): Array<{ from: number; to: number; name: string }> {
+  const final = block[block.length - 1];
+  if (!final) return [];
+  // BSD pads the last `od -c` row with blank cells, which read as spaces. A
+  // value that really ended in one is still taken by its trimmed spelling.
+  if (final.layout === "od -c") {
+    while (final.cells[final.cells.length - 1]?.byte === 0x20) final.cells.pop();
+  }
+  const bytes: number[] = [];
+  const rowOf: number[] = [];
+  const firstOf: number[] = [];
+  let pending: Buffer | undefined;
+  let taken = 0;
+  for (const [index, row] of block.entries()) {
+    firstOf.push(bytes.length);
+    for (const cell of row.cells) {
+      let byte = cell.byte;
+      if (cell.char !== undefined) {
+        pending = Buffer.from(cell.char, "utf8");
+        taken = 1;
+        byte = pending[0]!;
+      } else if (byte < 0) {
+        // A `**` with no character in front of it in this block continues one
+        // the block does not hold. No value that starts in the block runs
+        // through it, so any byte will do.
+        byte = pending && taken < pending.length ? pending[taken++]! : 0x80;
+      } else {
+        pending = undefined;
+      }
+      bytes.push(byte);
+      rowOf.push(index);
+    }
+  }
+  const decoded = Buffer.from(bytes);
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const { name, bytes: needle } of needles) {
+    for (let found = decoded.indexOf(needle); found >= 0; ) {
+      const end = found + needle.length;
+      for (let at = rowOf[found]!; at <= rowOf[end - 1]!; at++) {
+        const row = block[at]!;
+        const first = Math.max(found, firstOf[at]!) - firstOf[at]!;
+        const last = Math.min(end, firstOf[at]! + row.cells.length) - firstOf[at]!;
+        spans.push({ from: row.cells[first]!.from, to: row.cells[last - 1]!.to, name });
+        if (row.column) spans.push(columnSpan(row.column, row.cells.length, first, last, name));
+      }
+      found = decoded.indexOf(needle, end);
+    }
+  }
+  return spans;
+}
+
+/** Where bytes `[first, last)` of a row of `n` stand in its text column. */
+function columnSpan(
+  column: DumpColumn,
+  n: number,
+  first: number,
+  last: number,
+  name: string
+): { from: number; to: number; name: string } {
+  const { at, end, head, tail } = column;
+  const from = first < head ? at + first : first >= n - tail ? end - (n - first) : at + head;
+  const to = last <= head ? at + last : last > n - tail ? end - (n - last) : end - tail;
+  return { from, to, name };
+}
+
+/** Where the run of characters `accept` takes from `at` ends, `to` at the latest. */
+function runEnd(text: string, at: number, to: number, accept: (code: number) => boolean): number {
+  while (at < to && accept(text.charCodeAt(at))) at++;
+  return at;
+}
+
+function isHexDigit(code: number): boolean {
+  return (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x46) || isLowerHexLetter(code);
+}
+
+function isLowerHexLetter(code: number): boolean {
+  return code >= 0x61 && code <= 0x66;
+}
+
+/** Two lower-case hex digits, which is how `hexdump -C` and `od -t x1` write a byte. */
+function isLowerHexPair(text: string, at: number): boolean {
+  for (const code of [text.charCodeAt(at), text.charCodeAt(at + 1)]) {
+    if (!((code >= 0x30 && code <= 0x39) || isLowerHexLetter(code))) return false;
+  }
+  return true;
+}
+
+function isOctalDigit(code: number): boolean {
+  return code >= 0x30 && code <= 0x37;
+}
+
+function isBlank(code: number): boolean {
+  return code === 0x20;
 }
 
 /**
