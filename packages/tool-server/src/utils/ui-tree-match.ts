@@ -723,7 +723,10 @@ export async function fetchTree(
   device: DeviceInfo,
   opts: { bundleId?: string } = {}
 ): Promise<DescribeTreeData> {
-  if (device.platform === "ios") {
+  // `ios-remote` is an iOS simulator reached over the sim-remote tunnel and
+  // reads the same AX tree: the ax-service blueprint routes describeIos there,
+  // exactly as the `describe` tool already relies on.
+  if (device.platform === "ios" || device.platform === "ios-remote") {
     return describeIos(registry, device, { bundleId: opts.bundleId });
   }
   if (device.platform === "android") {
