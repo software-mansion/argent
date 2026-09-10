@@ -1553,14 +1553,15 @@ function scrubScriptPart(part: string, spellings: FlowScriptSecret[], cutAtEnd: 
 /**
  * What runs after the whole-value scrub, in order. Each one answers a rendering
  * that leaves no spelling of the value in the text: a prefix another process
- * cut, a rendering of the bytes, an escaper's backslashes, a re-encoding into
- * another alphabet. Each reads the text the ones before it left, so a value
- * that two of them rewrote is still taken.
+ * cut, a rendering of the bytes, an escaper's backslashes, a percent-encoder's
+ * escapes, a re-encoding into another alphabet. Each reads the text the ones
+ * before it left, so a value that two of them rewrote is still taken.
  */
 const SCRUB_REPAIRS = [
   repairQuotedCuts,
   repairByteRenderings,
   repairBackslashEscapes,
+  repairPercentEscapes,
   repairEncodedRuns,
 ] as const;
 
@@ -2173,6 +2174,115 @@ function repairBackslashEscapes(text: string, secrets: readonly FlowScriptSecret
   }
   return spliceSpans(text, spans);
 }
+
+/**
+ * A value PERCENT-ENCODED by a table no spelling was derived from, read back
+ * with its escapes decoded.
+ *
+ * The spellings hold what `encodeURIComponent`, `encodeURI`, `URLSearchParams`
+ * and `escape` write, and the other percent-encoders a step meets each escape a
+ * different set. `new URL()` escapes by the WHATWG set of the component the
+ * value lands in: a query keeps `&` and `^` as written, and a userinfo escapes
+ * `@` but keeps `$`. Python's `quote`, `jq @uri` and `curl --data-urlencode`
+ * escape `!*'()`, which `encodeURIComponent` keeps. A value that mixes a
+ * character its encoder escaped with one it kept matched no spelling, so
+ * `postgres://app:P%40ssw0rd$2026@…` reported the password one `%40` away from
+ * written, in the step reason and in the log.
+ *
+ * Read as one rule instead of more tables, for the reason
+ * {@link repairBackslashEscapes} is: a table the list does not name still
+ * leaks. Decoded in byte space, as {@link repairByteRenderings} reads a
+ * rendering - a `%XX` is one byte and every other character is its UTF-8
+ * bytes - so a character escaped byte by byte comes back whole. A second
+ * reading also takes `+` as a space, which is form encoding: Python's
+ * `quote_plus` and `urlencode` write a space as `URLSearchParams` does and
+ * escape a different set around it. That reading runs without a `%XX` too,
+ * because `urlencode` writes `pass word~1` as `pass+word~1`, with no escape in
+ * it and still no spelling of it.
+ *
+ * A hit counts only where it covers something decoded: a `%XX`, or a `+` the
+ * second reading took as a space. One that covers neither stood in the text
+ * literally, where the whole-value scrub either replaced it or left it alone on
+ * purpose inside a `{{secret:NAME}}` placeholder - and finding it there again
+ * would nest one placeholder inside another.
+ */
+function repairPercentEscapes(text: string, secrets: readonly FlowScriptSecret[]): string {
+  const readings: boolean[] = [];
+  if (PERCENT_ESCAPE_RE.test(text)) readings.push(false);
+  if (text.includes("+") && secrets.some(({ value }) => value.includes(" "))) readings.push(true);
+  if (readings.length === 0) return text;
+  const needles = secrets
+    .filter(({ value }) => value.length > 0)
+    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }));
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const plusIsSpace of readings) {
+    const { bytes, from, to, decoded } = percentReading(text, plusIsSpace);
+    for (const { name, bytes: needle } of needles) {
+      for (let found = bytes.indexOf(needle); found >= 0; ) {
+        const end = found + needle.length;
+        if (!decoded.subarray(found, end).includes(1)) {
+          found = bytes.indexOf(needle, found + 1);
+          continue;
+        }
+        spans.push({ from: from[found]!, to: to[end - 1]!, name });
+        found = bytes.indexOf(needle, end);
+      }
+    }
+  }
+  return spliceSpans(text, spans);
+}
+
+/** One text as bytes, with where each byte was read from and how. */
+interface PercentReading {
+  bytes: Buffer;
+  /** Per byte, the first character of the text it was read from. */
+  from: Int32Array;
+  /** Per byte, the character just past the text it was read from. */
+  to: Int32Array;
+  /** Per byte, 1 where it was decoded from a `%XX` or a `+`, 0 where it was written as is. */
+  decoded: Uint8Array;
+}
+
+/**
+ * The text's bytes with each `%XX` decoded, and each `+` read as a space when
+ * `plusIsSpace` says so. Every other character is its own UTF-8 bytes, which is
+ * what `Buffer.from` makes of a value, a lone surrogate included.
+ */
+function percentReading(text: string, plusIsSpace: boolean): PercentReading {
+  // Three bytes is the most one UTF-16 unit writes, and an escape writes one.
+  const bytes = Buffer.alloc(text.length * 3);
+  const from = new Int32Array(bytes.length);
+  const to = new Int32Array(bytes.length);
+  const decoded = new Uint8Array(bytes.length);
+  let length = 0;
+  for (let cursor = 0; cursor < text.length; ) {
+    const code = text.charCodeAt(cursor);
+    let next = cursor + 1;
+    let width = 1;
+    if (code === 0x25 && PERCENT_ESCAPE_RE.test(text.slice(cursor, cursor + 3))) {
+      bytes[length] = parseInt(text.slice(cursor + 1, cursor + 3), 16);
+      decoded[length] = 1;
+      next = cursor + 3;
+    } else if (plusIsSpace && code === 0x2b) {
+      bytes[length] = 0x20;
+      decoded[length] = 1;
+    } else if (code < 0x80) {
+      bytes[length] = code;
+    } else {
+      if (text.codePointAt(cursor)! > 0xffff) next = cursor + 2;
+      width = bytes.write(text.slice(cursor, next), length, "utf8");
+    }
+    for (const last = length + width; length < last; length++) {
+      from[length] = cursor;
+      to[length] = next;
+    }
+    cursor = next;
+  }
+  return { bytes: bytes.subarray(0, length), from, to, decoded };
+}
+
+/** A `%` and the two hex digits of the byte it stands for. */
+const PERCENT_ESCAPE_RE = /%[0-9A-Fa-f]{2}/;
 
 /**
  * A value RE-ENCODED into another alphabet, decoded back in byte space.

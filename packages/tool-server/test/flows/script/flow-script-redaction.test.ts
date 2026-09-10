@@ -1252,3 +1252,183 @@ describe("flow script executor — what the byte-space repairs must not do", () 
     }
   }, 60_000);
 });
+
+/**
+ * The spellings hold what four percent-encoders write, and every other encoder
+ * a step meets escapes a different set: `new URL()` by the WHATWG set of the
+ * component the value lands in, Python's `quote`, `jq @uri` and `curl` by
+ * RFC 3986. A value that mixes a character its encoder escaped with one it kept
+ * matched no spelling, and reached the reason and the log one `%XX` away from
+ * written. The values are the reviewer's, and each holds characters those
+ * tables disagree on.
+ */
+describe("flow script executor - redaction of a value another table percent-encoded", () => {
+  const TOKEN: FlowScriptSecret = { name: "TOKEN", value: 'Tr0ub4dor"&3^xYz-9' };
+  const DB_PASS: FlowScriptSecret = { name: "DB_PASS", value: "P@ssw0rd$2026" };
+  const PW: FlowScriptSecret = { name: "PW", value: "P@ss w0rd~2026!" };
+  const ALL = [TOKEN, DB_PASS, PW];
+
+  /** The failure text and the log of one run, with the value in `K`. */
+  async function failWith(
+    source: string,
+    secret: FlowScriptSecret,
+    secrets: FlowScriptSecret[] = ALL
+  ): Promise<{ reason: string; log: string }> {
+    const ws = workspace();
+    const script = ws.write("percent.mjs", source);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: secret.value },
+      secrets,
+    });
+    expect(result.ok).toBe(false);
+    return {
+      reason: `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`,
+      log: result.log,
+    };
+  }
+
+  /** No run of six or more characters of the value survives, as written or decoded. */
+  function expectNoValue(text: string, secret: FlowScriptSecret): void {
+    expect(text).toContain(`{{secret:${secret.name}}}`);
+    const decoded = text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
+    for (let n = secret.value.length; n >= 6; n -= 1) {
+      for (let at = 0; at + n <= secret.value.length; at += 1) {
+        const part = secret.value.slice(at, at + n);
+        for (const view of [text, decoded, decoded.replace(/\+/g, " ")]) {
+          expect(view).not.toContain(part);
+        }
+      }
+    }
+  }
+
+  // A query is escaped by the WHATWG query set, which keeps `&` and `^` as
+  // written. `Tr0ub4dor%22&3^xYz-9` is no spelling in the list: every one of the
+  // four encoders escapes the `^`.
+  it("replaces a value new URL() percent-encoded into a query", async () => {
+    for (const secret of ALL) {
+      const { reason, log } = await failWith(
+        `const u = new URL("https://api.example.com/v1/items?token=" + process.env.K);
+         console.log("GET " + u);
+         throw new Error("GET " + u + " returned 401");`,
+        secret
+      );
+      const line = `GET https://api.example.com/v1/items?token={{secret:${secret.name}}}`;
+      expect(reason).toContain(`${line} returned 401`);
+      expect(log).toContain(line);
+      expectNoValue(reason, secret);
+      expectNoValue(log, secret);
+    }
+  }, 60_000);
+
+  // A userinfo is escaped by a wider set, which takes the `@` and keeps the
+  // `$`. None of the four encoders does both, so `P%40ssw0rd$2026` is no
+  // spelling either.
+  it("replaces a value new URL() percent-encoded into a userinfo", async () => {
+    for (const secret of ALL) {
+      const { reason, log } = await failWith(
+        `const u = new URL("postgres://app:" + process.env.K + "@db.internal:5432/orders");
+         console.log("connecting to " + u.href);
+         throw new Error("could not connect to " + u.href + ": ECONNREFUSED");`,
+        secret
+      );
+      const url = `postgres://app:{{secret:${secret.name}}}@db.internal:5432/orders`;
+      expect(reason).toContain(`could not connect to ${url}: ECONNREFUSED`);
+      expect(log).toContain(`connecting to ${url}`);
+      expectNoValue(reason, secret);
+      expectNoValue(log, secret);
+    }
+  }, 60_000);
+
+  // Python's `quote(v, safe="")` and `jq @uri` escape `!*'()` as well, which
+  // `encodeURIComponent` keeps, and Python before 3.7 escaped `~` too.
+  // Simulated here, so the case needs no Python on the host.
+  it("replaces a value a strict RFC 3986 encoder wrote", async () => {
+    for (const reserved of ["[!'()*]", "[!'()*~]"]) {
+      for (const secret of ALL) {
+        const { reason, log } = await failWith(
+          `const strict = (v) => encodeURIComponent(v).replace(/${reserved}/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+           const line = "GET https://api.example.com/v1?pw=" + strict(process.env.K);
+           console.error(line);
+           throw new Error(line + " returned 401");`,
+          secret
+        );
+        const line = `GET https://api.example.com/v1?pw={{secret:${secret.name}}}`;
+        expect(reason).toContain(`${line} returned 401`);
+        expect(log).toContain(line);
+        expectNoValue(reason, secret);
+        expectNoValue(log, secret);
+      }
+    }
+  }, 60_000);
+
+  // Form encoding writes a space as `+`, as `URLSearchParams` does, but
+  // Python's `quote_plus` and `urlencode` escape around it by RFC 3986: `~`
+  // stays and `!` goes. `curl --data-urlencode` does the same in lower-case hex.
+  // A value with nothing else to escape leaves no `%XX` in the text at all, so
+  // the `+` reading cannot wait for one.
+  it("replaces a value a form encoder wrote a space of as +", async () => {
+    const PHRASE: FlowScriptSecret = { name: "PHRASE", value: "correct horse~2026" };
+    for (const hexCase of ["toUpperCase", "toLowerCase"]) {
+      for (const secret of [...ALL, PHRASE]) {
+        const { reason, log } = await failWith(
+          `const form = (v) => encodeURIComponent(v)
+             .replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16))
+             .replace(/%[0-9A-Fa-f]{2}/g, (escape) => escape.${hexCase}())
+             .replace(/%20/g, "+");
+           const line = "POST /v1/login pw=" + form(process.env.K);
+           console.error(line);
+           throw new Error(line + " returned 401");`,
+          secret,
+          [...ALL, PHRASE]
+        );
+        const line = `POST /v1/login pw={{secret:${secret.name}}}`;
+        expect(reason).toContain(`${line} returned 401`);
+        expect(log).toContain(line);
+        expectNoValue(reason, secret);
+        expectNoValue(log, secret);
+      }
+    }
+  }, 60_000);
+
+  // Decoding is only how a value is found. An escape that spells none stays
+  // exactly as the script wrote it, `+` and all.
+  it("leaves percent-escaped text that holds no value alone", async () => {
+    const line =
+      "GET https://api.example.com/v1/search?q=caf%C3%A9+menu%20P%40ss&page=1%2C2 returned 500 (100%25 of retries)";
+    const { reason, log } = await failWith(
+      `console.log(${JSON.stringify(line)});
+       throw new Error(${JSON.stringify(line)});`,
+      PW
+    );
+    expect(reason).toContain(line);
+    expect(log).toContain(line);
+    expect(reason).not.toContain("{{secret:");
+    expect(log).not.toContain("{{secret:");
+  }, 30_000);
+
+  // A hit has to cover something decoded. `Q` stands inside its own
+  // placeholder, where the whole-value scrub leaves it alone on purpose, and
+  // decoding the `%2C` beside that placeholder must not find it there again.
+  it("does not nest a placeholder that stands beside an escape", async () => {
+    const Q: FlowScriptSecret = { name: "Q0", value: "Q" };
+    const { reason, log } = await failWith(
+      `const line = "value=" + process.env.K + "%2C next";
+       console.log(line);
+       throw new Error(line);`,
+      Q,
+      [Q]
+    );
+    expect(reason).toContain("value={{secret:Q0}}%2C next");
+    expect(log).toContain("value={{secret:Q0}}%2C next");
+    expect(reason).not.toContain("{{secret:{{secret:");
+    expect(log).not.toContain("{{secret:{{secret:");
+  }, 30_000);
+});
