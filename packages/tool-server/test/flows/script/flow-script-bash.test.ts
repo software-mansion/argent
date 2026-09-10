@@ -1702,7 +1702,10 @@ describe("limits and stopping", () => {
 
     expect(withinMargin).toBe(true);
     expect(pastMargin).toBe(false);
-    expect(result.failure?.kind).toBe("timeout");
+    // The whole failure, so a wrong verdict names which side produced it: the
+    // runner's own report of bash's exit, or the parent's reading of a runner
+    // that ended with none.
+    expect(result.failure).toMatchObject({ kind: "timeout" });
   }, 60_000);
 
   // The `.mjs` side has this at flow-script-lifecycle.test.ts; every bash

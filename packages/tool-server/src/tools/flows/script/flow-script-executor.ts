@@ -967,13 +967,17 @@ function classifyOutcome(
     );
   }
 
+  // The clock rather than the timer, which a stall in the tool server's own
+  // event loop can hold behind the exit it is racing. Past that stall the
+  // child's deadline watchdog has already stopped the tree, and reporting that
+  // stop as unexplained sends the author looking for a killer that is the step's
+  // own time limit. On POSIX the stop is a SIGKILL; on Windows it is `taskkill`,
+  // which leaves an exit code of 1 and no signal, so there a runner that ended
+  // with no verdict past the limit is the same stop.
+  if (input.deadlinePassed && (exit.signal || process.platform === "win32")) {
+    return timedOut(input.timeoutMs);
+  }
   if (exit.signal) {
-    // The clock rather than the timer, which a stall in the tool server's own
-    // event loop can hold behind the exit it is racing. Past that stall the
-    // child's deadline watchdog has already killed the group, and reporting its
-    // SIGKILL as unexplained sends the author looking for a killer that is the
-    // step's own time limit.
-    if (input.deadlinePassed) return timedOut(input.timeoutMs);
     return failed(
       "signal",
       `The script process was killed by ${exit.signal} before it returned output. ` +
