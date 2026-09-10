@@ -901,8 +901,8 @@ export class FlowScriptExecutor {
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
     // inherited the streams and is holding them open, and it stretches while
-    // that descendant is still writing.
-    const settled = await settleStreams(closed, () => lastOutputAt);
+    // that descendant is still writing. A cancelled run ends it at once.
+    const settled = await settleStreams(closed, () => lastOutputAt, request.signal);
     // Before the stop, which a job that logs its shutdown answers on stderr.
     const stderrLineBeforeStop = capture.stderrLineSoFar;
     await stop();
@@ -966,16 +966,33 @@ export class FlowScriptExecutor {
  */
 async function settleStreams(
   closed: Promise<void>,
-  lastOutputAt: () => number
+  lastOutputAt: () => number,
+  signal?: AbortSignal
 ): Promise<"closed" | "quiet" | "cut"> {
   const startedAt = Date.now();
   const limitAt = startedAt + SETTLE_WRITING_LIMIT_MS;
   const isClosed = closed.then(() => true);
-  for (;;) {
-    const quietAt = Math.max(startedAt, lastOutputAt()) + SETTLE_TIMEOUT_MS;
-    const wait = Math.min(quietAt, limitAt) - Date.now();
-    if (wait <= 0) return quietAt <= limitAt ? "quiet" : "cut";
-    if (await Promise.race([isClosed, sleep(wait).then(() => false)])) return "closed";
+  // A cancelled run has no use for the rest of the wait: the script has
+  // already answered, and what is left is only what it left running.
+  let onAbort = (): void => {};
+  const aborted = new Promise<false>((resolve) => {
+    onAbort = () => resolve(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    for (;;) {
+      const quietAt = Math.max(startedAt, lastOutputAt()) + SETTLE_TIMEOUT_MS;
+      if (signal?.aborted) {
+        return lastOutputAt() > startedAt && quietAt > Date.now() ? "cut" : "quiet";
+      }
+      const wait = Math.min(quietAt, limitAt) - Date.now();
+      if (wait <= 0) return quietAt <= limitAt ? "quiet" : "cut";
+      if (await Promise.race([isClosed, aborted, sleep(wait).then(() => false)])) {
+        return "closed";
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 

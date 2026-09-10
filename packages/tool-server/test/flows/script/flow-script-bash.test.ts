@@ -678,6 +678,41 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // A cancel is the caller giving up on the run. Past the script's own exit the
+  // wait is for what the script left running, and a cancelled run has no use
+  // for it: it ends at once rather than at its limit.
+  onPosix(
+    "ends the wait for a job still writing when the run is cancelled",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "cancel-settle.sh",
+        `( while true; do echo tick >&2; sleep 0.05; done ) &
+         printf '{"ok":true}' > "$ARGENT_OUTPUT"
+         echo done > ${JSON.stringify(exited)}`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(20);
+      await delay(300);
+      const cancelledAt = Date.now();
+      cancel.abort();
+      const result = await pending;
+
+      // The script had already passed; only the wait after it was cut short.
+      expect(result.ok).toBe(true);
+      expect(Date.now() - cancelledAt).toBeLessThan(1_500);
+    },
+    30_000
+  );
+
   it("says only the code when the script wrote nothing to stderr", async () => {
     const ws = workspace();
     const result = await runBash(ws, "silent", `exit 7`);
