@@ -142,13 +142,15 @@ describe("a flow reads the full view hierarchy on a remote simulator", () => {
 // The recorder reads the same source the runner replays against, so a tap it
 // captures on a remote sim writes a selector rather than the bare coordinates
 // it used to keep behind `selector capture failed (ui-tree matching is not
-// supported on platform "ios-remote")`.
-describe("the recorder captures a selector on a remote simulator", () => {
-  /** Serves the hierarchy AND runs the tap - what recording one step needs. */
+// supported on platform "ios-remote")`, and a wait it records is re-probed
+// against that tree rather than left with an UNKNOWN verdict.
+describe("the recorder reads the runner's tree on a remote simulator", () => {
+  /** Serves the hierarchy AND runs the recorded tool - what recording one step needs. */
   function recordingRegistry(): Registry {
     return {
       invokeTool: vi.fn(async (id: string) => {
         if (id === "gesture-tap") return { tapped: true };
+        if (id === "await-ui-element") return { success: true, elapsed: 120 };
         throw new Error(`Tool "${id}" not found`);
       }),
       getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -194,5 +196,31 @@ describe("the recorder captures a selector on a remote simulator", () => {
     const local = await recordTapOn(IOS);
 
     expect(remote.steps).toEqual(local.steps);
+  });
+
+  it("re-probes a recorded wait against the full hierarchy, with a determinate verdict", async () => {
+    // The fixture has no "Continue", so the verdict is known-bad. Before this
+    // platform had a source the read threw, and the same wait came back UNKNOWN.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "wait", project_root: tmpDir, executionPrerequisite: "on the login screen" }
+    );
+    const result = await createFlowAddStepTool(recordingRegistry()).execute(
+      {},
+      {
+        name: "wait",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: JSON.stringify({
+          udid: REMOTE,
+          condition: "visible",
+          selector: { text: "Continue" },
+        }),
+      }
+    );
+
+    expect(queries.map(([, method]) => method)).toContain("ViewHierarchy.getFullHierarchy");
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(result.message).not.toContain("is UNKNOWN, not known-bad");
   });
 });

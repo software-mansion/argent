@@ -2144,31 +2144,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // declare no capability at all, so nothing gates a remote udid out — and both
   // tables answer for one: REPLAY_TREE_SOURCES through the authoring fold, and
   // FLOW_TREE_SOURCES with its own `ios-remote` arm onto the iOS full
-  // hierarchy. So the verdict there is determinate, not UNKNOWN.
+  // hierarchy. This file stubs that fetch, so the determinate verdict the arm
+  // buys is pinned in flow-remote-tree.test.ts, which reads the real table.
   it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toEqual({ simulator: true });
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).not.toThrow();
-  });
-
-  it("returns a determinate verdict on ios-remote, not an UNKNOWN one", async () => {
-    // The runner's tree is readable there now, so a condition that does not hold
-    // against it is reported as known-bad — the same verdict a local sim gets.
-    serveTree(iosRunnerTree([iosLabel("Proceed")]));
-    await startRecording("remoteverdict");
-
-    const result = await recordWait("remoteverdict", {
-      udid: IOS_REMOTE,
-      condition: "visible",
-      selector: { text: "Continue" },
-    });
-    const warning = warningOf(result, "remoteverdict");
-
-    expect(warning).toContain("does NOT hold against the tree the runner resolves");
-    expect(warning).not.toContain("is UNKNOWN, not known-bad");
-    expect(await recordedSteps("remoteverdict")).toHaveLength(1);
   });
 });
 
