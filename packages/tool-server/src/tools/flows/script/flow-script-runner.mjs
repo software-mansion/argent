@@ -127,11 +127,19 @@ const realExit = process.exit.bind(process);
  * The protocol channel's own descriptor, read before any script code runs:
  * `process.channel` is a property a script may replace, and a wrong descriptor
  * would put the verdict into some other file. See `sendSynchronously`.
+ *
+ * None on Windows. libuv frames each message on a Windows IPC pipe with a
+ * header of its own - the room it keeps for passing a handle - so a raw line
+ * written past it is a frame the parent cannot read: the parent's end closes,
+ * this side sees `disconnect`, and in bash mode that stops the step's whole
+ * process tree before the verdict the write was for. The queued `process.send`
+ * is what frames it there.
  */
 const channelHandle = /** @type {{ fd?: number } | undefined} */ (
   /** @type {unknown} */ (process.channel)
 );
-const channelFd = typeof channelHandle?.fd === "number" ? channelHandle.fd : -1;
+const channelFd =
+  process.platform !== "win32" && typeof channelHandle?.fd === "number" ? channelHandle.fd : -1;
 
 /**
  * `JSON.stringify` and `JSON.parse` as they were before any script code ran: a
