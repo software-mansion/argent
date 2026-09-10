@@ -656,16 +656,17 @@ describe("what a failing bash step says", () => {
   );
 
   // A job that never stops writing holds the streams past any wait. Argent
-  // stops it at the limit and marks the log cut, and the reason stays the
-  // script's own.
+  // stops reading at the limit and marks the log cut, and the reason stays
+  // the script's own. The job starts writing a moment after bash exits, so a
+  // stall in this process cannot put its line in the reason.
   onPosix(
-    "marks the log cut when it stops a job that was still writing",
+    "marks the log cut when a job is still writing at the limit",
     async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
         "chatty-job",
-        `( sleep 0.2; while true; do echo "[logcat] heartbeat" >&2; sleep 0.05; done ) &
+        `( sleep 0.3; while true; do echo "[logcat] heartbeat" >&2; sleep 0.05; done ) &
          echo "the orders API answered 503" >&2
          exit 1`
       );
