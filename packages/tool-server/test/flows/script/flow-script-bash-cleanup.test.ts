@@ -17,15 +17,43 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
  */
 let refuseRemoval: ((target: string) => boolean) | undefined;
 let refuseWrite: ((target: string) => boolean) | undefined;
+/** Every path the synchronous remove was called on. */
+const removedSync: string[] = [];
+/**
+ * The asynchronous removes: how many were in flight at most, and each recursive
+ * one that found a directory with entries in it - the call that starts one
+ * operation per entry at once.
+ */
+const removesAsync = { inFlight: 0, most: 0, recursiveOnFull: [] as string[] };
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const rmSync: typeof actual.rmSync = (target, options) => {
+    removedSync.push(String(target));
+    return actual.rmSync(target, options);
+  };
+  const rm: typeof actual.promises.rm = async (target, options) => {
     if (refuseRemoval?.(String(target))) {
       throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
     }
-    return actual.rmSync(target, options);
+    if (options?.recursive) {
+      try {
+        if (actual.readdirSync(target).length > 0) {
+          removesAsync.recursiveOnFull.push(String(target));
+        }
+      } catch {
+        // Not a directory, or not there.
+      }
+    }
+    removesAsync.inFlight++;
+    removesAsync.most = Math.max(removesAsync.most, removesAsync.inFlight);
+    try {
+      return await actual.promises.rm(target, options);
+    } finally {
+      removesAsync.inFlight--;
+    }
   };
+  const promises = { ...actual.promises, rm };
   const writeFileSync: typeof actual.writeFileSync = (target, data, options) => {
     if (refuseWrite?.(String(target))) {
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
@@ -36,7 +64,8 @@ vi.mock("node:fs", async () => {
     ...actual,
     rmSync,
     writeFileSync,
-    default: { ...actual, rmSync, writeFileSync },
+    promises,
+    default: { ...actual, rmSync, writeFileSync, promises },
   };
 });
 
@@ -94,6 +123,45 @@ describe("an exchange directory that will not go", () => {
       rmSync(left!, { recursive: true, force: true });
     } finally {
       refuseRemoval = undefined;
+      ws.cleanup();
+    }
+  }, 30_000);
+});
+
+describe("removing the exchange directory", () => {
+  // A script can leave many files in its private directory - a fixture it
+  // unpacked there, a clone. A synchronous recursive remove of 100 000 of them
+  // held every request, device socket and flow on the host for 3.9 s, and an
+  // awaited recursive `fs.promises.rm` of the whole tree still held it for 1.2 s,
+  // because it starts one operation per entry at once.
+  it("removes it in bounded batches, never in one call, before the step returns", async () => {
+    const ws = createScriptWorkspace("bash-async-rm");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-async-rm-root-"));
+    const script = ws.write(
+      "scratch.sh",
+      `work="$(dirname "$ARGENT_OUTPUT")/work"
+for d in 1 2 3; do mkdir -p "$work/$d" && (cd "$work/$d" && seq 1 100 | xargs touch); done
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    removedSync.length = 0;
+    removesAsync.most = 0;
+    removesAsync.recursiveOnFull.length = 0;
+    try {
+      const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
+
+      const exchangePaths = (targets: string[]) =>
+        targets.filter((target) => target.includes(exchangeDirPrefix()));
+      expect(result.ok).toBe(true);
+      expect(exchangePaths(removedSync)).toEqual([]);
+      expect(exchangePaths(removesAsync.recursiveOnFull)).toEqual([]);
+      expect(removesAsync.most).toBeLessThanOrEqual(64);
+      expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+    } finally {
+      fs.rmSync(exchangeRoot, { recursive: true, force: true });
       ws.cleanup();
     }
   }, 30_000);

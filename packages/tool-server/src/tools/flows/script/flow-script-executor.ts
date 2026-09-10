@@ -129,7 +129,8 @@ const EXCHANGE_SWEEP_INTERVAL_MS = 60_000;
  * How many names the sweep's directory handle reads at a time. Small, because
  * what it bounds is the work one turn of the event loop does: the read is
  * scheduled off-thread either way, and it is building the JavaScript names that
- * blocks.
+ * blocks. {@link removeTree} reads a directory the same way, and keeps no more
+ * removals than this in flight.
  */
 const EXCHANGE_SWEEP_BATCH = 64;
 
@@ -690,7 +691,7 @@ export class FlowScriptExecutor {
       // removal that fails (Windows answers EBUSY while a surviving descendant
       // holds a file) is a note, never a throw: `execute` owes its caller a
       // verdict.
-      if (exchange) removeExchange(exchange, notes);
+      if (exchange) await removeExchange(exchange, notes);
       // The sweep this step started, which ran beside it rather than in front
       // of it. Waiting for it here costs nothing a step of ordinary length can
       // measure, and it keeps the root readable the moment `execute` resolves.
@@ -1515,12 +1516,12 @@ function createExchange(
   }
 }
 
-function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
+async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise<void> {
   try {
-    fs.rmSync(exchange.dir, { recursive: true, force: true });
+    await removeTree(exchange.dir);
   } catch (err) {
-    // What the sweep can and cannot do, because it is the SAME call: both are a
-    // recursive `rm` with `force`, one sync and one async. So a cause that
+    // What the sweep can and cannot do, because it is the SAME call: both
+    // remove through {@link removeTree}. So a cause that
     // clears on its own - a Windows EBUSY from a descendant that has since
     // exited - is swept, and a cause that does not, such as a mode the script
     // put on the directory itself, is still there after every later step. The
@@ -1534,6 +1535,57 @@ function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
         `directory itself - needs the directory removed by hand.`
     );
   }
+}
+
+/**
+ * A recursive remove that leaves the event loop free. What an exchange
+ * directory holds is the script's business - a fixture it unpacked, a clone -
+ * and 100 000 files there held the tool server's main thread, and with it every
+ * request, device socket and flow on the host, for 3.9 s under `rmSync`. An
+ * awaited `fs.promises.rm` of the whole tree is no cure: it starts one
+ * operation per entry at once, and their completions come back in bursts that
+ * the loop runs in one turn - 1.2 s for the same tree. So the tree is walked
+ * here a batch of names at a time, with at most {@link EXCHANGE_SWEEP_BATCH}
+ * removals in flight: 22 ms at worst. Each entry still goes through
+ * `fs.promises.rm`, for its `force` and its Windows handling of a read-only
+ * file.
+ */
+async function removeTree(target: string): Promise<void> {
+  const subdirectories: string[] = [];
+  let removals: Promise<void>[] = [];
+  // Caught where each removal starts rather than where its batch is awaited:
+  // one that fails while the next names are still being read is otherwise an
+  // unhandled rejection, which Node answers by ending the process.
+  let failure: Error | undefined;
+  const settle = async () => {
+    await Promise.all(removals);
+    removals = [];
+    if (failure) throw failure;
+  };
+  try {
+    const dir = await fs.promises.opendir(target, { bufferSize: EXCHANGE_SWEEP_BATCH });
+    for await (const entry of dir) {
+      const child = path.join(target, entry.name);
+      if (entry.isDirectory()) {
+        subdirectories.push(child);
+      } else {
+        removals.push(
+          fs.promises.rm(child, { force: true }).catch((err: unknown) => {
+            failure ??= err as Error;
+          })
+        );
+      }
+      if (removals.length >= EXCHANGE_SWEEP_BATCH) await settle();
+    }
+  } catch (err) {
+    // Gone already, which `force` asks to be quiet about, or not a directory,
+    // which the remove below takes as it is.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+  }
+  await settle();
+  for (const child of subdirectories) await removeTree(child);
+  await fs.promises.rm(target, { recursive: true, force: true });
 }
 
 let sweptStaleExchangesAt = 0;
@@ -1614,7 +1666,7 @@ async function sweepStaleExchanges(root: string): Promise<void> {
       const ownUntil = exchangeOwnedUntil(entry.name);
       if (ownUntil === undefined || ownUntil > now) continue;
       try {
-        await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
+        await removeTree(path.join(root, entry.name));
       } catch {
         // Raced with the step that owns it, or with another server's own sweep.
       }
