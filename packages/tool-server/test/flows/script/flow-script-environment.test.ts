@@ -626,57 +626,70 @@ describe("an environment near the operating system's limit", () => {
   // that exited before the script started — a verdict naming an exit code and
   // nothing else. A flow could not set `env` at all before this branch, so
   // both bands are newly reachable and neither had a test.
-  it("names the environment's size above the limit and just below it", async () => {
-    const ws = workspace();
-    const script = ws.write("noop.mjs", "output.ok = true;");
+  //
+  // POSIX only: Windows has no `ARG_MAX`. CreateProcess takes an environment
+  // block of any size, so a 1.4 MB value spawns and the script runs.
+  const onPosix = it.skipIf(process.platform === "win32");
 
-    const refused = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { BIG: "x".repeat(1_400_000) },
-    });
-    expect(refused.failure?.kind).toBe("spawn");
-    expect(refused.failure?.message).toContain("E2BIG");
-    expect(refused.failure?.message).toContain("ARG_MAX");
+  onPosix(
+    "names the environment's size above the limit and just below it",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("noop.mjs", "output.ok = true;");
 
-    const died = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { BIG: "x".repeat(1_000_000) },
-    });
-    // Whichever side of the line this host puts a megabyte on, the size is
-    // named: the refusal names it in the message, the early exit in a note.
-    const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
-    expect(died.ok).toBe(false);
-    expect(said).toMatch(/ARG_MAX/);
-    expect(said).toMatch(/100\d{4} bytes/);
-  }, 60_000);
+      const refused = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
 
-  it("names the environment's size for a .sh step too", async () => {
-    // A `.sh` step touches the child environment EARLIER than a `.mjs` one: the
-    // bash-version probe spawns each candidate, and that spawn is the one the
-    // operating system refuses. Every candidate then failed the probe, and the
-    // step's reason condemned the host's bash installation and pointed the
-    // author at `scripts.bash` — a different subsystem, and one that is
-    // working. The case above covers `.mjs`, which reaches the fork.
-    const found = await resolveHostBash();
-    if (!("path" in found)) return;
-    const ws = workspace();
-    const script = ws.write("noop.sh", "printf '{}' > \"$ARGENT_OUTPUT\"");
+      const died = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_000_000) },
+      });
+      // Whichever side of the line this host puts a megabyte on, the size is
+      // named: the refusal names it in the message, the early exit in a note.
+      const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
+      expect(died.ok).toBe(false);
+      expect(said).toMatch(/ARG_MAX/);
+      expect(said).toMatch(/100\d{4} bytes/);
+    },
+    60_000
+  );
 
-    const refused = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      env: { BIG: "x".repeat(1_400_000) },
-    });
+  onPosix(
+    "names the environment's size for a .sh step too",
+    async () => {
+      // A `.sh` step touches the child environment EARLIER than a `.mjs` one: the
+      // bash-version probe spawns each candidate, and that spawn is the one the
+      // operating system refuses. Every candidate then failed the probe, and the
+      // step's reason condemned the host's bash installation and pointed the
+      // author at `scripts.bash` — a different subsystem, and one that is
+      // working. The case above covers `.mjs`, which reaches the fork.
+      const found = await resolveHostBash();
+      if (!("path" in found)) return;
+      const ws = workspace();
+      const script = ws.write("noop.sh", "printf '{}' > \"$ARGENT_OUTPUT\"");
 
-    expect(refused.failure?.kind).toBe("spawn");
-    expect(refused.failure?.message).toContain("E2BIG");
-    expect(refused.failure?.message).toContain("ARG_MAX");
-    expect(refused.failure?.message).not.toContain("scripts.bash");
-    expect(refused.failure?.message).not.toContain("is not a bash");
-  }, 60_000);
+      const refused = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
+      expect(refused.failure?.message).not.toContain("scripts.bash");
+      expect(refused.failure?.message).not.toContain("is not a bash");
+    },
+    60_000
+  );
 
   it("says nothing about the environment when an ordinary one dies early", async () => {
     const ws = workspace();

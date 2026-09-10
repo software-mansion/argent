@@ -355,11 +355,15 @@ function scriptFrames(
  * not found never appeared in it` has the words but keeps going. Nothing caps
  * how long the line may be, either — bash prefixes the failing script's own
  * path, and a deep enough checkout would push a genuine miss past a fixed cap.
+ *
+ * That path may open with a drive letter. Git Bash names a script by the path
+ * it was handed, which on Windows is `C:/…`, and its colon is the one the
+ * writer's path may hold.
  */
 const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
-  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
-  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
-  /^(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
+  /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
   // cmd.exe writes TWO lines, and both are asked for, ending the failure text
   // the way the three signatures above do. The opening quote alone let any
   // sentence QUOTING the message match — `AssertionError: 'foo' is not

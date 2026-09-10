@@ -1005,7 +1005,9 @@ describe("the host allowlist extension", () => {
 
     const reason = result.steps[0].reason ?? "";
     expect(reason).toContain("NODE_OPTIONS");
-    expect(reason).toContain(`Listed in ${globalFile}.`);
+    // A step's reason is escaped onto one line, backslashes included, so a
+    // Windows path reads with each of them doubled.
+    expect(reason).toContain(`Listed in ${globalFile.replace(/\\/g, "\\\\")}.`);
   });
 
   it("stays silent about which file when only one is configured", async () => {
@@ -1727,6 +1729,28 @@ describe("the shell-environment note", () => {
     // The runner's own 127 hint already named the code; the note adds the
     // remedy and not a second diagnosis.
     expect(reason).not.toContain("A command was not found.");
+  });
+
+  it("keeps the note when the shell's line names the script by a Windows path", async (ctx) => {
+    skipWithoutBash(ctx);
+    // Git Bash names the script by the path it was handed, and on Windows that
+    // path opens with a drive letter. The script writes that line itself, so
+    // the shape is held on every host and not only on a Windows one.
+    await write(
+      "scripts/win-not-found.sh",
+      `echo "C:/Users/dev/project/scripts/win-not-found.sh: line 1: adb: command not found" >&2\n` +
+        `exit 127\n`
+    );
+    await flow(
+      "sh-win-not-found",
+      "steps:\n  - script: { path: ../../scripts/win-not-found.sh }\n"
+    );
+
+    const { result } = await runFlow("sh-win-not-found");
+
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("exited with code 127");
+    expect(reason).toContain("The tool server keeps the environment it started with");
   });
 
   it("leaves a .sh that chose 127 and explained itself alone", async (ctx) => {
