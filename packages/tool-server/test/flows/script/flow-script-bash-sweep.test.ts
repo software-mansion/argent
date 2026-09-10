@@ -243,6 +243,42 @@ describe("a bash step's sweep of the exchange root", () => {
     }
   }, 60_000);
 
+  // The sweep takes anything whose name carries the executor's prefix and a
+  // past stamp. A link planted under such a name is removed as a link: the
+  // directory it points to is not the sweep's, and the recursive `rm` the
+  // batched remove replaced never followed it either. POSIX only, because a
+  // symbolic link on Windows needs a privilege the CI runner lacks.
+  it.skipIf(process.platform === "win32")(
+    "removes a planted link, never what it points to",
+    async () => {
+      const ws = createScriptWorkspace("bash-sweep-link");
+      const victim = fs.mkdtempSync(path.join(os.tmpdir(), "argent-sweep-victim-"));
+      fs.writeFileSync(path.join(victim, "keep.txt"), "not the sweep's");
+      const link = path.join(exchangeRoot, `${exchangeDirPrefix()}${Date.now() - 1_000}-planted`);
+      fs.symlinkSync(victim, link);
+      try {
+        // Past the interval, so this step's own sweep is not the throttled one.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const script = ws.write("link.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+        const result = await new FlowScriptExecutor({
+          concurrency: 2,
+          maxTimeoutMs: 60_000,
+          exchangeRoot,
+          exchangeSweepIntervalMs: 1,
+        }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
+
+        expect(result.ok).toBe(true);
+        expect(fs.readFileSync(path.join(victim, "keep.txt"), "utf8")).toBe("not the sweep's");
+        expect(() => fs.lstatSync(link)).toThrow();
+      } finally {
+        fs.rmSync(link, { force: true });
+        fs.rmSync(victim, { recursive: true, force: true });
+        ws.cleanup();
+      }
+    },
+    30_000
+  );
+
   // A step never outlives its own sweep: `runOne` waits on it, so the root is
   // readable the moment `execute` resolves and a document a dead owner left is
   // gone by then rather than shortly after. Without the wait a small root still

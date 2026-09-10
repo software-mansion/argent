@@ -1595,6 +1595,24 @@ async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise
  * walked, which shortens every path below it.
  */
 async function removeTree(target: string, top = target): Promise<void> {
+  // Never through a link at the top: `opendir` follows one, and the directory
+  // it names is not this tree's - a name the sweep took for an abandoned
+  // exchange, or a link a script left where its own directory was. The link
+  // itself is removed, as a recursive `rm` removes it. Below the top a
+  // directory entry already says whether it is a link.
+  if (target === top) {
+    let stats: fs.Stats;
+    try {
+      stats = await fs.promises.lstat(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    if (!stats.isDirectory()) {
+      await fs.promises.rm(target, { force: true });
+      return;
+    }
+  }
   const subdirectories: string[] = [];
   let removals: Promise<void>[] = [];
   // Caught where each removal starts rather than where its batch is awaited:
