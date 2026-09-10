@@ -84,7 +84,11 @@ vi.mock("../src/utils/sim-remote", () => ({ moqInfo: () => Promise.resolve({}) }
 
 import { openMoqClient } from "../src/utils/moq-client";
 
-/** Node reports an unhandled rejection once the microtask queue has drained. */
+/**
+ * Node reports an unhandled rejection once the microtask queue has drained.
+ * While this listener is attached, vitest's own net stands down, so it records
+ * every reason for the caller to assert empty, and `finally` detaches it.
+ */
 async function unhandledDuring(run: () => Promise<unknown>): Promise<unknown[]> {
   const seen: unknown[] = [];
   const record = (reason: unknown) => seen.push(reason);
