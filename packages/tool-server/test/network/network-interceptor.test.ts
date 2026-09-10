@@ -1,8 +1,144 @@
+import { runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
+  NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
+
+describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
+  async function interceptResponse({
+    body,
+    mimeType,
+    byteLength,
+    contentLength,
+    method = "GET",
+    status = 200,
+    blobFails = false,
+  }: {
+    body: string | undefined;
+    mimeType: string;
+    byteLength?: number;
+    contentLength?: number;
+    method?: string;
+    status?: number;
+    blobFails?: boolean;
+  }) {
+    const response = {
+      url: "https://example.test/data",
+      status,
+      statusText: "OK",
+      headers: {
+        forEach: (callback: (value: string, key: string) => void) => {
+          callback(mimeType, "content-type");
+          if (contentLength !== undefined) callback(String(contentLength), "content-length");
+        },
+      },
+      clone: () => ({
+        text: async () => body,
+        blob: async () => {
+          if (blobFails) throw new Error("Blob unavailable");
+          return { size: byteLength };
+        },
+      }),
+    };
+    const sandbox: Record<string, unknown> = {
+      fetch: async () => response,
+    };
+
+    runInNewContext(NETWORK_INTERCEPTOR_SCRIPT, sandbox);
+    await (sandbox.fetch as (_input: string, init: { method: string }) => Promise<unknown>)(
+      response.url,
+      { method }
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    return (
+      sandbox.__argent_network_log as Array<{
+        encodedDataLength?: number;
+        responseBody?: string;
+      }>
+    )[0];
+  }
+
+  it("records decoded entity bytes instead of JavaScript string length", async () => {
+    const body = JSON.stringify({ message: "你好 👋" });
+    const byteLength = Buffer.byteLength(body, "utf8");
+    const entry = await interceptResponse({ body, byteLength, mimeType: "application/json" });
+
+    expect(entry?.encodedDataLength).toBe(byteLength);
+    expect(entry?.encodedDataLength).not.toBe(body.length);
+  });
+
+  it("records zero bytes for HEAD even when Content-Length describes a GET body", async () => {
+    const entry = await interceptResponse({
+      body: "",
+      byteLength: 0,
+      contentLength: 524_288_000,
+      method: "HEAD",
+      mimeType: "application/octet-stream",
+    });
+
+    expect(entry?.encodedDataLength).toBe(0);
+  });
+
+  it("records zero bytes for a 304 cached response", async () => {
+    const entry = await interceptResponse({
+      body: "",
+      byteLength: 0,
+      contentLength: 4096,
+      mimeType: "application/json",
+      status: 304,
+    });
+
+    expect(entry?.encodedDataLength).toBe(0);
+  });
+
+  it("does not re-encode replacement characters from a non-UTF-8 response", async () => {
+    const body = "Caf\uFFFD na\uFFFDve r\uFFFDsum\uFFFD";
+    const entry = await interceptResponse({
+      body,
+      byteLength: 17,
+      mimeType: "text/plain; charset=iso-8859-1",
+    });
+
+    expect(entry?.encodedDataLength).toBe(17);
+    expect(entry?.encodedDataLength).not.toBe(Buffer.byteLength(body, "utf8"));
+  });
+
+  it("uses decoded body bytes instead of compressed Content-Length", async () => {
+    const entry = await interceptResponse({
+      body: "x".repeat(6308),
+      byteLength: 6308,
+      contentLength: 1510,
+      mimeType: "application/json",
+    });
+
+    expect(entry?.encodedDataLength).toBe(6308);
+  });
+
+  it("records binary bytes when no text body is exposed", async () => {
+    const entry = await interceptResponse({
+      body: undefined,
+      byteLength: 16,
+      mimeType: "image/png",
+    });
+
+    expect(entry?.encodedDataLength).toBe(16);
+    expect(entry?.responseBody).toBeUndefined();
+  });
+
+  it("leaves size unknown when Blob conversion is unavailable", async () => {
+    const entry = await interceptResponse({
+      body: "hello",
+      blobFails: true,
+      mimeType: "text/plain",
+    });
+
+    expect(entry?.encodedDataLength).toBeUndefined();
+    expect(entry?.responseBody).toBe("hello");
+  });
+});
 
 describe("makeNetworkLogReadScript", () => {
   it("returns a string containing the start and limit values", () => {

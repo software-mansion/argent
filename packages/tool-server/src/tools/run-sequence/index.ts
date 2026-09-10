@@ -7,7 +7,10 @@ import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
-const ALLOWED_TOOLS = new Set([
+// No tool here returns an image or an artifact handle — that is what keeps a
+// sequence to the single capture the MCP layer appends after the last step.
+// Gated by test/run-sequence-observation-gate.test.ts.
+export const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
   "gesture-scroll",
@@ -70,6 +73,7 @@ type RunSequenceResult = {
 // Gates only the *outer* invocation: every step resolves its own platform from
 // `params.udid` and is gated separately in `execute`.
 const capability: ToolCapability = {
+  // Physical iOS is a valid outer target. Unsupported steps fail at their own gate, not the whole sequence.
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
@@ -91,7 +95,8 @@ export function createRunSequenceTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to run interaction sequence: ${failureSignal.error_code}`,
     },
-    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, Apple TV / Android TV, or Chromium app).
+    description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, or Chromium app).
+On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard, and await-ui-element steps run; others fail at their own gate.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).

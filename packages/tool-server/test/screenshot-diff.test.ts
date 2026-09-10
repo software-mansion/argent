@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { diffPngFiles, type Rgb } from "../src/tools/screenshot-diff/screenshot-diff";
 
@@ -567,8 +567,16 @@ describe("diffPngFiles", () => {
   );
 });
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
+
 async function makeTempDir(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 async function writePng(

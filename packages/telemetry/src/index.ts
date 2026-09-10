@@ -30,6 +30,7 @@ export type {
   EventName,
   EventPropertyMap,
   Platform,
+  TelemetryDeviceKind,
 } from "./events.js";
 export { DEBUGGER_NOT_CONNECTED_REASONS, DEBUGGER_TOOL_OUTCOMES, PLATFORMS } from "./events.js";
 export type { Runtime } from "./base-props.js";

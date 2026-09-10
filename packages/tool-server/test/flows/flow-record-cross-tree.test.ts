@@ -5,6 +5,11 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import {
+  __resetDeviceSetCacheForTesting,
+  rememberDeviceSet,
+} from "../../src/utils/ios-device-sets";
 
 // `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
 // directive polish converts the step into reads `fetchFlowTree`'s. Neither tree
@@ -38,7 +43,10 @@ import { createAwaitUiElementTool, evaluateMatches } from "../../src/tools/await
 import { assertSupported } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
 import { findAll, type Selector } from "../../src/utils/ui-tree-match";
-import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
+import {
+  adaptFullHierarchyToDescribeResult,
+  queryFullHierarchyTree,
+} from "../../src/tools/flows/flow-ios-tree";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
@@ -277,6 +285,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __resetRecordingsForTesting();
+  // The udid to device-set memo is module state; a seeded entry would outlive
+  // the case that seeded it.
+  __resetDeviceSetCacheForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -1194,14 +1205,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("no directive takes a bundleId");
   });
 
-  // The quoted reason ends "provide bundleId explicitly", but no directive takes one.
-  it("iOS: says the bundleId its quoted reason recommends cannot reach the probe", async () => {
+  /**
+   * The iOS caveat rides on a reason the RUNNER's own tree source writes, so
+   * build that reason with the real function. A hand-copied one is what let the
+   * caveat go on describing a message production had stopped emitting.
+   */
+  async function realIosTargetingFailure(): Promise<Error> {
+    // Seed the device set so `terminateCommand` answers from the memo instead of
+    // probing simctl.
+    rememberDeviceSet(IOS, null);
+    const api = {
+      listConnectedBundleIds: () => [] as string[],
+      getAppState: vi.fn(),
+    } as unknown as NativeDevtoolsApi;
+    const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
+    return (await queryFullHierarchyTree(registry, resolveDevice(IOS)).catch(
+      (err: unknown) => err
+    )) as Error;
+  }
+
+  // That reason carries its own remedy, so the caveat must not answer it with a
+  // second one.
+  it("iOS: adds no remedy of its own to the reason the runner's source wrote", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error(
-        "No native-devtools-connected apps are available for auto-targeting. " +
-          "Launch or restart the app first, provide bundleId explicitly, or use screenshot " +
-          "to inspect visible Home/system UI."
-      );
+      throw failure;
     };
     await startRecording("iosblind");
 
@@ -1211,16 +1239,27 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     });
     const warning = warningOf(result, "iosblind");
 
-    // The quoted reason still arrives whole — its tail is the recovery.
-    expect(warning).toContain("provide bundleId explicitly");
+    // The reason arrives whole, its own recovery included.
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
+    // launch-app does not terminate, so it cannot instrument a process that is
+    // already running — the opposite move to the one just quoted.
+    expect(warning).not.toContain("relaunch it with `launch-app`");
+    // And no advice attributed to the reason that it does not carry.
+    expect(warning).not.toContain("provide bundleId explicitly");
+    expect(warning).not.toContain("quoted from the shared native-target");
+    // The reason is not always the iOS tree source's: a blind-but-not-throwing
+    // read is described by the poll loop instead, and names no recovery at all.
+    // So the caveat asserts nothing about where the reason came from.
+    expect(warning).not.toContain("tree source writes it");
+    // What the reason cannot see — this step — is still said.
     expect(warning).toContain("no directive takes a bundleId");
-    expect(warning).toContain("`launch-app`");
-    expect(warning).toContain("keep the check as a raw `tool:` step");
   });
 
   it("iOS: the caveat holds when the step DID carry a bundleId", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error("no connected app; provide bundleId explicitly");
+      throw failure;
     };
     await startRecording("iosblindbundle");
 
@@ -2044,14 +2083,21 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // No `ios-remote` arm: a remote sim never reaches the probe, assertSupported
-  // throws first. If appleRemote is added, both tables need that arm.
-  it("cannot be reached on ios-remote: await-ui-element refuses the device", () => {
+  // The wait tool itself now accepts a remote sim: it polls the same AX tree
+  // through describeIos, which the ax-service blueprint routes over the
+  // sim-remote tunnel. The recorder's tables still have no `ios-remote` arm
+  // (FLOW_TREE_SOURCES in flow-tree.ts, REPLAY_TREE_SOURCES in flow-add-step.ts),
+  // so the re-probe now REACHES them — the flow tools declare no capability at
+  // all, so nothing gates a remote udid out. `fetchTree` throws its
+  // not-supported error there, the recorder catches it, and the step records
+  // with the UNKNOWN-verdict warning rather than a known-bad one. Giving both
+  // tables an `ios-remote` arm is what would let the re-probe actually verify.
+  it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
-    expect(tool.capability?.appleRemote).toBeUndefined();
+    expect(tool.capability?.appleRemote).toEqual({ simulator: true });
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
-    ).toThrow(/not supported on ios-remote/);
+    ).not.toThrow();
   });
 });
 
@@ -2093,6 +2139,17 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(await recordedSteps("hints")).toEqual([]);
   });
 
+  it("sends `script` to flow-add-script, not to a hand-written step", async () => {
+    // The other half of the same contract as the nested-recorder refusal above:
+    // one of the two names is the call to make, the other refuses the nesting.
+    const result = await hint("script");
+    expect(result.message).toContain('"script" is a flow directive');
+    expect(result.message).toContain("Call `flow-add-script` directly");
+    expect(result.message).not.toContain("Add the `script:` step by hand");
+    expect(result.stepCount).toBe(0);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
   it("names gesture-pinch for `pinch`, stored raw", async () => {
     const result = await hint("pinch");
     expect(result.message).toContain("gesture-pinch");
@@ -2120,6 +2177,7 @@ describe("a flow-directive name points at the tool that records it", () => {
     const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
     for (const command of [
       "flow-add-echo",
+      "flow-add-script",
       "flow-add-step",
       "flow-start-recording",
       "flow-finish-recording",
@@ -2140,6 +2198,11 @@ describe("a flow-directive name points at the tool that records it", () => {
       [
         "flow-add-echo",
         ["must be called DIRECTLY", "fails on every replay"],
+        ["truncates", "ends the recording"],
+      ],
+      [
+        "flow-add-script",
+        ["records its own step", "Call it directly", "not through flow-add-step"],
         ["truncates", "ends the recording"],
       ],
       ["flow-add-step", ["cannot record itself"], ["truncates", "ends the recording"]],

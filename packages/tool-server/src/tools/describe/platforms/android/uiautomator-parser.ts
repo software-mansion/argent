@@ -194,11 +194,45 @@ const SCROLL_CLASSES = new Set([
  * the clip window for the scroll-clip prune. Shared with `flow-android-tree` so
  * both trees agree on which containers clip.
  */
-export function isUiAutomatorScrollable(attrs: Record<string, string>): boolean {
+export function isUiAutomatorScrollable(attrs: Record<string, string>, inWebView = false): boolean {
+  // Inside a WebView the class is Chromium's mapping of an HTML tag, not a
+  // scroll container: a `<ul>` arrives as `android.widget.ListView` with
+  // `scrollable="false"` and does not scroll. Only the framework flag counts
+  // there, or the list's box would clip the page around it.
+  if (inWebView) return attrIsTrue(attrs, "scrollable");
   return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
 }
 
 const WEBVIEW_CLASSES = new Set(["android.webkit.WebView", "android.webkit.WebViewChromium"]);
+
+function hasGestureFlag(attrs: Record<string, string>): boolean {
+  return (
+    attrIsTrue(attrs, "clickable") ||
+    attrIsTrue(attrs, "long-clickable") ||
+    attrIsTrue(attrs, "checkable") ||
+    attrIsTrue(attrs, "scrollable")
+  );
+}
+
+/**
+ * Role of a node Chromium published for an HTML element. A plain text run is a
+ * labelled leaf `android.view.View` with no gesture flag (`focusable` says
+ * nothing here — Chromium sets it on some text runs), and a `<ul>` is an
+ * `android.widget.ListView` that does not scroll.
+ */
+function deriveWebRole(
+  cls: string,
+  attrs: Record<string, string>,
+  label: string,
+  hasRawChildren: boolean
+): string {
+  if (cls === "android.view.View" && label && !hasRawChildren && !hasGestureFlag(attrs)) {
+    return "StaticText";
+  }
+  const role = deriveUiAutomatorRole(cls);
+  if (role === "ScrollView" && !attrIsTrue(attrs, "scrollable")) return "List";
+  return role;
+}
 
 interface PixelRect {
   x: number;
@@ -224,6 +258,10 @@ interface UiNode {
   password: boolean;
   scrollHidden: number;
   children: UiNode[];
+  // Set on the node emitted for a `WEBVIEW_CLASSES` host, so the doubled
+  // in-app pair can recognise its inner half. The role cannot: any class whose
+  // name contains "webview" derives it. Never copied onto the public tree.
+  webHost?: boolean;
 }
 
 interface PruneOptions {
@@ -237,14 +275,7 @@ export function attrIsTrue(attrs: Record<string, string>, key: string): boolean 
 }
 
 function isInteractive(attrs: Record<string, string>): boolean {
-  if (
-    attrIsTrue(attrs, "clickable") ||
-    attrIsTrue(attrs, "long-clickable") ||
-    attrIsTrue(attrs, "checkable") ||
-    attrIsTrue(attrs, "scrollable")
-  ) {
-    return true;
-  }
+  if (hasGestureFlag(attrs)) return true;
   // Focusable without a label is just a focus trap on a layout wrapper.
   if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
   return false;
@@ -372,8 +403,15 @@ function makeUiNode(
 function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
   // Iterative post-order. Each frame carries the clip this node must enforce on
   // its own children, so the filter fires at the parent of the clipped node.
-  type Frame = { parsed: ParsedXmlNode; scrollClip: PixelRect | null; visited: boolean };
-  const stack: Frame[] = [{ parsed: root, scrollClip: null, visited: false }];
+  type Frame = {
+    parsed: ParsedXmlNode;
+    scrollClip: PixelRect | null;
+    // Everything below a WebView is web DOM Chromium mapped onto widget class
+    // names, which the scroll and role rules read differently.
+    inWebView: boolean;
+    visited: boolean;
+  };
+  const stack: Frame[] = [{ parsed: root, scrollClip: null, inWebView: false, visited: false }];
   const outputs = new Map<ParsedXmlNode, UiNode[]>();
 
   while (stack.length > 0) {
@@ -382,17 +420,26 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
       top.visited = true;
       const attrs = top.parsed.attrs;
       const myBounds = parseUiAutomatorBounds(attrs.bounds ?? "");
-      const isScroll = isUiAutomatorScrollable(attrs);
+      const isScroll = isUiAutomatorScrollable(attrs, top.inWebView);
       // Children inherit my bounds if I scroll, else the clip I was handed.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;
+      const childInWebView = top.inWebView || WEBVIEW_CLASSES.has(attrs.class ?? "");
       for (let i = top.parsed.children.length - 1; i >= 0; i--) {
         const c = top.parsed.children[i]!;
         if (c.tag === "node") {
-          stack.push({ parsed: c, scrollClip: childClip, visited: false });
+          stack.push({
+            parsed: c,
+            scrollClip: childClip,
+            inWebView: childInWebView,
+            visited: false,
+          });
         }
       }
     } else {
-      outputs.set(top.parsed, computeNodeOutput(top.parsed, top.scrollClip, outputs, opts));
+      outputs.set(
+        top.parsed,
+        computeNodeOutput(top.parsed, top.scrollClip, top.inWebView, outputs, opts)
+      );
       stack.pop();
     }
   }
@@ -402,6 +449,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
 function computeNodeOutput(
   parsed: ParsedXmlNode,
   scrollClip: PixelRect | null,
+  inWebView: boolean,
   outputs: Map<ParsedXmlNode, UiNode[]>,
   opts: PruneOptions
 ): UiNode[] {
@@ -429,12 +477,36 @@ function computeNodeOutput(
     }
   }
 
-  // The DOM is opaque to uiautomator: emit one sentinel leaf and discard the
-  // misleading accessibility scaffold underneath.
+  // Chromium publishes the web DOM as the WebView's children, so the trim
+  // above already ran over it. An app that hosts its own WebView dumps a nested
+  // pair under the same class — the app's view, then Chromium's root web area
+  // carrying the page <title> as text — so fold the inner half into the outer
+  // node; a browser tab arrives as one node. Returning here keeps the label
+  // dedupe below off the page: a heading repeating the title must survive.
   if (WEBVIEW_CLASSES.has(cls)) {
-    if (!visible) return [];
-    const own = labelOf(attrs);
-    return [makeUiNode(attrs, "WebView", bounds, "[web-view] " + (own || "(no label)"), [])];
+    if (!visible) return keptChildren;
+    let label = labelOf(attrs);
+    let children = keptChildren;
+    const inner = children.length === 1 && children[0]!.webHost ? children[0]! : undefined;
+    if (inner) {
+      children = inner.children;
+      if (!label && inner.label) label = inner.label;
+    }
+    // Chromium builds the tree on the first request for it, so a WebView with
+    // nothing under it is usually a page not read yet — `describeAndroid`
+    // re-reads once. Past that, the page has no accessible content.
+    if (!label && children.length === 0) label = "(no web content exposed)";
+    const node = makeUiNode(attrs, "WebView", bounds, label, children);
+    node.webHost = true;
+    if (inner) {
+      node.clickable ||= inner.clickable;
+      node.longClickable ||= inner.longClickable;
+      node.scrollable ||= inner.scrollable;
+      if (!node.identifier && inner.identifier) node.identifier = inner.identifier;
+    }
+    const hidden = hiddenInScroll + (inner?.scrollHidden ?? 0);
+    if (hidden > 0) node.scrollHidden = hidden;
+    return [node];
   }
 
   const interactive = isInteractive(attrs);
@@ -501,7 +573,15 @@ function computeNodeOutput(
     );
   }
 
-  const node = makeUiNode(attrs, deriveUiAutomatorRole(cls), bounds, label, keptChildren);
+  const role = inWebView
+    ? deriveWebRole(
+        cls,
+        attrs,
+        label,
+        parsed.children.some((c) => c.tag === "node")
+      )
+    : deriveUiAutomatorRole(cls);
+  const node = makeUiNode(attrs, role, bounds, label, keptChildren);
   if (hiddenInScroll > 0) node.scrollHidden = hiddenInScroll;
   return [node];
 }

@@ -4,13 +4,16 @@ import * as path from "node:path";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   ToolNotFoundError,
+  wrapFailure,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
+  holdsOutputReference,
   appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
@@ -29,7 +32,7 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
-import { stepAnchor, summarizeStep } from "./flow-finish-recording";
+import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
@@ -58,14 +61,7 @@ const zodSchema = z.object({
   command: z
     .string()
     .describe(
-      'MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app") — a TOOL, not a flow directive. ' +
-        'A flow-file directive name ("tap", "launch", "run", "type", "await", "assert", "pinch", ' +
-        '"swipe", "echo", "wait", "long-press", "scroll-to", "snapshot", "when") is answered with ' +
-        "guidance, and nothing runs or is recorded: most name the tool that records the directive, while " +
-        '"wait", "long-press", "scroll-to", "snapshot" and "when" have no recording tool at all and ' +
-        "are answered with what to do instead. A recording tool (flow-add-step, flow-add-echo, " +
-        "flow-start-recording, flow-finish-recording) is refused the same way, each for its own " +
-        "reason — nesting one would erase this flow at replay, end the take, or write the step twice."
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass a flow directive or a recording tool. Call flow-add-script directly for a requested script step.'
     ),
   args: z
     .string()
@@ -150,6 +146,13 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
  * Chromium, that no read-only tool reports it. `describe` and the native
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
+ *
+ * On an iOS SIMULATOR the near miss is also SHALLOWER: `native-full-hierarchy`
+ * defaults to `maxDepth: 8` where the runner's read asks for 100, so absent
+ * from it does not mean absent from the runner's tree until the depth is
+ * raised. A physical device is not covered: `platformOf` reports `ios` for one
+ * too, but its runner reads the XCUITest snapshot, which takes no depth at all,
+ * and `native-full-hierarchy` is simulator-only.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
@@ -380,19 +383,17 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
   return UNMET_WAIT_WARNING;
 }
 
-// The indeterminate reason is quoted verbatim, and on iOS it can end "provide
-// bundleId explicitly" — advice written for the native tools. Correct it rather
-// than honour it.
+// The indeterminate reason is quoted verbatim, and it carries whatever recovery
+// fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
+// dropped the shared native-target error's "provide bundleId explicitly" line
+// that a flow selector step cannot act on. So name no remedy here — a second one
+// would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
   return (
-    ". That reason may tell you to pass `bundleId` — it is quoted from the shared native-target " +
-    "error, and it does not apply here: the probe predicts an `await:`/`assert:` directive, and " +
-    "no directive takes a bundleId, so neither this probe nor the runner accepts one (the " +
-    "`bundleId` on this step reached the live wait only). What the runner's iOS tree needs is an " +
-    "app with argent's instrumentation loaded — relaunch it with `launch-app` or a flow `launch:` " +
-    "step. An app that cannot load it at all, such as a `com.apple.*` system app, can never be " +
-    "probed or converted: keep the check as a raw `tool:` step"
+    ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
+    "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
+    "one (the `bundleId` on this step reached the live wait only)"
   );
 }
 
@@ -582,6 +583,27 @@ async function probeAgainstRunnerTree(
 }
 
 /**
+ * `deriveSelector`'s last resort: the tapped node has no identifier and no
+ * visible text, so the step replays on role alone. It holds only while that
+ * element keeps winning `selectorToFrame`'s ranking. The re-resolve guard below
+ * proves that for the recording screen, never for the screen replay meets, so
+ * the warning says so instead of leaving it silent.
+ *
+ * The raised iOS depth cap makes this more common. An unlabeled icon that the
+ * device used to truncate away, which left `nodeAtPoint` to pick its `testID`
+ * container, is now present and is the smaller frame under the tap.
+ */
+function roleOnlySelectorWarning(selector: Selector): string | undefined {
+  if (selector.role === undefined || selector.identifier !== undefined) return undefined;
+  if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  return (
+    `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
+    `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
+    `against a labelled element if that is not reliably this one`
+  );
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -639,7 +661,11 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    return { selector, warning: fallbackSourceWarning(source, device.platform) };
+    const warnings = [
+      roleOnlySelectorWarning(selector),
+      fallbackSourceWarning(source, device.platform),
+    ].filter((w) => w !== undefined);
+    return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
@@ -718,6 +744,8 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
     "`flow-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
     "flow-add-step — nesting it would write the echo AND a `tool: flow-add-echo` step that " +
     "fails on every replay.",
+  "flow-add-script":
+    "`flow-add-script` records its own step. Call it directly, not through flow-add-step.",
   "flow-add-step":
     "flow-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
   "flow-start-recording":
@@ -763,6 +791,9 @@ export function directiveCommandHint(command: string): string | undefined {
       `flow-add-step, which would run it as a nested tool AND record a \`tool: flow-add-echo\` ` +
       `step that fails on every replay.`
     );
+  }
+  if (command === "script") {
+    return `"script" is a flow directive. Call \`flow-add-script\` directly.`;
   }
   if (command === "wait") {
     return (
@@ -1077,10 +1108,10 @@ async function captureRunTarget(
     // as-written flows dir under the caller's project_root. When the recording
     // is a symlink out of the flows dir the two anchors can name different
     // files, so require them to canonicalize to the same one, matching the
-    // runner's own canonicalization (canonicalFlowPath in flow-run.ts realpaths
-    // before reading). An executed path that cannot be canonicalized (e.g.
-    // ENOENT) means nothing verifiable ran from the flows dir, and the raw step
-    // is then the honest record: it replays via name + project_root.
+    // runner's own canonicalization (canonicalFlowPath in flow-file-refs.ts
+    // realpaths before reading). An executed path that cannot be canonicalized
+    // (e.g. ENOENT) means nothing verifiable ran from the flows dir, and the raw
+    // step is then the honest record: it replays via name + project_root.
     let executedPath: string | undefined;
     try {
       executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
@@ -1132,10 +1163,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
-A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
-Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
-If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
+    description: `Execute one MCP tool and record its flow step, in the flow named by \`name\` + \`project_root\`. Use when recording a flow and you want each action run and captured; the recording must already be open.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`flow-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
     // MCP adapter capped the POST at 30s and retried the identical body four
@@ -1299,7 +1329,33 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         };
       }
 
-      const { savedTo, stepCount } = await appendStepToFlow(session, step);
+      let savedTo: FlowSavedTo;
+      let stepCount: number;
+      try {
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+      } catch (err) {
+        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+        const refused = err instanceof Error ? err.message : String(err);
+        // A host-mode append re-parses the file, so the scan that refuses an
+        // output reference sees the steps ALREADY there as well — and a
+        // mid-recording hand edit is a supported way for one of those to carry
+        // one. Blaming the just-run call for that step's field would send the
+        // author back over a call whose args were clean.
+        throw wrapFailure(
+          err,
+          {
+            error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+            failure_stage: "flow_output_reference",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          },
+          holdsOutputReference(step)
+            ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
+                `recorded. Check the call's changes before you retry. ${refused}`
+            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
+                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+        );
+      }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by

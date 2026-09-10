@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import * as fs from "node:fs/promises";
 import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
@@ -134,9 +135,11 @@ async function startFakeCdp(): Promise<FakeCdp> {
 }
 
 const servers: FakeCdp[] = [];
+const filesToCleanup: string[] = [];
 
 afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
+  for (const p of filesToCleanup.splice(0)) await fs.rm(p, { force: true });
 });
 
 describe("chromiumCdpBlueprint (smoke)", () => {
@@ -190,6 +193,7 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       // Screenshot — fake server returns a tiny PNG, we expect a real file
       // path in the unified media dir maintained by the chromium-server.
       const shot = await instance.api.captureScreenshot();
+      filesToCleanup.push(shot.path);
       expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);

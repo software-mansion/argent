@@ -10,6 +10,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 - `native-profiler-analyze` — parse exported trace data and return a structured bottleneck payload.
 - `profiler-stack-query` — drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
 - `profiler-load` — list and reload previous trace sessions from disk for re-investigation.
+- Physical iPhone: not supported; use a simulator.
 
 ---
 

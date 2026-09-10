@@ -11,11 +11,13 @@ Load `argent-create-flow` as the authoring engine. Follow its required reference
 
 **Apple TV and Android TV are out of scope.** The runner does not reject touch directives there, so they fail at the gesture layer instead of with authoring guidance. Use `argent-tv-interact` and report the limitation.
 
+**Physical iPhones** run QA flows, with three hardware limits: replay never auto-binds a phone, so pass its udid as `device` (CLI `--device`) and keep it `connected`; `pinch`/`rotate` steps fail there like the live tools, so drive the app's own zoom UI instead; the flow tree is the `describe` tree (same ids and roles), so a selector authored on a simulator can miss there. Read `argent-ios-device-interact` for the app-scoped contract before recording.
+
 ## Definition of done
 
 A QA flow is complete only when:
 
-1. The first non-echo step is `launch:`. In-flow setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
+1. The first step that is not `echo:` or `script:` is `launch:`. In-flow setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
@@ -43,7 +45,12 @@ Make repeated runs deterministic:
 3. After setup navigation, echo the named baseline and hard-check it before the first scenario mutation. Use `assert:` or a destination `await:` that fully proves the baseline.
 4. Prefer to restore the baseline at the end.
 
-Use `run:` for a separately recorded reset or seed flow. No other fixture mechanism exists. Ask before cleanup that creates or deletes meaningful user data outside the request.
+A flow has two fixture mechanisms:
+
+- `run:` replays a separately recorded reset or seed flow.
+- `script:` runs requested local setup or cleanup. Record it with `flow-add-script` where it belongs in the walkthrough.
+
+Ask before cleanup that creates or deletes meaningful user data outside the request.
 
 ### Compact example
 
