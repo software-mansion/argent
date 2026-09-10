@@ -9,6 +9,7 @@ import {
   type FlowScriptExecutorOptions,
   type FlowScriptRequest,
   type FlowScriptResult,
+  SCRIPT_STEP_LOG_LIMIT_BYTES,
 } from "../../../src/tools/flows/script/flow-script-executor";
 import { SCRIPT_MAX_OUTPUT_BYTES } from "../../../src/tools/flows/script/flow-script-protocol";
 import {
@@ -162,7 +163,7 @@ function runBash(
  * does not reach the runner as a signal, a `TERM` trap has nothing to catch,
  * and the lifeline reads a descriptor the parent cannot hand it. The cases
  * whose SEMANTICS are POSIX skip there; everything else — the document, the
- * exchange files, the exit codes, the null devices, the tree stop and the
+ * exchange file, the exit codes, the null devices, the tree stop and the
  * deadline watchdog — is what the Windows job runs.
  */
 const onPosix = it.skipIf(process.platform === "win32");
@@ -218,7 +219,7 @@ function exchangeDirs(): string[] {
 const BASH_SOURCE = "${BASH_SOURCE[0]}";
 
 describe("a bash step that passes", () => {
-  it("returns the document the script wrote, and nothing it printed", async () => {
+  it("returns the document the script wrote, and what it printed as the log", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
@@ -233,8 +234,11 @@ describe("a bash step that passes", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toEqual({ order: { id: "ord_1", total: 42 } });
     expect(result.durationMs).toBeGreaterThan(0);
-    expect(JSON.stringify(result)).not.toContain("seeding order");
-    expect(JSON.stringify(result)).not.toContain("a warning");
+    // Both streams, as a `.mjs` step's are. Not their order: two writes this
+    // close together can reach the parent in either order across two pipes.
+    expect(result.log).toContain("seeding order\n");
+    expect(result.log).toContain("a warning\n");
+    expect(result.logTruncated).toBe(false);
   }, 30_000);
 
   it("returns the document it was given when the script never touches the file", async () => {
@@ -527,23 +531,6 @@ describe("the document a bash step returns", () => {
     30_000
   );
 
-  it("reports the exit code when $ARGENT_REASON is a named pipe, at once", async () => {
-    const ws = workspace();
-    const startedAt = Date.now();
-    const result = await runBash(
-      ws,
-      "reason-pipe",
-      `rm -f "$ARGENT_REASON"
-       mkfifo "$ARGENT_REASON"
-       exit 3`,
-      { timeoutMs: 3_000 }
-    );
-
-    expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("code 3");
-    expect(Date.now() - startedAt).toBeLessThan(3_000);
-  }, 30_000);
-
   it("does not read the document of a non-zero exit", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -567,151 +554,302 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toMatch(/bash: \S+/);
   }, 30_000);
 
-  it("appends what the script wrote to $ARGENT_REASON", async () => {
+  it("appends the last line the script wrote to stderr", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
       "with-reason",
-      `echo "the orders API answered 503" > "$ARGENT_REASON"
+      `echo "the orders API answered 503" >&2
        exit 1`
     );
     expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("the orders API answered 503");
+    // One space after the exit line, and the line ends the message.
+    expect(result.failure?.message).toMatch(
+      /^The script exited with code 1 \(bash: .+\)\. the orders API answered 503$/
+    );
+    expect(result.log).toContain("the orders API answered 503\n");
   }, 30_000);
 
-  it("says only the code when the script wrote no reason", async () => {
+  it("says only the code when the script wrote nothing to stderr", async () => {
     const ws = workspace();
     const result = await runBash(ws, "silent", `exit 7`);
     expect(result.failure?.message).toMatch(/^The script exited with code 7 \(bash: .+\)\.$/);
   }, 30_000);
 
-  it("ignores the reason file on exit 0", async () => {
+  // Whitespace is not a reason, and a carriage return is whitespace: stderr of
+  // nothing else must not leave a trailing space, or a stray `\r` from a CRLF
+  // editor, on the end of the exit line. The last line has no newline after
+  // it, so it is read at the end of the stream rather than at a line break.
+  it("says only the code when stderr held nothing but whitespace", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
-      "reason-on-pass",
-      `echo "not a failure" > "$ARGENT_REASON"
-       printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+      "blank-stderr",
+      `printf '\\n   \\n\\t\\r\\n \\r' >&2
+       exit 7`
     );
-    expect(result.ok).toBe(true);
-    expect(JSON.stringify(result)).not.toContain("not a failure");
+    expect(result.failure?.message).toMatch(/^The script exited with code 7 \(bash: .+\)\.$/);
   }, 30_000);
 
-  // The marker states the size of the FILE. A bounded read cannot count what it
-  // did not read, and the count of the string that was read is wrong by orders
-  // of magnitude — 40000 characters were once reported as 24671 omitted.
-  it("clamps a reason at the ceiling and says how much the file holds", async () => {
+  // Blank at any length: a whitespace-only line longer than the head the reason
+  // keeps is skipped like a short one, rather than ending the reason with a
+  // marker that counts spaces.
+  it("skips a whitespace-only stderr line longer than the head it would keep", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
-      "loud-reason",
-      `head -c 40000 /dev/zero | tr '\\0' 'x' > "$ARGENT_REASON"
+      "long-blank",
+      `echo "the orders API answered 503" >&2
+       head -c 100000 /dev/zero | LC_ALL=C tr '\\0' ' ' >&2
+       exit 9`
+    );
+    expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+  }, 30_000);
+
+  it("ends the reason with the last line that is not blank, trimmed", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "several-lines",
+      `echo "connecting to the orders API" >&2
+       echo "  the orders API answered 503  " >&2
+       printf '\\n   \\n\\t\\r\\n' >&2
+       exit 5`
+    );
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toMatch(/\(bash: .+\)\. the orders API answered 503$/);
+    expect(result.failure?.message).not.toContain("connecting");
+  }, 30_000);
+
+  // stdout is the log's and nothing else's: what a script prints on its way
+  // out - a cleanup notice, a summary - is not why it failed. The pause puts
+  // the stdout line after the stderr one in arrival order too, not only in the
+  // script.
+  it("never takes the reason from stdout, even when stdout spoke last", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "stdout-last",
+      `echo "the orders API answered 503" >&2
+       sleep 0.2
+       echo "cleaning up"
+       exit 1`
+    );
+    expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+    expect(result.failure?.message).not.toContain("cleaning up");
+    expect(result.log).toContain("cleaning up\n");
+  }, 30_000);
+
+  // The case the line is for: a script that writes no reason of its own still
+  // gets one, because the command `set -e` stopped on said why on stderr.
+  it("takes the error of the command set -e stopped on as the reason", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "set-e",
+      `set -euo pipefail
+       echo "reading the fixture"
+       cat ./no-such-fixture.json
+       echo "never reached" >&2`
+    );
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toContain("code 1");
+    expect(result.failure?.message).toMatch(
+      /\)\. cat: \.\/no-such-fixture\.json: No such file or directory$/
+    );
+    expect(result.failure?.message).not.toContain("never reached");
+  }, 30_000);
+
+  // A pipe hands over what it holds when it is read, not a line at a time, so
+  // one line can arrive in two chunks - here for certain, with a pause between
+  // the writes. The line runs from one newline to the next, not to the end of
+  // the last chunk.
+  it("joins a stderr line that arrived in two pieces", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "two-pieces",
+      `printf 'the orders API ' >&2
+       sleep 0.3
+       printf 'answered 503\\n' >&2
+       exit 1`
+    );
+    expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+  }, 30_000);
+
+  // The log stops at its limit and the reason does not: a script that floods
+  // stderr with progress and then says why it failed still says it. The flood
+  // is one line, so the reason is the only line after it. The short line in
+  // front moves the limit off the edge of a pipe chunk, so the log is cut
+  // inside one, as it is for most real output.
+  it("takes the last line after a stderr flood past the log's limit", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "flood-then-reason",
+      `echo "starting the flood" >&2
+       head -c ${SCRIPT_STEP_LOG_LIMIT_BYTES * 2} /dev/zero | tr '\\0' 'e' >&2
+       printf '\\nthe orders API answered 503\\n' >&2
        exit 1`
     );
     expect(result.failure?.kind).toBe("exit");
-    expect(result.failure!.message.length).toBeLessThanOrEqual(8 * 1024);
-    expect(result.failure?.message).toContain("$ARGENT_REASON holds 40000 bytes");
-    expect(result.failure?.message).toMatch(/keeps the first \d+ characters]$/);
+    expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+    expect(result.logTruncated).toBe(true);
+    expect(Buffer.byteLength(result.log)).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
+    // Past the cut, so the reason came from what the log itself dropped.
+    expect(result.log).not.toContain("503");
   }, 30_000);
 
-  // The count is what the report really carries, not what the budget allowed.
-  // The read is bounded in BYTES and then trimmed, so leading whitespace leaves
-  // far fewer characters than the ceiling while the truncation path is still
-  // the right one - and the marker announced the ceiling either way. With
-  // nothing but whitespace in the file the report showed no reason text at all
-  // and still announced 7168 characters kept, sending its author after a lost
-  // report rather than a blank reason file.
-  //
-  // 28 672 is the bounded read: 7168 characters at four bytes each. What
-  // survives the trim is whatever of it is not the leading whitespace.
-  it.each([
-    ["a reason behind leading whitespace", 25_000, 5_000, 3_672],
-    ["a reason of nothing but whitespace", 100_000, 0, 0],
-  ])(
-    "counts what it kept of %s",
-    async (_label, spaces, letters, kept) => {
+  it("has no failure for a passing step that wrote to stderr", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "stderr-on-pass",
+      `echo "not a failure" >&2
+       printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    expect(result.ok).toBe(true);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ ok: true });
+    expect(result.log).toContain("not a failure\n");
+  }, 30_000);
+
+  // The line is only for a script that chose to exit non-zero. Everywhere else
+  // the runner's own account is the reason, and the line would read as the
+  // cause: what a script last said before its time ran out is what it was
+  // doing, not why it stopped. The log still has it.
+  it("adds no stderr line to a time limit", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "timeout-with-stderr",
+      `echo "still waiting on the orders API" >&2
+       while true; do sleep 1; done`,
+      { timeoutMs: 1_000 }
+    );
+    expect(result.failure?.kind).toBe("timeout");
+    expect(result.failure?.message).not.toContain("still waiting");
+    expect(result.log).toContain("still waiting on the orders API");
+  }, 30_000);
+
+  onPosix(
+    "adds no stderr line to a signal death",
+    async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
-        `padded-reason-${letters}`,
-        `set -euo pipefail
-       {
-         head -c ${spaces} /dev/zero | LC_ALL=C tr '\\0' ' '
-         head -c ${letters} /dev/zero | LC_ALL=C tr '\\0' 'Z'
-       } > "$ARGENT_REASON"
-       exit 9`
+        "signal-with-stderr",
+        `echo "about to be killed" >&2
+       kill -KILL $$`
       );
-
-      expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toContain(`keeps the first ${kept} characters]`);
-      expect(result.failure?.message.match(/Z/g)?.length ?? 0).toBe(kept);
+      expect(result.failure?.kind).toBe("signal");
+      expect(result.failure?.message).toContain("SIGKILL");
+      expect(result.failure?.message).not.toContain("about to be killed");
     },
     30_000
   );
 
-  // Octal escapes rather than `\u`, which bash 3.2 does not know: the point is
-  // that the bytes really are multi-byte. The read is bounded in BYTES and the
-  // ceiling counts CHARACTERS, so a cut that ignored continuation bytes would
-  // put a replacement character where a euro sign was.
-  it("clamps a multi-byte reason without breaking a character", async () => {
+  it("adds no stderr line to a document it could not use", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "output-with-stderr",
+      `echo "wrote the document" >&2
+       printf 'not json' > "$ARGENT_OUTPUT"`
+    );
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("did not parse");
+    expect(result.failure?.message).not.toContain("wrote the document");
+  }, 30_000);
+
+  // The head of the line and a count of the rest, measured on the whole line
+  // however many chunks it came in. The line here has no newline after it,
+  // which still makes it a line.
+  it("keeps the head of a long stderr line and counts the rest", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "loud-reason",
+      `head -c 40000 /dev/zero | tr '\\0' 'x' >&2
+       exit 1`
+    );
+    expect(result.failure?.kind).toBe("exit");
+    // Between the exit line and the marker, so exactly 1000 of them.
+    expect(result.failure?.message).toMatch(/\)\. x{1000}… \[39000 more characters omitted]$/);
+  }, 30_000);
+
+  // The count is taken on the head BEFORE its leading whitespace is trimmed:
+  // 400 spaces leave 600 of the 1000 for the letters behind them, and the
+  // other 4400 of the 5400 are what the marker counts.
+  it("counts what it omitted from a long line behind leading whitespace", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "padded-reason",
+      `set -euo pipefail
+       {
+         head -c 400 /dev/zero | LC_ALL=C tr '\\0' ' '
+         head -c 5000 /dev/zero | LC_ALL=C tr '\\0' 'Z'
+       } >&2
+       exit 9`
+    );
+
+    expect(result.failure?.kind).toBe("exit");
+    expect(result.failure?.message).toMatch(/\)\. Z{600}… \[4400 more characters omitted]$/);
+  }, 30_000);
+
+  // A character split across two pipe chunks has to be decoded whole, or the
+  // reason carries a replacement character where a euro sign was. The pause
+  // splits one for certain, inside the head the reason keeps, and the line
+  // runs past the limit so the cut meets multi-byte text too. Octal escapes
+  // rather than `\u`, which bash 3.2 does not know.
+  it("keeps the head of a long multi-byte stderr line without breaking a character", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
       "wide-reason",
-      `set -euo pipefail
-       i=0
-       while [ $i -lt 4000 ]; do
-         printf '\\342\\202\\254ab\\342\\202\\254ab\\342\\202\\254ab\\342\\202\\254ab'
-         i=$((i + 1))
-       done >> "$ARGENT_REASON"
+      `euros() {
+         i=0
+         while [ $i -lt "$1" ]; do printf '\\342\\202\\254ab'; i=$((i + 1)); done
+       }
+       {
+         euros 100
+         printf '\\342'
+         sleep 0.3
+         printf '\\202\\254ab'
+         euros 299
+       } >&2
        exit 2`
     );
 
+    const message = result.failure?.message ?? "";
+    const expected = `). ${"\u20ACab".repeat(400).slice(0, 1_000)}… [200 more characters omitted]`;
     expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("\u20AC");
-    expect(result.failure?.message).not.toContain("\uFFFD");
-    expect(result.failure?.message).toContain("$ARGENT_REASON holds 80000 bytes");
+    expect(message).not.toContain("\uFFFD");
+    expect(message.slice(-expected.length)).toBe(expected);
   }, 30_000);
 
-  // The document's policy, applied to the file beside it. `toString("utf8")`
-  // substitutes U+FFFD per invalid sequence, so a reason written by a tool in a
-  // non-UTF-8 locale reached the report rewritten, with nothing saying so -
-  // while the same two bytes in $ARGENT_OUTPUT were refused.
-  it("refuses a reason that is not valid UTF-8 rather than rewriting it", async () => {
+  // The cut counts UTF-16 units, and one landing between the halves of an
+  // astral character would leave a lone surrogate at the end of the report -
+  // carried through `JSON.stringify` as `\ud83d`, and turned into U+FFFD by any
+  // UTF-8 write of it. One unit ahead of the emoji puts the limit exactly
+  // between the halves of the 500th.
+  it("keeps the head of a long stderr line without splitting an astral character", async () => {
     const ws = workspace();
+    ws.write("emoji-line.txt", `a${"\u{1F600}".repeat(9_000)}`);
     const result = await runBash(
       ws,
-      "latin-reason",
-      `printf 'caf\\351 unreachable' > "$ARGENT_REASON"
-     exit 3`
+      "emoji-line",
+      `cat emoji-line.txt >&2
+       exit 1`
     );
 
+    const message = result.failure?.message ?? "";
+    // 999 units kept - the `a` and 499 whole emoji - of the line's 18 001.
+    const expected = `). a${"\u{1F600}".repeat(499)}… [17002 more characters omitted]`;
     expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("code 3");
-    expect(result.failure?.message).toContain("not valid UTF-8");
-    expect(result.failure?.message).not.toContain("\uFFFD");
-  }, 30_000);
-
-  // The BYTE read lands on a UTF-8 boundary; the CHARACTER cut after it counts
-  // UTF-16 units, and one landing between the halves of an astral character
-  // left a lone surrogate at the end of the report - carried through
-  // `JSON.stringify` as `\ud83d`, and turned into U+FFFD by any UTF-8 write of
-  // the report.
-  it("clamps a reason without splitting an astral character", async () => {
-    const ws = workspace();
-    const reason = ws.write("emoji-reason.txt", `a${"\u{1F600}".repeat(9_000)}`);
-    const result = await runBash(
-      ws,
-      "emoji-reason",
-      `cp ${JSON.stringify("emoji-reason.txt")} "$ARGENT_REASON"
-     exit 1`,
-      { projectRoot: ws.dir }
-    );
-
-    expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("$ARGENT_REASON holds 36001 bytes");
-    expect(result.failure!.message.isWellFormed()).toBe(true);
-    expect(reason).toContain("emoji-reason.txt");
+    expect(message.isWellFormed()).toBe(true);
+    expect(message.slice(-expected.length)).toBe(expected);
   }, 30_000);
 
   it("hints at the two exit codes that are bash's own, not the script's", async () => {
@@ -776,26 +914,19 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
   }, 30_000);
 
-  // The same stray sibling on the non-zero exit path, which is the only path
-  // that ever reads `$ARGENT_REASON`. The author whose script DID explain
-  // itself got the bare exit line - no reason text, no note, and no CRLF hint,
-  // since `exitCodeHint` names CRLF only for 126 and 127 - while the identical
-  // stray file on the exit-0 path produced a full remediation message.
-  it("names CRLF when a failing script's reason landed one carriage return away", async () => {
+  // What CRLF does to a script that fails is bash's own complaint on stderr,
+  // so that complaint is what the report ends with: to bash a blank line is a
+  // lone carriage return, and a command it cannot find. GNU bash 5.x spells the
+  // name `$'\r'`; Apple's 3.2 writes the carriage return itself.
+  it("hands a CRLF script's own bash error to the reason and to the log", async () => {
     const ws = workspace();
-    const script = ws.write(
-      "crlf-reason.sh",
-      'echo "the orders API answered 503" > "$ARGENT_REASON"\r\nexit 4\r\n'
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-    });
+    const result = await runBash(ws, "crlf-blank", "echo start\r\n\r\n");
 
+    const said = /crlf-blank\.sh: line 2: (\$'\\r'|\r): command not found/;
     expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("CRLF");
-    expect(result.failure?.message).toContain("$ARGENT_REASON");
+    expect(result.failure?.message).toContain("code 127");
+    expect(result.failure?.message).toMatch(new RegExp(`${said.source}$`));
+    expect(result.log).toMatch(said);
   }, 30_000);
 
   // Windows is the one platform a CRLF checkout happens on, and there bash is
@@ -1182,7 +1313,10 @@ describe("the runner's own channels in bash mode", () => {
     expect(result.output).toEqual({ stdin: "eof" });
   }, 30_000);
 
-  it("survives a flood on stdout, which nothing reports and nothing may block on", async () => {
+  // Past the log's limit the pipe is still drained, not paused: a paused pipe
+  // fills and blocks the script on its next write, so a step that prints a lot
+  // would end at its time limit instead of passing.
+  it("survives a flood on stdout, keeping only the head of it in the log", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
@@ -1193,7 +1327,10 @@ describe("the runner's own channels in bash mode", () => {
     );
     expect(result.failure).toBeUndefined();
     expect(result.output).toEqual({ ok: true });
-    expect(JSON.stringify(result)).not.toContain("zzz");
+    expect(result.logTruncated).toBe(true);
+    expect(Buffer.byteLength(result.log)).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
+    expect(Buffer.byteLength(result.log)).toBeGreaterThan(SCRIPT_STEP_LOG_LIMIT_BYTES - 2048);
+    expect(result.log).toMatch(/^z+$/);
   }, 60_000);
 
   // The terminal message a runner in bash mode always sends is classified ahead
@@ -1330,7 +1467,7 @@ describe("finding the interpreter", () => {
 });
 
 describe("environment and working directory", () => {
-  it("gives the script the same allowlist a .mjs gets, plus the two exchange names", async () => {
+  it("gives the script the same allowlist a .mjs gets, plus the exchange name", async () => {
     const ws = workspace();
     const result = await runBash(
       ws,
@@ -1341,7 +1478,7 @@ describe("environment and working directory", () => {
     const names = String((result.output as { names: string }).names).split(" ");
     expect(names).toContain("PATH");
     expect(names).toContain("ARGENT_OUTPUT");
-    expect(names).toContain("ARGENT_REASON");
+    expect(names).not.toContain("ARGENT_REASON");
     expect(names).not.toContain("ARGENT_FLOW_SCRIPT_RUNNER");
     expect(names).not.toContain("NODE_CHANNEL_FD");
     // Nothing bash-specific is admitted: each of these steers bash rather than
@@ -1351,13 +1488,27 @@ describe("environment and working directory", () => {
     }
   }, 30_000);
 
-  it("refuses either exchange name in a caller's override map", async () => {
+  it("refuses the exchange name in a caller's override map", async () => {
     const ws = workspace();
-    for (const name of ["ARGENT_OUTPUT", "ARGENT_REASON"]) {
-      const result = await runBash(ws, `env-${name}`, `exit 0`, { env: { [name]: "/tmp/x" } });
-      expect(result.failure?.kind, name).toBe("invalid");
-      expect(result.failure?.message, name).toContain(name);
-    }
+    const result = await runBash(ws, "env-output", `exit 0`, {
+      env: { ARGENT_OUTPUT: "/tmp/x" },
+    });
+    expect(result.failure?.kind).toBe("invalid");
+    expect(result.failure?.message).toContain("ARGENT_OUTPUT");
+  }, 30_000);
+
+  // `ARGENT_REASON` is an ordinary name: the runner sets nothing under it, so a
+  // caller's value reaches the script as given.
+  it("hands ARGENT_REASON to the script like any other name", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "env-reason",
+      `printf '{"value":"%s"}' "$ARGENT_REASON" > "$ARGENT_OUTPUT"`,
+      { env: { ARGENT_REASON: "the caller's own" } }
+    );
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ value: "the caller's own" });
   }, 30_000);
 
   // Written as two files rather than as two path strings: under Git Bash `$PWD`
@@ -1587,8 +1738,8 @@ describe("the private exchange directory", () => {
     const result = await runBash(
       ws,
       "spaced",
-      `test -f "$ARGENT_OUTPUT"
-       test -f "$ARGENT_REASON"
+      `set -euo pipefail
+       test -f "$ARGENT_OUTPUT"
        printf '{"where":"%s"}' "$(dirname "$ARGENT_OUTPUT")" > "$ARGENT_OUTPUT.t"
        mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`,
       {},
@@ -1600,26 +1751,44 @@ describe("the private exchange directory", () => {
     expect(fs.readdirSync(spaced)).toEqual([]);
   }, 30_000);
 
-  // Both files carry the document, and the document may hold values derived
+  // The document is the one thing a step and Argent exchange through the
+  // directory: nothing is made beside it for a script to write into. Listed
+  // from inside the step, because the directory is gone by the time it
+  // returns.
+  it("holds the document and nothing else", async () => {
+    const ws = workspace();
+    const result = await runBash(
+      ws,
+      "listing",
+      `set -euo pipefail
+       held="$(ls -A "$(dirname "$ARGENT_OUTPUT")" | tr '\\n' ' ')"
+       printf '{"held":"%s"}' "$held" > "$ARGENT_OUTPUT.t"
+       mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
+    );
+
+    expect(result.output).toEqual({ held: "output.json " });
+  }, 30_000);
+
+  // The file carries the document, and the document may hold values derived
   // from a secret. The 0700 directory `mkdtemp` makes already holds on its own;
-  // these modes are the second barrier, and a bare write leaves them to the
+  // the file's mode is the second barrier, and a bare write leaves it to the
   // umask, which on an ordinary host is 0644. Read from inside the step,
   // because the directory is gone by the time it returns.
   onPosix(
-    "gives both exchange files the owner's account and nothing else",
+    "gives the exchange file the owner's account and nothing else",
     async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
         "modes",
         `mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
-       printf '{"output":"%s","reason":"%s","dir":"%s"}' \
-         "$(mode "$ARGENT_OUTPUT")" "$(mode "$ARGENT_REASON")" \
+       printf '{"output":"%s","dir":"%s"}' \
+         "$(mode "$ARGENT_OUTPUT")" \
          "$(mode "$(dirname "$ARGENT_OUTPUT")")" > "$ARGENT_OUTPUT.t"
        mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`
       );
 
-      expect(result.output).toEqual({ output: "600", reason: "600", dir: "700" });
+      expect(result.output).toEqual({ output: "600", dir: "700" });
     },
     30_000
   );
@@ -1737,9 +1906,7 @@ describe("a tool server that dies mid-step", () => {
       const ws = workspace();
       const exchange = fs.mkdtempSync(path.join(exchangeRoot, "disconnect-"));
       const outputFile = path.join(exchange, "output.json");
-      const reasonFile = path.join(exchange, "reason.txt");
       fs.writeFileSync(outputFile, "{}");
-      fs.writeFileSync(reasonFile, "");
       const bashFile = ws.resolve("bash.pid");
       const childFile = ws.resolve("bash-child.pid");
       const script = ws.write(
@@ -1768,7 +1935,6 @@ describe("a tool server that dies mid-step", () => {
           scriptPath: script,
           outputFile,
           outputJson: "{}",
-          reasonFile,
           deadlineMs: 120_000,
           maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
         });
@@ -1805,9 +1971,7 @@ describe("a tool server that dies mid-step", () => {
     const ws = workspace();
     const exchange = fs.mkdtempSync(path.join(exchangeRoot, "lifeline-"));
     const outputFile = path.join(exchange, "output.json");
-    const reasonFile = path.join(exchange, "reason.txt");
     fs.writeFileSync(outputFile, "{}");
-    fs.writeFileSync(reasonFile, "");
     const descendantFile = ws.resolve("lifeline-descendant.pid");
     const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
     const script = ws.write(
@@ -1836,7 +2000,6 @@ describe("a tool server that dies mid-step", () => {
         scriptPath: script,
         outputFile,
         outputJson: "{}",
-        reasonFile,
         deadlineMs: 120_000,
         maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
       });

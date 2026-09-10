@@ -100,15 +100,16 @@ describe("an exchange directory that will not go", () => {
 });
 
 describe("an exchange directory that could not be filled", () => {
-  // `mkdtemp` succeeds and then a write does not. The caller is handed a throw
-  // with no exchange in it, so the `finally` that owns the directory's life has
-  // nothing to remove — and the directory is left under the shared temporary
-  // root holding the document it was seeded with.
+  // `mkdtemp` succeeds and then the write of the seeded document does not. The
+  // caller is handed a throw with no exchange in it, so the `finally` that owns
+  // the directory's life has nothing to remove — and the directory is left
+  // under the shared temporary root, holding whatever the write got down.
   it("is removed by the call that made it, not left behind", async () => {
     const ws = createScriptWorkspace("bash-nospace");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-nospace-root-"));
     const script = ws.write("never-runs.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
-    refuseWrite = (target) => target.endsWith("reason.txt");
+    refuseWrite = (target) =>
+      target.includes(exchangeDirPrefix()) && path.basename(target) === "output.json";
     try {
       const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
         scriptPath: script,

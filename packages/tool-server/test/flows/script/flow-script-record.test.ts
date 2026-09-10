@@ -534,7 +534,7 @@ describe("recording a script step", () => {
 });
 
 describe("recording a bash step", () => {
-  it("runs the .sh, appends it, and hands back the document it wrote", async (ctx) => {
+  it("runs the .sh, appends it, and hands back its document and what it printed", async (ctx) => {
     skipWithoutBash(ctx);
     await write(
       "scripts/seed.sh",
@@ -547,7 +547,7 @@ describe("recording a bash step", () => {
     const result = await addScript("checkout", "../../scripts/seed.sh");
 
     expect(result.status).toBe("pass");
-    expect(JSON.stringify(result)).not.toContain("seeded order 4711");
+    expect(result.log).toContain("seeded order 4711");
     expect(result.outputJson).toBe('{"order":{"id":4711}}');
     expect(result.recorded).toBe("1. script: ../../scripts/seed.sh");
     expect(await steps("checkout")).toEqual([{ kind: "script", path: "../../scripts/seed.sh" }]);
@@ -555,10 +555,15 @@ describe("recording a bash step", () => {
 
   it("records nothing when the .sh fails, and carries its reason back", async (ctx) => {
     skipWithoutBash(ctx);
+    // The last stdout line is what a reason read off the whole log, rather than
+    // off stderr alone, would end with. The two are separate pipes, and only the
+    // pause puts that line after the explanation in the log.
     await write(
       "scripts/half.sh",
       `echo "created 2 of 3 records"\n` +
-        `echo "the backend refused the third" > "$ARGENT_REASON"\n` +
+        `echo "the backend refused the third" >&2\n` +
+        `sleep 0.2\n` +
+        `echo "left 2 records behind"\n` +
         `exit 1\n`
     );
     await start("failing");
@@ -566,8 +571,13 @@ describe("recording a bash step", () => {
     const result = await addScript("failing", "../../scripts/half.sh");
 
     expect(result.status).toBe("fail");
+    expect(result.reason).toContain("exited with code 1");
     expect(result.reason).toContain("the backend refused the third");
-    expect(JSON.stringify(result)).not.toContain("created 2 of 3 records");
+    expect(result.reason).not.toContain("created 2 of 3 records");
+    expect(result.reason).not.toContain("left 2 records behind");
+    expect(result.log).toContain("created 2 of 3 records");
+    expect(result.log).toContain("the backend refused the third");
+    expect(result.log).toContain("left 2 records behind");
     expect(result).not.toHaveProperty("recorded");
     expect(result).not.toHaveProperty("outputJson");
     expect(result.message).toContain("Check or restore its changes");

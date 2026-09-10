@@ -81,12 +81,18 @@ function executor(options: FlowScriptExecutorOptions = {}) {
 
 /**
  * A bash step reaches redaction through a different channel from a `.mjs` one:
- * its failure text is a file the script wrote, read by the runner and appended
- * to the exit line, and its document is a file rather than a value the runner
- * encoded. Neither had a case here.
+ * its failure text ends with the last line the script wrote to stderr, which
+ * the parent reads off the pipe and appends to the runner's exit line, and its
+ * document is a file rather than a value the runner encoded.
  */
 describe("flow script executor — redaction of a bash step", () => {
   const SECRET: FlowScriptSecret = { name: "API_KEY", value: "s3cr3t-token-value" };
+  /**
+   * How much of that stderr line the reason keeps, in step with
+   * `STDERR_REASON_LINE_CHARS` in `flow-script-executor.ts`, which does not
+   * export it.
+   */
+  const STDERR_LINE_CHARS = 1_000;
 
   let noBash: string | undefined;
   let hostBash = "";
@@ -101,11 +107,11 @@ describe("flow script executor — redaction of a bash step", () => {
     if (noBash) ctx.skip(`this host has no bash to run a .sh step with: ${noBash}`);
   });
 
-  it("replaces a secret the script wrote to $ARGENT_REASON", async () => {
+  it("replaces a secret the script wrote to stderr, in the reason and in the log", async () => {
     const ws = workspace();
     const script = ws.write(
       "reason.sh",
-      `printf 'the call to %s failed' "$API_KEY" > "$ARGENT_REASON"
+      `printf 'the call to %s failed\\n' "$API_KEY" >&2
        exit 4`
     );
     const result = await executor().execute({
@@ -118,7 +124,9 @@ describe("flow script executor — redaction of a bash step", () => {
 
     expect(result.failure?.kind).toBe("exit");
     expect(result.failure?.message).not.toContain(SECRET.value);
-    expect(result.failure?.message).toContain("API_KEY");
+    expect(result.failure?.message).toContain("the call to {{secret:API_KEY}} failed");
+    expect(result.log).not.toContain(SECRET.value);
+    expect(result.log).toContain("the call to {{secret:API_KEY}} failed");
   }, 30_000);
 
   it("replaces a secret the script wrote into its output document", async () => {
@@ -143,25 +151,24 @@ describe("flow script executor — redaction of a bash step", () => {
 
   // A secret cut in half by a truncation is not a secret any scrub can find:
   // what is left is a PREFIX of one, which matches nothing. The parent drops
-  // that tail wherever a truncation marker ends the text, and the runner's
-  // reason marker is a second shape of one — it counts what it kept rather than
-  // what it dropped, because a bounded read cannot know the file's length. This
-  // runs a real script through both sides, so a wording that drifted apart
-  // fails here rather than leaking there.
-  it("drops the half of a secret the $ARGENT_REASON cut left behind", async () => {
+  // that tail wherever an omission marker ends the text, and the cut that keeps
+  // only the head of a long stderr line ends the reason with one. This runs a
+  // real script through the cut, the join and the redaction together, so a
+  // marker the redaction stopped recognising fails here rather than leaking
+  // there.
+  it("drops the half of a secret the stderr line's cut left behind", async () => {
     const ws = workspace();
-    // The reason ceiling, in step with `MAX_REASON_CHARS` in
-    // `flow-script-runner.mjs`: the whole message ceiling less the room the exit
-    // line, the exit-code hint and the marker ride in. The padding stops ten
-    // characters short of it, so the cut lands INSIDE the secret and what
-    // survives is a prefix of one — which no scrub can match.
-    const reasonCeiling = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - 1024;
-    const pad = reasonCeiling - 10;
+    // The padding stops ten characters short of the line cap, so the cut lands
+    // INSIDE the secret and what survives is a prefix of one. One line, written
+    // in three pieces, so it reaches the parent in more than one read.
+    const pad = STDERR_LINE_CHARS - 10;
+    const tail = 2_000;
     const script = ws.write(
-      "long-reason.sh",
-      `printf '%${pad}s' '' | tr ' ' 'x' > "$ARGENT_REASON"
-       printf '%s' "$API_KEY" >> "$ARGENT_REASON"
-       printf '%${reasonCeiling}s' '' | tr ' ' 'y' >> "$ARGENT_REASON"
+      "long-line.sh",
+      `printf '%${pad}s' '' | tr ' ' 'x' >&2
+       printf '%s' "$API_KEY" >&2
+       printf '%${tail}s' '' | tr ' ' 'y' >&2
+       echo >&2
        exit 5`
     );
     const result = await executor().execute({
@@ -179,47 +186,42 @@ describe("flow script executor — redaction of a bash step", () => {
     for (let n = SECRET.value.length; n > 3; n -= 1) {
       expect(message).not.toContain(SECRET.value.slice(0, n));
     }
-    expect(message).toMatch(/this report keeps the first \d+ characters]$/);
+    // The half is counted with what the cut dropped, so the marker counts
+    // everything from the secret on.
+    const marker = `x… [${SECRET.value.length + tail} more characters omitted]`;
+    expect(message.slice(-marker.length)).toBe(marker);
+    // The log keeps the whole line, and so the whole value to replace.
+    expect(result.log).not.toContain(SECRET.value);
+    expect(result.log).toContain("x{{secret:API_KEY}}y");
   }, 30_000);
 
   /**
-   * The reason ceiling leaves 1024 characters for the exit line the reason
-   * rides behind, and the interpreter path inside that line is the one term
-   * nothing bounds. A bash far enough down a directory tree spends that room,
-   * the whole message passes `SCRIPT_MAX_FAILURE_MESSAGE_CHARS`, and the clamp
-   * that answers takes the reason's own marker off the end — the marker the
-   * parent reads to find where the reason was cut, and so where half a secret
-   * may be left. So the reason is cut to what the exit line leaves, and this is
-   * the case that proves it: the same straddling secret as above, under a bash
-   * whose path is long enough to have moved the cut.
+   * The interpreter path rides in the exit line in front of the stderr line,
+   * and it is the one term in the message nothing bounds. A ceiling it can push
+   * the message past cuts the line's own marker off the end — the marker the
+   * parent reads to find where the line was cut, and so where half a secret
+   * may be left. This is the same straddling secret as above, under a bash
+   * whose path is as long as the whole line the reason keeps: the marker at
+   * the end must still be the line's own, counting the half it dropped.
    *
-   * POSIX only. The path is a symlink of over 900 characters, and Windows
-   * refuses both without a per-machine opt-in.
+   * POSIX only. The path is a symlink of 1,000 characters, and Windows refuses
+   * both without a per-machine opt-in.
    */
   it.skipIf(process.platform === "win32")(
-    "keeps the reason's own marker when the interpreter path is long",
+    "keeps the stderr line's own marker when the interpreter path is long",
     async () => {
       const ws = workspace();
-      const reasonCeiling = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - 1024;
-      // `The script exited with code 5 (bash: <path>).` and the space in front
-      // of the reason, less the path itself.
-      const exitLine = "The script exited with code 5 (bash: ). ".length;
-      // Enough to pass the ceiling, which puts the clamp inside the reason's
-      // marker rather than in front of it. PLUS the margin, not minus: the exit
-      // line has to be LONGER than the room `MAX_REASON_CHARS` reserves for it,
-      // which is the whole premise the fix is about, and subtracting left the
-      // message short of the ceiling - so the branch was not entered even once
-      // the pin applied. The margin is small because the whole path has to stay
-      // inside PATH_MAX, 1024 on macOS.
-      const pathChars = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - exitLine - reasonCeiling + 20;
-      const pinned = bashAtPathOfLength(hostBash, pathChars);
+      // Inside PATH_MAX, which is 1024 on macOS.
+      const pinned = bashAtPathOfLength(hostBash, STDERR_LINE_CHARS);
 
-      const pad = reasonCeiling - 10;
+      const pad = STDERR_LINE_CHARS - 10;
+      const tail = 2_000;
       const script = ws.write(
-        "long-reason-long-bash.sh",
-        `printf '%${pad}s' '' | tr ' ' 'x' > "$ARGENT_REASON"
-         printf '%s' "$API_KEY" >> "$ARGENT_REASON"
-         printf '%${reasonCeiling}s' '' | tr ' ' 'y' >> "$ARGENT_REASON"
+        "long-line-long-bash.sh",
+        `printf '%${pad}s' '' | tr ' ' 'x' >&2
+         printf '%s' "$API_KEY" >&2
+         printf '%${tail}s' '' | tr ' ' 'y' >&2
+         echo >&2
          exit 5`
       );
       const result = await withPinnedBash(pinned, () =>
@@ -234,11 +236,12 @@ describe("flow script executor — redaction of a bash step", () => {
 
       const message = result.failure?.message ?? "";
       expect(result.failure?.kind).toBe("exit");
-      // The pin is what puts the whole message past the ceiling, so a pin that
-      // did not apply leaves this case asserting nothing about the branch.
+      // The pin is what makes the exit line long, so a pin that did not apply
+      // leaves this case asserting nothing the one above does not.
       expect(message).toContain(pinned);
       expect(message.length).toBeLessThanOrEqual(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
-      expect(message).toMatch(/this report keeps the first \d+ characters]$/);
+      const marker = `x… [${SECRET.value.length + tail} more characters omitted]`;
+      expect(message.slice(-marker.length)).toBe(marker);
       for (let n = SECRET.value.length; n > 3; n -= 1) {
         expect(message).not.toContain(SECRET.value.slice(0, n));
       }

@@ -12,7 +12,7 @@
  * it rides in as an `--import` preload in front of the script itself, and the
  * document crosses this channel in both directions. In `bash` mode it is the
  * entry module and spawns bash as its own child, so the document travels
- * through the two files the executor names in the request instead — bash has no
+ * through the file the executor names in the request instead — bash has no
  * IPC channel, and the runner closes its own to what it starts.
  */
 
@@ -62,8 +62,6 @@ export interface ScriptExecuteBashRequest extends ScriptExecuteCommon {
    * nowhere the parent looked.
    */
   outputJson: string;
-  /** `$ARGENT_REASON`: the failure text, read only on a non-zero exit. */
-  reasonFile: string;
   /**
    * The parent's OWN time limit - {@link ScriptExecuteCommon.deadlineMs} minus
    * the stall margin the child's watchdog sits behind it. The runner needs it

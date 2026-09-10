@@ -63,7 +63,7 @@ const heldSignals = new Set();
 const STRAY_SUFFIXES = ["\r", "\uF00D"];
 
 /**
- * How both exchange files are opened. `O_NONBLOCK` closes the window the check
+ * How the exchange file is opened. `O_NONBLOCK` closes the window the check
  * above leaves: a named pipe put there between the `stat` and the `open`
  * answers at once instead of parking this thread on a writer that never comes.
  * It is a no-op on a regular file, and absent on a platform that has no such
@@ -72,10 +72,10 @@ const STRAY_SUFFIXES = ["\r", "\uF00D"];
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 
 /**
- * How the exchange files are decoded — both of them. `fatal` because the
- * alternative is `toString("utf8")`, which substitutes U+FFFD for every invalid
- * sequence: silent, unequal to what the script wrote, and three bytes wide
- * where the input was one. See `readOutputFile` and `readReasonFile`.
+ * How the exchange file is decoded. `fatal` because the alternative is
+ * `toString("utf8")`, which substitutes U+FFFD for every invalid sequence:
+ * silent, unequal to what the script wrote, and three bytes wide where the
+ * input was one. See `readOutputFile`.
  */
 const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
 
@@ -113,14 +113,6 @@ const ENTRY_SETTLE_PROBE_MS = 1_000;
  */
 const MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 const MAX_FAILURE_STACK_CHARS = 16 * 1024;
-
-/**
- * The MOST a bash step's `$ARGENT_REASON` may take of the message it rides in,
- * leaving the rest for the exit line, the exit-code hint and the marker itself.
- * An exit line longer than that remainder cuts the reason further still — see
- * `readReasonFile`, which takes what the line leaves as its budget.
- */
-const MAX_REASON_CHARS = MAX_FAILURE_MESSAGE_CHARS - 1024;
 
 /**
  * Taken while this preload is the only code that has run: `process.send` is a
@@ -312,12 +304,11 @@ function runBash(request) {
       // The parent chose it, and it built this process's environment: the
       // allowlist, minus the activation flag this file deleted before anything
       // else ran, minus the `NODE_CHANNEL_FD` Node removes at its own startup.
-      // The two exchange names are all this side adds.
+      // The exchange name is all this side adds.
       cwd: process.cwd(),
       env: {
         ...process.env,
         ARGENT_OUTPUT: request.outputFile,
-        ARGENT_REASON: request.reasonFile,
       },
       // `bash <file>`, never `shell: true` and never the shebang: a path with a
       // space or a `$` must reach bash as one argument, the file needs no
@@ -327,7 +318,8 @@ function runBash(request) {
       //
       // stdin is the null device, so a `read` gets end of file; there is no
       // caller to answer it. stdout and stderr are this process's pipes, which
-      // the parent drains and discards.
+      // the parent captures as the step's log - and whose last stderr line it
+      // adds to the reason of a non-zero exit.
       stdio: ["ignore", "inherit", "inherit", ...nulls],
       // bash joins this process's group on POSIX; on Windows the parent's
       // `taskkill /t` on this process walks to it.
@@ -525,30 +517,15 @@ function bashOutcome(request, code, signal) {
   }
   const status = code ?? 0;
   if (status !== 0) {
-    const line =
-      `The script exited with code ${status} (bash: ${request.interpreterPath}).` +
-      exitCodeHint(status);
-    // What the reason may take is what this line leaves, not a fixed share:
-    // `interpreterPath` is the one term here nothing bounds, and a bash far
-    // enough down a directory tree spends the room `MAX_REASON_CHARS` reserves.
-    const reason = readReasonFile(request.reasonFile, MAX_FAILURE_MESSAGE_CHARS - line.length - 1);
-    // The same stray sibling, on the one path that ever reads `$ARGENT_REASON`.
-    // A CRLF script's `echo … > "$ARGENT_REASON"` writes `reason.txt\r`, the
-    // read finds the empty file the parent seeded, and the step reported the
-    // bare exit line - so the author whose script DID explain itself got
-    // nothing, while the identical stray file on the exit-0 path produced a
-    // full remediation message. `exitCodeHint` does not cover it either: it
-    // names CRLF only for 126 and 127.
-    const strayed = reason === "" && strayedByCarriageReturn(request.reasonFile);
-    const tail = reason
-      ? ` ${reason}`
-      : strayed
-        ? ` ${carriageReturnHint("$ARGENT_REASON", "so the explanation it wrote is not in this report")}`
-        : "";
+    // Why it exited is on stderr, which this process never reads: bash writes
+    // straight into the pipe the parent captures, so the parent is the side
+    // that adds the last line there to this one.
     return {
       type: "failure",
       failureType: "exit",
-      message: line + (line.length + tail.length <= MAX_FAILURE_MESSAGE_CHARS ? tail : ""),
+      message:
+        `The script exited with code ${status} (bash: ${request.interpreterPath}).` +
+        exitCodeHint(status),
     };
   }
   const read = readOutputFile(request.outputFile, request.maxOutputBytes);
@@ -570,8 +547,8 @@ function bashOutcome(request, code, signal) {
  * endings carries the carriage return into the last word of every line, so
  * `> "$ARGENT_OUTPUT"` writes `output.json\r` and the file the parent reads is
  * still the one it seeded: exit code 0, and a document nothing wrote. The name
- * is the proof — the parent created these two files and nobody else may name
- * one with a carriage return after it.
+ * is the proof — the parent created this file and nobody else may name one
+ * with a carriage return after it.
  *
  * Asked only where the document is missing or unchanged, because this explains
  * THAT and nothing else: a stray sibling beside a document the script really
@@ -585,14 +562,8 @@ function bashOutcome(request, code, signal) {
  * 0, which is exactly the case this function is for.
  */
 function carriageReturnProblem(request) {
-  for (const [name, file] of [
-    ["$ARGENT_OUTPUT", request.outputFile],
-    ["$ARGENT_REASON", request.reasonFile],
-  ]) {
-    if (!strayedByCarriageReturn(file)) continue;
-    return carriageReturnHint(name, "so the document Argent read is the one it seeded");
-  }
-  return null;
+  if (!strayedByCarriageReturn(request.outputFile)) return null;
+  return carriageReturnHint("$ARGENT_OUTPUT", "so the document Argent read is the one it seeded");
 }
 
 /** Whether the script wrote one carriage return past the name it was given. */
@@ -707,125 +678,6 @@ function readOutputFile(file, maxOutputBytes) {
 }
 
 /**
- * The failure text, read only on a non-zero exit. Four bytes per character is
- * the widest the ceiling can be, and the cut lands on a UTF-8 boundary so a
- * character split by the bound does not arrive as a replacement.
- *
- * The reason is clamped HERE, at whichever is smaller of `MAX_REASON_CHARS` and
- * the `budget` the exit line in front of it leaves — so that the exit line is
- * not what pays for a long reason, AND so that `clampText` never fires on a
- * message that carries reason text. Its marker counts the characters of the
- * string it was handed, and a bounded read is not the file: a script writing
- * five million characters was told 24,671 had been omitted. The size of the
- * file is knowable, so that is what the marker says.
- *
- * The budget matters because that marker is load-bearing downstream:
- * `redactTruncated` in the parent reads it to find where the reason was cut,
- * and drops the half of a secret left at that cut. `clampText` firing over the
- * top would take the marker off the end and leave the half behind — which an
- * interpreter path of some 900 characters was enough to do, since the path is
- * the one term in the exit line that nothing bounds.
- */
-function readReasonFile(file, budget) {
-  if (budget <= 0 || irregularFileKind(file)) return "";
-  let fd;
-  try {
-    fd = fs.openSync(file, READ_FLAGS);
-  } catch {
-    // Never written, or the script removed it. A failed step that wrote no
-    // reason says only its exit code.
-    return "";
-  }
-  try {
-    const maxChars = Math.min(MAX_REASON_CHARS, budget);
-    const maxBytes = maxChars * 4;
-    const buffer = Buffer.alloc(maxBytes + 4);
-    const read = readInto(fd, buffer, buffer.length);
-    const kept = buffer.subarray(0, utf8SafeCut(buffer, Math.min(read, maxBytes)));
-    let text;
-    try {
-      // The same policy the document gets, for the same reason: `toString`
-      // substitutes U+FFFD per invalid sequence, so a reason written by a tool
-      // in a non-UTF-8 locale reached the report rewritten and said nothing
-      // about it. `utf8SafeCut` has already moved the bound off a character the
-      // budget split, so what fails here is the file's own bytes.
-      text = STRICT_UTF8.decode(kept).trim();
-    } catch {
-      return (
-        "the explanation the script wrote to $ARGENT_REASON is not valid UTF-8, and Argent " +
-        "will not rewrite the bytes a script emitted, so it is not in this report: write the " +
-        "reason as UTF-8"
-      );
-    }
-    if (text.length <= maxChars && read <= maxBytes) return text;
-    return markReason(text, maxChars, budget, reasonSize(fd));
-  } catch {
-    return "";
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/**
- * The kept head and the marker that says so, together inside `budget`. The
- * marker counts against it — as it does in `clampText` — because the parent
- * re-applies the same whole-message ceiling and a marker left outside would be
- * the first thing cut.
- *
- * Two passes at most: the marker only shrinks by the digits a smaller count
- * drops. The count is the length of the head this keeps, so it is what the
- * report really carries. A budget narrower than the marker itself drives the kept head to
- * nothing, which is the outcome wanted — the marker alone still says a reason
- * was written, and no reason text means no half of a secret to leave behind.
- */
-function markReason(text, maxChars, budget, size) {
-  // What is really there, not what the budget allowed. The read is bounded in
-  // BYTES and then trimmed, so leading whitespace can leave far fewer
-  // characters than `maxChars` while the truncation path is still the right one
-  // - a reason of 25 000 spaces and 3672 letters announced 7168 characters kept
-  // and showed 3672, and one of nothing but spaces announced 7168 and showed
-  // none, so its author went looking for a lost report rather than for a blank
-  // reason file. The same number is what `REASON_KEPT_RE` reads back in the
-  // parent to find where the reason was cut.
-  let cut = wholeCharacters(text, Math.min(maxChars, text.length));
-  let marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
-  while (marked.length > budget && cut > 0) {
-    cut = wholeCharacters(text, Math.max(0, cut - (marked.length - budget)));
-    marked = `${text.slice(0, cut)}${reasonKeptMarker(size, cut)}`;
-  }
-  return marked;
-}
-
-/**
- * The cut, moved back off the halves of a surrogate pair. The BYTE read above
- * lands on a UTF-8 boundary; this cut is in UTF-16 code units, and one landing
- * between the two halves of an astral character left a lone surrogate at the
- * end of the report - `JSON.stringify` carries it as `\ud83d`, and any UTF-8
- * write of the report turns it into U+FFFD, which is the substitution
- * {@link STRICT_UTF8} exists to refuse for the document.
- */
-function wholeCharacters(text, cut) {
-  if (cut <= 0 || cut >= text.length) return cut;
-  const before = text.charCodeAt(cut - 1);
-  const after = text.charCodeAt(cut);
-  const splits = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
-  return splits ? cut - 1 : cut;
-}
-
-/** In step with `REASON_KEPT_RE` in `flow-script-executor.ts`, which reads it. */
-function reasonKeptMarker(size, kept) {
-  return `… [${size}; this report keeps the first ${kept} characters]`;
-}
-
-function reasonSize(fd) {
-  try {
-    return `$ARGENT_REASON holds ${fs.fstatSync(fd).size} bytes`;
-  } catch {
-    return "$ARGENT_REASON holds more";
-  }
-}
-
-/**
  * What is at `file`, when it is not the regular file the parent created there.
  * Asked BEFORE the open, because `open` on a named pipe with no writer blocks
  * on this thread — inside the exit handler, where the runner holds SIGTERM, so
@@ -858,13 +710,6 @@ function readInto(fd, buffer, cap) {
     read += chunk;
   }
   return read;
-}
-
-/** In step with the parent's copy, which this file cannot import. */
-function utf8SafeCut(buffer, max) {
-  let cut = Math.min(max, buffer.length);
-  while (cut > 0 && (buffer[cut] & 0xc0) === 0x80) cut -= 1;
-  return cut;
 }
 
 /**
@@ -1102,7 +947,6 @@ function parseRequest(raw) {
   if (typeof raw.scriptPath !== "string" || raw.scriptPath === "") return null;
   if (typeof raw.outputFile !== "string" || raw.outputFile === "") return null;
   if (typeof raw.outputJson !== "string") return null;
-  if (typeof raw.reasonFile !== "string" || raw.reasonFile === "") return null;
   return raw;
 }
 

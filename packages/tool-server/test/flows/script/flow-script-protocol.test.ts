@@ -20,6 +20,7 @@ import {
   SOURCE_RUNNER_DIR,
   type ScriptWorkspace,
 } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 const workspaces: ScriptWorkspace[] = [];
 const cleanups: Array<() => void> = [];
@@ -603,13 +604,13 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         interpreter: "bash",
         scriptPath: "/tmp/x.sh",
         outputFile: "/tmp/o.json",
-        reasonFile: "/tmp/r.txt",
+        outputJson: "{}",
         deadlineMs: 1,
         maxOutputBytes: 1,
       },
     ],
     [
-      "a bash request with no exchange files",
+      "a bash request with no exchange file",
       {
         type: "execute",
         interpreter: "bash",
@@ -658,6 +659,44 @@ describe("flow script runner — the watchdogs, driven directly", () => {
     });
 
     expect(result?.outputJson).toBe('{"ran":true}');
+  }, 30_000);
+
+  // A bash request carries the interpreter, the script and the one exchange
+  // file, and nothing names a reason file any more: a runner that still asked
+  // for one would refuse every bash step the parent sends.
+  it("runs a bash request that names no reason file", async (ctx) => {
+    const found = await resolveHostBash();
+    if (!("path" in found)) {
+      ctx.skip(`this host has no bash to run a .sh step with: ${found.problem}`);
+      return;
+    }
+    const ws = workspace();
+    // Forward slashes, as the executor sends them.
+    const slashed = (file: string) => file.split(path.sep).join("/");
+    const outputFile = ws.resolve("output.json");
+    fs.writeFileSync(outputFile, "{}");
+    const script = ws.write("ran.sh", `printf '{"ran":true}' > "$ARGENT_OUTPUT"`);
+    // Any entry will do: in bash mode the runner parks before one can load.
+    const child = forkRunner(ws.write("entry.mjs", ""), 20_000, {
+      type: "execute",
+      interpreter: "bash",
+      interpreterPath: found.path,
+      scriptPath: slashed(script),
+      outputFile: slashed(outputFile),
+      outputJson: "{}",
+      timeoutMs: 20_000,
+      deadlineMs: 20_000,
+      maxOutputBytes: 1024 * 1024,
+    });
+    const answer = await new Promise<Record<string, unknown> | null>((resolve) => {
+      child.on("message", (raw) => {
+        const m = raw as { type?: string };
+        if (m.type === "result" || m.type === "failure") resolve(m);
+      });
+      child.once("exit", () => resolve(null));
+    });
+
+    expect(answer).toMatchObject({ type: "result", outputJson: '{"ran":true}' });
   }, 30_000);
 
   it("obeys the first request and ignores a second", async () => {

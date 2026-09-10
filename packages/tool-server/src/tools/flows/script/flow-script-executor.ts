@@ -51,6 +51,12 @@ import {
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 export const SCRIPT_STEP_LOG_LIMIT_BYTES = 64 * 1024;
 const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
+/**
+ * How much of a bash step's last stderr line its reason carries. The log under
+ * the reason has the whole line and the rest of stderr beside it; the reason is
+ * what a reader sees first, on the step's own line, so it stays short.
+ */
+const STDERR_REASON_LINE_CHARS = 1_000;
 const SETTLE_TIMEOUT_MS = 500;
 const STOP_GRACE_MS = 1_500;
 /**
@@ -81,7 +87,6 @@ const RUNNER_FILE = "flow-script-runner.mjs";
 const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
 
 const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
-const BASH_REASON_ENV = "ARGENT_REASON";
 
 /**
  * One private directory per bash step, under `os.tmpdir()` — 0700 on POSIX
@@ -100,7 +105,6 @@ const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
 const EXCHANGE_LIFE_MARGIN_MS =
   SETTLE_TIMEOUT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
 const EXCHANGE_OUTPUT_FILE = "output.json";
-const EXCHANGE_REASON_FILE = "reason.txt";
 
 /**
  * The owner's account and nothing else, matching the 0700 `mkdtemp` directory
@@ -221,12 +225,10 @@ const RESERVED_ENV_NAMES: readonly string[] = [
   "ELECTRON_RUN_AS_NODE",
   RUNNER_ACTIVATION_ENV,
   // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
-  // out and `$ARGENT_REASON` is where a failure reason comes from, so either
-  // one set by a caller would steer the runner's own protocol. Reserved
-  // whichever language the step runs — a flow-level map applies to every step
-  // — and set for bash only, since a `.mjs` has `output`.
+  // out, so a caller setting it would steer the runner's own protocol.
+  // Reserved whichever language the step runs — a flow-level map applies to
+  // every step — and set for bash only, since a `.mjs` has `output`.
   BASH_OUTPUT_ENV,
-  BASH_REASON_ENV,
 ];
 
 /**
@@ -357,7 +359,6 @@ interface QueueWaiter {
 interface ExchangeFiles {
   dir: string;
   outputFile: string;
-  reasonFile: string;
 }
 
 type ChildRun = {
@@ -830,7 +831,7 @@ export class FlowScriptExecutor {
             // answer `.` for every path. It is not about escaping: bash does no
             // escape processing on the RESULT of a parameter expansion.
             //
-            // These three strings, and no others. The environment the step
+            // These two strings, and no others. The environment the step
             // forwards reaches bash as the host wrote it — `JAVA_HOME`,
             // `LOCALAPPDATA`, `USERPROFILE` and the rest are `C:\…` there, and
             // only `PATH`, `HOME`, `TMP`, `TEMP` and `TMPDIR` are converted, by
@@ -839,7 +840,6 @@ export class FlowScriptExecutor {
             scriptPath: toForwardSlashes(scriptPath),
             outputFile: toForwardSlashes(run.exchange.outputFile),
             outputJson: run.outputJson,
-            reasonFile: toForwardSlashes(run.exchange.reasonFile),
             timeoutMs,
             deadlineMs: timeoutMs + CHILD_DEADLINE_MARGIN_MS,
             maxOutputBytes: SCRIPT_MAX_OUTPUT_BYTES,
@@ -881,19 +881,20 @@ export class FlowScriptExecutor {
     if (child.connected) child.disconnect();
 
     const log = capture.text;
+    const outcome = classifyOutcome({
+      exit,
+      spawnProblem,
+      protocolProblem,
+      terminal,
+      startedSeen,
+      interrupted,
+      timeoutMs,
+      deadlinePassed,
+      heapFatalSeen: capture.heapFatalSeen,
+      heapLimitMb: bounds.heapLimitMb,
+    });
     const verdict = redactSecrets(
-      classifyOutcome({
-        exit,
-        spawnProblem,
-        protocolProblem,
-        terminal,
-        startedSeen,
-        interrupted,
-        timeoutMs,
-        deadlinePassed,
-        heapFatalSeen: capture.heapFatalSeen,
-        heapLimitMb: bounds.heapLimitMb,
-      }),
+      run.interpreter === "bash" ? withStderrLine(outcome, capture.lastStderrLine) : outcome,
       request.secrets ?? []
     );
 
@@ -1013,6 +1014,26 @@ function redactSecrets(
       ...failure,
       message: redactTruncated(failure.message, secrets),
       ...(failure.stack ? { stack: redactTruncated(failure.stack, secrets) } : {}),
+    },
+  };
+}
+
+/**
+ * A bash step that exited non-zero says why on stderr, as every command it runs
+ * does, so the last line it wrote there ends the reason. Only on `exit`: a
+ * signal, a time limit or a document the runner could not read already carries
+ * the runner's own account, and the log has every line either way.
+ */
+function withStderrLine(
+  verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
+  line: string
+): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
+  if (!line || verdict.failure?.kind !== "exit") return verdict;
+  return {
+    ...verdict,
+    failure: {
+      ...verdict.failure,
+      message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
 }
@@ -1237,32 +1258,14 @@ function memberPath(key: string): string {
 function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
   const scrubbed = scrubSecretValues(text, secrets);
   const omission = OMISSION_RE.exec(scrubbed);
-  const kept = omission ? null : REASON_KEPT_RE.exec(scrubbed);
-  const marker = omission ?? kept;
-  if (!marker) return scrubbed;
-  const head = scrubbed.slice(0, marker.index);
+  if (!omission) return scrubbed;
+  const head = scrubbed.slice(0, omission.index);
   const partial = partialSecretTail(head, secrets);
   if (partial === 0) return scrubbed;
-  const shortened = head.slice(0, head.length - partial);
-  if (omission) return `${shortened}${omissionMarker(Number(omission[1]) + partial)}`;
-  return `${shortened}${kept![1]}${Number(kept![2]) - partial}${kept![3]}`;
+  return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
 }
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
-
-/**
- * The runner's own marker, for a `$ARGENT_REASON` it read only the head of. It
- * counts what it KEPT rather than what it dropped: a bounded read cannot know
- * how many characters the whole file holds, and the file's size is what it says
- * instead. So the count moves the other way when a half of a secret is taken
- * off the end above.
- *
- * In step with `readReasonFile` in `flow-script-runner.mjs`, which this file
- * cannot import. A wording that drifts apart stops matching and the tail is
- * left in place, which is why a real bash step is what pins the pair.
- */
-const REASON_KEPT_RE =
-  /(… \[\$ARGENT_REASON holds [^\]]*; this report keeps the first )(\d+)( characters])$/;
 
 function omissionMarker(omitted: number): string {
   return `… [${omitted} more characters omitted]`;
@@ -1397,13 +1400,12 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
  * what will let a script that wants to ADD one key read what it was given
  * first. Nothing hands a document in yet: `flow-script-step.ts` passes
  * `output: {}` on every step, so what a `.sh` reads back today is always the
- * empty seed. `reason.txt` is created empty so a script can append to it
- * without a test.
+ * empty seed.
  *
- * Both files carry the document, and the document may hold values derived from
- * a secret, so both are written 0600 rather than left to the umask. The barrier
- * that holds is the 0700 `mkdtemp` directory around them, not the mode on the
- * files: `docs/reference/flow-yaml.mdx` teaches writing a sibling and `mv`-ing
+ * The file carries the document, and the document may hold values derived from
+ * a secret, so it is written 0600 rather than left to the umask. The barrier
+ * that holds is the 0700 `mkdtemp` directory around it, not the mode on the
+ * file: `docs/reference/flow-yaml.mdx` teaches writing a sibling and `mv`-ing
  * it into place - which is the way past the empty-file failure a redirection
  * straight into `$ARGENT_OUTPUT` gives - and a `mv` replaces the inode, so the
  * document Argent reads back carries the script's own umask, 0644 on an
@@ -1418,7 +1420,7 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
  *
  * A directory that was made and could not be filled is removed here. The
  * `finally` that owns the rest of its life is only reached with an exchange to
- * remove, and a throw from either write leaves the caller without one.
+ * remove, and a throw from the write leaves the caller without one.
  */
 function createExchange(
   root: string,
@@ -1436,10 +1438,8 @@ function createExchange(
   const dir = fs.mkdtempSync(path.join(root, `${EXCHANGE_DIR_PREFIX}${ownUntil}-`));
   try {
     const outputFile = path.join(dir, EXCHANGE_OUTPUT_FILE);
-    const reasonFile = path.join(dir, EXCHANGE_REASON_FILE);
     fs.writeFileSync(outputFile, outputJson, { encoding: "utf8", mode: EXCHANGE_FILE_MODE });
-    fs.writeFileSync(reasonFile, "", { mode: EXCHANGE_FILE_MODE });
-    return { dir, outputFile, reasonFile };
+    return { dir, outputFile };
   } catch (err) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw err;
@@ -1836,6 +1836,7 @@ interface StreamState {
   holdbackAt?: number;
   collapser?: V8FrameCollapser;
   watchForHeapFatal?: boolean;
+  lastLine?: LastLineTracker;
 }
 
 /**
@@ -1861,6 +1862,7 @@ class ScriptLogCapture {
   private cut = false;
   private heapFatalFlag = false;
   private heapFatalTail = "";
+  private stderrLastLine = "";
 
   constructor(
     private readonly secrets: () => readonly FlowScriptSecret[],
@@ -1887,6 +1889,7 @@ class ScriptLogCapture {
         this.append(state.collapser.end());
         if (state.collapser.collapsed) this.truncatedFlag = true;
       }
+      if (state.lastLine) this.stderrLastLine = state.lastLine.end();
     }
     this.streams.clear();
   }
@@ -1901,6 +1904,11 @@ class ScriptLogCapture {
 
   get heapFatalSeen(): boolean {
     return this.heapFatalFlag;
+  }
+
+  /** The last line stderr carried that was not blank; see {@link LastLineTracker}. */
+  get lastStderrLine(): string {
+    return this.stderrLastLine;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -1921,7 +1929,11 @@ class ScriptLogCapture {
         decoder: new StringDecoder("utf8"),
         holdback: "",
         ...(stream === "stderr"
-          ? { collapser: new V8FrameCollapser(), watchForHeapFatal: true }
+          ? {
+              collapser: new V8FrameCollapser(),
+              watchForHeapFatal: true,
+              lastLine: new LastLineTracker(),
+            }
           : {}),
       };
       this.streams.set(stream, state);
@@ -1932,6 +1944,9 @@ class ScriptLogCapture {
   private consume(state: StreamState, text: string, final: boolean): void {
     if (!text && !final) return;
     if (state.watchForHeapFatal) this.watchForHeapFatal(text);
+    // Ahead of the scrub and the limits, which shape the log and not this: a
+    // script that floods stderr and then says why it failed still says it.
+    state.lastLine?.write(text);
     const secrets = this.secrets();
     const held = state.holdback;
     const pending = held + text;
@@ -2007,6 +2022,65 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
     if (text.endsWith(SECRET_PLACEHOLDER_MARKER.slice(0, n))) return taken - n;
   }
   return taken;
+}
+
+/**
+ * The last line a stream carried that was not blank: where a bash step that
+ * exited non-zero says why, whether that is its own `echo … >&2` or the error of
+ * the command `set -e` stopped on. Fed the text as the script wrote it, because
+ * what this returns joins the failure message and is redacted with it.
+ *
+ * Only the head of each line is kept, so a long line is cut at its end: that is
+ * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
+ * at the start would leave the other half where nothing looks.
+ */
+class LastLineTracker {
+  private head = "";
+  private length = 0;
+  private blank = true;
+  private last = "";
+
+  write(text: string): void {
+    let from = 0;
+    for (let nl = text.indexOf("\n"); nl !== -1; nl = text.indexOf("\n", from)) {
+      this.extend(text.slice(from, nl));
+      this.close();
+      from = nl + 1;
+    }
+    this.extend(text.slice(from));
+  }
+
+  end(): string {
+    this.close();
+    return this.last;
+  }
+
+  private extend(segment: string): void {
+    const room = STDERR_REASON_LINE_CHARS - this.head.length;
+    if (room > 0) this.head += segment.slice(0, room);
+    this.length += segment.length;
+    // Over the WHOLE line, not the head: a line of nothing but whitespace is
+    // blank at any length, and one whose first character comes after the head
+    // is not.
+    if (this.blank && /\S/.test(segment)) this.blank = false;
+  }
+
+  private close(): void {
+    if (!this.blank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
+    this.head = "";
+    this.length = 0;
+    this.blank = true;
+  }
+
+  /**
+   * The head, moved back off the first half of a surrogate pair the limit
+   * split, then marked the way `clampText` marks a cut.
+   */
+  private cut(): string {
+    const final = this.head.charCodeAt(this.head.length - 1);
+    const kept = final >= 0xd800 && final <= 0xdbff ? this.head.slice(0, -1) : this.head;
+    return `${kept.trimStart()}${omissionMarker(this.length - kept.length)}`;
+  }
 }
 
 function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {

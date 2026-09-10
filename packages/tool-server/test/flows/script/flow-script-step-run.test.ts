@@ -215,7 +215,7 @@ describe("a script step in a run", () => {
 });
 
 describe("a bash step in a run", () => {
-  it("runs the .sh, passes, and reports nothing the script printed", async (ctx) => {
+  it("runs the .sh, passes, and carries what it printed into the report", async (ctx) => {
     skipWithoutBash(ctx);
     await write(
       "scripts/seed.sh",
@@ -234,9 +234,9 @@ describe("a bash step in a run", () => {
       status: "pass",
       target: "../../scripts/seed.sh",
     });
-    const whole = JSON.stringify(result);
-    expect(whole).not.toContain("seeded order 4711");
-    expect(whole).not.toContain("and a warning");
+    expect(result.steps[0]!.scriptLog).toContain("seeded order 4711");
+    expect(result.steps[0]!.scriptLog).toContain("and a warning");
+    expect(result.steps[0]!.scriptLogTruncated).toBeUndefined();
     expect(readMark("seed-sh")).toBe("ran");
     expect(result.device).toBe("");
     expect(listedDevices(invokeTool)).toBe(false);
@@ -244,7 +244,7 @@ describe("a bash step in a run", () => {
 
   it("stops the flow on a failing .sh and carries its reason into the report", async (ctx) => {
     skipWithoutBash(ctx);
-    await write("scripts/boom.sh", `echo "seed API returned 500" > "$ARGENT_REASON"\nexit 1\n`);
+    await write("scripts/boom.sh", `echo "seed API returned 500" >&2\nexit 1\n`);
     await flow(
       "boom-sh",
       "steps:\n" +
@@ -258,6 +258,7 @@ describe("a bash step in a run", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
     expect(result.steps[0]!.reason).toContain("seed API returned 500");
+    expect(result.steps[0]!.scriptLog).toContain("seed API returned 500");
     expect(result.steps.slice(1).map((s) => [s.kind, s.status])).toEqual([
       ["echo", "skip"],
       ["wait", "skip"],
