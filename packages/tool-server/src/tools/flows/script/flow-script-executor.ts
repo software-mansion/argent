@@ -1641,8 +1641,10 @@ async function removeTree(target: string, top = target): Promise<void> {
     removals = [];
     if (failure) throw failure;
   };
+  let listed = false;
   try {
     const dir = await fs.promises.opendir(target, { bufferSize: EXCHANGE_SWEEP_BATCH });
+    listed = true;
     for await (const entry of dir) {
       const child = path.join(target, entry.name);
       if (entry.isDirectory()) {
@@ -1657,10 +1659,12 @@ async function removeTree(target: string, top = target): Promise<void> {
       if (removals.length >= EXCHANGE_SWEEP_BATCH) await settle();
     }
   } catch (err) {
-    // Gone already, which `force` asks to be quiet about, or not a directory,
-    // which the remove below takes as it is.
+    // Gone already, which `force` asks to be quiet about; not a directory; or
+    // one this process may not list - which, when empty, `rmdir` removes all
+    // the same, since it asks only the parent. The remove below takes each as
+    // it is.
     const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+    if (code !== "ENOENT" && code !== "ENOTDIR" && !(code === "EACCES" && !listed)) throw err;
   }
   await settle();
   for (const child of subdirectories) await removeTree(await hoistIfDeep(child, top), top);

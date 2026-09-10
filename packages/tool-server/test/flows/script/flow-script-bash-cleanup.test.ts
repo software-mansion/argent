@@ -332,6 +332,38 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
   }, 30_000);
 });
 
+describe("removing a directory the step may not list", () => {
+  // Listing a directory needs read permission, and removing an empty one does
+  // not: `rmdir` asks only the parent. A script that leaves an unreadable empty
+  // directory - `mkdir -m 000`, a umask of 0777 - has it removed all the same.
+  it("removes an empty directory it may not list", async () => {
+    const ws = createScriptWorkspace("bash-unreadable-rm");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-unreadable-rm-root-"));
+    const script = ws.write(
+      "unreadable.sh",
+      `set -euo pipefail
+cd "$(dirname "$ARGENT_OUTPUT")"
+mkdir -m 000 closed
+mkdir -m 300 blind
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    try {
+      const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.notes.join(" ")).not.toContain("could not be removed");
+      expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+    } finally {
+      removeLeftovers(exchangeRoot);
+      ws.cleanup();
+    }
+  }, 30_000);
+});
+
 describe("an exchange directory that could not be filled", () => {
   // `mkdtemp` succeeds and then the write of the seeded document does not. The
   // caller is handed a throw with no exchange in it, so the `finally` that owns
