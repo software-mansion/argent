@@ -4,7 +4,7 @@ description: Step-by-step workflows for developing or debugging React Native app
 ---
 
 - Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator.
-- Do not use the in-app DevMenu. Use the argent tools instead.
+- Do not try to use the DevMenu in React Native apps by default. Use the argent tools instead.
 
 ## 1. Starting the React Native App
 
