@@ -400,10 +400,11 @@ describe("statusBarMaskFraction", () => {
   });
 
   it("masks the band on a remote iOS simulator too", async () => {
-    // sim-remote drives an ordinary iOS simulator, so its status bar ticks
-    // like a local one — and the run-level `pinStatusBar` does not cover the
-    // platform either. The tvOS probe reads the local simulator list, which
-    // cannot see another machine's device, so it is not asked.
+    // sim-remote drives an ordinary iOS simulator, so it has the same status
+    // bar to mask. The run-level `pinStatusBar` covers it too, but the mask is
+    // what a snapshot outside a flow run leans on. The tvOS probe reads the
+    // local simulator list, which cannot see another machine's device, so it
+    // is not asked.
     await expect(
       statusBarMaskFraction({ platform: "ios-remote", kind: "simulator", id: "remote:ios-udid" })
     ).resolves.toBe(0.06);
@@ -880,5 +881,23 @@ describe("capturePixelsWithin", () => {
     } as DeviceInfo;
     expect(pixelCaptureTimeoutMs(physical, true)).toBe(4_000);
     expect(pixelCaptureTimeoutMs(physical, false)).toBe(4_000);
+  });
+
+  it("widens only the warm bound on a remote simulator", () => {
+    // Every capture on a cloud device is a round trip to another machine, which
+    // the localhost warm bound does not allow for; a timed-out read costs a
+    // whole settle round, since waitForIdle needs two comparable captures.
+    const remote = { platform: "ios-remote", kind: "simulator", id: "remote:SIM" } as DeviceInfo;
+    expect(pixelCaptureTimeoutMs(remote, false)).toBe(4_000);
+    expect(pixelCaptureTimeoutMs(remote, false)).toBeGreaterThan(PIXEL_CAPTURE_TIMEOUT_MS);
+    // The first capture is not narrowed to the remote ceiling. It keeps the
+    // wider one as unused headroom: the MoQ request never enters the
+    // first-frame poll that ceiling is sized for.
+    expect(pixelCaptureTimeoutMs(remote, true)).toBe(FIRST_PIXEL_CAPTURE_TIMEOUT_MS);
+    // No other platform moved.
+    expect(pixelCaptureTimeoutMs(iosDevice, false)).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+    expect(
+      pixelCaptureTimeoutMs({ platform: "android", kind: "emulator", id: "emulator-5554" }, false)
+    ).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
   });
 });

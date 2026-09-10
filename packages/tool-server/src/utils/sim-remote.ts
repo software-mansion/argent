@@ -155,6 +155,15 @@ export async function simctlPrivacy(
   await run(["simctl", "privacy", stripRemotePrefix(udid), action, service, bundleId]);
 }
 
+/**
+ * Remote analogue of `xcrun simctl status_bar <udid> <action> ...` — overrides
+ * or clears the remote simulator's status bar. `sim-remote simctl` forwards its
+ * arguments verbatim, so the argv is the local one minus the udid.
+ */
+export async function simctlStatusBar(udid: string, args: string[]): Promise<void> {
+  await run(["simctl", "status_bar", stripRemotePrefix(udid), ...args]);
+}
+
 /** Copy text into the simulator's pasteboard (streamed over stdin). */
 export async function simctlPbcopy(udid: string, text: string): Promise<void> {
   await run(["simctl", "pbcopy", stripRemotePrefix(udid)], { stdin: text });
