@@ -16,6 +16,10 @@ const deadlineMs = workerData && workerData.deadlineMs;
 if (Number.isFinite(deadlineMs) && deadlineMs > 0) {
   const slot = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(slot, 0, 0, deadlineMs);
+  // Before anything is stopped, so the runner's own thread cannot report what
+  // the stop does to bash as the script's own answer: `taskkill /t` below takes
+  // the tree one process at a time.
+  if (workerData.fired instanceof Int32Array) Atomics.store(workerData.fired, 0, 1);
   // The group, so a descendant the script started goes with it: reaching here
   // means the parent that would have reaped them could not.
   try {

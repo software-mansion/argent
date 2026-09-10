@@ -153,6 +153,15 @@ const decodeJson = JSON.parse;
 const runnerListeners = [];
 
 /**
+ * Set by the deadline watchdog before it starts to stop this process's tree. On
+ * Windows that stop is `taskkill /t`, which takes the tree one process at a
+ * time, so bash can die before this thread does - and this thread would then
+ * report bash's forced exit as the script's own code 1. The step overran its
+ * time limit, which is the parent's to say; see `finish`.
+ */
+const deadlineFired = new Int32Array(new SharedArrayBuffer(4));
+
+/**
  * Every pattern and separator the functions below read, declared ABOVE the
  * activation call rather than beside its reader.
  *
@@ -970,7 +979,7 @@ function startWatchdogs(deadlineMs) {
   // Read here rather than in the worker: `process.ppid` is a property script
   // code may replace, and the worker's own `process` is not the main thread's.
   start(new URL(LIFELINE_WATCHDOG, here), { parentPid: process.ppid });
-  start(new URL(DEADLINE_WATCHDOG, here), { deadlineMs });
+  start(new URL(DEADLINE_WATCHDOG, here), { deadlineMs, fired: deadlineFired });
 
   function start(url, workerData) {
     try {
@@ -1252,6 +1261,10 @@ function safeStringify(value) {
 function finish(response) {
   if (finished) return;
   finished = true;
+  // The deadline watchdog is stopping this tree: whatever bash's exit said, the
+  // step overran its limit, and the parent's own timer, due before this one,
+  // answers for it.
+  if (Atomics.load(deadlineFired, 0) === 1) return;
   const bounded = boundFailureText(response);
   const exit = () => realExit(0);
   let pending = 2;
