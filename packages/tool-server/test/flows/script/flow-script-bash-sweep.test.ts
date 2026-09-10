@@ -258,7 +258,12 @@ describe("a bash step's sweep of the exchange root", () => {
     const rm = vi
       .spyOn(fs.promises, "rm")
       .mockImplementation(async (target: Parameters<typeof realRm>[0], options) => {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        // The abandoned directory alone: the step removes its own exchange
+        // through `fs.promises.rm` too, and slowing that as well let the sweep
+        // finish first with or without the wait.
+        if (String(target).startsWith(abandoned)) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
         return realRm(target, options);
       });
     try {
