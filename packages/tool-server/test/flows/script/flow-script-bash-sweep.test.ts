@@ -99,35 +99,42 @@ describe("a bash step's sweep of the exchange root", () => {
   // large root stalled the tool server's event loop: no MCP request, device
   // socket or timer ran during it. A handle read in small batches leaves the
   // loop between them.
-  it("sweeps a large root without stalling the event loop", async () => {
-    const ws = createScriptWorkspace("bash-sweep-stall");
-    const crowded = fs.mkdtempSync(path.join(os.tmpdir(), "argent-sweep-crowded-"));
-    for (let i = 0; i < 40_000; i += 1) fs.mkdirSync(path.join(crowded, `junk-${i}`));
+  //
+  // Not on Windows: its timers tick at about 15.6 ms, above the bound itself, so
+  // a 5 ms heartbeat cannot resolve that bound there.
+  it.skipIf(process.platform === "win32")(
+    "sweeps a large root without stalling the event loop",
+    async () => {
+      const ws = createScriptWorkspace("bash-sweep-stall");
+      const crowded = fs.mkdtempSync(path.join(os.tmpdir(), "argent-sweep-crowded-"));
+      for (let i = 0; i < 40_000; i += 1) fs.mkdirSync(path.join(crowded, `junk-${i}`));
 
-    let worstBlockMs = 0;
-    let last = process.hrtime.bigint();
-    const heartbeat = setInterval(() => {
-      const now = process.hrtime.bigint();
-      worstBlockMs = Math.max(worstBlockMs, Number(now - last) / 1e6 - 5);
-      last = now;
-    }, 5);
-    try {
-      const script = ws.write("crowded.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
-      const result = await new FlowScriptExecutor({
-        concurrency: 2,
-        maxTimeoutMs: 60_000,
-        exchangeRoot: crowded,
-      }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
+      let worstBlockMs = 0;
+      let last = process.hrtime.bigint();
+      const heartbeat = setInterval(() => {
+        const now = process.hrtime.bigint();
+        worstBlockMs = Math.max(worstBlockMs, Number(now - last) / 1e6 - 5);
+        last = now;
+      }, 5);
+      try {
+        const script = ws.write("crowded.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
+        const result = await new FlowScriptExecutor({
+          concurrency: 2,
+          maxTimeoutMs: 60_000,
+          exchangeRoot: crowded,
+        }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
 
-      expect(result.ok).toBe(true);
-      // 21-22 ms on this machine before, 0 after; the margin is for a loaded one.
-      expect(worstBlockMs).toBeLessThan(12);
-    } finally {
-      clearInterval(heartbeat);
-      fs.rmSync(crowded, { recursive: true, force: true });
-      ws.cleanup();
-    }
-  }, 120_000);
+        expect(result.ok).toBe(true);
+        // 21-22 ms on this machine before, 0 after; the margin is for a loaded one.
+        expect(worstBlockMs).toBeLessThan(12);
+      } finally {
+        clearInterval(heartbeat);
+        fs.rmSync(crowded, { recursive: true, force: true });
+        ws.cleanup();
+      }
+    },
+    120_000
+  );
 
   // The bound a directory carries has to be a whole number of milliseconds,
   // because the sweep reads it back with `/^(\d+)-/` and a `.` matches nothing

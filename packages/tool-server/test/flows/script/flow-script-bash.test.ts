@@ -512,8 +512,11 @@ describe("the document a bash step returns", () => {
   // graceful stop could not reach it either and the whole stop grace was spent
   // before the SIGKILL. A script that failed in ten milliseconds was reported
   // as having spent its entire time limit.
+  //
+  // The pipe is a POSIX case: Git Bash's `mkfifo` makes a Cygwin FIFO that Node
+  // sees as no file at all, so there the step reports the document gone.
   it.each([
-    ["a named pipe", `mkfifo "$ARGENT_OUTPUT"`],
+    ...(process.platform === "win32" ? [] : [["a named pipe", `mkfifo "$ARGENT_OUTPUT"`]]),
     ["a directory", `mkdir "$ARGENT_OUTPUT"`],
   ])(
     "refuses %s in the place of the document, at once",
@@ -879,55 +882,71 @@ describe("what a failing bash step says", () => {
   // word of every line, so `> "$ARGENT_OUTPUT"` writes a file one carriage
   // return past the one the parent reads — and the parent's own seeded document
   // is what an exit code of 0 then returns. The one CRLF symptom that is green.
-  it("refuses an exit 0 whose redirection landed one carriage return away", async () => {
-    const ws = workspace();
-    const script = ws.write("crlf.sh", `printf '%s' '{"seeded":true}' > "$ARGENT_OUTPUT"\r\n`);
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-    });
+  //
+  // POSIX bash only, like the two cases after it: Git for Windows' bash drops a
+  // carriage return from the line it reads, so a CRLF script runs there as its
+  // LF twin would - which is what the Windows runner showed for all three.
+  onPosix(
+    "refuses an exit 0 whose redirection landed one carriage return away",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("crlf.sh", `printf '%s' '{"seeded":true}' > "$ARGENT_OUTPUT"\r\n`);
+      const result = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
 
-    expect(result.ok).toBe(false);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("CRLF");
-    expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
-  }, 30_000);
+      expect(result.ok).toBe(false);
+      expect(result.failure?.kind).toBe("output");
+      expect(result.failure?.message).toContain("CRLF");
+      expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
+    },
+    30_000
+  );
 
   // A fully CRLF script reaches the same place, not only a mixed-ending one: it
   // dies early only when it HAS a `set -euo pipefail` line, and this one does
   // not. It runs to completion, leaves the stray sibling and exits 0.
-  it("refuses a wholly CRLF script that ran to the end and exited 0", async () => {
-    const ws = workspace();
-    const script = ws.write(
-      "crlf-whole.sh",
-      "printf '%s' '{\"seeded\":true}' > \"$ARGENT_OUTPUT\"\r\n"
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-    });
+  onPosix(
+    "refuses a wholly CRLF script that ran to the end and exited 0",
+    async () => {
+      const ws = workspace();
+      const script = ws.write(
+        "crlf-whole.sh",
+        "printf '%s' '{\"seeded\":true}' > \"$ARGENT_OUTPUT\"\r\n"
+      );
+      const result = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
 
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("CRLF");
-    expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
-  }, 30_000);
+      expect(result.failure?.kind).toBe("output");
+      expect(result.failure?.message).toContain("CRLF");
+      expect(result.failure?.message).toContain("$ARGENT_OUTPUT");
+    },
+    30_000
+  );
 
   // What CRLF does to a script that fails is bash's own complaint on stderr,
   // so that complaint is what the report ends with: to bash a blank line is a
   // lone carriage return, and a command it cannot find. GNU bash 5.x spells the
   // name `$'\r'`; Apple's 3.2 writes the carriage return itself.
-  it("hands a CRLF script's own bash error to the reason and to the log", async () => {
-    const ws = workspace();
-    const result = await runBash(ws, "crlf-blank", "echo start\r\n\r\n");
+  onPosix(
+    "hands a CRLF script's own bash error to the reason and to the log",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(ws, "crlf-blank", "echo start\r\n\r\n");
 
-    const said = /crlf-blank\.sh: line 2: (\$'\\r'|\r): command not found/;
-    expect(result.failure?.kind).toBe("exit");
-    expect(result.failure?.message).toContain("code 127");
-    expect(result.failure?.message).toMatch(new RegExp(`${said.source}$`));
-    expect(result.log).toMatch(said);
-  }, 30_000);
+      const said = /crlf-blank\.sh: line 2: (\$'\\r'|\r): command not found/;
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toContain("code 127");
+      expect(result.failure?.message).toMatch(new RegExp(`${said.source}$`));
+      expect(result.log).toMatch(said);
+    },
+    30_000
+  );
 
   // Windows is the one platform a CRLF checkout happens on, and there bash is
   // msys2 — a Cygwin fork, which cannot put an ASCII control character in a
@@ -947,14 +966,19 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toContain("CRLF");
   }, 30_000);
 
+  // The stray is written the way each platform's bash names one. Git Bash drops
+  // a carriage return from the line it reads, which turned `$'<CR>'` into an
+  // empty word and the redirection into one that emptied the real document; it
+  // names the stray with U+F00D, as the case above does.
   it("keeps the document of a script that also left a stray sibling", async () => {
     const ws = workspace();
+    const stray = process.platform === "win32" ? "" : "\r";
     const result = await runBash(
       ws,
       "stray-sibling",
       `printf '{"real":true}' > "$ARGENT_OUTPUT.t"
        mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"
-       : > "$ARGENT_OUTPUT"$'\r'`
+       : > "$ARGENT_OUTPUT"$'${stray}'`
     );
 
     expect(result.ok).toBe(true);
@@ -1036,8 +1060,9 @@ describe("what a failing bash step says", () => {
   // whole legal range from `MIN_SCRIPT_TIMEOUT_MS` up - and the parent sealed
   // the interruption and discarded a terminal message that was already correct.
   // The step was then reported as a time limit that was never exceeded, about
-  // the one fact that explains the failure.
-  it.each([100, 500, 900])(
+  // the one fact that explains the failure. POSIX only: the step dies by a
+  // signal, and Windows has none to send.
+  onPosix.each([100, 500, 900])(
     "reports a signalled bash as a signal under a %sms time limit",
     async (timeoutMs) => {
       const ws = workspace();
@@ -1638,10 +1663,15 @@ describe("limits and stopping", () => {
   it("has the deadline watchdog take the whole group when the tool server stalls", async () => {
     const ws = workspace();
     const pidFile = ws.resolve("stalled.pid");
+    // A Node descendant that writes its own pid, as the lifeline case below
+    // uses: under Git Bash `$!` is an MSYS number rather than one `process.kill`
+    // can ask Windows about, so a `sleep`'s pid read as dead there from the start.
+    const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
     const script = ws.write(
       "stalled.sh",
-      `sleep 300 &
-       echo $! > ${JSON.stringify(pidFile)}
+      `${node} -e 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);' ${JSON.stringify(
+        pidFile.replace(/\\/g, "/")
+      )} &
        while true; do sleep 1; done`
     );
     const timeoutMs = 2_000;
