@@ -58,6 +58,15 @@ const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
  */
 const STDERR_REASON_LINE_CHARS = 1_000;
 const SETTLE_TIMEOUT_MS = 500;
+/**
+ * How long after the child exits the settle keeps waiting for a process that
+ * still holds the output streams and is still writing to them. A stderr
+ * consumer - `exec 2> >(…)`, the timestamp idiom - is still working through
+ * its backlog when bash exits, and the stop would cut its last lines, the
+ * script's own error among them. A job that never stops writing holds the step
+ * this long, and then the log is marked cut.
+ */
+const SETTLE_WRITING_LIMIT_MS = 3_000;
 const STOP_GRACE_MS = 1_500;
 /**
  * How far behind the parent's timer the child's own deadline watchdog sits.
@@ -103,7 +112,7 @@ const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
  * Nothing waits on it but the collection of a directory whose server died.
  */
 const EXCHANGE_LIFE_MARGIN_MS =
-  SETTLE_TIMEOUT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
+  SETTLE_WRITING_LIMIT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
 const EXCHANGE_OUTPUT_FILE = "output.json";
 
 /**
@@ -797,8 +806,17 @@ export class FlowScriptExecutor {
       });
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => capture.push("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer) => capture.push("stderr", chunk));
+    // When the tree last wrote, which the settle below reads to tell a process
+    // still working through its output from one that only holds the streams.
+    let lastOutputAt = 0;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      lastOutputAt = Date.now();
+      capture.push("stdout", chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      lastOutputAt = Date.now();
+      capture.push("stderr", chunk);
+    });
 
     child.on("message", (raw) => {
       if (terminal) return;
@@ -881,13 +899,20 @@ export class FlowScriptExecutor {
     // The protocol runs on IPC and the logs on the standard streams, with no
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
-    // inherited the streams and is holding them open.
-    const closedOnItsOwn = await Promise.race([
-      closed.then(() => true),
-      sleep(SETTLE_TIMEOUT_MS).then(() => false),
-    ]);
+    // inherited the streams and is holding them open, and it stretches while
+    // that descendant is still writing.
+    const settled = await settleStreams(closed, () => lastOutputAt);
+    const closedOnItsOwn = settled === "closed";
     await stop();
     capture.end();
+    if (settled === "cut") {
+      notes.push(
+        `A process the script left running was still writing to the log ` +
+          `${SETTLE_WRITING_LIMIT_MS / 1_000} seconds after the script ended, so Argent stopped ` +
+          `it, and what it would have written next is not in the log. Stop or wait for each ` +
+          `background job before the script exits.`
+      );
+    }
     child.stdout?.destroy();
     child.stderr?.destroy();
     lifeline?.destroy?.();
@@ -920,11 +945,32 @@ export class FlowScriptExecutor {
     return {
       ...verdict,
       log,
-      logTruncated: capture.truncated,
+      logTruncated: capture.truncated || settled === "cut",
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
     };
+  }
+}
+
+/**
+ * Waits for the streams of a child that has exited: `closed` when every process
+ * holding them let go, `quiet` when what holds them wrote nothing for
+ * {@link SETTLE_TIMEOUT_MS}, and `cut` when it was still writing at
+ * {@link SETTLE_WRITING_LIMIT_MS}, so the stop that follows ends it mid-output.
+ */
+async function settleStreams(
+  closed: Promise<void>,
+  lastOutputAt: () => number
+): Promise<"closed" | "quiet" | "cut"> {
+  const startedAt = Date.now();
+  const limitAt = startedAt + SETTLE_WRITING_LIMIT_MS;
+  const isClosed = closed.then(() => true);
+  for (;;) {
+    const quietAt = Math.max(startedAt, lastOutputAt()) + SETTLE_TIMEOUT_MS;
+    const wait = Math.min(quietAt, limitAt) - Date.now();
+    if (wait <= 0) return quietAt <= limitAt ? "quiet" : "cut";
+    if (await Promise.race([isClosed, sleep(wait).then(() => false)])) return "closed";
   }
 }
 

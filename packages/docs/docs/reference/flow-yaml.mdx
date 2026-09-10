@@ -307,6 +307,8 @@ Argent reports what the script writes to stdout and stderr as the log of the ste
 - `log` in the result of `flow-add-script`. `logTruncated` is `true` when Argent cut the log
 - The output of `argent flow run`, under the line of the step
 
+A command that the script starts can write to the log after the script exits. Argent waits for such a command while it writes, for up to 3 seconds. Argent stops a command that still writes after that, marks the log as cut, and adds a note to the step.
+
 A failed step stops the flow. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |

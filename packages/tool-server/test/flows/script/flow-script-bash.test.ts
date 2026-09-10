@@ -611,6 +611,52 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // The timestamp idiom: stderr goes through a process that is still working
+  // through its backlog when bash exits. It closes stderr on its own once it
+  // has written the last line, so the log keeps every line and the reason is
+  // the script's own error, not a progress line from the middle.
+  onPosix(
+    "keeps what a stderr consumer writes after bash exits",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "slow-consumer",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         for i in $(seq 1 40); do echo "progress line $i" >&2; done
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.log).toContain("progress line 40\n");
+      expect(result.logTruncated).toBe(false);
+    },
+    30_000
+  );
+
+  // A job that never stops writing holds the streams past any wait. Argent
+  // stops it at the limit and marks the log cut, and the reason stays the
+  // script's own.
+  onPosix(
+    "marks the log cut when it stops a job that was still writing",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "chatty-job",
+        `( sleep 0.2; while true; do echo "[logcat] heartbeat" >&2; sleep 0.05; done ) &
+         echo "the orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+      expect(result.log).toContain("[logcat] heartbeat\n");
+      expect(result.logTruncated).toBe(true);
+      expect(result.notes.join(" ")).toContain("was still writing to the log");
+      expect(result.durationMs).toBeLessThan(15_000);
+    },
+    30_000
+  );
+
   it("says only the code when the script wrote nothing to stderr", async () => {
     const ws = workspace();
     const result = await runBash(ws, "silent", `exit 7`);
