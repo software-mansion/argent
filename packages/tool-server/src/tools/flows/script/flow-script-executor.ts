@@ -903,9 +903,9 @@ export class FlowScriptExecutor {
     // the log text of the same script. The bound covers a descendant that
     // inherited the streams and is holding them open, and it stretches while
     // that descendant is still writing. A run cancelled after the script's
-    // process exited ends it at once. One cancelled before that was stopped
-    // already, and what it left holding the streams is waited for as any
-    // other is.
+    // process exited ends it once the first settle has passed. One cancelled
+    // before that was stopped already, and what it left holding the streams is
+    // waited for as any other is.
     //
     // Beside it, the line stderr stood on when it first went quiet for a settle
     // after the script's process exited, which the reason takes: see below.
@@ -1008,8 +1008,8 @@ export class FlowScriptExecutor {
  * holding them let go, `quiet` when what holds them wrote nothing for
  * {@link SETTLE_TIMEOUT_MS}, and `cut` when it was still writing at
  * {@link SETTLE_WRITING_LIMIT_MS}, so the log ends while it had more to say.
- * An abort of `signal` ends the wait at once: `cut` when output was still
- * arriving, `quiet` when it was not.
+ * An abort of `signal` ends the wait once {@link SETTLE_TIMEOUT_MS} has passed:
+ * `cut` when output was still arriving, `quiet` when it was not.
  */
 async function settleStreams(
   closed: Promise<void>,
@@ -1020,7 +1020,10 @@ async function settleStreams(
   const limitAt = startedAt + SETTLE_WRITING_LIMIT_MS;
   const isClosed = closed.then(() => true);
   // A cancelled run has no use for the rest of the wait: the script's process
-  // has already exited, and what is left is only what it left running.
+  // has already exited, and what is left is only what it left running. But
+  // never short of the settle every step had before the wait could stretch: a
+  // stderr consumer still delivering the script's last lines gets that long.
+  const abortFrom = startedAt + SETTLE_TIMEOUT_MS;
   let onAbort = (): void => {};
   const aborted = new Promise<false>((resolve) => {
     onAbort = () => resolve(false);
@@ -1029,14 +1032,16 @@ async function settleStreams(
   try {
     for (;;) {
       const quietAt = Math.max(startedAt, lastOutputAt()) + SETTLE_TIMEOUT_MS;
-      if (signal?.aborted) {
+      const cancelled = signal?.aborted === true;
+      if (cancelled && Date.now() >= abortFrom) {
         return lastOutputAt() > startedAt && quietAt > Date.now() ? "cut" : "quiet";
       }
-      const wait = Math.min(quietAt, limitAt) - Date.now();
+      const wait = Math.min(quietAt, limitAt, cancelled ? abortFrom : Infinity) - Date.now();
       if (wait <= 0) return quietAt <= limitAt ? "quiet" : "cut";
-      if (await Promise.race([isClosed, aborted, sleep(wait).then(() => false)])) {
-        return "closed";
-      }
+      // The abort only until it fires: once settled it would win every race.
+      const racers: Promise<boolean>[] = [isClosed, sleep(wait).then(() => false)];
+      if (!cancelled) racers.push(aborted);
+      if (await Promise.race(racers)) return "closed";
       // A timer that fires after the loop was blocked runs before the poll
       // that reads what arrived meanwhile, so one turn goes by before the next
       // look at when output last came.

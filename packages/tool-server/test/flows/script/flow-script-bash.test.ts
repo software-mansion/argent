@@ -807,9 +807,46 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
+  // A cancel that lands before the consumer has written the script's error:
+  // the wait still runs the settle every step had before it could stretch, so
+  // the consumer delivers the error and the reason keeps it.
+  onPosix(
+    "keeps a consumer's late line when a cancel lands before it is written",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "cancel-early.sh",
+        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         touch ${JSON.stringify(exited)}
+         exit 1`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
+      // After the consumer's first line, before its second.
+      await delay(150);
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
   // A cancel is the caller giving up on the run. Past the script's own exit the
   // wait is for what the script left running, and a cancelled run has no use
-  // for it: it ends at once rather than at its limit.
+  // for it: it ends within the first settle rather than at its limit.
   onPosix(
     "ends the wait for a job still writing when the run is cancelled",
     async () => {
