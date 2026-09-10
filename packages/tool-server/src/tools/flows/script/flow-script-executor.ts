@@ -902,9 +902,10 @@ export class FlowScriptExecutor {
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
     // inherited the streams and is holding them open, and it stretches while
-    // that descendant is still writing. A run cancelled after the script
-    // answered ends it at once. One cancelled before that was stopped already,
-    // and what it left holding the streams is waited for as any other is.
+    // that descendant is still writing. A run cancelled after the script's
+    // process exited ends it at once. One cancelled before that was stopped
+    // already, and what it left holding the streams is waited for as any
+    // other is.
     const settled = await settleStreams(
       closed,
       () => lastOutputAt,
@@ -989,8 +990,8 @@ async function settleStreams(
   const startedAt = Date.now();
   const limitAt = startedAt + SETTLE_WRITING_LIMIT_MS;
   const isClosed = closed.then(() => true);
-  // A cancelled run has no use for the rest of the wait: the script has
-  // already answered, and what is left is only what it left running.
+  // A cancelled run has no use for the rest of the wait: the script's process
+  // has already exited, and what is left is only what it left running.
   let onAbort = (): void => {};
   const aborted = new Promise<false>((resolve) => {
     onAbort = () => resolve(false);
