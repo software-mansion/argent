@@ -928,15 +928,17 @@ export class FlowScriptExecutor {
       }
     };
     watchStderr();
-    const settled = await settleStreams(
-      closed,
-      () => lastOutputAt,
-      request.signal?.aborted ? undefined : request.signal
-    );
+    const settleSignal = request.signal?.aborted ? undefined : request.signal;
+    const settled = await settleStreams(closed, () => lastOutputAt, settleSignal);
     watchingStderr = false;
     clearTimeout(stderrQuietTimer);
-    // Quiet by now, but the settle ended before the watch came round to it.
-    if (stderrLineAtQuiet === undefined && stderrQuietFor() >= SETTLE_TIMEOUT_MS) {
+    // Quiet by now, but the settle ended before the watch came round to it - or
+    // a cancel ended the settle before stderr could go quiet, and what stderr
+    // had said by then is what the run reports.
+    if (
+      stderrLineAtQuiet === undefined &&
+      (settleSignal?.aborted === true || stderrQuietFor() >= SETTLE_TIMEOUT_MS)
+    ) {
       stderrLineAtQuiet = capture.stderrLineSoFar;
     }
     await stop();
