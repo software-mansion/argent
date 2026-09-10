@@ -253,11 +253,12 @@ export interface RecordedStepWarning {
    * - `wait` — the live wait itself came back `success: false`, so the probe
    *   was skipped. Nothing here is about conversion: a genuine miss is a step
    *   FAILURE at replay, and the other causes leave the step unjudged.
-   * - `env` — the recorded call was rewritten to a `run:` step, which carries
-   *   no environment, so the `env` the live call ran with is not part of what
-   *   was recorded. Not a polish question at all: the replay runs without those
-   *   values, and the step renders identically whether they were dropped or
-   *   never passed.
+   * - `env` — the recorded call was rewritten to a `run:` step, and the replay
+   *   does not share the live call's environment. That step carries no
+   *   environment, so the `env` the live call passed is not part of what was
+   *   recorded; and it inherits the recording's own `env:`, which the live
+   *   call's separate run never had. Not a polish question at all: the step
+   *   renders identically either way.
    */
   kind: "conversion" | "wait" | "env";
   /**

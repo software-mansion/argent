@@ -20,12 +20,15 @@ import {
   classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
+  flowEnvOnDisk,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
   type RecordedStepWarning,
   type RecordingSession,
+  type ScriptEnv,
 } from "./flow-utils";
+import { envNameKey } from "./script/flow-script-env";
 import {
   AWAIT_UI_ELEMENT_TOOL_ID,
   isUnmetUiWaitResult,
@@ -1072,8 +1075,9 @@ async function captureRunTarget(
     }
 
     // Parsing validates the sibling exists and is a well-formed flow; a failure
-    // falls through to keeping the raw step.
-    parseFlow(await fs.readFile(fragPath, "utf8"));
+    // falls through to keeping the raw step. Its own `env:` is kept for the
+    // inherited-env warning below.
+    const fragmentEnv = parseFlow(await fs.readFile(fragPath, "utf8")).env;
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
@@ -1107,12 +1111,14 @@ async function captureRunTarget(
     // passed the sub-run is not part of what was recorded. The rewrite is
     // lossy, and the warning below is what says so.
     const dropped = envNamesInArgs(args.env);
-    return {
-      flow: `${name}.yaml`,
+    // It is lossy the other way too: the live call's separate run never had
+    // this recording's own `env:`, and the `run:` step inherits it at replay.
+    const inherited = await inheritedEnvNames(session, fragmentEnv, dropped);
+    const many = inherited.length > 1;
+    const warnings = [
       ...(dropped.length > 0
-        ? {
-            warning:
-              `a run: step takes no env, so the ${dropped.length > 1 ? "values" : "value"} this ` +
+        ? [
+            `a run: step takes no env, so the ${dropped.length > 1 ? "values" : "value"} this ` +
               `call passed (${dropped.join(", ")}) ${dropped.length > 1 ? "are" : "is"} NOT part ` +
               `of the recorded step and the replay runs without ` +
               `${dropped.length > 1 ? "them" : "it"}. Write ${dropped.length > 1 ? "them" : "it"} ` +
@@ -1120,8 +1126,21 @@ async function captureRunTarget(
               `itself declare, since a fragment's env: layers OVER the flow that runs it — ` +
               `into this recording's, or keep the raw flow-execute step instead (recording ` +
               `the call with a delayMs does that)`,
-          }
-        : {}),
+          ]
+        : []),
+      ...(inherited.length > 0
+        ? [
+            `at replay the run: step passes ${inherited.join(", ")} from this recording's env: ` +
+              `to ${name}.yaml's scripts, but the live flow-execute call ran without ` +
+              `${many ? "them" : "it"}. To make the two match, declare ${many ? "them" : "it"} ` +
+              `in ${name}.yaml's own env:, or keep the raw flow-execute step (recording the ` +
+              `call with a delayMs does that)`,
+          ]
+        : []),
+    ];
+    return {
+      flow: `${name}.yaml`,
+      ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}),
     };
   } catch (err) {
     return {
@@ -1134,15 +1153,49 @@ async function captureRunTarget(
  * The `run:` rewrite's own warning, as a verdict the finish can carry.
  *
  * {@link captureRunTarget} hands back a `flow` only when the rewrite succeeded,
- * and the one warning it raises beside a successful rewrite is the dropped
- * `env`. Every other warning it raises comes with no `flow` and keeps the raw
- * step, which the summary already renders as `N. tool: flow-execute`.
+ * and the one warning it raises beside a successful rewrite is about `env`: the
+ * values the call passed that the step drops, the recording's own `env:` the
+ * step inherits that the live call never had, or both in one string. Every
+ * other warning it raises comes with no `flow` and keeps the raw step, which
+ * the summary already renders as `N. tool: flow-execute`.
  */
 function runEnvWarning(
   step: FlowStep,
   warning: string | undefined
 ): Omit<RecordedStepWarning, "step"> | undefined {
   return step.kind === "run" && warning !== undefined ? { warning, kind: "env" } : undefined;
+}
+
+/**
+ * The names this recording's own top-level `env:` gives the fragment's scripts
+ * at replay that the live call never gave them.
+ *
+ * The live `flow-execute` started a run of its own, rooted at the fragment, so
+ * none of this recording's `env:` reached it; the recorded `run:` step composes
+ * the fragment UNDER that `env:` instead. A name the fragment declares itself
+ * layers over it at replay (`execRunStep` in flow-run.ts), so its scripts read
+ * the value the live call gave them, and a name the call passed is the dropped
+ * warning's to report. Keyed through {@link envNameKey}, as the merge that
+ * decides the replay's value is.
+ *
+ * Read off the FILE, for the reason {@link flowEnvOnDisk} gives. A file that
+ * will not read or parse yields no names rather than failing the rewrite: this
+ * is only a warning, and the append after it re-reads that file and refuses it
+ * in its own words.
+ */
+async function inheritedEnvNames(
+  session: RecordingSession,
+  fragmentEnv: ScriptEnv | undefined,
+  dropped: readonly string[]
+): Promise<string[]> {
+  let recordingEnv: ScriptEnv | undefined;
+  try {
+    recordingEnv = await flowEnvOnDisk(session);
+  } catch {
+    return [];
+  }
+  const layered = new Set([...Object.keys(fragmentEnv ?? {}), ...dropped].map(envNameKey));
+  return Object.keys(recordingEnv ?? {}).filter((name) => !layered.has(envNameKey(name)));
 }
 
 /**

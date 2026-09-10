@@ -58,8 +58,8 @@ function attachStepWarnings(
  *
  * The kinds are different news, and only one is about conversion. A wait that
  * came back `success: false` was never probed: it failed live, and at replay it
- * stops the run. An `env` warning is about neither — the step replays, just
- * without values the live call had. Counting any of them as a conversion
+ * stops the run. An `env` warning is about neither: the step replays, just not
+ * under the env the live call had. Counting any of them as a conversion
  * warning states the opposite of the actionable fact.
  *
  * `discarded` is what the anchor checks threw away. Dropping is the right
@@ -83,7 +83,8 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
   }
   if (counts.env > 0) {
     clauses.push(
-      `${counts.env} ${counts.env === 1 ? "step" : "steps"} lost the env the recorded call ran with`
+      `${counts.env} ${counts.env === 1 ? "step replays" : "steps replay"} under a different env ` +
+        `than the recorded call ran with`
     );
   }
   const carried =
