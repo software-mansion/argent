@@ -25,6 +25,8 @@ const removedSync: string[] = [];
  * operation per entry at once.
  */
 const removesAsync = { inFlight: 0, most: 0, recursiveOnFull: [] as string[] };
+/** The path each directory had when the batched remove moved it up. */
+const movedUp: string[] = [];
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -53,7 +55,11 @@ vi.mock("node:fs", async () => {
       removesAsync.inFlight--;
     }
   };
-  const promises = { ...actual.promises, rm };
+  const rename: typeof actual.promises.rename = async (from, to) => {
+    movedUp.push(String(from));
+    return actual.promises.rename(from, to);
+  };
+  const promises = { ...actual.promises, rm, rename };
   const writeFileSync: typeof actual.writeFileSync = (target, data, options) => {
     if (refuseWrite?.(String(target))) {
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
@@ -77,6 +83,8 @@ import {
   exchangeDirPrefix,
   FlowScriptExecutor,
 } from "../../../src/tools/flows/script/flow-script-executor";
+import { createScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 /**
  * `rm -rf`, which walks a tree by descriptor. What a regressed remove leaves
@@ -84,11 +92,8 @@ import {
  * throw from a `finally` would hide the failure that left it there.
  */
 function removeLeftovers(dir: string): void {
-  spawnSync("chmod", ["-R", "u+rwx", dir]);
   spawnSync("rm", ["-rf", dir]);
 }
-import { createScriptWorkspace } from "../../helpers/flow-script-workspace";
-import { resolveHostBash } from "../../helpers/host-bash";
 
 let noBash: string | undefined;
 
@@ -215,8 +220,9 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
   }, 90_000);
 
   // APFS takes 255 characters in a name, and a character can take three bytes
-  // in UTF-8, so one name alone can carry a path past the 1 024 macOS takes.
-  // macOS only: Linux file systems cap a name at 255 bytes.
+  // in UTF-8, so one name can add 765 bytes: a parent of a few hundred is then
+  // enough to carry the path past the 1 024 macOS takes. macOS only: Linux
+  // file systems cap a name at 255 bytes.
   it.skipIf(process.platform !== "darwin")(
     "removes names that are long in bytes",
     async () => {
@@ -251,6 +257,45 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
     },
     30_000
   );
+});
+
+describe("where the batched remove moves a directory up", () => {
+  // The point is set by APFS, where one name can add 765 bytes. No Linux file
+  // system takes such a name, so the removals CI runs pass at any point below
+  // 4 096 - which is why the move itself is pinned here: a directory whose
+  // path has passed 257 bytes is moved before it is walked.
+  it("moves a directory up once its path passes 257 bytes", async () => {
+    const ws = createScriptWorkspace("bash-hoist-at");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-hoist-at-root-"));
+    const script = ws.write(
+      "hoist.sh",
+      `set -euo pipefail
+cd "$(dirname "$ARGENT_OUTPUT")"
+a=$(printf 'a%.0s' $(seq 1 150))
+mkdir -p "$a/$a/$a"
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    movedUp.length = 0;
+    try {
+      const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
+
+      const moved = movedUp
+        .filter((from) => from.includes(exchangeDirPrefix()))
+        .map((from) => Buffer.byteLength(from));
+      expect(result.ok).toBe(true);
+      expect(moved.length).toBeGreaterThan(0);
+      expect(Math.min(...moved)).toBeGreaterThan(257);
+      expect(Math.min(...moved)).toBeLessThanOrEqual(512);
+      expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+    } finally {
+      removeLeftovers(exchangeRoot);
+      ws.cleanup();
+    }
+  }, 30_000);
 });
 
 describe("removing a read-only directory deep in the tree", () => {
