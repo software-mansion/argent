@@ -330,16 +330,16 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 | `argent flow run <dir>`       | Run every flow in the directory, one after the other |
 | `argent flow list`            | List the flow files in `.argent/flows`               |
 
-| Option               | Description                                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here |
-| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection. `ios` still never picks a physical iPhone                    |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                      |
-| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                             |
-| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                      |
-| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                   |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                 |
-| `--`                 | End of options, for a flow name that starts with `-`                                                                        |
+| Option               | Description                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                       |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                                                            |
+| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                   |
+| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                            |
+| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                         |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                       |
+| `--`                 | End of options, for a flow name that starts with `-`                                                                                                              |
 
 ```bash
 argent flow run checkout --platform ios

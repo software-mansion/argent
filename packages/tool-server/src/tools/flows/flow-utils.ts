@@ -646,7 +646,8 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift (flow-device's `FlowPlatform` aliases it).
+ * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
+ * with: a guard is authored text, and `ios-remote` is not writable.
  */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
@@ -2188,11 +2189,19 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
 }
 
 /**
- * The platform set, spelled once: launch maps, `when: { platform }` guards
- * ({@link WhenPlatform}), flow-device's `FlowPlatform`, and flow-run's
- * `platform` param enum all derive from this tuple.
+ * The platforms an AUTHOR can name in a flow file: launch-map keys and
+ * `when: { platform }` guards ({@link WhenPlatform}).
  */
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+
+/**
+ * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
+ * flow-run's `platform` param. `ios-remote` is selectable but deliberately not
+ * writable: a flow says what it drives, not which machine hosts the simulator,
+ * so `when:` and launch maps stay on {@link LAUNCH_PLATFORMS}.
+ */
+export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
+export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
