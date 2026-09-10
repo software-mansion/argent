@@ -1572,8 +1572,14 @@ async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise
  * removals in flight: 22 ms at worst. Each entry still goes through
  * `fs.promises.rm`, for its `force` and its Windows handling of a read-only
  * file.
+ *
+ * A tree can also run deeper than the longest path the system takes - 1 024
+ * bytes on macOS - and no call by full path gets past that, `fs.promises.rm`
+ * included, where the `rmSync` this replaced walked the tree by descriptor. So
+ * a directory whose path has grown long is moved up under `top` before it is
+ * walked, which shortens every path below it.
  */
-async function removeTree(target: string): Promise<void> {
+async function removeTree(target: string, top = target): Promise<void> {
   const subdirectories: string[] = [];
   let removals: Promise<void>[] = [];
   // Caught where each removal starts rather than where its batch is awaited:
@@ -1607,8 +1613,25 @@ async function removeTree(target: string): Promise<void> {
     if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
   }
   await settle();
-  for (const child of subdirectories) await removeTree(child);
+  for (const child of subdirectories) await removeTree(await hoistIfDeep(child, top), top);
   await fs.promises.rm(target, { recursive: true, force: true });
+}
+
+/**
+ * How long a path {@link removeTree} descends into before it moves the
+ * directory up. A name adds at most 255 bytes, so every path it hands the
+ * system stays well inside the 1 024 that macOS takes.
+ */
+const REMOVE_TREE_HOIST_AT_BYTES = 512;
+
+let hoistedDirectories = 0;
+
+/** `dir`, moved to sit directly under `top` first when its path has grown long. */
+async function hoistIfDeep(dir: string, top: string): Promise<string> {
+  if (Buffer.byteLength(dir) <= REMOVE_TREE_HOIST_AT_BYTES) return dir;
+  const moved = path.join(top, `.argent-hoisted-${process.pid}-${hoistedDirectories++}`);
+  await fs.promises.rename(dir, moved);
+  return moved;
 }
 
 let sweptStaleExchangesAt = 0;

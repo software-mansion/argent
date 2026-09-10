@@ -167,6 +167,44 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
   }, 30_000);
 });
 
+describe("removing an exchange directory deeper than a path can name", () => {
+  // A tree the script leaves can run deeper than the longest path the system
+  // takes - 1 024 bytes on macOS, 4 096 on Linux - and no call by full path
+  // gets through it. The `rmSync` the batched remove replaced walked it by
+  // descriptor; a remove that stopped at the limit left it behind for good,
+  // because every later sweep stopped at the same place. Long names rather
+  // than many levels, because bash takes quadratic time to `cd` down a chain
+  // of short ones: 2 500 levels took 22 s to build, 25 of these take 0.1 s.
+  it("removes a tree whose paths run past the longest the system takes", async () => {
+    const ws = createScriptWorkspace("bash-deep-rm");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-deep-rm-root-"));
+    const script = ws.write(
+      "deep.sh",
+      `set -euo pipefail
+cd "$(dirname "$ARGENT_OUTPUT")"
+name=$(printf 'd%.0s' $(seq 1 200))
+for i in $(seq 1 25); do mkdir "$name" && cd "$name"; done
+touch leaf
+printf '{"ok":true}' > "$ARGENT_OUTPUT"`
+    );
+    try {
+      const result = await new FlowScriptExecutor({ concurrency: 2, exchangeRoot }).execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        timeoutMs: 20_000,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.notes.join(" ")).not.toContain("could not be removed");
+      expect(fs.readdirSync(exchangeRoot)).toEqual([]);
+    } finally {
+      fs.rmSync(exchangeRoot, { recursive: true, force: true });
+      ws.cleanup();
+    }
+  }, 90_000);
+});
+
 describe("an exchange directory that could not be filled", () => {
   // `mkdtemp` succeeds and then the write of the seeded document does not. The
   // caller is handed a throw with no exchange in it, so the `finally` that owns
