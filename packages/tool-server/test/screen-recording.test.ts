@@ -198,8 +198,8 @@ const androidDevice: DeviceInfo = {
 // than a constant, so the millisecond two runs start in is the only thing
 // separating their paths — and each test ends by deleting the path it derived.
 // Scoping the tmpdir per test removes that window instead of leaving it narrow.
-let restoreTmpdir: () => void;
-let scratch: string;
+let restoreTmpdir: () => void = () => {};
+let scratch = "";
 
 beforeEach(async () => {
   scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screen-recording-test-"));

@@ -24,4 +24,4 @@ module.exports = function (api) {
 };
 ```
 
-After adding the plugin, restart Metro (`npx react-native start --reset-cache` or `npx expo start --clear`) and reload the app. The tool will then automatically pick up `_debugSource` and resolve components to their source files. No extra `npm install` needed — the plugin ships with `babel-preset-expo` and `@babel/preset-env`.
+After adding the plugin, restart Metro (`npx react-native start --reset-cache` or `npx expo start --clear`) and reload the app. No extra `npm install` needed — the plugin ships with `babel-preset-expo` and `@babel/preset-env`.

@@ -151,6 +151,7 @@ describe("GET /tools progressive-loading metadata", () => {
 
     expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), {
       platform: "ios",
+      device_kind: "simulator",
     });
     expect(seenMeta).not.toHaveProperty("bundleId");
     expect(seenMeta).not.toHaveProperty("deviceId");
@@ -218,7 +219,7 @@ describe("GET /tools progressive-loading metadata", () => {
 
     // The first id is enough for the coarse platform; a mixed-platform scope
     // is not something this dimension tries to represent.
-    expect(seenMeta).toEqual({ platform: "android" });
+    expect(seenMeta).toEqual({ platform: "android", device_kind: "emulator" });
   });
 
   it("ignores a devices list that holds no usable id", async () => {
@@ -269,7 +270,11 @@ describe("GET /tools progressive-loading metadata", () => {
       .expect(400);
 
     expect(recordFailure).toHaveBeenCalled();
-    expect(recordFailure.mock.calls[0][1]).toMatchObject({ platform: "android" });
+    expect(recordFailure.mock.calls[0][1]).toEqual({
+      platform: "android",
+      device_kind: "emulator",
+      invalid_params: ["unrecognized_keys"],
+    });
   });
 
   it("refines an iOS device to `tvos` when its cached runtime kind is tv", async () => {
@@ -288,7 +293,8 @@ describe("GET /tools progressive-loading metadata", () => {
       .expect(200);
 
     // Same UDID shape as an iPhone sim, but the warm cache splits it out as tvOS.
-    expect(seenMeta).toEqual({ platform: "tvos" });
+    // The kind never depends on the cache: a tvOS target is still a simulator.
+    expect(seenMeta).toEqual({ platform: "tvos", device_kind: "simulator" });
   });
 
   it("refines an Android device to `android-tv` when its cached runtime kind is tv", async () => {
@@ -306,7 +312,7 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({ udid: "emulator-5554" })
       .expect(200);
 
-    expect(seenMeta).toEqual({ platform: "android-tv" });
+    expect(seenMeta).toEqual({ platform: "android-tv", device_kind: "emulator" });
   });
 
   it("keeps the coarse `ios` platform when the cached kind is mobile (not tv)", async () => {
@@ -324,7 +330,7 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({ udid: "11111111-1111-1111-1111-111111111111" })
       .expect(200);
 
-    expect(seenMeta).toEqual({ platform: "ios" });
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "simulator" });
   });
 
   it("keeps the coarse platform when the cache is cold (first call before warm-up)", async () => {
@@ -344,7 +350,7 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({ udid: "11111111-1111-1111-1111-111111111111" })
       .expect(200);
 
-    expect(seenMeta).toEqual({ platform: "ios" });
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "simulator" });
   });
 
   it("re-derives a child sub-tool's TV platform from its own device arg", async () => {
@@ -366,7 +372,10 @@ describe("GET /tools progressive-loading metadata", () => {
 
     // A sub-tool targeting the same TV device is attributed to android-tv too.
     recordChildInvocation("tv-child", { udid: "emulator-5554" });
-    expect(recordInvocation).toHaveBeenCalledWith("tv-child", { platform: "android-tv" });
+    expect(recordInvocation).toHaveBeenCalledWith("tv-child", {
+      platform: "android-tv",
+      device_kind: "emulator",
+    });
   });
 
   it("records the AI client from request headers alongside platform", async () => {
@@ -384,7 +393,7 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({ udid: "11111111-1111-1111-1111-111111111111" })
       .expect(200);
 
-    expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "simulator", ai_client: "codex" });
   });
 
   it("forwards a child-invocation recorder bound to the request's attribution", async () => {
@@ -402,7 +411,11 @@ describe("GET /tools progressive-loading metadata", () => {
 
     // The parent invocation is recorded with the resolved attribution.
     expect(recordInvocation).toHaveBeenCalledTimes(1);
-    expect(recordInvocation.mock.calls[0]![1]).toEqual({ platform: "ios", ai_client: "codex" });
+    expect(recordInvocation.mock.calls[0]![1]).toEqual({
+      platform: "ios",
+      device_kind: "simulator",
+      ai_client: "codex",
+    });
 
     // A recorder is threaded into the tool context so orchestrator tools can
     // attribute the sub-tools they dispatch. The AI client is inherited; a child
@@ -415,6 +428,7 @@ describe("GET /tools progressive-loading metadata", () => {
     const childRelease = opts.recordChildInvocation!("child-id");
     expect(recordInvocation).toHaveBeenCalledWith("child-id", {
       platform: "ios",
+      device_kind: "simulator",
       ai_client: "codex",
     });
     expect(childRelease).toBe(release);
@@ -444,14 +458,124 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(recordInvocation).toHaveBeenCalledWith("android-child", {
       ai_client: "codex",
       platform: "android",
+      device_kind: "emulator",
     });
 
-    // A child with no device arg falls back to the parent's platform.
+    // A child with no device arg falls back to the parent's platform and kind.
     recordChildInvocation("no-device-child", { message: "hi" });
     expect(recordInvocation).toHaveBeenCalledWith("no-device-child", {
       ai_client: "codex",
       platform: "ios",
+      device_kind: "simulator",
     });
+
+    // A child that names a physical phone reports hardware, never the parent's
+    // simulator kind. `R5CT12345678` is the serial the adb tests use.
+    recordChildInvocation("phone-child", { udid: "R5CT12345678" });
+    expect(recordInvocation).toHaveBeenCalledWith("phone-child", {
+      ai_client: "codex",
+      platform: "android",
+      device_kind: "device",
+    });
+
+    // An `avdName`-only child has a platform but no serial to derive a kind
+    // from: it must not report the parent's `simulator` next to `android`.
+    recordChildInvocation("avd-child", { avdName: "Pixel_9" });
+    expect(recordInvocation).toHaveBeenCalledWith("avd-child", {
+      ai_client: "codex",
+      platform: "android",
+    });
+  });
+
+  it("records `device` for a physical iPhone UDID, `simulator` for a simulator one", async () => {
+    // The whole point of `device_kind`: the two share `platform: "ios"`, and only
+    // the UDID shape (`isIosPhysicalUdid`) tells hardware from a simulator.
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    const registry = stubRegistry();
+    // `device-tool` above is simulator-only, so the HTTP capability gate would
+    // reject the phone before attribution; this one supports both.
+    (registry.getTool as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "phone-tool",
+      description: "Phone tool",
+      inputSchema: { type: "object", properties: {} },
+      capability: { apple: { simulator: true, device: true } },
+      services: () => ({}),
+      execute: async () => ({}),
+    });
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/phone-tool")
+      .send({ udid: "00008030-000A1B2C3D4E5F60" })
+      .expect(200);
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "device" });
+
+    await request(handle.app)
+      .post("/tools/phone-tool")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "simulator" });
+  });
+
+  it("drops the parent's external-provider label when a child names a native device", async () => {
+    const recordInvocation = vi.fn((_id: string, _meta: Record<string, unknown>) => vi.fn());
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    // Parent targets a device an external provider attached.
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({ udid: "ext:acme-3f2a9c:11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+    expect(recordInvocation.mock.calls[0]![1]).toEqual({
+      device_provider: "acme",
+      platform: "ios",
+      device_kind: "simulator",
+    });
+
+    const { recordChildInvocation } = vi.mocked(registry.invokeTool).mock.calls[0]![2] as {
+      recordChildInvocation: (id: string, childArgs?: unknown) => () => void;
+    };
+
+    // The child named its own, non-external device: the provider label is
+    // re-derived from it (to nothing), not inherited from the parent.
+    recordChildInvocation("native-child", { udid: "emulator-5554" });
+    expect(recordInvocation).toHaveBeenCalledWith("native-child", {
+      platform: "android",
+      device_kind: "emulator",
+    });
+  });
+
+  it("classifies a FAILED call's platform but not its kind when the udid is garbage", async () => {
+    // `emitHttpFailure` reads the raw body before validation, so a typo'd udid
+    // reaches the classifier. It still shape-classifies as `android` (the
+    // pre-existing fallback), but it must not count as physical hardware.
+    const recordFailure = vi.fn();
+    const registry = stubRegistry();
+    (registry.getTool as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "strict-tool",
+      description: "Strict tool",
+      inputSchema: { type: "object", properties: { udid: {} } },
+      zodSchema: z.object({ udid: z.string() }).strict(),
+      services: () => ({}),
+      execute: async () => ({}),
+    });
+    handle.dispose();
+    handle = createHttpApp(registry, { recordFailure });
+
+    await request(handle.app)
+      .post("/tools/strict-tool")
+      .send({ udid: "booted", extra: 1 })
+      .expect(400);
+
+    expect(recordFailure.mock.calls[0]![1]).toMatchObject({ platform: "android" });
+    expect(recordFailure.mock.calls[0]![1]).not.toHaveProperty("device_kind");
   });
 
   it("does not forward a child recorder when there is no attribution to propagate", async () => {
@@ -527,7 +651,7 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({ udid: "11111111-1111-1111-1111-111111111111" })
       .expect(200);
 
-    expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
+    expect(seenMeta).toEqual({ platform: "ios", device_kind: "simulator", ai_client: "codex" });
   });
 
   it("drops a client name sent with no ai_client header", async () => {
