@@ -3,6 +3,7 @@ import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { RestartAppResult, RestartAppVegaServices, RestartAppIosServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { iosDeviceImpl } from "./platforms/ios-device";
@@ -10,9 +11,6 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 
-// Head must be a letter or `_` so a bundleId like `--user` can't masquerade as
-// a flag inside `am force-stop …`.
-const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 // Same alphabet as launch-app's ACTIVITY_PATTERN: leading `.` for shorthand
 // activities like `.MainActivity`, no leading `-` (flag injection).
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
@@ -25,7 +23,7 @@ const zodSchema = z.object({
   bundleId: z
     .string()
     .min(1)
-    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe("App identifier. iOS: bundle id. Android: package name."),
   activity: z
     .string()

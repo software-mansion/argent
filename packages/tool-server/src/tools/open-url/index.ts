@@ -3,16 +3,13 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { androidImpl } from "./platforms/android";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
-
-// Same head-restricted alphabet as launch-app so a bundleId cannot masquerade
-// as a devicectl flag.
-const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
   udid: z
@@ -26,7 +23,7 @@ const zodSchema = z.object({
     ),
   bundleId: z
     .string()
-    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .optional()
     .describe(
       "Physical iOS only: the app that receives the URL. Defaults to Safari for http(s); required for any other scheme. Ignored elsewhere."

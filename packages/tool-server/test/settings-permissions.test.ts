@@ -199,7 +199,7 @@ describe("settings-permissions schema", () => {
       properties?: Record<string, { pattern?: string; enum?: string[] }>;
     };
     expect(json.required).toEqual(["udid", "action", "permission", "bundleId"]);
-    expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z_][A-Za-z0-9._-]*$");
+    expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z0-9_][A-Za-z0-9._-]*$");
     expect(json.properties?.action?.enum).toEqual(["grant", "deny", "reset"]);
     expect(json.properties?.permission?.enum).toHaveLength(11);
   });
