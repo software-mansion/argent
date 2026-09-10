@@ -34,6 +34,7 @@ import {
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
@@ -1249,6 +1250,23 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           failure_area: "tool_server",
           error_kind: "validation",
         });
+      }
+
+      // A blocked native-devtools precheck RESOLVES its block instead of
+      // throwing, and returns before the tool does any work — so recording the
+      // step would write an action the device never took, and the runner scores
+      // that same result a failure at replay (isNativeDevtoolsBlockResult in
+      // flow-run.ts). Refusing here keeps the two verdicts identical.
+      if (isNativeDevtoolsBlockResult(params.command, toolResult)) {
+        throw new FailureError(
+          `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call flow-add-step again`,
+          {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+            failure_stage: "flow_add_step_native_devtools_block",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
       }
 
       // A wait that HELD is asked the runner's tree as well, so the author
