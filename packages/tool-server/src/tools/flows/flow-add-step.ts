@@ -396,10 +396,10 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 // would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
-  // Every remedy below repairs a source that is DOWN, which is the only kind of
-  // silence there is: every machine this clause covers - a local simulator, a
-  // remote one, a physical device - has a tree source, so a relaunch can always
-  // bring the tree back.
+  // This caveat rides on a reason whose remedy repairs a source that is DOWN,
+  // which is the only kind of silence there is: every machine this clause
+  // covers - a local simulator, a remote one, a physical device - has a tree
+  // source, so a relaunch can always bring the tree back.
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
     "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
