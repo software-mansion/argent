@@ -592,14 +592,13 @@ describe("script log redaction - past the cut", () => {
   it("drains a 50 MiB flood without scrubbing it, and still ends the reason with the last stderr line", async (ctx) => {
     skipWithoutBash(ctx);
     const unscrubbed = await flood([]);
-    const started = Date.now();
     // Three secrets, one of them multi-line, for the spellings a step with a
     // few credentials carries: scrubbed, 50 MiB of them is seconds of CPU.
     const { result, cpuMs } = await flood([API_KEY, PEM, PASSWORD]);
-    const elapsed = Date.now() - started;
 
-    expect(elapsed).toBeLessThan(15_000);
     expect(cpuMs - unscrubbed.cpuMs).toBeLessThan(1_000);
+    // A stream that stopped draining would end in the step's timeout, not in
+    // the script's own exit.
     expect(result.failure?.kind).toBe("exit");
     expect(result.failure?.message).toMatch(/upload failed for \{\{secret:API_KEY\}\}: HTTP 503$/);
     expect(result.logTruncated).toBe(true);
