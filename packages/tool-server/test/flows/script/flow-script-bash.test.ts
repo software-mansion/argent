@@ -728,9 +728,44 @@ describe("what a failing bash step says", () => {
       cancel.abort();
       const result = await pending;
 
-      // The script had already passed; only the wait after it was cut short.
+      // The script had already passed; only the wait after it was cut short,
+      // and the job was still writing when it was.
       expect(result.ok).toBe(true);
       expect(Date.now() - cancelledAt).toBeLessThan(1_500);
+      expect(result.logTruncated).toBe(true);
+    },
+    30_000
+  );
+
+  // A run cancelled before the script answered was stopped already, and a job
+  // in a group of its own outlives that stop. The wait for it is the wait any
+  // stopped run gets, so what it goes on writing still marks the log cut.
+  onPosix(
+    "still marks the log cut when a run cancelled mid-script leaves a writer",
+    async () => {
+      const ws = workspace();
+      const pidFile = ws.resolve("writer.pid");
+      const script = ws.write(
+        "cancel-midscript.sh",
+        `set -m
+         ( while true; do echo tick >&2; sleep 0.05; done ) &
+         echo $! > ${JSON.stringify(pidFile)}
+         sleep 30`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      strays.push(await readPidFile(pidFile));
+      await delay(300);
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.failure?.kind).toBe("cancelled");
+      expect(result.logTruncated).toBe(true);
     },
     30_000
   );

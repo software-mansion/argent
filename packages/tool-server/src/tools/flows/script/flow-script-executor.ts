@@ -902,8 +902,14 @@ export class FlowScriptExecutor {
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
     // inherited the streams and is holding them open, and it stretches while
-    // that descendant is still writing. A cancelled run ends it at once.
-    const settled = await settleStreams(closed, () => lastOutputAt, request.signal);
+    // that descendant is still writing. A run cancelled after the script
+    // answered ends it at once. One cancelled before that was stopped already,
+    // and what it left holding the streams is waited for as any other is.
+    const settled = await settleStreams(
+      closed,
+      () => lastOutputAt,
+      request.signal?.aborted ? undefined : request.signal
+    );
     // Before the stop, which a job that logs its shutdown answers on stderr.
     const stderrLineBeforeStop = capture.stderrLineSoFar;
     const stderrStillWriting = settled === "cut" && Date.now() - lastStderrAt < SETTLE_TIMEOUT_MS;
@@ -971,7 +977,9 @@ export class FlowScriptExecutor {
  * Waits for the streams of a child that has exited: `closed` when every process
  * holding them let go, `quiet` when what holds them wrote nothing for
  * {@link SETTLE_TIMEOUT_MS}, and `cut` when it was still writing at
- * {@link SETTLE_WRITING_LIMIT_MS}, so the stop that follows ends it mid-output.
+ * {@link SETTLE_WRITING_LIMIT_MS}, so the log ends while it had more to say.
+ * An abort of `signal` ends the wait at once: `cut` when output was still
+ * arriving, `quiet` when it was not.
  */
 async function settleStreams(
   closed: Promise<void>,
