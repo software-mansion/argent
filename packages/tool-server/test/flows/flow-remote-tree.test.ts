@@ -16,7 +16,7 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fetchFlowTree, supportsFlowTree } from "../../src/tools/flows/flow-tree";
+import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
@@ -105,9 +105,8 @@ afterEach(async () => {
 });
 
 describe("a flow reads the full view hierarchy on a remote simulator", () => {
-  it("declares a tree source for the platform at all", () => {
+  it("resolves a remote udid to its own platform, which the source table keys on", () => {
     expect(resolveDevice(REMOTE).platform).toBe("ios-remote");
-    expect(supportsFlowTree("ios-remote")).toBe(true);
   });
 
   it("asks native devtools for the full hierarchy, not the trimmed describe tree", async () => {

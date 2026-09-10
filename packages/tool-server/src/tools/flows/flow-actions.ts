@@ -25,7 +25,7 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { fetchFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -915,12 +915,6 @@ type GestureSettle = { aborted?: true; warning?: string };
  * coordinates for exactly that reason), so every step of such a flow arrives
  * here and would otherwise be charged a window for the same verdict.
  *
- * A platform with no tree source at all would be the one case that settles
- * nothing and reports nothing: there would be no source to be down and no
- * degradation to warn about, and no remedy a warning could name. Every
- * platform a flow runs on has one today, remote iOS simulators included, so
- * the guard is a table read rather than a live case.
- *
  * The other cost is a screen that never holds still: nothing converges, so every
  * selector-less gesture pays the whole window, and the memo buys no relief
  * because a window that read the tree proves no outage. The fingerprint cannot
@@ -930,18 +924,14 @@ type GestureSettle = { aborted?: true; warning?: string };
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
-  // A platform with no tree source settles nothing and is warned about nothing;
-  // the abort checkpoint below is owed to the gesture either way.
-  if (supportsFlowTree(env.device.platform)) {
-    try {
-      await settleTree(env, { skipProvenOutage: true });
-    } catch (err) {
-      // tree-source outage — this gesture needs no frame from it, so dispatch
-      // anyway. Untyped because a settle has nothing else to throw: every read
-      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
-      // so the walk's own unguarded recursion is unreachable on every adapter.
-      warning = unsettledGestureWarning(err);
-    }
+  try {
+    await settleTree(env, { skipProvenOutage: true });
+  } catch (err) {
+    // tree-source outage — this gesture needs no frame from it, so dispatch
+    // anyway. Untyped because a settle has nothing else to throw: every read
+    // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+    // so the walk's own unguarded recursion is unreachable on every adapter.
+    warning = unsettledGestureWarning(err);
   }
   if (env.signal?.aborted) return { aborted: true };
   return warning !== undefined ? { warning } : {};
