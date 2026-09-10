@@ -181,6 +181,19 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * A background job that writes its own pid, for a case that asks the operating
+ * system whether a descendant is still alive. Under Git Bash `$!` is an MSYS
+ * number rather than one `process.kill` can ask Windows about, and a small one
+ * can belong to an unrelated Windows process - so a `sleep`'s `$!` read as dead,
+ * or as alive, by chance there.
+ */
+function backgroundJob(pidFile: string): string {
+  const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
+  const file = JSON.stringify(pidFile.replace(/\\/g, "/"));
+  return `${node} -e 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);' ${file} &`;
+}
+
 async function waitForExit(pid: number, timeoutMs = 10_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1577,8 +1590,7 @@ describe("limits and stopping", () => {
     const pidFile = ws.resolve("child.pid");
     const script = ws.write(
       "loop.sh",
-      `sleep 120 &
-       echo $! > ${JSON.stringify(pidFile)}
+      `${backgroundJob(pidFile)}
        while true; do sleep 1; done`
     );
     const pending = executor().execute({
@@ -1634,8 +1646,7 @@ describe("limits and stopping", () => {
     const pidFile = ws.resolve("cancelled.pid");
     const script = ws.write(
       "wait.sh",
-      `sleep 120 &
-       echo $! > ${JSON.stringify(pidFile)}
+      `${backgroundJob(pidFile)}
        while true; do sleep 1; done`
     );
     const controller = new AbortController();
@@ -1663,15 +1674,9 @@ describe("limits and stopping", () => {
   it("has the deadline watchdog take the whole group when the tool server stalls", async () => {
     const ws = workspace();
     const pidFile = ws.resolve("stalled.pid");
-    // A Node descendant that writes its own pid, as the lifeline case below
-    // uses: under Git Bash `$!` is an MSYS number rather than one `process.kill`
-    // can ask Windows about, so a `sleep`'s pid read as dead there from the start.
-    const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
     const script = ws.write(
       "stalled.sh",
-      `${node} -e 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);' ${JSON.stringify(
-        pidFile.replace(/\\/g, "/")
-      )} &
+      `${backgroundJob(pidFile)}
        while true; do sleep 1; done`
     );
     const timeoutMs = 2_000;
