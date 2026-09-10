@@ -129,14 +129,12 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("the call to {{secret:API_KEY}} failed");
   }, 30_000);
 
-  // The runner TRIMS the reason it read, so a secret whose own value ends in
-  // whitespace — a PEM key, a service-account blob — arrives one character
-  // short of itself when it sits at the edge of the file, and a whole-value
-  // replacement finds nothing. `echo "…$KEY" > "$ARGENT_REASON"` is the
-  // idiomatic way to write that file, so this is the shape the promise exists
-  // for. The other reason case here pads AFTER the secret, which is the control
-  // that always passed.
-  it("replaces a secret whose own trailing newline the reason trim ate", async () => {
+  // A PEM key or a service-account blob spans lines, and `echo "…$KEY" >&2` is
+  // the idiomatic way to report one. The reason keeps only the LAST line the
+  // script wrote to stderr — here the value's own closing line, with its
+  // trailing newline left behind as a blank line — so no whole-value spelling
+  // is in it to find. The log keeps every line.
+  it("replaces every line of a multi-line secret, in the reason and in the log", async () => {
     const multiline: FlowScriptSecret = {
       name: "PEM",
       value: "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0\n-----END PRIVATE KEY-----\n",
@@ -144,7 +142,7 @@ describe("flow script executor — redaction of a bash step", () => {
     const ws = workspace();
     const script = ws.write(
       "edge-reason.sh",
-      `echo "signing failed with key: $PEM" > "$ARGENT_REASON"
+      `echo "signing failed with key: $PEM" >&2
        exit 1`
     );
     const result = await executor().execute({
@@ -157,40 +155,12 @@ describe("flow script executor — redaction of a bash step", () => {
 
     const message = result.failure?.message ?? "";
     expect(result.failure?.kind).toBe("exit");
-    expect(message).not.toContain("MIIBVQIBADANBgkqhkiG9w0");
-    expect(message).toContain("{{secret:PEM}}");
-  }, 30_000);
-
-  // The runner's marker counts what it KEPT of the reason; `partialSecretTail`
-  // measures a suffix of the WHOLE message. A value long enough to be a prefix
-  // of the reason and of argent's own exit line in front of it therefore takes
-  // off more than the reason ever held, and the subtraction went below zero:
-  // `… [$ARGENT_REASON holds 20000 bytes; this report keeps the first -2
-  // characters]` is a count no reader can use.
-  it("never reports a negative kept-count for the reason it cut", async () => {
-    const reasonCeiling = SCRIPT_MAX_FAILURE_MESSAGE_CHARS - 1024;
-    const ws = workspace();
-    // A secret that opens with the exit line the runner composes, so the whole
-    // message head is a prefix of it.
-    const spanning: FlowScriptSecret = {
-      name: "SPAN",
-      value: `The script exited with code 1 (bash: ${hostBash}). ${"z".repeat(reasonCeiling + 64)}`,
-    };
-    const script = ws.write(
-      "spanning.sh",
-      `printf '%${reasonCeiling * 2}s' '' | tr ' ' 'z' > "$ARGENT_REASON"
-       exit 1`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      secrets: [spanning],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(message).toMatch(/this report keeps the first \d+ characters]$/);
-    expect(message).not.toMatch(/keeps the first -/);
+    expect(message).toMatch(/ \{\{secret:PEM}}$/);
+    expect(result.log).toContain("signing failed with key: {{secret:PEM}}");
+    for (const line of multiline.value.split("\n").filter(Boolean)) {
+      expect(message).not.toContain(line);
+      expect(result.log).not.toContain(line);
+    }
   }, 30_000);
 
   // The document is the script's ANSWER, read by later steps for the id or the
@@ -355,7 +325,7 @@ describe("flow script executor — redaction of a bash step", () => {
     const ws = workspace();
     const script = ws.write(
       "quoted-reason.sh",
-      `printf %q "$SPACED" > "$ARGENT_REASON"
+      `printf %q "$SPACED" >&2
        exit 1`
     );
     const result = await executor().execute({
@@ -369,30 +339,36 @@ describe("flow script executor — redaction of a bash step", () => {
     const message = result.failure?.message ?? "";
     expect(result.failure?.kind).toBe("exit");
     expect(message).toContain("{{secret:SPACED}}");
+    // The log holds the same line, and no spelling matches it there either: it
+    // is the repair pass over the finished log that takes it.
+    expect(result.log).toContain("{{secret:SPACED}}");
     // Raw and in the spelling the quoter wrote: the escaping is one `sed` away
     // from reversed, so leaving it is disclosure rather than obfuscation.
     for (let n = spaced.value.length; n >= 6; n -= 1) {
       for (let at = 0; at + n <= spaced.value.length; at += 1) {
         const part = spaced.value.slice(at, at + n);
-        expect(message).not.toContain(part);
-        expect(message).not.toContain(part.replace(/ /g, "\\ "));
+        for (const text of [message, result.log]) {
+          expect(text).not.toContain(part);
+          expect(text).not.toContain(part.replace(/ /g, "\\ "));
+        }
       }
     }
   }, 30_000);
 
-  // The same trim, on a SINGLE-LINE value. The multi-line case above is
-  // answered by the LINE spellings `encodedSpellings` adds for a value holding
-  // a newline — its last line is empty and the one before it matches whole — so
-  // it passes with `withTrimmedSpellings` removed. A one-line value stored with
-  // the padding a `.env` line carries every day has no line spelling to fall
-  // back on, and nothing else in the list is the value minus its own edge
-  // whitespace.
+  // The parent TRIMS the stderr line it keeps, so a secret that ends the line
+  // arrives without its own trailing whitespace: one character short of the
+  // value, and a whole-value replacement finds nothing. The multi-line case
+  // above is answered by the LINE spellings `encodedSpellings` adds for a value
+  // holding a newline. A one-line value stored with the padding a `.env` line
+  // carries every day has no line spelling to fall back on, and nothing else in
+  // the list is the value minus its own edge whitespace. The log keeps the line
+  // untrimmed, so the whole value is there to replace.
   it("replaces a one-line secret whose own trailing space the reason trim ate", async () => {
     const padded: FlowScriptSecret = { name: "PADDED", value: "sk-live-9d3f0a1bcdef " };
     const ws = workspace();
     const script = ws.write(
       "padded-reason.sh",
-      `printf %s "$PADDED" > "$ARGENT_REASON"
+      `echo "rejected key: $PADDED" >&2
        exit 1`
     );
     const result = await executor().execute({
@@ -405,8 +381,10 @@ describe("flow script executor — redaction of a bash step", () => {
 
     const message = result.failure?.message ?? "";
     expect(result.failure?.kind).toBe("exit");
-    expect(message).toContain("{{secret:PADDED}}");
+    expect(message).toContain("rejected key: {{secret:PADDED}}");
     expect(message).not.toContain(padded.value.trimEnd());
+    expect(result.log).toContain("rejected key: {{secret:PADDED}}");
+    expect(result.log).not.toContain(padded.value.trimEnd());
   }, 30_000);
 });
 

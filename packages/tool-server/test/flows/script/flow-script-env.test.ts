@@ -374,18 +374,18 @@ describe("environment shape rules", () => {
     );
   });
 
-  it("refuses ARGENT_OUTPUT and ARGENT_REASON in every env channel", async () => {
+  it("refuses ARGENT_OUTPUT in every env channel", async () => {
     // Reserved whichever language the step runs: a flow-level map applies to
-    // every step, and these two name the files a `.sh` exchanges through.
+    // every step, and it names the file a `.sh` exchanges its document through.
     await flow("file-env", "env: { ARGENT_OUTPUT: /tmp/x }\nsteps:\n  - echo: hi\n");
     await expect(runFlow("file-env")).rejects.toThrow(/ARGENT_OUTPUT/);
 
     await write("scripts/probe.mjs", "");
     await flow(
       "step-env",
-      "steps:\n  - script: { path: ../../scripts/probe.mjs, env: { ARGENT_REASON: /tmp/y } }\n"
+      "steps:\n  - script: { path: ../../scripts/probe.mjs, env: { ARGENT_OUTPUT: /tmp/y } }\n"
     );
-    await expect(runFlow("step-env")).rejects.toThrow(/ARGENT_REASON/);
+    await expect(runFlow("step-env")).rejects.toThrow(/ARGENT_OUTPUT/);
 
     await flow("ok", "steps:\n  - echo: hi\n");
     const runTime = runFlow("ok", { env: { ARGENT_OUTPUT: "/tmp/z" } });
@@ -413,6 +413,44 @@ describe("environment shape rules", () => {
     ).rejects.toThrow(/ARGENT_OUTPUT/);
   });
 
+  it("passes ARGENT_REASON to the script like any other name, in every env channel", async () => {
+    // Nothing sets it for any step - a `.sh` step's reason comes from its stderr
+    // - so reserving it would refuse an author's own name for no file at all.
+    await write("scripts/reason.mjs", reporter("reason", ["ARGENT_REASON"]));
+
+    await flow(
+      "reason-file",
+      "env: { ARGENT_REASON: from-file }\nsteps:\n  - script: { path: ../../scripts/reason.mjs }\n"
+    );
+    expect((await runFlow("reason-file")).result.ok).toBe(true);
+    expect(seen("reason")).toEqual({ ARGENT_REASON: "from-file" });
+
+    await flow(
+      "reason-step",
+      "steps:\n  - script: { path: ../../scripts/reason.mjs, env: { ARGENT_REASON: from-step } }\n"
+    );
+    expect((await runFlow("reason-step")).result.ok).toBe(true);
+    expect(seen("reason")).toEqual({ ARGENT_REASON: "from-step" });
+
+    await flow("reason-run", "steps:\n  - script: { path: ../../scripts/reason.mjs }\n");
+    const runTime = await runFlow("reason-run", { env: { ARGENT_REASON: "from-run" } });
+    expect(runTime.result.ok).toBe(true);
+    expect(seen("reason")).toEqual({ ARGENT_REASON: "from-run" });
+
+    await flowStartRecordingTool.execute({}, { name: "reason-rec", project_root: root });
+    const added = (await flowAddScriptTool.execute(
+      {},
+      {
+        name: "reason-rec",
+        project_root: root,
+        path: "../../scripts/reason.mjs",
+        env: { ARGENT_REASON: "from-recording" },
+      }
+    )) as { status: string };
+    expect(added.status).toBe("pass");
+    expect(seen("reason")).toEqual({ ARGENT_REASON: "from-recording" });
+  });
+
   it("refuses a reserved name in a nested fragment's own env, mid-run", async () => {
     // Every refusal above is decided BEFORE the run starts, off the file the
     // caller named. A fragment is parsed when the `run:` step reaches it, with
@@ -423,7 +461,7 @@ describe("environment shape rules", () => {
     await flow("outer-reserved", "steps:\n  - echo: before\n  - run: inner-reserved.yaml\n");
     await flow(
       "inner-reserved",
-      "env: { ARGENT_REASON: /tmp/x }\n" +
+      "env: { ARGENT_OUTPUT: /tmp/x }\n" +
         "steps:\n" +
         "  - script: { path: ../../scripts/probe.mjs }\n"
     );
@@ -434,7 +472,23 @@ describe("environment shape rules", () => {
     // the steps in front of it keep their verdicts.
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("pass");
-    expect(JSON.stringify(result.steps)).toContain("ARGENT_REASON");
+    expect(JSON.stringify(result.steps)).toContain("ARGENT_OUTPUT");
+
+    // `ARGENT_REASON` on the same path is an ordinary name, and reaches the
+    // fragment's script.
+    await write("scripts/reason.mjs", reporter("fragment-reason", ["ARGENT_REASON"]));
+    await flow("outer-reason", "steps:\n  - echo: before\n  - run: inner-reason.yaml\n");
+    await flow(
+      "inner-reason",
+      "env: { ARGENT_REASON: from-fragment }\n" +
+        "steps:\n" +
+        "  - script: { path: ../../scripts/reason.mjs }\n"
+    );
+
+    const reasonRun = (await runFlow("outer-reason", {}, { booted: true })).result;
+
+    expect(reasonRun.ok).toBe(true);
+    expect(seen("fragment-reason")).toEqual({ ARGENT_REASON: "from-fragment" });
   });
 
   it("refuses a non-string value and an illegal name", async () => {
@@ -1281,13 +1335,10 @@ describe("secret placeholders in an env value", () => {
     expect(reason).toContain("fail.mjs");
   });
 
-  it("replaces the resolved value a .sh wrote into $ARGENT_REASON", async (ctx) => {
+  it("replaces the resolved value a .sh wrote to stderr, in the reason and the log", async (ctx) => {
     skipWithoutBash(ctx);
     await writeProjectSecret("API_KEY", "sk-live-9d3f0a1b");
-    await write(
-      "scripts/fail.sh",
-      `printf 'the call with %s failed' "$API_KEY" > "$ARGENT_REASON"\nexit 1\n`
-    );
+    await write("scripts/fail.sh", `printf 'the call with %s failed\\n' "$API_KEY" >&2\nexit 1\n`);
     await flow(
       "sh-throws",
       "steps:\n" +
@@ -1296,10 +1347,15 @@ describe("secret placeholders in an env value", () => {
 
     const { result } = await runFlow("sh-throws");
 
+    // The last stderr line ends the reason, and the log holds every line: two
+    // copies of the same value, each redacted on its own.
     const reason = result.steps[0].reason ?? "";
+    const log = result.steps[0].scriptLog ?? "";
     expect(result.steps[0].status).toBe("fail");
     expect(reason).not.toContain("sk-live-9d3f0a1b");
     expect(reason).toContain("the call with {{secret:API_KEY}} failed");
+    expect(log).not.toContain("sk-live-9d3f0a1b");
+    expect(log).toContain("the call with {{secret:API_KEY}} failed");
   });
 
   it("redacts a one-character secret like any other — there is no floor", async () => {
@@ -1638,9 +1694,8 @@ describe("the shell-environment note", () => {
 
   it("reads exit 127 from a .sh without repeating the runner's own hint", async (ctx) => {
     skipWithoutBash(ctx);
-    // A `.sh` says it in an exit code, not in words: its output is drained and
-    // discarded, so the shell's own line never reaches this side. The runner's
-    // 127 hint has already named the code, so the note adds only the remedy.
+    // The runner's 127 hint has already named the code, so the note adds only
+    // the remedy.
     await write("scripts/missing.sh", `argent-no-such-command-xyz\n`);
     await flow("sh-missing", "steps:\n  - script: { path: ../../scripts/missing.sh }\n");
 
@@ -1652,21 +1707,22 @@ describe("the shell-environment note", () => {
     expect(reason).not.toContain("A command was not found.");
   });
 
-  it("keeps the note for a .sh that captured the shell's own wording", async (ctx) => {
+  it("keeps the note for a .sh whose stderr line is the shell's own wording", async (ctx) => {
     skipWithoutBash(ctx);
-    // Redirecting stderr into `$ARGENT_REASON` is how a `.sh` is told to
-    // explain itself, and for a missing command what it captures IS bash's
-    // `command not found`. That reason must not be read as "the script
-    // explained something else": the note is exactly what that step needs.
-    // The runner joins the reason to its hint with a space, so the shell's line
-    // has no line start of its own — the reason is judged on its own instead.
-    await write("scripts/captured.sh", `argent-no-such-command-xyz 2>"$ARGENT_REASON"\n`);
-    await flow("sh-captured", "steps:\n  - script: { path: ../../scripts/captured.sh }\n");
+    // The reason ends with the last line a `.sh` wrote to stderr, and for a
+    // missing command that line IS bash's `command not found`. It must not be
+    // read as "the script explained something else": the note is exactly what
+    // that step needs. The parent joins the line to the runner's hint with a
+    // space, so the shell's line has no line start of its own — it is judged on
+    // its own instead.
+    await write("scripts/not-found.sh", `argent-no-such-command-xyz\n`);
+    await flow("sh-not-found", "steps:\n  - script: { path: ../../scripts/not-found.sh }\n");
 
-    const { result } = await runFlow("sh-captured");
+    const { result } = await runFlow("sh-not-found");
 
     const reason = result.steps[0].reason ?? "";
-    expect(reason).toContain("command not found");
+    expect(reason).toContain("exited with code 127");
+    expect(reason).toContain("argent-no-such-command-xyz: command not found");
     expect(reason).toContain("The tool server keeps the environment it started with");
     // The runner's own 127 hint already named the code; the note adds the
     // remedy and not a second diagnosis.
@@ -1676,15 +1732,16 @@ describe("the shell-environment note", () => {
   it("leaves a .sh that chose 127 and explained itself alone", async (ctx) => {
     skipWithoutBash(ctx);
     // 127 is bash's own name for a missing command AND an ordinary exit code a
-    // script may choose. A script that wrote `$ARGENT_REASON` said what went
-    // wrong, and the note would answer it with a paragraph about the tool
+    // script may choose. A script that wrote its own line to stderr said what
+    // went wrong, and the note would answer it with a paragraph about the tool
     // server's `PATH` — a confident instruction pointing somewhere else.
-    await write("scripts/own-127.sh", `echo "no such tenant" > "$ARGENT_REASON"\nexit 127\n`);
+    await write("scripts/own-127.sh", `echo "no such tenant" >&2\nexit 127\n`);
     await flow("sh-own-127", "steps:\n  - script: { path: ../../scripts/own-127.sh }\n");
 
     const { result } = await runFlow("sh-own-127");
 
     const reason = result.steps[0].reason ?? "";
+    expect(reason).toContain("exited with code 127");
     expect(reason).toContain("no such tenant");
     expect(reason).not.toContain("The tool server keeps the environment it started with");
   });

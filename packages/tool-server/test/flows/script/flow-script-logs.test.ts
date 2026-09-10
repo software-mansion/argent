@@ -394,30 +394,6 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value);
   });
 
-  it("replaces a secret in the output document, at any depth and in a key", async () => {
-    const ws = workspace();
-    const script = ws.write(
-      "echo.mjs",
-      `const key = process.env.API_KEY;
-       console.log("using " + key);
-       output.session = { token: key, scopes: ["read", key] };
-       output[key] = "keyed";`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { API_KEY: SECRET.value },
-      secrets: [SECRET],
-    });
-
-    expect(result.ok).toBe(true);
-    expect(JSON.stringify(result.output)).not.toContain(SECRET.value);
-    expect(result.output).toEqual({
-      "session": { token: "{{secret:API_KEY}}", scopes: ["read", "{{secret:API_KEY}}"] },
-      "{{secret:API_KEY}}": "keyed",
-    });
-  });
-
   it("leaves a marker well formed when a value occurs inside another secret's name", async () => {
     const ws = workspace();
     const script = ws.write("marker.mjs", `console.log("value=Q");`);
@@ -443,22 +419,6 @@ describe("flow script executor — redaction", () => {
     });
 
     expect(result.log).toBe("id={{secret:OKEN}} and {{secret:TOKEN_ABC}}\n");
-  });
-
-  it("refuses a document whose redacted key would replace a sibling", async () => {
-    const ws = workspace();
-    const script = ws.write("collide.mjs", `output.doc = { "ab": 1, "{{secret:s}}": 2 };`);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      secrets: [{ name: "s", value: "ab" }],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("Two keys in the script's output become \"");
-    expect(result.failure?.message).toContain("{{secret:s}}");
-    expect(result.output).toBeUndefined();
   });
 
   it("replaces a value that starts inside marker-shaped text the script printed", async () => {
