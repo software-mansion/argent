@@ -335,8 +335,8 @@ function runBash(request) {
       //
       // stdin is the null device, so a `read` gets end of file; there is no
       // caller to answer it. stdout and stderr are this process's pipes, which
-      // the parent captures as the step's log - and whose last stderr line it
-      // adds to the reason of a non-zero exit.
+      // the parent captures as the step's log - and whose stderr gives the line
+      // it adds to the reason of a non-zero exit.
       stdio: ["ignore", "inherit", "inherit", ...nulls],
       // bash joins this process's group on POSIX; on Windows the parent's
       // `taskkill /t` on this process walks to it.
@@ -536,7 +536,7 @@ function bashOutcome(request, code, signal) {
   if (status !== 0) {
     // Why it exited is on stderr, which this process never reads: bash writes
     // straight into the pipe the parent captures, so the parent is the side
-    // that adds the last line there to this one.
+    // that adds a line from there to this one.
     return {
       type: "failure",
       failureType: "exit",

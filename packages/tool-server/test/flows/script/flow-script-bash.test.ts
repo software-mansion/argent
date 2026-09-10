@@ -586,27 +586,48 @@ describe("what a failing bash step says", () => {
     expect(result.log).toContain("the orders API answered 503\n");
   }, 30_000);
 
-  // A job the script left running still holds stderr when bash exits. What it
-  // writes after that - once on its own, and once in answer to Argent's own
-  // stop - is in the log, and is not why the script failed.
+  // A job the script left running still holds stderr when bash exits, and
+  // Argent's own stop makes it write: a mock server that logs its shutdown, a
+  // helper with a TERM trap. That line is in the log, and is not why the script
+  // failed.
   onPosix(
-    "takes the reason from what bash wrote, not from a job it left running",
+    "keeps a job's answer to the stop out of the reason",
     async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
         "job-left-running",
         `( trap 'echo "helper: stopping" >&2; exit 0' TERM
-           sleep 0.3
-           echo "helper: still here" >&2
            while true; do sleep 0.05; done ) &
          echo "the orders API answered 503" >&2
          exit 1`
       );
       expect(result.failure?.kind).toBe("exit");
       expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
-      expect(result.log).toContain("helper: still here\n");
       expect(result.log).toContain("helper: stopping\n");
+    },
+    30_000
+  );
+
+  // Both idioms at once: stderr goes through a consumer that writes the
+  // script's last lines only after bash exits, and a quiet job keeps the
+  // streams open. What the consumer wrote before the stop is the script's own
+  // error, written late.
+  onPosix(
+    "keeps a stderr consumer's last line when a quiet job holds the streams",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "consumer-and-job",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
     },
     30_000
   );

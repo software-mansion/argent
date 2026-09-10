@@ -834,10 +834,10 @@ export class FlowScriptExecutor {
       if (interruptionSealed) return;
       terminal = message;
       // Where stderr stood when the runner answered, which in bash mode is when
-      // bash exited. A job the script left running can keep writing after that,
-      // and a job that logs its shutdown writes because the stop below asked
-      // it to. Read on the next turn, so that what bash wrote before it exited,
-      // already in the pipe, is read first.
+      // bash exited: the reason falls back to it when a job the script left
+      // running is still writing when the settle below gives up. Read on the
+      // next turn, so that what bash wrote before it exited, already in the
+      // pipe, is read first.
       setImmediate(() => (stderrLineAtVerdict = capture.stderrLineSoFar));
     });
 
@@ -903,7 +903,8 @@ export class FlowScriptExecutor {
     // inherited the streams and is holding them open, and it stretches while
     // that descendant is still writing.
     const settled = await settleStreams(closed, () => lastOutputAt);
-    const closedOnItsOwn = settled === "closed";
+    // Before the stop, which a job that logs its shutdown answers on stderr.
+    const stderrLineBeforeStop = capture.stderrLineSoFar;
     await stop();
     capture.end();
     if (settled === "cut") {
@@ -932,12 +933,15 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
-    // The last line overall only when every process that held stderr closed it
-    // on its own. Otherwise the stop above ended one, and what that process
-    // wrote after bash exited is not why the script failed.
-    const stderrLine = closedOnItsOwn
-      ? capture.lastStderrLine
-      : (stderrLineAtVerdict ?? capture.lastStderrLine);
+    // The last line overall when every process that held stderr closed it on
+    // its own. Otherwise the stop above ended one, and its answer to the stop is
+    // not why the script failed, so the line is the one stderr ended on before
+    // it - which keeps the script's own error that a stderr consumer wrote late.
+    // A process still writing when the settle gave up never went quiet, so
+    // nothing written after bash exited counts.
+    let stderrLine = capture.lastStderrLine;
+    if (settled === "quiet") stderrLine = stderrLineBeforeStop;
+    else if (settled === "cut") stderrLine = stderrLineAtVerdict ?? stderrLineBeforeStop;
     const verdict = redactSecrets(
       run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
