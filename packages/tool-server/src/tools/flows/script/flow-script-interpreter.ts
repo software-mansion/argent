@@ -75,9 +75,10 @@ const BASH_PROBE_SETTLE_MS = 250;
 const BASH_PROBE_MAX_CHARS = 4 * 1024;
 
 /**
- * How much of the last line a refused candidate wrote to stderr the refusal
+ * How much of the first line a refused candidate wrote to stderr the refusal
  * quotes. A version-manager shim says there why it ran no bash - "No version is
- * set for command bash" - and that names the remedy the refusal cannot.
+ * set for command bash" - and that names the remedy the refusal cannot. The
+ * first line, because asdf follows it with the versions it has, one per line.
  */
 const BASH_PROBE_STDERR_CHARS = 300;
 
@@ -313,9 +314,9 @@ function askForBashVersion(
     // its own business.
     let pending = "";
     let answered = false;
-    // The head of the last stderr line that was not blank, and of the line
+    // The head of the first stderr line that was not blank, and of the line
     // still arriving.
-    let lastErr = "";
+    let firstErr = "";
     let pendingErr = "";
     let settled = false;
     let killedWith: NodeJS.Signals | null = null;
@@ -335,7 +336,7 @@ function askForBashVersion(
       // The last line, which a candidate that exits without a trailing newline
       // leaves here.
       if (BASH_PROBE_MARKER.test(pending)) answered = true;
-      const stderr = (pendingErr.trim() ? pendingErr : lastErr).trim();
+      const stderr = (firstErr || pendingErr).trim();
       resolve({
         answered,
         signal,
@@ -369,10 +370,10 @@ function askForBashVersion(
     });
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
+      if (firstErr) return;
       const lines = (pendingErr + chunk).split("\n");
       pendingErr = (lines.pop() ?? "").slice(0, BASH_PROBE_STDERR_CHARS);
-      const said = lines.filter((line) => line.trim()).pop();
-      if (said !== undefined) lastErr = said.slice(0, BASH_PROBE_STDERR_CHARS);
+      firstErr = lines.find((line) => line.trim())?.slice(0, BASH_PROBE_STDERR_CHARS) ?? "";
     });
     child.on("error", (err) => answer(null, firstLine(err)));
     child.on("exit", (_code, signal) => {

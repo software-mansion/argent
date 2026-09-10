@@ -779,12 +779,18 @@ describe("a candidate that will not answer", () => {
 
   // Where a shim says why it ran no bash. A refusal that drops it blames the
   // candidate for not being a bash, when the shim only lacked a version pin.
-  onPosix("quotes what a refused candidate wrote to stderr", async () => {
+  // The lines are asdf's own, in its order: the reason first, then the
+  // versions it has - so the last line would quote a version, not the reason.
+  onPosix("quotes the first line a refused candidate wrote to stderr", async () => {
     const root = hostWith(undefined);
     const shim = path.join(root, "bash");
     fs.writeFileSync(
       shim,
-      '#!/bin/sh\necho "starting" >&2\necho "No version is set for command bash" >&2\nexit 126\n'
+      "#!/bin/sh\n" +
+        'echo "No version is set for command bash" >&2\n' +
+        'echo "Consider adding one of the following versions in your config file at $PWD/.tool-versions" >&2\n' +
+        'echo "bash 5.2.37" >&2\n' +
+        "exit 126\n"
     );
     fs.chmodSync(shim, 0o755);
     pinGlobalConfig({ scripts: { bash: shim } });
@@ -792,7 +798,7 @@ describe("a candidate that will not answer", () => {
     const found = (await resolveBashInterpreter()) as { problem: string };
     expect(found.problem).toContain("is not a bash");
     expect(found.problem).toContain("(it wrote to stderr: No version is set for command bash)");
-    expect(found.problem).not.toContain("starting");
+    expect(found.problem).not.toContain("Consider adding");
   });
 
   // The other way a probed candidate dies by a signal. It answers in

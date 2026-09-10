@@ -373,7 +373,7 @@ Argent looks for bash in this order, and takes the first result:
 2. `bash` on the PATH of the tool-server
 3. `/bin/bash`, then `/usr/bin/bash`. On Windows, the `bash.exe` of Git for Windows, never the WSL launcher
 
-Argent runs each candidate in the working directory of the step and asks it for its version. A version-manager shim, such as the shim of asdf, thus finds the bash that the project pins. Argent refuses a candidate that does not answer with a bash version, and quotes the last line that the candidate wrote to stderr. When Argent refuses the `bash` on the PATH and takes a later candidate, the step reports the refusal.
+Argent runs each candidate in the working directory of the step and asks it for its version. A version-manager shim, such as the shim of asdf, thus finds the bash that the project pins. Argent refuses a candidate that does not answer with a bash version. If the candidate exits without a version, the refusal quotes the first non-blank line that the candidate wrote to stderr. When Argent refuses the `bash` on the PATH and takes a later candidate, Argent adds a note to the step.
 
 macOS ships bash 3.2 at `/bin/bash`. Set `scripts.bash` to use bash 4 features.
 
