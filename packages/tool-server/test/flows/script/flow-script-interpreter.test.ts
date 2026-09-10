@@ -958,6 +958,40 @@ describe("a candidate that will not answer", () => {
   );
 });
 
+describe("a candidate that leaves a job holding stderr", () => {
+  // stderr is piped only for the refusal to quote, so a job the candidate left
+  // holding it must not hold the answer too: the answer comes when the
+  // candidate exits and its stdout ends, not a settle later.
+  onPosix(
+    "answers when the candidate exits, not a settle later",
+    async () => {
+      const root = hostWith(undefined);
+      const stamp = path.join(root, "exited-at");
+      const brief = nodeExecutable(
+        root,
+        "bash",
+        'require("node:child_process")\n' +
+          '  .spawn(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], {\n' +
+          '    stdio: ["ignore", "ignore", "inherit"],\n' +
+          "  })\n" +
+          "  .unref();\n" +
+          'process.stdout.write("\\nargent-bash-version:5.2.37\\n");\n' +
+          `require("node:fs").writeFileSync(${JSON.stringify(stamp)}, String(Date.now()));\n` +
+          "process.exit(0);\n"
+      );
+      pinGlobalConfig({ scripts: { bash: brief } });
+
+      const found = await resolveBashInterpreter();
+      const answeredAt = Date.now();
+
+      expect(found).toEqual({ path: brief });
+      // The settle is 250 ms, and the answer comes well inside it.
+      expect(answeredAt - Number(fs.readFileSync(stamp, "utf8"))).toBeLessThan(200);
+    },
+    30_000
+  );
+});
+
 describe("no bash anywhere", () => {
   // The POSIX arm of the same message. Both fixed locations exist on an
   // ordinary POSIX host, so the only way to reach it is to take them away.
