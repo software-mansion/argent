@@ -586,6 +586,31 @@ describe("what a failing bash step says", () => {
     expect(result.log).toContain("the orders API answered 503\n");
   }, 30_000);
 
+  // A job the script left running still holds stderr when bash exits. What it
+  // writes after that - once on its own, and once in answer to Argent's own
+  // stop - is in the log, and is not why the script failed.
+  onPosix(
+    "takes the reason from what bash wrote, not from a job it left running",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "job-left-running",
+        `( trap 'echo "helper: stopping" >&2; exit 0' TERM
+           sleep 0.3
+           echo "helper: still here" >&2
+           while true; do sleep 0.05; done ) &
+         echo "the orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+      expect(result.log).toContain("helper: still here\n");
+      expect(result.log).toContain("helper: stopping\n");
+    },
+    30_000
+  );
+
   it("says only the code when the script wrote nothing to stderr", async () => {
     const ws = workspace();
     const result = await runBash(ws, "silent", `exit 7`);

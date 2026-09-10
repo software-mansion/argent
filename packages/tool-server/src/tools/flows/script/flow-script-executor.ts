@@ -755,6 +755,7 @@ export class FlowScriptExecutor {
 
     let startedSeen = false;
     let terminal: ScriptTerminalResponse | null = null;
+    let stderrLineAtVerdict: string | undefined;
     let protocolProblem: string | null = null;
     let spawnProblem: string | null = null;
     let interrupted: "timeout" | "cancelled" | null = null;
@@ -810,6 +811,12 @@ export class FlowScriptExecutor {
       }
       if (interruptionSealed) return;
       terminal = message;
+      // Where stderr stood when the runner answered, which in bash mode is when
+      // bash exited. A job the script left running can keep writing after that,
+      // and a job that logs its shutdown writes because the stop below asked
+      // it to. Read on the next turn, so that what bash wrote before it exited,
+      // already in the pipe, is read first.
+      setImmediate(() => (stderrLineAtVerdict = capture.stderrLineSoFar));
     });
 
     const deadlineAt = Date.now() + timeoutMs;
@@ -872,7 +879,10 @@ export class FlowScriptExecutor {
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
     // inherited the streams and is holding them open.
-    await Promise.race([closed, sleep(SETTLE_TIMEOUT_MS)]);
+    const closedOnItsOwn = await Promise.race([
+      closed.then(() => true),
+      sleep(SETTLE_TIMEOUT_MS).then(() => false),
+    ]);
     await stop();
     capture.end();
     child.stdout?.destroy();
@@ -893,8 +903,14 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
+    // The last line overall only when every process that held stderr closed it
+    // on its own. Otherwise the stop above ended one, and what that process
+    // wrote after bash exited is not why the script failed.
+    const stderrLine = closedOnItsOwn
+      ? capture.lastStderrLine
+      : (stderrLineAtVerdict ?? capture.lastStderrLine);
     const verdict = redactSecrets(
-      run.interpreter === "bash" ? withStderrLine(outcome, capture.lastStderrLine) : outcome,
+      run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
     );
 
@@ -1915,6 +1931,11 @@ class ScriptLogCapture {
     return this.stderrLastLine;
   }
 
+  /** {@link lastStderrLine} as it stands now, the line still being written included. */
+  get stderrLineSoFar(): string {
+    return this.streams.get("stderr")?.lastLine?.peek() ?? this.stderrLastLine;
+  }
+
   private watchForHeapFatal(text: string): void {
     if (this.heapFatalFlag) return;
     const window = this.heapFatalTail + text;
@@ -2059,6 +2080,12 @@ class LastLineTracker {
     return this.last;
   }
 
+  /** What {@link end} would return now, without closing the line in progress. */
+  peek(): string {
+    if (this.blank) return this.last;
+    return this.length > this.head.length ? this.cut() : this.head.trim();
+  }
+
   private extend(segment: string): void {
     const room = STDERR_REASON_LINE_CHARS - this.head.length;
     if (room > 0) this.head += segment.slice(0, room);
@@ -2070,7 +2097,7 @@ class LastLineTracker {
   }
 
   private close(): void {
-    if (!this.blank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
+    this.last = this.peek();
     this.head = "";
     this.length = 0;
     this.blank = true;

@@ -343,6 +343,8 @@ The reason of a step that failed on a non-zero code has two parts:
 
 Argent never puts stdout in the reason. A script that writes nothing to stderr gets only the first part.
 
+A background job can hold stderr after bash exits. When Argent stops such a job, the second part is the last line that stderr carried when bash exited. A line that the job writes after that goes only to the log.
+
 With `set -euo pipefail`, the second part is the error message of the failed command. The script needs no extra code for it. For example, a `curl -fsS` call that gets a 503 answer ends the reason with `curl: (22) The requested URL returned error: 503`. To explain a failure yourself, write the explanation to stderr and exit with a non-zero code:
 
 ```bash
