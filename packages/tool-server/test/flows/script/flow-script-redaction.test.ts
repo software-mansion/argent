@@ -163,6 +163,149 @@ describe("flow script executor — redaction of a bash step", () => {
     }
   }, 30_000);
 
+  // The shell's own encoders WRAP: `base64` breaks its output every 76 columns
+  // and `xxd -p` every 60, so the last line such a script writes to stderr is
+  // the encoding's last line, and on its own that decodes to a large piece of
+  // the value. Nothing in the line says it ends a run; the stderr text ahead of
+  // it does, which is what the log's own pass reads. The output is written with
+  // printf, so these cases do not depend on which `base64` the host has.
+  const JWT: FlowScriptSecret = {
+    name: "JWT",
+    value:
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkNJIFNlZWRlciIs" +
+      "ImlhdCI6MTUxNjIzOTAyMn0.7Rk1bXkF0yGmQ2nYx4L8vW9sD7cT1eP6hZ5uA0o",
+  };
+  const KEY: FlowScriptSecret = { name: "KEY", value: "sk-live-51Hq7xK2mN9pR4tV8wY3zA6bC0dE" };
+  /** `Authorization: Basic` for `api:<JWT>`, as `base64` wraps it: 76, 76 and 56 characters. */
+  const BASIC = Buffer.from(`api:${JWT.value}`)
+    .toString("base64")
+    .match(/.{1,76}/g)!;
+
+  /** A script that writes each of `lines` to stderr, then exits 1. */
+  function stderrLines(lines: readonly string[]): string {
+    return `printf '%s\\n' ${lines.map((line) => `'${line}'`).join(" ")} >&2
+       exit 1`;
+  }
+
+  /**
+   * Every four-byte piece of `value` that a base64 or hex run in `text` decodes
+   * to, at any frame offset. Four bytes is the floor the executor's own decode
+   * searches at. A contiguous `xxd -p` run is read too, which a reader of dumps
+   * with a space between the bytes would pass over.
+   */
+  function decodedPieces(text: string, value: string): string[] {
+    const bytes = Buffer.from(value, "utf8");
+    const views = [
+      { encoding: "base64", runs: /[A-Za-z0-9+/]{4,}/g, frame: 4 },
+      { encoding: "hex", runs: /[0-9A-Fa-f]{2,}/g, frame: 2 },
+    ] as const;
+    const found = new Set<string>();
+    for (const { encoding, runs, frame } of views) {
+      for (const [run] of text.matchAll(runs)) {
+        for (let offset = 0; offset < frame; offset++) {
+          const decoded = Buffer.from(run.slice(offset), encoding);
+          for (let at = 0; at + 4 <= bytes.length; at++) {
+            const piece = bytes.subarray(at, at + 4);
+            if (decoded.includes(piece)) found.add(piece.toString("latin1"));
+          }
+        }
+      }
+    }
+    return [...found];
+  }
+
+  it("replaces a base64 run the encoder wrapped onto the last stderr line", async () => {
+    const [first, ...rest] = BASIC;
+    const ws = workspace();
+    const script = ws.write(
+      "basic-auth.sh",
+      stderrLines([`login failed (401) with Authorization: Basic ${first}`, ...rest])
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      secrets: [JWT],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(decodedPieces(message, JWT.value)).toEqual([]);
+    // The replacement starts in the frame the value starts in, on the line the
+    // payload began, so the reason ends as that line reads in the log.
+    const line = "login failed (401) with Authorization: Basic YXBp{{secret:JWT}}";
+    expect(message.slice(-(line.length + 3))).toBe(`). ${line}`);
+    expect(result.log).toContain(`${line}\n`);
+  }, 30_000);
+
+  it("replaces a hex run xxd -p wrapped onto the last stderr line", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "xxd.sh",
+      stderrLines(
+        Buffer.from(KEY.value)
+          .toString("hex")
+          .match(/.{1,60}/g)!
+      )
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      secrets: [KEY],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(decodedPieces(message, KEY.value)).toEqual([]);
+    expect(message).toMatch(/\)\. \{\{secret:KEY}}$/);
+  }, 30_000);
+
+  // What came before the last line is only read, never reported: a secret on an
+  // earlier line is replaced where it stood, and an unrelated last line ends the
+  // reason exactly as the script wrote it.
+  it("ends the reason with an unrelated last line when a secret came before it", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "earlier.sh",
+      `echo "using key $KEY" >&2
+       echo "deploy failed: quota exceeded" >&2
+       exit 1`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { KEY: KEY.value },
+      secrets: [KEY],
+    });
+
+    expect(result.failure?.message).toMatch(
+      /^The script exited with code 1 \(bash: .+\)\. deploy failed: quota exceeded$/
+    );
+    expect(result.log).toContain("using key {{secret:KEY}}\n");
+  }, 30_000);
+
+  // With nothing to hide, nothing is re-read: the reason ends with the last
+  // line exactly as the script wrote it, even one that is the tail of a run.
+  it("leaves the last stderr line as written when the step has no secrets", async () => {
+    const [first, ...rest] = BASIC;
+    const ws = workspace();
+    const script = ws.write(
+      "basic-auth-plain.sh",
+      stderrLines([`login failed (401) with Authorization: Basic ${first}`, ...rest])
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(message).toMatch(/^The script exited with code 1 \(bash: .+\)\. /);
+    expect(message.slice(-(BASIC.at(-1)!.length + 3))).toBe(`). ${BASIC.at(-1)}`);
+  }, 30_000);
+
   // The document is the script's ANSWER, read by later steps for the id or the
   // derived value the flow needs. Replacing a resolved secret inside it would
   // hand those steps `{{secret:NAME}}` — a string nothing downstream can use —

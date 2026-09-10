@@ -65,6 +65,20 @@ const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
  * what a reader sees first, on the step's own line, so it stays short.
  */
 const STDERR_REASON_LINE_CHARS = 1_000;
+/**
+ * How much of the stderr text ahead of that line is kept, to redact the line
+ * in. Never reported: it is read once, on a step that failed with secrets.
+ *
+ * The line alone is out of context. `base64` and `xxd -p` wrap at a fixed
+ * column, so when a script's last words are the encoding of a credential, the
+ * line is the encoding's LAST line, and on its own it decodes to a piece of the
+ * value that no whole-text repair can see. So the window has to hold the whole
+ * wrapped run behind it. A 4096-bit RSA key in PEM, as `openssl genpkey` writes
+ * one, is 3,272 bytes: `xxd -p` spells that as 6,544 hex digits in lines of 60,
+ * 6,654 characters with the newlines, and `base64` as 4,422. An 8192-bit key is
+ * 12,989 characters of hex, still inside with room for the line in front.
+ */
+const STDERR_REASON_CONTEXT_CHARS = 16 * 1024;
 const SETTLE_TIMEOUT_MS = 500;
 const STOP_GRACE_MS = 1_500;
 /**
@@ -903,7 +917,15 @@ export class FlowScriptExecutor {
       heapLimitMb: bounds.heapLimitMb,
     });
     const verdict = redactSecrets(
-      run.interpreter === "bash" ? withStderrLine(outcome, capture.lastStderrLine) : outcome,
+      run.interpreter === "bash"
+        ? withStderrLine(outcome, () =>
+            stderrLineInContext(
+              capture.lastStderrLine,
+              capture.stderrBeforeLastLine,
+              request.secrets ?? []
+            )
+          )
+        : outcome,
       request.secrets ?? []
     );
 
@@ -1064,12 +1086,18 @@ function redactSecrets(
  * does, so the last line it wrote there ends the reason. Only on `exit`: a
  * signal, a time limit or a document the runner could not read already carries
  * the runner's own account, and the log has every line either way.
+ *
+ * The line is read only past that gate, because reading it is what redacts it
+ * ({@link stderrLineInContext}). One gate then decides both: no line is
+ * redacted that the reason will not carry, and none is carried unredacted.
  */
 function withStderrLine(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
-  line: string
+  readLine: () => string
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
-  if (!line || verdict.failure?.kind !== "exit") return verdict;
+  if (verdict.failure?.kind !== "exit") return verdict;
+  const line = readLine();
+  if (!line) return verdict;
   return {
     ...verdict,
     failure: {
@@ -1077,6 +1105,35 @@ function withStderrLine(
       message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
+}
+
+/**
+ * The line {@link withStderrLine} ends the reason with, redacted in the text
+ * stderr carried before it.
+ *
+ * Redacted on its own, the line is out of context. When a script's last words
+ * are a `base64` or `xxd -p` of a credential, the encoder has wrapped them, and
+ * the line is only the run's LAST line: on its own it decodes to a large piece
+ * of the value, and the repairs that take the whole run in the log never see
+ * the rest of it. So the text ahead of the line is redacted with it, as ONE
+ * text, by the pass a failure message gets, and only the last line of the
+ * result is kept. A replacement that began on an earlier line brings that
+ * line's start with it, which says where the value began.
+ *
+ * Only where there is something to hide, so a step with no secrets reports the
+ * line exactly as the script wrote it, and only when {@link withStderrLine}
+ * reads it, which is when the reason will carry it. `redactSecrets` scrubs the
+ * whole reason again after the join, as the log is scrubbed live and again
+ * when it is finished.
+ */
+function stderrLineInContext(
+  line: string,
+  before: string,
+  secrets: readonly FlowScriptSecret[]
+): string {
+  if (secrets.length === 0 || !line) return line;
+  const redacted = redactTruncated(`${before}${line}`, secrets);
+  return redacted.slice(redacted.lastIndexOf("\n") + 1).trim();
 }
 
 /**
@@ -3428,6 +3485,7 @@ class ScriptLogCapture {
   private heapFatalFlag = false;
   private heapFatalTail = "";
   private stderrLastLine = "";
+  private stderrBeforeLast = "";
   private spelledFrom: readonly FlowScriptSecret[] | undefined;
   private spelledCount = -1;
   private spelled: FlowScriptSecret[] = [];
@@ -3458,7 +3516,10 @@ class ScriptLogCapture {
         this.append(state.collapser.end());
         if (state.collapser.collapsed) this.truncatedFlag = true;
       }
-      if (state.lastLine) this.stderrLastLine = state.lastLine.end();
+      if (state.lastLine) {
+        this.stderrLastLine = state.lastLine.end();
+        this.stderrBeforeLast = state.lastLine.before;
+      }
     }
     this.streams.clear();
   }
@@ -3515,6 +3576,14 @@ class ScriptLogCapture {
   /** The last line stderr carried that was not blank; see {@link LastLineTracker}. */
   get lastStderrLine(): string {
     return this.stderrLastLine;
+  }
+
+  /**
+   * The end of what stderr carried before {@link lastStderrLine}, as the script
+   * wrote it: read to redact that line in, never reported.
+   */
+  get stderrBeforeLastLine(): string {
+    return this.stderrBeforeLast;
   }
 
   /**
@@ -3677,26 +3746,54 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
  * Only the head of each line is kept, so a long line is cut at its end: that is
  * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
  * at the start would leave the other half where nothing looks.
+ *
+ * The end of the text that came BEFORE that line is kept too, raw, up to
+ * {@link STDERR_REASON_CONTEXT_CHARS}, for {@link stderrLineInContext} to
+ * redact the line in. Blank lines after the line are in neither.
  */
 class LastLineTracker {
   private head = "";
   private length = 0;
   private blank = true;
   private last = "";
+  /** The end of everything written so far. */
+  private recent = "";
+  /** The end of what came before the line now open. */
+  private openBefore = "";
+  /** The end of what came before `last`. */
+  private lastBefore = "";
 
   write(text: string): void {
+    const earlier = this.recent;
+    // Where in `text` the open line began, -1 while it began before `text`;
+    // and where the last line closed here that was not blank began.
+    let open = -1;
+    let closed: number | undefined;
     let from = 0;
     for (let nl = text.indexOf("\n"); nl !== -1; nl = text.indexOf("\n", from)) {
       this.extend(text.slice(from, nl));
-      this.close();
+      if (this.close()) closed = open;
       from = nl + 1;
+      open = from;
     }
     this.extend(text.slice(from));
+    // Once per chunk rather than once per line, so a chunk of many short lines
+    // costs no more than a chunk of one.
+    if (closed !== undefined) {
+      this.lastBefore = closed < 0 ? this.openBefore : windowBefore(earlier, text, closed);
+    }
+    if (open >= 0) this.openBefore = windowBefore(earlier, text, open);
+    this.recent = windowBefore(earlier, text, text.length);
   }
 
   end(): string {
-    this.close();
+    if (this.close()) this.lastBefore = this.openBefore;
     return this.last;
+  }
+
+  /** What came before {@link end}'s line, raw, up to {@link STDERR_REASON_CONTEXT_CHARS}. */
+  get before(): string {
+    return this.lastBefore;
   }
 
   private extend(segment: string): void {
@@ -3709,11 +3806,14 @@ class LastLineTracker {
     if (this.blank && /\S/.test(segment)) this.blank = false;
   }
 
-  private close(): void {
-    if (!this.blank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
+  /** Ends the open line, and says whether it was not blank: the last line now. */
+  private close(): boolean {
+    const nonBlank = !this.blank;
+    if (nonBlank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
     this.head = "";
     this.length = 0;
     this.blank = true;
+    return nonBlank;
   }
 
   /**
@@ -3725,6 +3825,19 @@ class LastLineTracker {
     const kept = final >= 0xd800 && final <= 0xdbff ? this.head.slice(0, -1) : this.head;
     return `${kept.trimStart()}${omissionMarker(this.length - kept.length)}`;
   }
+}
+
+/**
+ * The last {@link STDERR_REASON_CONTEXT_CHARS} characters of `earlier` followed
+ * by the first `at` of `text`, without building the whole of either. A window
+ * cut between the halves of a surrogate pair drops the half it would start
+ * with.
+ */
+function windowBefore(earlier: string, text: string, at: number): string {
+  const room = STDERR_REASON_CONTEXT_CHARS - at;
+  const kept = room <= 0 ? text.slice(-room, at) : `${earlier.slice(-room)}${text.slice(0, at)}`;
+  const first = kept.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff ? kept.slice(1) : kept;
 }
 
 function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {
