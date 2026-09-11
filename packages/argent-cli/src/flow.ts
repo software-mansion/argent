@@ -1199,16 +1199,18 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // Once streaming is requested stdout belongs exclusively to NDJSON, so help
-  // goes to stderr as the diagnostic it is.
+  // Either flag claims stdout for machine-readable output, so help goes to
+  // stderr as the diagnostic it is.
   const jsonStream = rest.some(
     (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
   );
+  const helpToStderr =
+    jsonStream || rest.some((tok) => tok === "--json" || tok.startsWith("--json="));
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(jsonStream);
+    printHelp(helpToStderr);
     return;
   }
   const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
@@ -1224,7 +1226,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (err instanceof FlagParseException) {
       if (jsonStream) writeJsonStreamError(err);
       console.error(`Error: ${err.message}\n`);
-      printHelp(jsonStream);
+      printHelp(helpToStderr);
       return exitAfterFlush(2);
     }
     throw err;
@@ -1234,7 +1236,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
     if (jsonStream) writeJsonStreamError(message);
     console.error(message);
-    printHelp(jsonStream);
+    printHelp(helpToStderr);
     return exitAfterFlush(2);
   }
 
