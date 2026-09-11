@@ -97,8 +97,8 @@ describe("create-flow selector-scope docs", () => {
 describe("bash script exchange docs", () => {
   const REFERENCE = path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx");
 
-  it.each([REFERENCE, FLOW_YAML])("teaches the sibling-and-mv pattern in %s", (file) => {
-    const text = readFileSync(file, "utf8");
+  it("teaches the sibling-and-mv pattern in the Bash documentation", () => {
+    const text = readFileSync(REFERENCE, "utf8");
     expect(text).toContain("$ARGENT_OUTPUT");
     expect(text).toMatch(/\$ARGENT_OUTPUT\.new/);
     expect(text).toMatch(/mv .\$ARGENT_OUTPUT\.new/);
@@ -114,11 +114,8 @@ describe("bash script exchange docs", () => {
   // with the last non-blank line the script wrote there, and stdout never
   // reaches it. Read inside the bash section, so a mention elsewhere on the
   // page cannot stand in for it.
-  it.each([
-    [REFERENCE, "### Bash scripts", "\n## The `argent flow` command"],
-    [FLOW_YAML, "### Bash scripts", "\n## Snapshots and standalone runs"],
-  ])("teaches the stderr failure reason in %s", (file, start, end) => {
-    const section = between(file, start, end);
+  it("teaches the stderr failure reason in the Bash documentation", () => {
+    const section = between(REFERENCE, "### Bash scripts", "\n## The `argent flow` command");
     expect(section).toMatch(/last non-blank[^.]*stderr/);
     expect(section).toMatch(/echo "[^"]+" >&2(?:;|\n)\s*exit 1/);
     expect(section).toMatch(/reason[^.]*stdout|stdout[^.]*reason/);

@@ -31,7 +31,7 @@ const zodSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to the .mjs or .sh file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs". A .mjs runs under Node, a .sh under bash.'
+      'Path to the .mjs (Node.js) or .sh (Bash) file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
     ),
   timeout: z
     .number()

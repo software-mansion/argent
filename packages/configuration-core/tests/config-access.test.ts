@@ -547,8 +547,8 @@ describe("scripts.bash — schema entry", () => {
   // machine of another family carries a spelling that host refuses.
   it("says what it wants when it refuses one", () => {
     const expected = describeExpectedValue(getConfigDefinition("scripts.bash")!);
-    expect(expected).toContain("an absolute path to a bash executable");
-    expect(expected).toContain("the host running the tool server");
+    expect(expected).toContain("an absolute path to Bash");
+    expect(expected).toContain("the tool-server host");
     expect(expected).toContain("on Windows");
   });
 

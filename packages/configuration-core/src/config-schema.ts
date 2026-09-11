@@ -248,8 +248,8 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.heapLimitMb",
     description:
-      "Old-space heap limit, in MiB, given to each Node process a flow `script` step starts " +
-      "(default 512); a bash script is not bounded by it. " +
+      "Old-space heap limit, in MiB, for `.mjs` flow scripts (default 512). " +
+      "This limit does not apply to Bash. " +
       `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
       "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
       "V8's own startup before any script runs.",
@@ -266,12 +266,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.bash",
     description:
-      "Absolute path to the bash a flow `script` step runs a `.sh` file with. Unset ⇒ the " +
-      "first bash on the tool server's PATH, then /bin/bash and /usr/bin/bash (on Windows, " +
-      "Git for Windows' bash.exe; the WSL launcher under %SystemRoot% is skipped). Each " +
-      "candidate is run once and has to answer with a $BASH_VERSION. Global scope only: the " +
-      "value names a path on the host running the tool server, so a committed project file " +
-      "cannot hold one a mixed-OS team can all use.",
+      "Absolute path to Bash for `.sh` flow scripts. Global scope only. " +
+      "If unset, Argent searches PATH, then standard install locations. " +
+      "On Windows, use Bash from Git for Windows.",
     scopes: ["global"],
     // Deliberately permissive: `readScopeValue` hands back `undefined` for a
     // value its `parse` rejected, which is indistinguishable from an absent key
@@ -284,8 +281,7 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     parse: asPresentText,
     validateWrite: asAbsolutePath,
     expected:
-      "an absolute path to a bash executable, spelled the way the host running the tool server " +
-      "spells one (`/bin/bash` on macOS and Linux, `C:\\...\\bash.exe` on Windows)",
+      "an absolute path to Bash on the tool-server host (`/bin/bash`; on Windows, `C:\\...\\bash.exe`)",
     merge: "prioritize-global",
     // Host-specific for the same reason the check above is: the example is
     // printed back as a command to run, and one this host would refuse is a
