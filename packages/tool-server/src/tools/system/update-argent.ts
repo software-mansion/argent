@@ -113,6 +113,67 @@ const zodSchema = z.object({
 
 let updateScheduled = false;
 
+function scheduleUpdater(updateArgs: string[]): boolean {
+  if (updateScheduled) return false;
+  updateScheduled = true;
+
+  // Delay the spawn so an in-flight MCP response can reach the client before
+  // the updater stops this tool-server.
+  setTimeout(() => {
+    const cliEntry = resolveCliEntry();
+    const cmd = cliEntry ? process.execPath : "argent";
+    const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
+    const child = spawn(cmd, args, {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+    });
+    // Without an error listener a spawn failure (ENOENT when `argent` isn't
+    // on PATH — the norm in local mode) crashes the tool-server. A later check
+    // or tool call can retry after the flag is cleared.
+    child.on("error", (err) => {
+      console.error(`[update-argent] failed to spawn updater: ${err}`);
+      updateScheduled = false;
+    });
+    // Updater exited without killing this server (failed or no-op'd) — unblock
+    // future attempts; a successful update restarts this server anyway.
+    child.on("exit", () => {
+      updateScheduled = false;
+    });
+    child.unref();
+  }, 2000);
+
+  return true;
+}
+
+/** Schedule the existing non-interactive updater for the install serving this server. */
+export function scheduleAutomaticUpdate(installableVersion: string): boolean {
+  const running = classifyRunningInstall();
+  let projectRoot: string | null = null;
+
+  if (running.kind === "local") {
+    const recordedRoot =
+      running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null;
+    projectRoot = recordedRoot ?? findDeclaringProjectRoot(process.cwd());
+    if (!projectRoot) {
+      console.error(
+        "[update-argent] automatic update skipped: could not determine the local project root"
+      );
+      return false;
+    }
+  }
+
+  const updateArgs = [
+    "update",
+    "--yes",
+    ...targetFlagsFor(running.kind),
+    "--version",
+    installableVersion,
+  ];
+  if (projectRoot) updateArgs.push("--project-root", projectRoot);
+  return scheduleUpdater(updateArgs);
+}
+
 export const updateArgentTool: ToolDefinition<{
   target?: "auto" | "global" | "local" | "both";
 }> = {
@@ -202,47 +263,20 @@ export const updateArgentTool: ToolDefinition<{
     }
 
     const targetFlags = targetFlagsFor(effectiveTarget);
-
-    updateScheduled = true;
-
-    // Delay the spawn so this response reaches the MCP server before the
-    // updater SIGTERMs this tool-server.
-    setTimeout(() => {
-      const cliEntry = resolveCliEntry();
-      // Pin --version only when the target IS the running install — it came
-      // from ITS update state; cross-install targets resolve their own.
-      const updateArgs = ["update", "--yes", ...targetFlags];
-      if (targetsOnlyRunningInstall && installableVersion) {
-        updateArgs.push("--version", installableVersion);
-      }
-      // Pin WHERE via a flag, not the child's cwd: the installer's
-      // resolveProjectRoot walks editor/.git markers and can pick a DIFFERENT
-      // ancestor in monorepos — and a vanished cwd would fail the spawn.
-      const spawnRoot =
-        projectRoot ??
-        (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
-      if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
-      const cmd = cliEntry ? process.execPath : "argent";
-      const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
-      const child = spawn(cmd, args, {
-        detached: true,
-        stdio: "ignore",
-        env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
-      });
-      // Without an error listener a spawn failure (ENOENT when `argent` isn't
-      // on PATH — the norm in local mode) crashes the tool-server. The next
-      // update notification re-offers.
-      child.on("error", (err) => {
-        console.error(`[update-argent] failed to spawn updater: ${err}`);
-        updateScheduled = false;
-      });
-      // Updater exited without killing this server (declined or no-op'd) —
-      // unblock future calls; a successful update restarts this server anyway.
-      child.on("exit", () => {
-        updateScheduled = false;
-      });
-      child.unref();
-    }, 2000);
+    // Pin --version only when the target IS the running install — it came
+    // from ITS update state; cross-install targets resolve their own.
+    const updateArgs = ["update", "--yes", ...targetFlags];
+    if (targetsOnlyRunningInstall && installableVersion) {
+      updateArgs.push("--version", installableVersion);
+    }
+    // Pin WHERE via a flag, not the child's cwd: the installer's
+    // resolveProjectRoot walks editor/.git markers and can pick a DIFFERENT
+    // ancestor in monorepos — and a vanished cwd would fail the spawn.
+    const spawnRoot =
+      projectRoot ??
+      (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
+    if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
+    scheduleUpdater(updateArgs);
 
     const targetLabel =
       effectiveTarget === "both"

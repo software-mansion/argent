@@ -1,0 +1,25 @@
+---
+sidebar_position: 9
+sidebar_label: Automatic updates
+title: Automatic updates
+sidebar_custom_props:
+  icon: repeat-2
+---
+
+Argent can install eligible updates without a separate confirmation. Automatic updates are disabled by default.
+
+Enable automatic updates with this command:
+
+```bash
+argent config set autoUpdate.enabled true
+```
+
+The tool-server checks for updates at startup and every 24 hours. Argent updates the install that runs the tool-server.
+
+Argent uses the same update process as `argent update --yes`. The tool-server restarts after a successful update.
+
+Argent follows the configured minimum release age. Argent waits until a release meets that policy.
+
+Run `argent config set autoUpdate.enabled false` to disable automatic updates.
+
+The [configuration reference](/docs/reference/configuration) describes the setting and its storage. The [tools reference](/docs/reference/tools) describes the related update tools.
