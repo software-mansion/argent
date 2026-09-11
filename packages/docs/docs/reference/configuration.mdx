@@ -40,11 +40,22 @@ argent config get ios.additionalDeviceSets
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                              |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                       |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                           |
+| `scripts.env.allow`        | project, global | union            | Additional environment variable names that scripts read from the tool-server. Use an array of names                          |
 | `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100` |
 | `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, for `.mjs` flow scripts. Default `512`. Argent refuses a value below `32`. This limit does not apply to Bash                        |
 | `scripts.bash`             | global          | global wins      | The absolute path to Bash for `.sh` flow scripts. If unset, Argent selects Bash automatically. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)   |
 
-Argent reads all `scripts.` keys from the global file only. A project file cannot raise the limits that one script step runs under. Each developer can set `scripts.bash` for their machine.
+Argent reads `scripts.maxTimeoutMs`, `scripts.heapLimitMb` and `scripts.bash` from the global file only. A project file cannot raise the limits that one script step runs under. Each developer can set `scripts.bash` for their machine.
+
+Use `scripts.env.allow` to give scripts access to additional variables from the tool-server's environment:
+
+```bash
+argent config set scripts.env.allow '["DATABASE_URL", "AWS_PROFILE"]' --scope project
+```
+
+Argent combines the project and global lists. The project's configuration comes from the run's `project_root`, even when the flow file is elsewhere. Argent ignores invalid entries, reserved names and names with the `ARGENT_` prefix. The run reports the entries that Argent ignores.
+
+The tool-server keeps the environment from its start. After you change a shell variable, restart the tool-server. To supply a value for one run, use [Environment values](/docs/reference/flow-yaml#environment-values).
 
 If `scripts.bash` is invalid, the `.sh` step reports an error. If Argent cannot read the configuration file, it selects Bash automatically and adds a note to the step report.
 
@@ -144,11 +155,13 @@ Argent can remove a flag from the recognized set. `argent flags` shows a flag th
 
 ## Secrets
 
-A flow step or a `keyboard` call can type a credential without the credential in the file or in the agent context. The step contains a placeholder:
+A flow step or a `keyboard` call can use a credential without the credential in the file or in the agent context. The step contains a placeholder:
 
 ```yaml
 - type: { into: { id: password }, text: "{{secret:APP_PASSWORD}}" }
 ```
+
+Use the same placeholder in script [environment values](/docs/reference/flow-yaml#environment-values), including `argent flow run --env`.
 
 The tool-server replaces the placeholder when the step runs. The tool-server resolves the name on the machine that runs the tool-server. It takes the first source that defines the name:
 
@@ -159,11 +172,13 @@ The tool-server replaces the placeholder when the step runs. The tool-server res
 | 3     | `<project-root>/.env.local`, then `<project-root>/.env` | Keys with the `ARGENT_SECRET_` prefix only |
 | 4     | `~/.argent/secrets.env`                                 | Every key, for every project               |
 
+For script environment values, `<project-root>` is the run's `project_root`. For `keyboard` and `paste`, it is the tool-server's working directory. To share a secret across these tools, use `~/.argent/secrets.env` or an `ARGENT_SECRET_<NAME>` environment variable.
+
 A bare `NAME=value` line in `.env` or `.env.local` stays unresolved. Write `ARGENT_SECRET_NAME=value` in these files.
 
 A change in a secrets file applies to the next tool call. An environment variable reaches only a tool-server that started after you exported the variable.
 
-A name that no source defines fails the step at run time. Argent redacts each resolved value in the reports and logs. Thus do not use a placeholder for content that a report must show.
+A missing secret fails the step. A missing secret in `--env` or the `flow-execute` `env` parameter prevents the run from starting. Argent hides resolved secrets in failure text and script logs. See [Secrets in an `env` value](/docs/reference/flow-yaml#secrets-in-an-env-value) for the limits. Do not use a placeholder for content that a report must show.
 
 ### Commands
 

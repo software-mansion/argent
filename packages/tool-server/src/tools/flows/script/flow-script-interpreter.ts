@@ -195,6 +195,17 @@ async function notBashProblem(
   );
 }
 
+const BASH_STARTUP_STEERING = ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"];
+
+function withoutBashStartupSteering(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const steering = new Set(BASH_STARTUP_STEERING.map((name) => name.toLowerCase()));
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!steering.has(name.toLowerCase())) kept[name] = value;
+  }
+  return kept;
+}
+
 function askForBashVersion(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
@@ -221,7 +232,7 @@ function askForBashVersion(
         // `bash`, and inheriting here handed it the bearer token, the port and
         // every `ARGENT_SECRET_*` value the allowlist exists to keep out of a
         // script's reach.
-        env: probeEnv,
+        env: withoutBashStartupSteering(probeEnv),
         // The step's own directory, for the same reason: a version-manager
         // shim picks its bash from the directory it starts in - asdf reads
         // `.tool-versions` there - so a shim probed from the tool server's own

@@ -11,12 +11,16 @@ import {
 } from "@argent/configuration-core";
 
 /**
- * Server-side secret placeholders for text-entry tools.
+ * Server-side secret placeholders, for a text-entry tool and for a flow
+ * `script` step's environment alike.
  *
  * A plaintext credential in an agent-composed tool call enters the model's
  * context, the MCP call log, the event log and any recorded flow YAML.
  * `{{secret:NAME}}` crosses those boundaries verbatim and is substituted only
- * in the tool's `execute`, the last hop before the device.
+ * at the last hop before the value leaves this process: in `keyboard`'s and
+ * `paste`'s `execute`, the hop before the device, and in
+ * `resolveScriptEnvSecrets`, the hop before a `script` step's child — a step
+ * that reaches no device at all.
  *
  * Which names resolve is owned by {@link secretSources}: only values the user
  * deliberately exposed to argent, so a prompt-injected agent cannot exfiltrate

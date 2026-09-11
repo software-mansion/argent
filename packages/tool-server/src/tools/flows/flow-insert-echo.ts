@@ -1,6 +1,17 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
-import { requireRecordingSession, appendStepToFlow, type FlowSavedTo } from "./flow-utils";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  wrapFailure,
+  type ToolDefinition,
+} from "@argent/registry";
+import {
+  requireRecordingSession,
+  appendStepToFlow,
+  holdsOutputReference,
+  type FlowSavedTo,
+  type FlowStep,
+} from "./flow-utils";
 
 const zodSchema = z.object({
   name: z
@@ -34,10 +45,30 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);
 
-    const { savedTo, stepCount } = await appendStepToFlow(session, {
-      kind: "echo",
-      message: params.message,
-    });
+    const step: FlowStep = { kind: "echo", message: params.message };
+    let savedTo: FlowSavedTo;
+    let stepCount: number;
+    try {
+      ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+    } catch (err) {
+      const stage = getFailureSignal(err)?.failure_stage;
+      const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
+      if (stage !== "flow_output_reference" && !fromTheFile) throw err;
+      throw wrapFailure(
+        err,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
+          failure_stage: "flow_insert_echo_append",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        },
+        (!fromTheFile && holdsOutputReference(step)
+          ? `The echo was not recorded: its own \`message\` failed validation. `
+          : `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
+            `already in the file, not in this call. `) +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
 
     return {
       message: `Echo added to "${params.name}" flow`,

@@ -194,6 +194,25 @@ describe("create-flow directive-answer docs", () => {
 });
 
 describe("create-flow script docs", () => {
+  it.each([FLOW_YAML, path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx")])(
+    "keeps the environment example in %s parsable",
+    (file) => {
+      const text = readFileSync(file, "utf8");
+      const section = text.split("## Environment values\n")[1];
+      const example = section?.match(/```yaml\n([\s\S]*?)```/)?.[1];
+      expect(example).toBeDefined();
+      expect(parseFlow(example!)).toMatchObject({
+        env: { API_URL: "https://api.example.com" },
+        steps: [
+          {
+            kind: "script",
+            env: { API_KEY: "{{secret:API_KEY}}", USER_TYPE: "premium" },
+          },
+        ],
+      });
+    }
+  );
+
   it("lists a script path among what a flow_path run re-anchors", () => {
     const schema = zodObjectToJsonSchema(
       createRunFlowTool({} as unknown as Registry).zodSchema!

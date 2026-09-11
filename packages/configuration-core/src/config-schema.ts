@@ -64,6 +64,99 @@ export function asPositiveInteger(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
 }
 
+export const SCRIPT_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export const PROTO_ENV_NAME = "__proto__";
+
+export const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
+
+export const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
+
+export const NPM_CONFIG_ENV_PREFIX = "npm_config_";
+
+/**
+ * npm config keys that reach `NODE_OPTIONS`, and so carry through the
+ * `npm_config_` prefix what the exact name is reserved to keep out.
+ * `node-options` is npm's own spelling of the variable — it hands the key back
+ * as `NODE_OPTIONS` to what it starts — and `userconfig` and `globalconfig`
+ * each name an `.npmrc` npm would read that key from.
+ */
+export const RESERVED_NPM_CONFIG_KEYS: readonly string[] = [
+  "node-options",
+  "userconfig",
+  "globalconfig",
+];
+
+/**
+ * Refused in a caller-supplied environment map, because each steers the
+ * runner's own process: `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID` and
+ * `NODE_CHANNEL_SERIALIZATION_MODE` name and frame the IPC channel the script
+ * protocol runs on, `ELECTRON_RUN_AS_NODE` decides whether the child boots as
+ * Node at all, and the activation flag decides which process the runner preload
+ * takes over.
+ *
+ * `NODE_CHANNEL_SERIALIZATION_MODE` is the sibling that fails most quietly.
+ * Node appends its own copy AFTER the caller's entries and `getenv` answers with
+ * the first, so the author's value wins; the fork never asks for a
+ * `serialization`, so the parent stays on `json` while the child switches. On
+ * `advanced` the child reads argent's JSON bytes as a length prefix and waits
+ * for about two gigabytes that never arrive — `child.send` reports no error, the
+ * script body never runs, and the step burns its whole time limit and is then
+ * reported as the author's script being slow. Any other value crashes the child
+ * inside `node:internal/child_process`, which the step then reports as the
+ * script's own failure. Refused up front instead, like the rest of the table.
+ *
+ * Here rather than in the tool server for the reason
+ * {@link SCRIPT_ENV_NAME_PATTERN} is: `argent flow run --env` is one of the
+ * channels held to this rule and cannot import from it. Held in one place
+ * because the two rules are asked TOGETHER — a name is refused as reserved or
+ * as malformed, never as both — and `npm_config_node-options`, npm's own
+ * spelling and the one every refusal here advertises, is reserved AND fails the
+ * name pattern. Read off two copies, the CLI answered "not an environment
+ * variable name" for the spelling the reference table lists as reserved.
+ */
+export const RESERVED_SCRIPT_ENV_NAMES: readonly string[] = [
+  "NODE_CHANNEL_FD",
+  "NODE_UNIQUE_ID",
+  "NODE_CHANNEL_SERIALIZATION_MODE",
+  "NODE_OPTIONS",
+  "ELECTRON_RUN_AS_NODE",
+  RUNNER_ACTIVATION_ENV,
+  BASH_OUTPUT_ENV,
+];
+
+function reservedNpmConfigName(name: string): string | undefined {
+  const lower = name.toLowerCase();
+  if (!lower.startsWith(NPM_CONFIG_ENV_PREFIX)) return undefined;
+  const key = lower.slice(NPM_CONFIG_ENV_PREFIX.length).replace(/(?!^)_/g, "-");
+  return RESERVED_NPM_CONFIG_KEYS.includes(key) ? `${NPM_CONFIG_ENV_PREFIX}${key}` : undefined;
+}
+
+export function reservedScriptEnvName(
+  name: string,
+  caseInsensitive: boolean = process.platform === "win32"
+): string | undefined {
+  return (
+    RESERVED_SCRIPT_ENV_NAMES.find((candidate) =>
+      caseInsensitive ? candidate.toLowerCase() === name.toLowerCase() : candidate === name
+    ) ?? reservedNpmConfigName(name)
+  );
+}
+
+export function reservedScriptEnvNamesForMessage(): string {
+  return [
+    ...RESERVED_SCRIPT_ENV_NAMES,
+    ...RESERVED_NPM_CONFIG_KEYS.map((key) => `${NPM_CONFIG_ENV_PREFIX}${key}`),
+  ].join(", ");
+}
+
+export function reservedScriptEnvReason(name: string): string {
+  return name === BASH_OUTPUT_ENV
+    ? "names the file a `.sh` step exchanges its output document through, so argent sets " +
+        "it and a script may not"
+    : "steers the runner's own process";
+}
+
 export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
 
 /**
@@ -158,6 +251,18 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // remote `argent link` tool-server it is the *client's* config that decides.
     merge: "prioritize-local",
     example: "~/Movies/argent",
+  },
+  {
+    key: "scripts.env.allow",
+    description:
+      "Additional environment variable names that scripts read from the tool-server. " +
+      "Use an array of names. Argent combines the project and global lists. " +
+      "Argent ignores invalid entries, reserved names and names with the `ARGENT_` prefix. " +
+      "After you change a shell variable, restart the tool-server to use its new value.",
+    scopes: ["project", "global"],
+    parse: asStringArray,
+    merge: "union",
+    example: '["DATABASE_URL", "AWS_PROFILE"]',
   },
   // All three `scripts.` keys below are global-scope only, for two reasons. The
   // two bounds: a checked-in `.argent/config.json` must not raise the ceiling on

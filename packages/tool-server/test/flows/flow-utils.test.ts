@@ -808,6 +808,48 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to reach the emitter's FOLD path, which none of the values
+      // above do: every one of them is under 40 characters, so the two rules
+      // `serializeFlow` sets against folding — `doubleQuotedMinMultiLineLength`
+      // and `lineWidth: 0` — were guarded by the `env` cases in
+      // `flow-script-env.test.ts` alone. The serializer change is
+      // document-wide, and these fields are the rest of the document.
+      //
+      // Both values were FOUND by searching for one the folding emitter
+      // corrupts at these column positions and the non-folding one does not:
+      // a fold placed between an escaped space and an escaped newline ate the
+      // space, and where the fold lands depends on the key it sits under. Each
+      // fails at one of the two positions this case writes them to, so neither
+      // is redundant.
+      "\n".repeat(10) +
+        "a".repeat(13) +
+        "\n".repeat(8) +
+        " ".repeat(15) +
+        "a " +
+        "\n".repeat(23) +
+        "a".repeat(12) +
+        " " +
+        "\n".repeat(43) +
+        "a".repeat(27) +
+        " ".repeat(4) +
+        "a".repeat(14) +
+        " ".repeat(11) +
+        "a".repeat(12),
+      " ".repeat(11) +
+        "\n".repeat(24) +
+        " ".repeat(21) +
+        "a " +
+        "\n".repeat(50) +
+        " ".repeat(3) +
+        "\n" +
+        " ".repeat(5) +
+        "a".repeat(8) +
+        " ".repeat(13) +
+        "a".repeat(9) +
+        " ".repeat(10) +
+        "\n".repeat(14) +
+        " ".repeat(20) +
+        "\n".repeat(5),
     ];
     for (const value of values) {
       const flow: FlowFile = {
@@ -833,6 +875,99 @@ describe("parseFlow", () => {
         ],
       };
       expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+    }
+  });
+
+  it("still accepts a file whose first line opens with a tab", async () => {
+    expect(parseFlow("\tsteps:\n  - echo: hi\n").steps).toEqual([{ kind: "echo", message: "hi" }]);
+  });
+
+  it("still parses a file whose last line holds nothing but a stray whitespace character", async () => {
+    const strays = ["\r", "\v", "\f", "\u00a0", "\u1680", "\u2028", "\u202f", "\u3000", "\ufeff"];
+    for (const stray of strays) {
+      expect(parseFlow(`steps:\n  - echo: hi\n${stray}`).steps).toEqual([
+        { kind: "echo", message: "hi" },
+      ]);
+      expect(parseFlow(`steps:\n  - echo: hi\n \t${stray}`).steps).toEqual([
+        { kind: "echo", message: "hi" },
+      ]);
+    }
+  });
+
+  it("still parses a CRLF file whose final LF a conversion dropped", async () => {
+    expect(parseFlow("steps:\r\n  - echo: hello\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+    expect(parseFlow("steps: [{ echo: hello }]\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+    expect(
+      parseFlow("steps:\r\n  - script:\r\n      path: seed.mjs\r\n      env:\r\n        TOK: abc\r")
+        .steps
+    ).toEqual([{ kind: "script", path: "seed.mjs", env: { TOK: "abc" } }]);
+    expect(parseFlow("steps:\r\n  - echo: hello\r\r").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+    expect(parseFlow("steps:\r\n  - echo: hello\r\n").steps).toEqual([
+      { kind: "echo", message: "hello" },
+    ]);
+  });
+
+  it("keeps a trailing non-ASCII space in the last scalar when a stray line follows it", async () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: "abc\u00a0" } }],
+    };
+    expect(parseFlow(`${serializeFlow(flow)}\u00a0`)).toEqual(flow);
+  });
+
+  it("keeps an env name YAML's core schema would resolve", async () => {
+    for (const name of ["TRUE", "True", "FALSE", "NULL", "Null"]) {
+      const flow = parseFlow(
+        `env: { ${name}: v }\nsteps:\n  - script: { path: seed.mjs, env: { ${name}: v } }\n`
+      );
+      expect(Object.keys(flow.env ?? {})).toEqual([name]);
+      expect(Object.keys(flow.steps[0].kind === "script" ? (flow.steps[0].env ?? {}) : {})).toEqual(
+        [name]
+      );
+    }
+    for (const name of ["YES", "ON", "NO", "OFF"]) {
+      expect(Object.keys(parseFlow(`env: { ${name}: v }\nsteps: []\n`).env ?? {})).toEqual([name]);
+    }
+  });
+
+  it("accepts a bare `env:` header with no entries under it", async () => {
+    const flow = parseFlow("env:\nsteps:\n  - echo: hi\n");
+    expect(flow.env).toEqual({});
+    expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+    expect(flow).toEqual(parseFlow("env: {}\nsteps:\n  - echo: hi\n"));
+  });
+
+  it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
+    const spaces = [
+      "\u00a0",
+      "\u1680",
+      "\u2000",
+      "\u200a",
+      "\u2028",
+      "\u2029",
+      "\u202f",
+      "\u205f",
+      "\u3000",
+      "\ufeff",
+    ];
+    for (const space of spaces) {
+      const flow: FlowFile = {
+        executionPrerequisite: "",
+        env: { HEADER: `abc${space}` },
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: `abc${space}` } }],
+      };
+      expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+      const lone: FlowFile = {
+        executionPrerequisite: "",
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: space } }],
+      };
+      expect(parseFlow(serializeFlow(lone))).toEqual(lone);
     }
   });
 
@@ -1320,10 +1455,21 @@ describe("output references", () => {
     }
     const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
-    expect(quoted!.endsWith("…")).toBe(true);
-    // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
-    expect(quoted!.length).toBe(201);
+    expect(quoted!.endsWith("…(+218 chars)")).toBe(true);
+    expect(quoted!.startsWith("{{output:user.id}}")).toBe(true);
     expect(message.length).toBeLessThan(1000);
+  });
+
+  it("says how much of a value it cut when the marker itself was past the cut", () => {
+    let message = "";
+    try {
+      parseFlow(`steps:\n  - echo: "${"x".repeat(400)}{{output:user.id}}"\n`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("uses unsupported template syntax");
+    expect(message).toContain("…(+218 chars)");
+    expect(message).not.toContain("{{output:user.id}}");
   });
 
   it("leaves a pattern alone, at both levels that spell one", () => {

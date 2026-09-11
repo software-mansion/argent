@@ -26,6 +26,7 @@ export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
+import { describeScriptEnvProblem } from "./script/flow-script-env";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -172,7 +173,7 @@ export type FlowPersistMode = "host" | "client";
 
 export interface RecordedStepWarning {
   warning: string;
-  kind: "conversion" | "wait";
+  kind: "conversion" | "wait" | "env";
   step: string;
 }
 
@@ -502,10 +503,13 @@ export type FlowStep =
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
-  | { kind: "script"; path: string; timeout?: number };
+  | { kind: "script"; path: string; timeout?: number; env?: ScriptEnv };
+
+export type ScriptEnv = Record<string, string>;
 
 export type FlowFile = {
   executionPrerequisite: string;
+  env?: ScriptEnv;
   steps: FlowStep[];
 };
 
@@ -635,9 +639,10 @@ type YamlStep =
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
-  | { script: { path: string; timeout?: number } };
+  | { script: { path: string; timeout?: number; env?: ScriptEnv } };
 
 type YamlFlowFile = {
+  env?: ScriptEnv;
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -1157,8 +1162,9 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { snapshot: body };
     }
     case "script": {
-      const body: { path: string; timeout?: number } = { path: step.path };
+      const body: { path: string; timeout?: number; env?: ScriptEnv } = { path: step.path };
       if (step.timeout !== undefined) body.timeout = step.timeout;
+      if (step.env) body.env = { ...step.env };
       return { script: body };
     }
     case "tool": {
@@ -2126,16 +2132,26 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
     );
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    badEntry(raw, "script needs { path, timeout? }, e.g. `script: { path: scripts/seed.mjs }`");
+    badEntry(
+      raw,
+      "script needs { path, timeout?, env? }, e.g. `script: { path: scripts/seed.mjs }`"
+    );
   }
   const b = body as Record<string, unknown>;
-  rejectUnknownKeys(raw, b, ["path", "timeout"], "script");
+  rejectUnknownKeys(raw, b, ["path", "timeout", "env"], "script");
   const step: Extract<FlowStep, { kind: "script" }> = {
     kind: "script",
     path: parseScriptPath(raw, b.path),
   };
   if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
+  if (b.env !== undefined) step.env = parseScriptEnv(raw, b.env);
   return step;
+}
+
+export function parseScriptEnv(raw: unknown, value: unknown): ScriptEnv {
+  const problem = describeScriptEnvProblem(value);
+  if (problem) badEntry(raw, `script \`env\` ${problem}`);
+  return { ...(value as ScriptEnv) };
 }
 
 export function parseScriptPath(raw: unknown, value: unknown): string {
@@ -2367,6 +2383,9 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
       return;
     case "script":
+      for (const [name, value] of Object.entries(step.env ?? {})) {
+        yield { where: `script.env.${name}`, value };
+      }
       return;
     case "launch":
     case "run":
@@ -2388,15 +2407,18 @@ export function holdsOutputReference(step: FlowStep): boolean {
   return blockSteps(step)?.some(holdsOutputReference) ?? false;
 }
 
+export function renderedValue(value: string): string {
+  if (value.length <= MAX_ENTRY_RENDER_CHARS) return value;
+  const elided = value.length - MAX_ENTRY_RENDER_CHARS;
+  return `${value.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
+}
+
 function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {
   steps.forEach((step, i) => {
     const at = [...trail, i + 1];
     for (const field of outputReferenceFields(step)) {
       if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
-      const rendered =
-        field.value.length > MAX_ENTRY_RENDER_CHARS
-          ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
-          : field.value;
+      const rendered = renderedValue(field.value);
       const locator = field.altWhere
         ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
         : `\`${field.where}\``;
@@ -2734,20 +2756,66 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 }
 
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = {
+    ...(flow.env ? { env: { ...flow.env } } : {}),
+    steps: flow.steps.map(toYamlStep),
+  };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
-  // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
-  // document tail exposes its raw last line to parseFlow's content.trim(), so
-  // parseFlow(serializeFlow(x)) was not the identity. Disabling it emits
-  // multi-line values as double-quoted scalars (escape-exact both ways);
-  // single-line values still serialize plain, and legacy files containing block
-  // scalars still parse.
-  return yamlStringify(doc, { blockQuote: false });
+  // stripped on re-parse (" \n" comes back as "\n"), and a block scalar's own
+  // chomping decides what its last line keeps, so a value at the document tail
+  // comes back changed. Either way parseFlow(serializeFlow(x)) is not the
+  // identity. Disabling it emits multi-line values as double-quoted scalars
+  // (escape-exact both ways); single-line values still serialize plain, and
+  // legacy files containing block scalars still parse.
+  //
+  // doubleQuotedMinMultiLineLength: Infinity — "escape-exact both ways" holds
+  // only while the double-quoted scalar stays on ONE line. Past the emitter's
+  // default of 40 characters it writes a MULTI-LINE double-quoted scalar, and a
+  // whitespace-only line inside one is written as `\ ` and re-parses as a
+  // backslash — so `parseFlow(serializeFlow(x))` is not the identity for
+  // exactly the shape `env` exists to carry, a PEM key or a service-account
+  // blob, where a changed value changes what a side-effecting script DOES
+  // rather than what a log line reads. Forcing the single-line form escapes
+  // every break as `\n` instead.
+  //
+  // lineWidth: 0 — and that is only half of it, because the emitter FOLDS a
+  // long line whatever form it chose. A fold placed between an escaped space
+  // and an escaped newline eats the space: a value ending `…aaa  a \n…` comes
+  // back `…aaa  a\n…`, one character shorter than the author wrote and with
+  // nothing to say so. Rare and silent, which is the combination this rule
+  // exists for; `flow-script-env.test.ts` pins a minimized value that
+  // reproduces it, and states the rate its own generator found. Zero disables
+  // folding, so every scalar stays on one physical line and every break is an
+  // escape. The cost is document-wide and cosmetic: a long `echo` message or
+  // `executionPrerequisite` is written on one line rather than wrapped at 80
+  // columns.
+  return yamlStringify(doc, {
+    blockQuote: false,
+    doubleQuotedMinMultiLineLength: Infinity,
+    lineWidth: 0,
+  });
+}
+
+export function assertNoEnvOutputReferences(env: ScriptEnv | undefined, whose: string): void {
+  for (const [name, value] of Object.entries(env ?? {})) {
+    if (!value.includes(OUTPUT_REFERENCE_MARKER)) continue;
+    throw new FailureError(
+      `${whose} \`env.${name}\` uses unsupported template syntax. ` +
+        `Replace it with the literal value the script needs: ${JSON.stringify(renderedValue(value))}`,
+      {
+        error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+        failure_stage: "flow_output_reference",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 export function validateFlow(flow: FlowFile): void {
+  assertNoEnvOutputReferences(flow.env, "The flow's");
   assertNoOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
@@ -2762,15 +2830,58 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-export function parseFlow(content: string): FlowFile {
-  const trimmed = content.trim();
-  if (trimmed.length === 0) {
-    return { executionPrerequisite: "", steps: [] };
-  }
+function readFlowHead(content: string): YamlFlowFile | undefined {
+  // Trimmed at the START, and at the trailing edge only back to the last line
+  // break. What is left of the trim is what nothing can be part of a value.
+  //
+  // The trailing edge is where the loss was: `String.prototype.trim` strips the
+  // whole Unicode whitespace class and YAML's plain scalars strip only the ASCII
+  // one, so a value ending in U+00A0 — the shape a token pasted out of a web UI
+  // has — lost that character whenever it was the last scalar in the file, which
+  // is where the serializer puts a recorded step's `env` value. That value sits
+  // on the last CONTENT line, so stopping at the line break keeps it.
+  //
+  // What is past that break is a line holding nothing but whitespace, and YAML
+  // accepts only space and tab there — so a lone U+00A0, a stray carriage return
+  // from a half-applied line-ending conversion, a vertical tab or a BOM read as
+  // a second top-level node at column 1 and the file stopped parsing AT ALL:
+  // not the `env:` block, the whole thing, for every caller of this function.
+  // The paste artefact the line above exists for is the same artefact that
+  // lands there.
+  //
+  // Nothing at the leading edge can be part of a value either, because the top
+  // level of a flow file is a map, so that trim costs nothing and keeps what it
+  // always covered: a file whose first line opens with a TAB, which YAML refuses
+  // as indentation and this accepted before.
+  //
+  // A trailing CR is taken off FIRST, because it is the half of a CRLF whose LF
+  // a line-ending conversion dropped — the document's own last break, not a
+  // character of the last value. Without that the trailing rule never fires (it
+  // is anchored on a break, and this file has none), and a CRLF-authored flow
+  // that lost its final LF read one character longer than the author wrote: a
+  // block-style `echo` came back `"hello\r"` and a `TOK:` value `"abc\r"`,
+  // while the flow-style spelling of the same file stopped parsing at all —
+  // "Unexpected scalar at node end".
+  //
+  // No file argent WRITES can end in a raw CR, which is what makes this safe:
+  // `serializeFlow` escapes a CR inside a value as the two characters `\r` and
+  // ends the document with a newline. The parser itself is no help here — it
+  // keeps a raw CR as ordinary content, so it cannot tell the two apart — which
+  // leaves one shape this costs: a HAND-authored plain scalar that is the
+  // file's last value and really does end in a literal CR. That character is a
+  // line ending far more often than it is a value, and the shape it comes from
+  // is a half-applied conversion.
+  //
+  // `+`, because the same conversion applied twice ends a file in two.
+  const body = content
+    .replace(/^\s+/, "")
+    .replace(/\r+$/, "")
+    .replace(/\n\s+$/, "\n");
+  if (body.length === 0) return undefined;
 
   let parsed: YamlFlowFile;
   try {
-    parsed = yamlParse(trimmed) as YamlFlowFile;
+    parsed = yamlParse(body, { stringKeys: true }) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
@@ -2798,7 +2909,7 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  const topKeys: readonly string[] = ["executionPrerequisite", "steps", "env"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -2813,6 +2924,27 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
+  if (parsed.env !== undefined) {
+    const problem = describeScriptEnvProblem(parsed.env);
+    if (problem) {
+      throw new FailureError(`Invalid flow file: \`env\` ${problem}`, {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    }
+  }
+
+  return parsed;
+}
+
+export function parseFlow(content: string): FlowFile {
+  const parsed = readFlowHead(content);
+  if (parsed === undefined) {
+    return { executionPrerequisite: "", steps: [] };
+  }
+
   const steps = parsed.steps.map((raw) => {
     if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
     return badEntry(raw, "step must be an object");
@@ -2820,6 +2952,7 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.env !== undefined ? { env: { ...(parsed.env as ScriptEnv) } } : {}),
     steps,
   };
   validateFlow(flow);
@@ -3077,6 +3210,10 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
   }
 }
 
+export async function flowEnvOnDisk(session: RecordingSession): Promise<ScriptEnv | undefined> {
+  return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
+}
+
 async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
@@ -3236,7 +3373,7 @@ function dropMovedWarnings(
 export async function appendStepToFlow(
   session: RecordingSession,
   step: FlowStep
-): Promise<{ savedTo: FlowSavedTo; stepCount: number }> {
+): Promise<{ savedTo: FlowSavedTo; stepCount: number; flowEnv?: ScriptEnv }> {
   // The session's OWN key, not a fresh resolution of it: the lock this append
   // takes and the identity {@link assertSessionStillLive} checks must be the
   // same one, or a key that moved under the session (a symlink repointed
@@ -3256,7 +3393,11 @@ export async function appendStepToFlow(
       // reading `session.flow.steps.length` after this returns would be racing a
       // concurrent same-key append, which can reassign `session.flow` between
       // the release here and that read.
-      return { savedTo: session.filePath, stepCount: session.flow.steps.length };
+      return {
+        savedTo: session.filePath,
+        stepCount: session.flow.steps.length,
+        ...(session.flow.env ? { flowEnv: session.flow.env } : {}),
+      };
     }
     session.flow.steps.push(step);
     try {
@@ -3265,6 +3406,7 @@ export async function appendStepToFlow(
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),
         stepCount: session.flow.steps.length,
+        ...(session.flow.env ? { flowEnv: session.flow.env } : {}),
       };
     } catch (err) {
       session.flow.steps.pop();

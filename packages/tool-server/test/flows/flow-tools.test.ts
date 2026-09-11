@@ -466,9 +466,36 @@ describe("a step the recorder refuses", () => {
     // The call ran, so that half stands — but the field the scan refused is the
     // hand-edited step's, and the wrap has to say so.
     expect(message).toContain("`keyboard` call ran");
-    expect(message).toContain("an existing flow step failed validation");
+    expect(message).toContain("something already in the flow file failed validation");
+    expect(message).toContain("it is not in this call");
     expect(message).toContain("Step 1 (`echo`)");
     expect(message).not.toContain("its step failed validation");
+  });
+
+  it("does not name a step when the refusal is about the file's own env", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "env-edited", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(flowsDirFor(tmpDir), "env-edited.yaml"),
+      `executionPrerequisite: ${PREREQ}\nenv: { X: "{{output:user.id}}" }\nsteps: []\n`
+    );
+
+    const err = await tool
+      .execute(
+        {},
+        { name: "env-edited", project_root: tmpDir, command: "keyboard", args: '{"text":"hi"}' }
+      )
+      .catch((e: unknown) => e as Error);
+
+    const message = (err as Error).message;
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "hi" });
+    expect(message).toContain("something already in the flow file failed validation");
+    expect(message).toContain("The flow's `env.X` uses unsupported template syntax");
+    expect(message).not.toContain("Fix the step named below");
   });
 
   // The other half of that claim: the tool's description tells an agent a

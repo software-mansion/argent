@@ -20,11 +20,15 @@ import {
   classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
+  flowEnvOnDisk,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type RecordedStepWarning,
   type RecordingSession,
+  type ScriptEnv,
 } from "./flow-utils";
+import { envNameKey } from "./script/flow-script-env";
 import {
   AWAIT_UI_ELEMENT_TOOL_ID,
   isUnmetUiWaitResult,
@@ -1101,9 +1105,7 @@ async function captureRunTarget(
       };
     }
 
-    // Parsing validates the sibling exists and is a well-formed flow; a failure
-    // falls through to keeping the raw step.
-    parseFlow(await fs.readFile(fragPath, "utf8"));
+    const fragmentEnv = parseFlow(await fs.readFile(fragPath, "utf8")).env;
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
@@ -1133,12 +1135,68 @@ async function captureRunTarget(
           `step would replay a different flow than the one that just ran`,
       };
     }
-    return { flow: `${name}.yaml` };
+    const dropped = envNamesInArgs(args.env);
+    const inherited = await inheritedEnvNames(session, fragmentEnv, dropped);
+    const many = inherited.length > 1;
+    const warnings = [
+      ...(dropped.length > 0
+        ? [
+            `a run: step takes no env, so the ${dropped.length > 1 ? "values" : "value"} this ` +
+              `call passed (${dropped.join(", ")}) ${dropped.length > 1 ? "are" : "is"} NOT part ` +
+              `of the recorded step and the replay runs without ` +
+              `${dropped.length > 1 ? "them" : "it"}. Write ${dropped.length > 1 ? "them" : "it"} ` +
+              `into ${name}.yaml's own env:, or — only for a name that fragment does not ` +
+              `itself declare, since a fragment's env: layers OVER the flow that runs it — ` +
+              `into this recording's, or keep the raw flow-execute step instead (recording ` +
+              `the call with a delayMs does that)`,
+          ]
+        : []),
+      ...(inherited.length > 0
+        ? [
+            `at replay the run: step passes ${inherited.join(", ")} from this recording's env: ` +
+              `to ${name}.yaml's scripts, but the live flow-execute call ran without ` +
+              `${many ? "them" : "it"}. To make the two match, declare ${many ? "them" : "it"} ` +
+              `in ${name}.yaml's own env:, or keep the raw flow-execute step (recording the ` +
+              `call with a delayMs does that)`,
+          ]
+        : []),
+    ];
+    return {
+      flow: `${name}.yaml`,
+      ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}),
+    };
   } catch (err) {
     return {
       warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
     };
   }
+}
+
+function runEnvWarning(
+  step: FlowStep,
+  warning: string | undefined
+): Omit<RecordedStepWarning, "step"> | undefined {
+  return step.kind === "run" && warning !== undefined ? { warning, kind: "env" } : undefined;
+}
+
+async function inheritedEnvNames(
+  session: RecordingSession,
+  fragmentEnv: ScriptEnv | undefined,
+  dropped: readonly string[]
+): Promise<string[]> {
+  let recordingEnv: ScriptEnv | undefined;
+  try {
+    recordingEnv = await flowEnvOnDisk(session);
+  } catch {
+    return [];
+  }
+  const layered = new Set([...Object.keys(fragmentEnv ?? {}), ...dropped].map(envNameKey));
+  return Object.keys(recordingEnv ?? {}).filter((name) => !layered.has(envNameKey(name)));
+}
+
+function envNamesInArgs(env: unknown): string[] {
+  if (env === null || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env);
 }
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
@@ -1334,6 +1392,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "launch", app: strippedArgs.bundleId as string };
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
+        warning = runTarget.warning;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
@@ -1352,13 +1411,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       try {
         ({ savedTo, stepCount } = await appendStepToFlow(session, step));
       } catch (err) {
-        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
+        const stage = getFailureSignal(err)?.failure_stage;
+        const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
+        if (stage !== "flow_output_reference" && !fromTheFile) throw err;
         const refused = err instanceof Error ? err.message : String(err);
-        // A host-mode append re-parses the file, so the scan that refuses an
-        // output reference sees the steps ALREADY there as well — and a
-        // mid-recording hand edit is a supported way for one of those to carry
-        // one. Blaming the just-run call for that step's field would send the
-        // author back over a call whose args were clean.
         throw wrapFailure(
           err,
           {
@@ -1367,11 +1423,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             failure_area: "tool_server",
             error_kind: "validation",
           },
-          holdsOutputReference(step)
+          !fromTheFile && holdsOutputReference(step)
             ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
                 `recorded. Check the call's changes before you retry. ${refused}`
-            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
-                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+            : `The \`${params.command}\` call ran, but something already in the flow file failed ` +
+                `validation. Fix what is named below — it is not in this call. Check the call's ` +
+                `changes before you retry. ${refused}`
         );
       }
 
@@ -1381,14 +1438,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // step's number and carrying the step itself, so a hand edit cannot pass
       // the verdict to whatever inherits that number (see
       // {@link RecordedStepWarning}).
-      //
-      // Only this warning is carried. The finish summary already shows the
-      // other two by rendering what was written: kept coordinates read as
-      // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
-      // A step that breaks on conversion renders like one that does not.
-      if (waitWarning) {
+      const carried = waitWarning ?? runEnvWarning(step, warning);
+      if (carried) {
         (session.stepWarnings ??= new Map()).set(stepCount, {
-          ...waitWarning,
+          ...carried,
           step: stepAnchor(step),
         });
       }

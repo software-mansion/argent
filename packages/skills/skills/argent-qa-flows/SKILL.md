@@ -48,7 +48,7 @@ Make repeated runs deterministic:
 A flow has two fixture mechanisms:
 
 - `run:` replays a separately recorded reset or seed flow.
-- `script:` runs requested local setup or cleanup. Record it with `flow-add-script` where it belongs in the walkthrough.
+- `script:` runs requested local setup or cleanup. Record it with `flow-add-script` where it belongs in the walkthrough. Put defaults in the flow's top-level `env` so `--env` can replace them for each run. Use `{{secret:NAME}}` for credentials. See [Environment values](../argent-create-flow/references/flow-yaml.md#environment-values).
 
 Ask before cleanup that creates or deletes meaningful user data outside the request.
 

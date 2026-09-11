@@ -1688,7 +1688,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(finished.message).toBe(
       'Finished recording "edited" flow (2 steps) — 1 warning raised during this recording is ' +
         "NOT in `summary`: a hand edit to the .yaml moved the step it judged, so which step it " +
-        "belongs to is no longer knowable — re-record that wait to see it again"
+        "belongs to is no longer knowable — re-record that step to see it again"
     );
   });
 

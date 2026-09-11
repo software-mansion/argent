@@ -318,13 +318,35 @@ describe("recording a script step", () => {
     expect((err as Error).message).toContain("Check the script's changes before you retry");
   });
 
-  it("blames the hand-edited step, not the script, when the re-parse refuses an earlier one", async () => {
-    await write("scripts/seed.mjs", `output.ok = true;`);
+  it("refuses a recording file that is gone, asking for a restart rather than a repair", async () => {
+    const marker = path.join(root, "gone.txt");
+    await start("erased");
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await fs.rm(flowPath("erased"));
+
+    const err = (await addScript("erased", "../../scripts/seed.mjs").catch(
+      (e: unknown) => e
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("was NOT run");
+    expect(err.message).toContain("is gone");
+    expect(err.message).toContain("Start the recording again with flow-start-recording");
+    await expect(fs.access(marker)).rejects.toThrow();
+  });
+
+  it("blames the hand-edited file, not the script, when the re-parse refuses it", async () => {
     await start("handedited");
-    await fs.writeFile(
-      flowPath("handedited"),
-      `steps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(flowPath("handedited"))},
+         'steps:\\n  - echo: "created {{output:user.id}}"\\n');
+       output.ok = true;`
     );
 
     const err = (await addScript("handedited", "../../scripts/seed.mjs").catch(
@@ -333,10 +355,37 @@ describe("recording a script step", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain("passed, but the step was not recorded");
-    expect(err.message).toContain("Fix the existing step named below");
+    expect(err.message).toContain("Fix what is named below");
+    expect(err.message).toContain("not in this script");
     expect(err.message).toContain(flowPath("handedited"));
     expect(err.message).toContain("Step 1 (`echo`)");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it("refuses a file that will not parse before it runs the script", async () => {
+    const marker = path.join(root, "seeded.txt");
+    await start("broken");
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await fs.writeFile(
+      flowPath("broken"),
+      `env:\n  PROBE_A: from-file\n  NODE_OPTIONS: --bogus\nsteps: []\n`,
+      "utf8"
+    );
+
+    const err = (await addScript("broken", "../../scripts/seed.mjs").catch(
+      (e: unknown) => e
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("was NOT run");
+    expect(err.message).toContain(flowPath("broken"));
+    expect(err.message).toContain("about the FILE, not about this script");
+    expect(err.message).toContain("NODE_OPTIONS");
+    await expect(fs.access(marker)).rejects.toThrow();
   });
 
   it("is never itself the step an output-reference refusal names", async () => {
@@ -418,6 +467,7 @@ describe("recording a script step", () => {
 
   it("needs no device of any kind", async () => {
     expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
+      "env",
       "name",
       "path",
       "project_root",
@@ -640,9 +690,14 @@ describe("a script that did not pass records nothing", () => {
       {},
       { name: "counted", project_root: root, message: "recorded" }
     );
-    await fs.appendFile(flowPath("counted"), "  - echo: hand-added\n  - bogus: [\n", "utf8");
+    await write(
+      "scripts/break-then-fail.mjs",
+      `import * as fs from "node:fs";
+       fs.appendFileSync(${JSON.stringify(flowPath("counted"))}, "  - bogus: [\\n");
+       throw new Error("seed failed");`
+    );
 
-    const failed = await addScript("counted", "../../scripts/gone.mjs");
+    const failed = await addScript("counted", "../../scripts/break-then-fail.mjs");
 
     expect(failed.status).toBe("fail");
     expect(failed.stepCount).toBe(1);

@@ -131,6 +131,8 @@ function streamErrorMessage(err: unknown): string {
   if (err instanceof ToolNotFoundError) return err.message;
   const depErr = findDependencyMissing(err);
   if (depErr) return depErr.message;
+  const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
+  if (invalidInputErr) return invalidInputErr.message;
   const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
   if (unsupportedErr) return unsupportedErr.message;
   const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

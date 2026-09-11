@@ -347,3 +347,38 @@ describe("an exchange directory that could not be filled", () => {
     }
   }, 30_000);
 });
+
+describe("an exchange directory when the step is cancelled", () => {
+  it("removes it", async () => {
+    const ws = createScriptWorkspace("bash-cancel");
+    const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-cancel-root-"));
+    const listing = (): string[] =>
+      fs.readdirSync(exchangeRoot).filter((entry) => entry.startsWith(exchangeDirPrefix()));
+    try {
+      const script = ws.write("sleep.sh", "sleep 30\n");
+      const controller = new AbortController();
+      const executor = new FlowScriptExecutor({
+        concurrency: 4,
+        maxTimeoutMs: 60_000,
+        exchangeRoot,
+      });
+      const run = executor.execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: controller.signal,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const during = listing();
+      controller.abort();
+      const result = await run;
+
+      expect(during).toHaveLength(1);
+      expect(result.failure?.kind).toBe("cancelled");
+      expect(listing()).toEqual([]);
+    } finally {
+      ws.cleanup();
+      fs.rmSync(exchangeRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
