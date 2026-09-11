@@ -44,13 +44,6 @@ The agent launches, restarts and reinstalls apps, opens URLs, reads the accessib
 
 A web URL opens in Safari, not in the app that owns the link. The agent names the app to hand it the URL. For any other URL scheme, the agent names the app that receives the URL.
 
-Some simulator capabilities do not exist on hardware. Each one fails with a `not supported on ios device` message. The alternatives:
-
-- Two-finger gestures such as pinch and rotate are not possible. The agent drives the zoom controls of the app instead.
-- The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
-- The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
-- JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only.
-
 ## Troubleshooting
 
 | Symptom                                           | Action                                                                                               |
@@ -63,6 +56,17 @@ Some simulator capabilities do not exist on hardware. Each one fails with a `not
 | The runner exits twice for the same app           | The current screen of the app is likely crashing the runner. Restart the app and retry.              |
 | The runner stops launching after about a week     | The free-team signature expired. Retry: the next interaction rebuilds and re-signs the runner.       |
 
-## In the device list
+## Limits
+
+Each tool that does not exist on hardware fails with a `not supported on ios device` message. The limits on a physical device:
+
+- Argent drives iPhones only. Argent does not show iPads in the device list.
+- Argent drives the device over a USB cable only. Argent does not use Wi-Fi.
+- Two-finger gestures such as pinch and rotate are not possible. The agent uses the zoom controls of the app instead.
+- The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
+- The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
+- The agent types text, Enter and Backspace only. Other named keys are not available.
+- The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
+- JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only.
 
 The device appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.

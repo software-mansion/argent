@@ -2373,14 +2373,15 @@ describe("flow composition (run:)", () => {
     // must fail rather than let selectors silently fall back to the AX tree.
     // (An unresolvable service fails fast; a resolvable-but-never-connected
     // one hits the same guard after the connect timeout.)
+    const resolveService = vi.fn(async () => {
+      throw new Error("native-devtools unavailable");
+    });
     const registry = {
       invokeTool: vi.fn(async (id: string) =>
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => {
-        throw new Error("native-devtools unavailable");
-      }),
+      resolveService,
     } as unknown as Registry;
 
     const result = asRun(
@@ -2401,6 +2402,122 @@ describe("flow composition (run:)", () => {
     // and the step's reason is the only place any of them surfaces.
     expect(result.steps[0].reason).toContain("native-devtools unavailable");
     expect(result.ok).toBe(false);
+    expect(resolveService).toHaveBeenCalled();
+  });
+
+  it("waits out the gate for a com.apple.* launch, then withholds the verdict", async () => {
+    // The gate ties the launched bundle to the app a later selector step
+    // auto-targets, so the wait runs for every bundle (see `treeSourceGate`).
+    // Only the verdict is withheld for `com.apple.*`: the first selector read
+    // reports the missing hierarchy instead.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        // The bundle prefix match is case-insensitive.
+        { kind: "launch", app: "com.APPLE.Preferences" },
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
+    // The wait ran: a per-bundle skip would never touch the service.
+    expect(resolveService).toHaveBeenCalled();
+    // The pass is clean: no connection failure for a hierarchy the gate cannot
+    // wait for.
+    expect(result.steps[0].reason ?? "").not.toMatch(/could not connect to native devtools/i);
+    expect(result.steps[0].reason ?? "").not.toMatch(/stale or duplicate argent server/i);
+    // The launch spends the post-launch settle plus the full 15s
+    // NATIVE_DEVTOOLS_CONNECT_BUDGET_MS, so the 30s budget covers both on a
+    // loaded host.
+  }, 30000);
+
+  it("runs a coordinate-only flow green against an app that never connects", async () => {
+    // A raw `tool: restart-app` step dispatches through the registry, not
+    // `runLaunch`, so it never reaches `treeSourceGate`. Point taps and `tool:`
+    // steps resolve no selectors.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "restart-app", args: { bundleId: "com.apple.Preferences" } },
+        {
+          kind: "tool",
+          name: "await-ui-element",
+          args: { condition: "visible", selector: { text: "General" } },
+        },
+        { kind: "tap", x: 0.5, y: 0.35 },
+      ],
+    });
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "tool:pass",
+      "tool:pass",
+      "tap:pass",
+    ]);
+    expect(result.ok).toBe(true);
+    // No step gates on the connection this flow never gets. A gesture without a
+    // selector still settles the screen first, so the tap goes out unsettled and
+    // warns.
+    expect(result.steps[2].warning).toContain("without settling the screen");
+  });
+
+  it("passes the gate for a com.apple.* app that does connect", async () => {
+    // Argent treats `com.apple.*` as non-injectable, but simulator system apps
+    // do connect after a restart-app (measured on iOS 18.3 and 26.5).
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.apple.Preferences" },
+        { kind: "echo", message: "runs once the system app has connected" },
+      ],
+    });
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => ({ isConnected: () => true })),
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
   });
 
   // Argent refuses an Apple system app a flow tree, so its hierarchy never
@@ -2718,8 +2835,12 @@ describe("flow composition (run:)", () => {
       );
 
       const reason = result.steps[2].reason ?? "";
-      expect(reason).toMatch(/Apple system app/);
-      expect(reason).not.toMatch(/Launch or restart the app first/);
+      // Both reasons say "Apple system app", so that phrase no longer separates
+      // the two paths. Only the launched-id diagnosis NAMES the bundle: it is
+      // handed the id the tool step preserved. Drop that id and the read falls
+      // through to auto-targeting, whose no-connection text names no app.
+      expect(reason).toMatch(/com\.apple\.Preferences is an Apple system app/);
+      expect(reason).not.toMatch(/no app is connected to native devtools/);
     }
   );
 
@@ -2743,7 +2864,12 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.steps[2].reason ?? "").toMatch(/Launch or restart the app first/);
+    // A flow selector step cannot name a bundleId, so `resolveNativeTargetApp`'s
+    // own "Launch or restart the app first" advice is dropped. The auto-target
+    // reason that replaces it names no bundle and reports nothing is connected.
+    const reason = result.steps[2].reason ?? "";
+    expect(reason).toMatch(/no app is connected to native devtools/);
+    expect(reason).not.toMatch(/platform binary with library validation/);
   });
 
   // The measured half says what is wrong with the app; without this half a flow

@@ -1,4 +1,5 @@
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { InvalidToolInputError } from "../../../utils/capability";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, isTerminalAdbError, shellQuote } from "../../../utils/adb";
 import type {
@@ -136,7 +137,7 @@ export const androidImpl: PlatformImpl<
 
     const permissions = permissionsFor(permission, action);
     if (permissions.length === 0) {
-      throw new FailureError(
+      throw new InvalidToolInputError(
         `Permission '${permission}' has no Android runtime-permission equivalent, so there is nothing to ${action}.`,
         {
           error_code: FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED,

@@ -1635,7 +1635,10 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
   return true;
 }
 
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+
+export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
+export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
 
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 

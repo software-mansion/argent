@@ -2,11 +2,14 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
+import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
 
-// The flows directory's one platform set — LAUNCH_PLATFORMS in flow-utils,
-// reached through WhenPlatform.
-export type FlowPlatform = WhenPlatform;
+/**
+ * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
+ * Wider than the authoring set by `ios-remote`: a remote simulator is a device
+ * a run can select, never something a flow file names.
+ */
+export type FlowPlatform = SelectablePlatform;
 
 /**
  * Arg names that mean "the device to act on". Stripped from every recorded step
@@ -64,7 +67,8 @@ interface RawDevice {
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
+  // A remote row carries `udid` too (the `remote:`-prefixed id), not `serial`.
+  if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }
@@ -77,6 +81,11 @@ function isBooted(d: RawDevice): boolean {
       // hardware because a phone happens to be on the cable, and a cabled
       // phone must not turn a lone booted simulator into an ambiguity. Name
       // the phone with `device` to run on it.
+      return d.state === "Booted";
+    case "ios-remote":
+      // A remote simulator reports the same simctl states as a local one, and
+      // carries none of the physical-device ambiguity above: `ios-remote` is
+      // always kind "simulator" (utils/device-info.ts).
       return d.state === "Booted";
     case "android":
       return d.state === "device";
