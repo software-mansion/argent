@@ -1188,7 +1188,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         .map((rel) => path.join(FLOWS_DIR, rel));
       if (paths.length === 0) console.log("No flows found in .argent/flows");
       else console.log(paths.join("\n"));
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        // Unreadable is not absent: reported as absence, a caller reads success
+        // and concludes the project has no flows.
+        console.error(`Could not read flow directory: ${dir}`);
+        return exitAfterFlush(2);
+      }
       console.log("No .argent/flows directory in the current working directory.");
     }
     return;
