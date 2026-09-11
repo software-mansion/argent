@@ -88,7 +88,14 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
   const proc = spawn(
     adbPath,
     ["-s", serial, "shell", "am", "instrument", "-w", manifest.instrumentationRunner],
-    { stdio: ["ignore", "pipe", "pipe"] }
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      // No-op off Windows. On Windows this is the adb spawn behind every
+      // Android `describe` call (this helper backs the accessibility tree) —
+      // without it, each one pops its own console window. See utils/adb.ts
+      // for the same fix on the rest of the adb call sites.
+      windowsHide: true,
+    }
   );
 
   return new Promise<SpawnedHelper>((resolve, reject) => {

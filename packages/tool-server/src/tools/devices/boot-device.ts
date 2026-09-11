@@ -641,6 +641,10 @@ async function attemptBoot(params: {
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
     stdio,
+    // `detached: true` on Windows gives the child its own console window
+    // unless this is also set — without it, every boot pops an extra cmd
+    // window alongside the emulator's own GUI window. No-op off Windows.
+    windowsHide: true,
   });
   child.unref();
   // The child holds its own handle for the log fd; close the parent's copy so a
