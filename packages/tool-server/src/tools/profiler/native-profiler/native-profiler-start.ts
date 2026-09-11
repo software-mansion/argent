@@ -61,6 +61,10 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
+  // A cold-start detect + attach retry can outlive the MCP client's 30s fetch
+  // cap; without this the client aborts and REPLAYS the start, attaching a
+  // second xctrace to the same device (native-profiler-stop already declares it).
+  longRunning: true,
   interaction: {
     startedMsg: () => "Starting native profiler",
     completedMsg: () => "Started native profiler",

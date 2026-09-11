@@ -384,6 +384,9 @@ export function start(): void {
         ...(meta.platform ? { platform: meta.platform } : {}),
         ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
         ...(meta.invalid_params?.length ? { invalid_params: meta.invalid_params } : {}),
+        ...(meta.invalid_param_issues?.length
+          ? { invalid_param_issues: meta.invalid_param_issues }
+          : {}),
         duration_ms: durationMs,
         ...signal,
         ...aiTelemetryFromMeta(meta),
