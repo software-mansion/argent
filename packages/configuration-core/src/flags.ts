@@ -63,6 +63,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
+    name: "run-script",
+    description:
+      "The run-script tool — execute an agent-authored JavaScript program in a separate, disposable Node.js process to drive the device through multi-step interaction with conditionals, loops and waits in a single call. Off by default: it runs model-written code locally in a child process, so it is opt-in.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

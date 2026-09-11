@@ -77,7 +77,7 @@ Decision order:
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
-- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
+- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. When the steps instead need conditionals, loops, retries or waits driven by what is on screen, and the `run-script` flag is enabled (`argent enable run-script`), use `run-script` to author that decision loop as one JavaScript program. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
   naming the devices this session actually used. One tool-server is shared by every other agent using this
   argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
