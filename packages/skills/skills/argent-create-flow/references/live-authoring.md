@@ -34,9 +34,9 @@ A recorded `flow-execute` has two names. The top-level `name` identifies the rec
 
 A `run:` step omits the call's `env` and inherits the recording's environment at replay. If the recorder warns about different values, put the required values in the sibling flow's top-level `env`. To keep the raw `flow-execute` call and its `env`, record with `delayMs: 0`.
 
-When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, read its message to determine whether the script ran. Before a retry, inspect any changes the script could have made.
+When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
 
-`flow-add-script` saves its `env` as the script step's `env`. These values replace the flow's defaults during recording and take priority over run values during replay. Use `{{secret:NAME}}` for credentials. See [Environment values](flow-yaml.md#environment-values).
+`flow-add-script` saves its `env` on the step, overriding even replay's `--env`. Put defaults that must vary per run in top-level `env` after recording. See [Environment values](flow-yaml.md#environment-values).
 
 If the call reports that the flow's `env` changed, the step is already recorded. Remove that step before you record it again.
 

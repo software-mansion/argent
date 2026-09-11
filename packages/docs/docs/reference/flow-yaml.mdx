@@ -286,7 +286,7 @@ The value is always a map. Parsing rejects a bare path, such as `script: scripts
 | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `path`    | yes      | An `.mjs` or `.sh` file, relative to the flow file that holds the step. Use a lowercase extension. Match the letter case on disk           |
 | `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                   |
-| `env`     | no       | Environment values for this script. Put `env` inside the `script` map. See [Environment values](#environment-values) |
+| `env`     | no       | Environment values for this script. See [Environment values](#environment-values)                                                           |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -297,7 +297,7 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The Node, npm, Android, Java and Apple toolchain names
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
-Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent by default. Use an `env` map for additional values. To inherit a tool-server variable, add its name to `scripts.env.allow`. See [Environment values](#environment-values).
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent by default. Supply additional [environment values](#environment-values) through `env` or `scripts.env.allow`.
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
@@ -310,8 +310,6 @@ The script log contains stdout and stderr from the script and its commands. Arge
 - The output of `argent flow run`, below the step.
 
 If log collection stops before the commands finish, the step report includes a note.
-
-Argent hides resolved secrets in script logs. See [Secrets in an `env` value](#secrets-in-an-env-value).
 
 A failed step stops the flow. The verdict names the side that caused the failure.
 
@@ -383,9 +381,7 @@ On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 
 ## Environment values
 
-Use `env` to supply script inputs. An `.mjs` script reads `process.env.NAME`; a `.sh` script reads `$NAME`.
-
-Put defaults in the flow file's top-level `env`. Put values for one script inside its `script` map:
+Use top-level `env` for script defaults and `script.env` for one step. Read values with `process.env.NAME` in `.mjs` or `$NAME` in `.sh`:
 
 ```yaml
 env:
@@ -398,51 +394,23 @@ steps:
         USER_TYPE: premium
 ```
 
-To change a default for one run, use `--env`:
+Override defaults with `argent flow run <name> --env NAME=value` or `flow-execute`'s `env` parameter. Precedence, highest first: script step, run values, nested flow defaults, parent defaults, allowed host variables.
 
-```bash
-argent flow run checkout --env API_URL=https://staging.example.com
-```
+A `run:` inherits values; its defaults apply only inside that flow. A raw `tool: flow-execute` starts a separate run: pass values in `args.env`.
 
-Argent applies values in this order. Each source replaces matching names from earlier sources:
+Use string values; quote numbers and booleans. Names must match `[A-Za-z_][A-Za-z0-9_]*`; on Windows, avoid names that differ only in case. Reserved names and script output references are rejected.
 
-1. The tool-server's allowed environment variables, including names in `scripts.env.allow`.
-2. The root flow's top-level `env`.
-3. Each nested flow's `env`, from the outermost flow to the innermost flow.
-4. The run's `--env` values or the `flow-execute` `env` parameter.
-5. The script step's `env`.
-
-Thus, `--env` replaces flow defaults, but a script step's `env` takes priority over `--env`.
-
-A `run:` step inherits environment values. Its flow's defaults apply only inside that flow. A `tool: flow-execute` step starts a separate run. Pass its required values in `args.env`.
-
-Use a plain YAML map with string values. Quote numbers and boolean values. Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. On Windows, do not use two names that differ only in letter case.
-
-Argent rejects these reserved names:
-
-- `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`
-- `ELECTRON_RUN_AS_NODE`, `ARGENT_FLOW_SCRIPT_RUNNER`, `ARGENT_OUTPUT`, `__proto__`
-- `npm_config_node-options`, `npm_config_userconfig`, `npm_config_globalconfig`, including alternative npm spellings
-
-Values cannot contain NUL characters or unpaired surrogates. An `env` value cannot reference a script's output.
-
-Recording tools do not create the top-level `env`. Add it to the YAML after recording. Before you record again, save any defaults: `flow-start-recording` clears the whole file.
+Add top-level `env` after recording. Save it before re-recording: `flow-start-recording` clears the whole file.
 
 ### Secrets in an `env` value
 
-Use `{{secret:NAME}}` for a credential. Keep `secret` lowercase and omit spaces inside the placeholder. Argent reads the value on the tool-server's machine from the sources in [Secrets](/docs/reference/configuration#secrets).
+Use `{{secret:NAME}}` for credentials; configure them in the tool-server's [secret sources](/docs/reference/configuration#secrets). Missing secrets prevent the script from starting.
 
-A missing secret fails the script step before the script runs. A missing secret in `--env` or the `flow-execute` `env` parameter prevents the run from starting.
+Argent redacts resolved secrets in script failures and logs, but not every encoding. Plaintext `env` values and returned output documents remain visible. Do not put credentials in logs or output documents.
 
-Argent hides resolved secrets in script failure messages, stack traces and logs. Redaction does not cover every encoding of a secret. Do not print credentials. Other `env` values remain visible in flow files, reports and tool logs.
+### Inheriting host variables
 
-Argent does not redact the output document that a script returns. Do not put credentials or other sensitive values in that document.
-
-### The environment of the tool-server
-
-The tool-server keeps the environment from its start, including `PATH`. A later shell `export` does not change it. `scripts.env.allow` adds variable names to the allowlist; it does not update their values.
-
-If a script reports `command not found`, supply the required `PATH` through `env` or restart the tool-server with that `PATH`. Changes to secrets files apply without a restart.
+[`scripts.env.allow`](/docs/reference/configuration#available-keys) adds names inherited from the tool-server. A later shell `export` does not update it. For a missing value or command, pass the value or `PATH` through `env`, or restart the tool-server with the required environment.
 
 ## The `argent flow` command
 

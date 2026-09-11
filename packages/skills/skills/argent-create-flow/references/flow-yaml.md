@@ -238,9 +238,6 @@ Use a local `.mjs` or `.sh` script only when the user requests one. Record it wi
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
-- script:
-    path: ../../scripts/create-user.mjs
-    env: { API_KEY: "{{secret:API_KEY}}", USER_TYPE: premium }
 ```
 
 An `.mjs` file runs under Node.js. A `.sh` file runs under Bash.
@@ -249,19 +246,19 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 - **`path`** is relative to the flow file that contains the step. Use the lowercase extension `.mjs` or `.sh`. Match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
-- **`env`** supplies values for this script. Put the map inside `script:`. See [Environment values](#environment-values).
+- **`env`** supplies [environment values](#environment-values) for this script.
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
 Argent uses `project_root` as the working directory of the script.
 
-If a script fails, check its changes before you retry. For an environment error, correct the name or secret that the error identifies.
+If a script fails, check its changes before you retry.
 
 For Bash scripts, a nonzero exit code fails the step. Write failure explanations to stderr.
 
 ## Environment values
 
-Use top-level `env` for script defaults. Put values for one script inside its `script` map:
+Use top-level `env` for script defaults and `script.env` for one step:
 
 ```yaml
 env:
@@ -274,19 +271,19 @@ steps:
         USER_TYPE: premium
 ```
 
-To replace defaults for a run, use `flow-execute`'s `env` parameter or `argent flow run --env NAME=value`. A script step's `env` takes priority over run values.
+Read values with `process.env.NAME` in `.mjs` or `$NAME` in `.sh`. Override defaults with `flow-execute`'s `env` or `argent flow run <name> --env NAME=value`. Precedence, highest first: script step, run values, nested flow defaults, parent defaults, allowed host variables.
 
-A `run:` step inherits environment values. Its flow's own defaults replace parent defaults inside that flow. A raw `tool: flow-execute` starts a separate run: pass its values in `args.env`.
+A `run:` inherits values; its defaults apply only inside that flow. A raw `tool: flow-execute` starts a separate run: pass values in `args.env`.
 
-Use string values; quote numbers and booleans. Use variable names that match `[A-Za-z_][A-Za-z0-9_]*`. If Argent rejects a reserved name, use a name for your script's input. On Windows, avoid names that differ only in letter case. Do not reference script output in `env`.
+Use string values; quote numbers and booleans. Script output references are unsupported in `env`.
 
-Use `{{secret:NAME}}` for credentials, with lowercase `secret` and no spaces. If a secret is missing, ask the user to configure its name. Do not ask for the secret value. Argent hides resolved secrets in script failure text and logs. Plaintext values remain visible. Do not put credentials in script logs or returned output documents.
+Use `{{secret:NAME}}` for credentials. Ask the user to configure missing secrets by name, never to provide their values. Plaintext `env` values and returned output documents are not redacted. Do not put credentials in logs or output documents.
 
-Scripts inherit allowed variables from the tool-server's environment at startup. `scripts.env.allow` adds names to that allowlist. A later shell `export` does not update the tool-server. For a missing value or command, pass the value or `PATH` through `env`, or restart the tool-server.
+`scripts.env.allow` adds names inherited from the tool-server. A later shell `export` does not update it: pass fresh values (including `PATH`) through `env` or restart the tool-server.
 
 ## Snapshots and standalone runs
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--env NAME=value] [--json]` runs without an LLM and exits non-zero on failure. Repeat `--env` for each variable. Quote values with spaces, for example `--env "LABEL=Test account"`.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--env NAME=value] [--json]` runs without an LLM and exits non-zero on failure. Repeat `--env` for each variable; quote values with spaces: `--env "LABEL=Test account"`.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
