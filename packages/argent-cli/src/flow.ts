@@ -205,6 +205,13 @@ export function parseRunArgs(argv: string[]): {
     json: options.json === true,
     jsonStream: options["json-stream"] === true,
   };
+  // The shared parser leaves a separately supplied "" for the command to judge
+  // (`--device "$UDID"` with UDID unset). Every read of these three is truthy-
+  // guarded, so an empty one is dropped and the run falls back to device
+  // auto-detection, against whatever happens to be booted.
+  for (const name of ["device", "platform", "output"] as const) {
+    if (options[name] === "") throw new FlagParseException(`--${name} requires a value`);
+  }
   if (positionals[0] !== undefined) out.flowRef = positionals[0];
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
