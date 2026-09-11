@@ -259,7 +259,7 @@ describe("argent config — a rejected value says what to type instead", () => {
     expect(() => config(["set", "scripts.bash", "bin/bash"])).toThrow(ExitError);
 
     const err = errors();
-    expect(err).toContain("expected an absolute path to a bash executable");
+    expect(err).toContain("expected an absolute path to Bash on the tool-server host");
     expect(err).not.toContain("Did you mean");
   });
 
