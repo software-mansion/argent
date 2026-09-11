@@ -3,10 +3,12 @@
  * `flow-script-runner.mjs` child it forks: an `execute` request out, then
  * `started` and one terminal response back.
  *
- * Script logs never travel here — they ride stdout/stderr, so that console text
- * and any subprocess the script starts land in one stream in written order, and
- * so that a limit can apply while draining rather than after a whole message
- * has been serialized.
+ * What the script PRINTS is not among them, and putting it here would not be a
+ * transport decision to make: the executor drains stdout and stderr precisely
+ * so that console text never reaches the report, because nothing in a flow file
+ * declares what a script prints is safe to forward. A script with something to
+ * say has to `throw` it or return it in `output` — both of which travel here,
+ * and both of which are bounded by the limits below.
  */
 
 export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;

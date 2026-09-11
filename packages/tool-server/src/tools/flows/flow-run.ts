@@ -37,7 +37,6 @@ import {
   type Launch,
   SELECTABLE_PLATFORMS,
 } from "./flow-utils";
-import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
@@ -234,8 +233,6 @@ export interface StepReport {
   snapshotKey?: string;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
-  scriptLog?: string;
-  scriptLogTruncated?: boolean;
   /**
    * Nesting depth for display: omitted at top level, +1 inside each nesting
    * step's expanded steps. The report is a flat list with no block-end marker,
@@ -972,7 +969,6 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   attachedAppPath?: string;
   projectRoot: string;
-  scriptLogBudget: FlowScriptLogBudget;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1385,7 +1381,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
         chromiumLaunched: false,
         snapshotApps: new Map(),
         projectRoot: params.project_root,
-        scriptLogBudget: createScriptLogBudget(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -2238,7 +2233,7 @@ async function execRunStep(
   );
 }
 
-type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
+type ScriptStepOutcome = Pick<StepReport, "status" | "reason">;
 
 /**
  * A `script` step is the one step whose `reason` is written by something other
@@ -2278,7 +2273,6 @@ async function runScriptStep(
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
-    logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });
   return outcome.reason === undefined

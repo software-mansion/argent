@@ -98,38 +98,19 @@ export function resolveSecretPlaceholders(
  * Zero-length values are skipped: replacing an empty string would corrupt the
  * text rather than redact anything.
  *
- * Callers that scrub a *stream* must scrub before any truncation and must hold
- * back a chunk tail across chunk boundaries, since a whole-value match sees
- * neither half of a value split across two writes — see
- * `flow-script-executor.ts`.
+ * Whole texts only: what a caller passes is already finished, so there is no
+ * half of a value still to arrive and the walk settles every position it
+ * passes. A text that was CUT is the other case, and this function cannot cover
+ * it — a value split by the cut leaves a prefix that a whole-value match never
+ * finds. A failure message is cut, by the child that has no secret list, so
+ * `redactTruncated` in `flow-script-executor.ts` drops that prefix afterwards.
  */
 export function scrubSecretValues(
   text: string,
   secrets: ReadonlyArray<{ name: string; value: string }>
 ): string {
-  return scrubSecretChunk(text, secrets, true).emit;
-}
-
-/**
- * {@link scrubSecretValues} over one chunk of a stream, holding back the tail a
- * later chunk could still complete into a value. `final` releases everything.
- *
- * The chunk ends at the first position where a value could still begin: past
- * that position no replacement is settled, and releasing further would commit
- * either half of a value split across the cut, or a shorter value where the
- * longer one containing it had not arrived yet.
- */
-export function scrubSecretChunk(
-  text: string,
-  secrets: ReadonlyArray<{ name: string; value: string }>,
-  final: boolean
-): {
-  emit: string;
-  held: number;
-} {
   const ordered = orderedSecrets(secrets);
-  if (ordered.length === 0) return { emit: text, held: 0 };
-  const longestValue = ordered[0].value.length;
+  if (ordered.length === 0) return text;
   const names = new Set(ordered.map((secret) => secret.name));
   const longestName = Math.max(...ordered.map((secret) => secret.name.length));
   let out = "";
@@ -143,19 +124,13 @@ export function scrubSecretChunk(
     // Only while the span really is a marker, though. A value that starts
     // inside it and reaches past its end belongs to text that merely looks like
     // one — a script echoing an unresolved `{{secret:NAME}}` — and jumping the
-    // span would leave that value in plaintext, here and in the whole-text pass
-    // that skips by this same rule. A marker left nested is the lesser fault.
+    // span would leave that value in plaintext. A marker left nested is the
+    // lesser fault.
     const marker = markerLengthAt(text, at, names, longestName);
     if (marker > 0 && !valueLeavesMarker(text, at, at + marker, ordered)) {
       at += marker;
       continue;
     }
-    // Ahead of the match, because a value that fits in what is left is not
-    // proof that it is the value there: one value can be a prefix of another —
-    // `sk-` of `sk-live-…` — and replacing the short one at a position the long
-    // one also starts at settles it, leaving the long one's remainder to be
-    // released in plaintext by the next chunk.
-    if (!final && text.length - at < longestValue && beginsAValue(text, at, ordered)) break;
     // Longest value first: one value can contain another — a host inside a URL
     // that is itself a secret — and taking the shorter one would leave the rest
     // of the longer one in the text.
@@ -168,10 +143,7 @@ export function scrubSecretChunk(
     }
     at += 1;
   }
-  return {
-    emit: copied === 0 ? text.slice(0, at) : out + text.slice(copied, at),
-    held: text.length - at,
-  };
+  return copied === 0 ? text : out + text.slice(copied);
 }
 
 /**
@@ -195,15 +167,6 @@ function valueLeavesMarker(
     }
   }
   return false;
-}
-
-function beginsAValue(
-  text: string,
-  at: number,
-  ordered: ReadonlyArray<{ value: string }>
-): boolean {
-  const rest = text.slice(at);
-  return ordered.some(({ value }) => value.length > rest.length && value.startsWith(rest));
 }
 
 function orderedSecrets(
