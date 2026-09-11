@@ -581,22 +581,25 @@ export class FlowScriptExecutor {
         //
         // `env` is the channel this branch adds, so it is also the first thing
         // that can make an environment big enough to hit this.
+        //
+        // Redacted either way: a refusal quotes what the candidate wrote to
+        // stderr, and the candidate ran under this step's resolved `env`.
         return emptyResult(
           {
             kind: "spawn",
-            message: /\bE2BIG\b/.test(found.problem)
-              ? redactBounded(
-                  spawnFailureMessage(new Error("spawn E2BIG"), env),
-                  request.secrets ?? [],
-                  SCRIPT_MAX_FAILURE_MESSAGE_CHARS
-                )
-              : found.problem,
+            message: redactBounded(
+              /\bE2BIG\b/.test(found.problem)
+                ? spawnFailureMessage(new Error("spawn E2BIG"), env)
+                : found.problem,
+              request.secrets ?? [],
+              SCRIPT_MAX_FAILURE_MESSAGE_CHARS
+            ),
           },
           { notes, durationMs: Date.now() - startedAt }
         );
       }
       interpreterPath = found.path;
-      if (found.note) notes.push(found.note);
+      if (found.note) notes.push(scrubScriptText(found.note, request.secrets ?? []));
       try {
         exchange = createExchange(
           this.options.exchangeRoot ?? os.tmpdir(),

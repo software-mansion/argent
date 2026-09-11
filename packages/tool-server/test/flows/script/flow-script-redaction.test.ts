@@ -44,6 +44,38 @@ function bashAtPathOfLength(bash: string, chars: number): string {
   return link;
 }
 
+/** A `bash` first on PATH, under a HOME with no `scripts.bash`, so the search finds it. */
+async function withSearchPathFirst<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-redaction-home-"));
+  const real = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    PATH: process.env.PATH,
+  };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.PATH = `${dir}${path.delimiter}${real.PATH ?? ""}`;
+  try {
+    return await body();
+  } finally {
+    for (const [name, previous] of Object.entries(real)) {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+/** A candidate named `bash` that prints no version, and quotes `$name` on stderr. */
+function shimQuoting(name: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-shim-"));
+  longRoots.push(dir);
+  const shim = path.join(dir, "bash");
+  fs.writeFileSync(shim, `#!/bin/sh\necho "shim: no bash selected for $${name}" >&2\nexit 1\n`);
+  fs.chmodSync(shim, 0o755);
+  return shim;
+}
+
 async function withPinnedBash<T>(bash: string, body: () => Promise<T>): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-redaction-home-"));
   const real = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -299,6 +331,60 @@ describe("flow script executor — redaction of a bash step", () => {
       for (let n = SECRET.value.length; n > 3; n -= 1) {
         expect(message).not.toContain(SECRET.value.slice(0, n));
       }
+    },
+    30_000
+  );
+
+  // The version probe runs each candidate under the step's resolved `env` and
+  // quotes what a refused one wrote to stderr.
+  it.skipIf(process.platform === "win32")(
+    "replaces a secret a refused scripts.bash wrote to stderr, in the refusal",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("never.sh", "exit 0");
+      const result = await withPinnedBash(shimQuoting("API_KEY"), () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          env: { API_KEY: SECRET.value },
+          secrets: [SECRET],
+        })
+      );
+
+      const message = result.failure?.message ?? "";
+      expect(result.failure?.kind).toBe("spawn");
+      expect(message).toContain(
+        "(it wrote to stderr: shim: no bash selected for {{secret:API_KEY}})"
+      );
+      expect(message).not.toContain(SECRET.value);
+    },
+    30_000
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "replaces a secret a refused bash on PATH wrote to stderr, in the note of the step that ran",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("ran.sh", "exit 0");
+      const shim = shimQuoting("API_KEY");
+      const result = await withSearchPathFirst(path.dirname(shim), () =>
+        executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          env: { API_KEY: SECRET.value },
+          secrets: [SECRET],
+        })
+      );
+
+      const notes = result.notes.join(" ");
+      expect(result.ok).toBe(true);
+      expect(notes).toContain(`${shim} is not a bash`);
+      expect(notes).toContain(
+        "(it wrote to stderr: shim: no bash selected for {{secret:API_KEY}})"
+      );
+      expect(notes).not.toContain(SECRET.value);
     },
     30_000
   );
