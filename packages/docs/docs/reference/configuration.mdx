@@ -40,20 +40,22 @@ argent config get ios.additionalDeviceSets
 | `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                              |
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                       |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                           |
-| `scripts.env.allow`        | project, global | union            | Extra environment names a flow `script` process inherits from the tool-server, on top of the built-in allowlist. An array of names                          |
+| `scripts.env.allow`        | project, global | union            | Additional environment variable names that scripts read from the tool-server. Use an array of names                          |
 | `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that a flow `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100` |
 | `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, for `.mjs` flow scripts. Default `512`. Argent refuses a value below `32`. This limit does not apply to Bash                        |
 | `scripts.bash`             | global          | global wins      | The absolute path to Bash for `.sh` flow scripts. If unset, Argent selects Bash automatically. See [Bash scripts](/docs/reference/flow-yaml#bash-scripts)   |
 
 Argent reads `scripts.maxTimeoutMs`, `scripts.heapLimitMb` and `scripts.bash` from the global file only. A project file cannot raise the limits that one script step runs under. Each developer can set `scripts.bash` for their machine.
 
-Argent reads `scripts.env.allow` from both files, because it names a project input rather than a limit on the host. Argent resolves the project file from the `project_root` of the run, not from the working directory of the tool-server. The working directory of the tool-server is whatever started it, usually your editor, and often `/` or your home directory. So the config comes from the project you ran against, even for a flow kept elsewhere, as in `argent flow run ~/shared-flows/checkout.yaml`.
+Use `scripts.env.allow` to give scripts access to additional variables from the tool-server's environment:
 
-Argent ignores an entry that names anything starting with `ARGENT_`, whatever its case. That prefix covers its own token, its own port, the address of its own server, and each `ARGENT_SECRET_` value. Argent ignores a name that steers the runner's own process too, and one that is not an environment variable name at all. The run reports each entry it dropped, and names it. Argent ignores `__proto__` as well, although it matches the name rule: Argent copies the environment through a plain object, where that name is an accessor rather than an entry.
+```bash
+argent config set scripts.env.allow '["DATABASE_URL", "AWS_PROFILE"]' --scope project
+```
 
-Argent drops an entry that is not a string, and a blank entry, when it reads the configuration file. The run reads the file again and names each one it dropped, so a nested list such as `["DB_URL", ["AWS_PROFILE", "AWS_REGION"]]` does not take two names out of every script in silence. `argent config set` echoes back the list it stored, which is where you see it missing. Argent also removes the spaces at each end of an entry it keeps, so `"  DATABASE_URL  "` becomes `DATABASE_URL`. When the whole value is not a list, as in `{ "scripts": { "env": { "allow": "DATABASE_URL" } } }`, Argent reads no names from it and the run says so, naming the file. Without that note the key reads exactly like one you never set.
+Argent combines the project and global lists. The project's configuration comes from the run's `project_root`, even when the flow file is elsewhere. Argent ignores invalid entries, reserved names and names with the `ARGENT_` prefix. The run reports the entries that Argent ignores.
 
-Pass the value a script needs under a name of your own. The environment of the tool-server is a snapshot from its first start, so a later `export` in your shell does not reach a name on this list. See [Environment values](/docs/reference/flow-yaml#environment-values).
+The tool-server keeps the environment from its start. After you change a shell variable, restart the tool-server. To supply a value for one run, use [Environment values](/docs/reference/flow-yaml#environment-values).
 
 If `scripts.bash` is invalid, the `.sh` step reports an error. If Argent cannot read the configuration file, it selects Bash automatically and adds a note to the step report.
 
@@ -159,7 +161,7 @@ A flow step or a `keyboard` call can use a credential without the credential in 
 - type: { into: { id: password }, text: "{{secret:APP_PASSWORD}}" }
 ```
 
-A placeholder also works in an `env` value of a flow `script` step. Four channels accept one: the top-level `env` of a flow file, the `env` of a `script` step, the `env` parameter of `flow-execute` that `argent flow run --env` fills, and the `env` parameter of `flow-add-script`. Nothing is typed there. The tool-server resolves the name and hands the value to the script process. See [Environment values](/docs/reference/flow-yaml#environment-values).
+Use the same placeholder in script [environment values](/docs/reference/flow-yaml#environment-values), including `argent flow run --env`.
 
 The tool-server replaces the placeholder when the step runs. The tool-server resolves the name on the machine that runs the tool-server. It takes the first source that defines the name:
 
@@ -170,13 +172,13 @@ The tool-server replaces the placeholder when the step runs. The tool-server res
 | 3     | `<project-root>/.env.local`, then `<project-root>/.env` | Keys with the `ARGENT_SECRET_` prefix only |
 | 4     | `~/.argent/secrets.env`                                 | Every key, for every project               |
 
-`<project-root>` is the `project_root` of the run for a flow `script` step and for the `env` values of the run. A `keyboard` or `paste` call carries no project, so `<project-root>` is the working directory of the tool-server there - whatever started it, often `/` or your home directory. A name that one channel resolves may therefore not resolve in the other. Put the name in `~/.argent/secrets.env`, or export `ARGENT_SECRET_<NAME>` before you start the tool-server, and every channel reads it.
+For script environment values, `<project-root>` is the run's `project_root`. For `keyboard` and `paste`, it is the tool-server's working directory. To share a secret across these tools, use `~/.argent/secrets.env` or an `ARGENT_SECRET_<NAME>` environment variable.
 
 A bare `NAME=value` line in `.env` or `.env.local` stays unresolved. Write `ARGENT_SECRET_NAME=value` in these files.
 
 A change in a secrets file applies to the next tool call. An environment variable reaches only a tool-server that started after you exported the variable.
 
-A name that no source defines fails the step at run time. In the values of the run, Argent refuses that name before the run starts. Argent replaces a resolved value with its placeholder in the text of a failure, and in the log of a flow `script` step. Argent does not redact any other output. For the exact rule for a `script` step, see [Secrets in an `env` value](/docs/reference/flow-yaml#secrets-in-an-env-value). Thus do not use a placeholder for content that a report must show.
+A missing secret fails the step. A missing secret in `--env` or the `flow-execute` `env` parameter prevents the run from starting. Argent hides resolved secrets in failure text and script logs. See [Secrets in an `env` value](/docs/reference/flow-yaml#secrets-in-an-env-value) for the limits. Do not use a placeholder for content that a report must show.
 
 ### Commands
 

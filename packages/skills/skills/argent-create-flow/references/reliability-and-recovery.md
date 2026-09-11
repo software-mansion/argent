@@ -133,7 +133,7 @@ Then:
 - For four or more broken steps, unclear state, or a comparison or profiling flow, fully re-record.
 - Treat manual recovery as diagnosis only. It never counts as a replay pass.
 
-Starting again under the same name truncates the whole YAML, including the top-level `env:`. Copy the working prefix and that header before you record again.
+Starting again under the same name truncates the YAML, including the top-level `env`. Save the working steps and environment defaults before you record again.
 
 ### Make every replacement gate stronger
 

@@ -26,13 +26,11 @@ steps:
 
 The file has three top-level keys:
 
-| Key                     | Required | Description                                                                                                                     |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                                               |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                                                         |
-| `env`                   | no       | Environment defaults for every `script` step in the file. Added in Argent 0.25.0. See [Environment values](#environment-values) |
-
-A file that uses `env` fails to parse on an Argent older than 0.25.0, and the error names the unknown key.
+| Key                     | Required | Description                                                                           |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                     |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it               |
+| `env`                   | no       | Default environment values for scripts. See [Environment values](#environment-values) |
 
 A flow has one of two shapes:
 
@@ -288,7 +286,7 @@ The value is always a map. Parsing rejects a bare path, such as `script: scripts
 | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `path`    | yes      | An `.mjs` or `.sh` file, relative to the flow file that holds the step. Use a lowercase extension. Match the letter case on disk           |
 | `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                   |
-| `env`     | no       | Environment values for this script alone. It goes inside the `script:` map, never beside it. See [Environment values](#environment-values) |
+| `env`     | no       | Environment values for this script. Put `env` inside the `script` map. See [Environment values](#environment-values) |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -299,7 +297,7 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The Node, npm, Android, Java and Apple toolchain names
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
-Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent by default. Pass what the script needs through an `env` map, or add the name to `scripts.env.allow`. See [Environment values](#environment-values).
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent by default. Use an `env` map for additional values. To inherit a tool-server variable, add its name to `scripts.env.allow`. See [Environment values](#environment-values).
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
@@ -313,7 +311,7 @@ The script log contains stdout and stderr from the script and its commands. Arge
 
 If log collection stops before the commands finish, the step report includes a note.
 
-Argent replaces each value that a `{{secret:NAME}}` resolved to in the log with its placeholder. See [Secrets in an `env` value](#secrets-in-an-env-value).
+Argent hides resolved secrets in script logs. See [Secrets in an `env` value](#secrets-in-an-env-value).
 
 A failed step stops the flow. The verdict names the side that caused the failure.
 
@@ -385,102 +383,66 @@ On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 
 ## Environment values
 
-A `script` step reads its inputs from its environment: `process.env` in a `.mjs`, `$NAME` in a `.sh`. Argent builds that environment from five layers. A later layer replaces an earlier one:
+Use `env` to supply script inputs. An `.mjs` script reads `process.env.NAME`; a `.sh` script reads `$NAME`.
 
-1. The host allowlist above, extended by the `scripts.env.allow` config key
-2. The top-level `env:` of the root flow file, which is a **default**
-3. The `env:` of each nested flow a `run:` step composes, outermost first, each also a default
-4. The values of the run: `argent flow run --env NAME=value`, or the `env` parameter of `flow-execute`
-5. The `env:` of the `script` step itself, which is not a default, so nothing outside it wins
+Put defaults in the flow file's top-level `env`. Put values for one script inside its `script` map:
 
 ```yaml
-env: # a default for every script in this file
+env:
   API_URL: https://api.example.com
 steps:
   - script:
       path: ../../scripts/create-user.mjs
-      env: # this script only
+      env:
         API_KEY: "{{secret:API_KEY}}"
         USER_TYPE: premium
 ```
 
+To change a default for one run, use `--env`:
+
 ```bash
-argent flow run checkout --env BUILD=1421 --env BASE_URL=https://staging.example.com
+argent flow run checkout --env API_URL=https://staging.example.com
 ```
 
-The file holds the defaults a project checks in, and the run holds what changes per run. So one flow serves a local run and a CI job, and no CI job edits the YAML.
+Argent applies values in this order. Each source replaces matching names from earlier sources:
 
-A `run:` fragment inherits the values in force, can override them inside itself, and leaves the parent's values as they were when it ends. A `tool: flow-execute` step does **not** inherit them. That step starts a separate run, so pass what it needs in the `env` argument of that step, where the flow file and the report both show it.
+1. The tool-server's allowed environment variables, including names in `scripts.env.allow`.
+2. The root flow's top-level `env`.
+3. Each nested flow's `env`, from the outermost flow to the innermost flow.
+4. The run's `--env` values or the `flow-execute` `env` parameter.
+5. The script step's `env`.
 
-Each script process gets a fresh environment object. A script can change its own `process.env`, and the change ends with the process.
+Thus, `--env` replaces flow defaults, but a script step's `env` takes priority over `--env`.
 
-Values are strings. Quote a number, `true` or `false`. A name matches `[A-Za-z_][A-Za-z0-9_]*`. These names are refused in every `env` map, because each one steers the runner itself:
+A `run:` step inherits environment values. Its flow's defaults apply only inside that flow. A `tool: flow-execute` step starts a separate run. Pass its required values in `args.env`.
 
-| Name                                                                          | Reason                                                         |
-| ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`        | Name and frame the channel the runner protocol runs on         |
-| `NODE_OPTIONS`                                                                | Overrides the startup options of the runner                    |
-| `ELECTRON_RUN_AS_NODE`                                                        | Changes the runtime of the child process                       |
-| `ARGENT_FLOW_SCRIPT_RUNNER`                                                   | The activation flag of the runner preload                      |
-| `ARGENT_OUTPUT`                                                               | Names the file a `.sh` step exchanges its document through     |
-| `npm_config_node-options`, `npm_config_userconfig`, `npm_config_globalconfig` | Each one reaches `NODE_OPTIONS`. Every npm spelling is refused |
+Use a plain YAML map with string values. Quote numbers and boolean values. Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. On Windows, do not use two names that differ only in letter case.
 
-Every channel reads this table, `argent flow run --env` included, so a reserved name is refused the same way wherever you write it. `argent flow run --env npm_config_node-options=x` names that spelling and exits 2 before it contacts the tool-server.
+Argent rejects these reserved names:
 
-`ARGENT_OUTPUT` is refused whichever language the step runs, because a flow-level map applies to every step. `__proto__` is refused too. It matches the name rule, but every map on the way to the child copies it through a plain object, where the name is an accessor rather than an entry, so the value would be dropped and the step would pass anyway. That refusal covers every channel: the two YAML maps, `--env`, and the two tool parameters, `flow-execute`'s `env` and `flow-add-script`'s, which refuse the name before the schema rebuilds the map without it.
+- `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `NODE_CHANNEL_SERIALIZATION_MODE`
+- `ELECTRON_RUN_AS_NODE`, `ARGENT_FLOW_SCRIPT_RUNNER`, `ARGENT_OUTPUT`, `__proto__`
+- `npm_config_node-options`, `npm_config_userconfig`, `npm_config_globalconfig`, including alternative npm spellings
 
-The map is a plain map. A YAML tag that builds something else — `!!omap` in its sequence form builds a Map, `!!set` a Set, `!!timestamp` a Date — is refused, because Argent reads no entries from any of them and the script would run without every value, silently.
+Values cannot contain NUL characters or unpaired surrogates. An `env` value cannot reference a script's output.
 
-Argent refuses a value that holds a NUL character or an unpaired surrogate, because an environment carries neither. Argent applies the same rule to the value a `{{secret:NAME}}` resolves to.
-
-No recording tool writes the top-level `env:`. `flow-start-recording` resets the file to an empty flow, and it does not keep that header. Write the header into the YAML yourself. Write it again each time you record the flow again.
-
-On Windows, Argent refuses two names of one map that differ only in case. Windows reads them as one variable, so a flow file that parses on macOS is refused there.
-
-`BASH_ENV`, `SHELLOPTS` and the other names that steer bash are **not** refused. They steer the interpreter of the script, not the runner, and an author who sets one meant to. Argent asks each bash candidate for its version before it runs a `.sh` step, and it asks without `BASH_ENV`, `ENV`, `SHELLOPTS` and `BASHOPTS`. None of them changes the answer, and a `BASH_ENV` preamble that ends the shell would stop the answer altogether - Argent would then report that this host offers no bash it can use.
+Recording tools do not create the top-level `env`. Add it to the YAML after recording. Before you record again, save any defaults: `flow-start-recording` clears the whole file.
 
 ### Secrets in an `env` value
 
-Write a credential as `{{secret:NAME}}`. Argent resolves it on the machine that runs the flow, from the sources in [Secrets](/docs/reference/configuration#secrets), just before the process starts. A name that no source defines errors the step, and the message lists the names that are available. In the values of the run — `argent flow run --env`, or the `env` parameter of `flow-execute` — Argent refuses that name before the run starts, because those values are one argument and not one flow's own text. A run over a directory then stops at the first flow instead of blaming each file in turn.
+Use `{{secret:NAME}}` for a credential. Keep `secret` lowercase and omit spaces inside the placeholder. Argent reads the value on the tool-server's machine from the sources in [Secrets](/docs/reference/configuration#secrets).
 
-The spelling is exact: lowercase `secret`, a colon, a name, no spaces. `{{ secret: NAME }}`, `{{SECRET:NAME}}` and `{secret:NAME}` are not placeholders. They reach the script as written, the way any other value does. Argent does not detect a near spelling.
+A missing secret fails the script step before the script runs. A missing secret in `--env` or the `flow-execute` `env` parameter prevents the run from starting.
 
-Argent replaces each value that a `{{secret:NAME}}` resolved to with that same placeholder. Argent does this in three places, and only in these:
+Argent hides resolved secrets in script failure messages, stack traces and logs. Redaction does not cover every encoding of a secret. Do not print credentials. Other `env` values remain visible in flow files, reports and tool logs.
 
-- The message of a failed `script` step
-- The stack of a failed `script` step
-- The log of a `script` step, wherever Argent reports it
-
-So a script that throws `"401 from " + process.env.API_URL + " for key " + process.env.API_KEY` under the map above reports `401 from https://api.example.com for key {{secret:API_KEY}}`. `API_URL` is not a secret and reads as written.
-
-An encoder can write the value differently on its way into that text. Argent replaces each of these forms in all three places:
-
-- The plain value
-- The value as `encodeURIComponent` percent-encodes it, and the same value with a space as `+`
-- The JSON-escaped value, such as a value in an object that a script throws
-- The base64 value, such as a token that a script prints with `base64`
-
-Argent replaces the plain value at any length. Argent replaces the other forms only for a value with six or more characters. Argent does not replace any other form of the value. For example:
-
-- `URLSearchParams` also percent-encodes `!`, `'`, `(`, `)`, `*` and `~`. Argent does not replace that form of a value that holds one of these characters.
-- A `Basic` authorization header is the base64 of a user name, a colon and a password. Argent does not replace the password in it.
-- Argent does not replace the hex form of a value.
-
-When Argent cuts one of these forms at a length limit, Argent also hides the part of the value that is left. This applies to the failure text and to the log.
-
-Every other `env` value is flow data. It appears as written in the report, in the file that `flow-finish-recording` returns and in `echo` output. Argent does not check whether a plaintext value is a credential, and does not compare an `env` value against the secrets it can resolve. Write a credential as `{{secret:NAME}}`.
-
-The document a script returns is **not** redacted. Do not put a credential or another sensitive value in it. Hand a later step a derived value instead. A document that does not parse is reported by its reason and the character it stopped on; Argent does not quote the text back.
+Argent does not redact the output document that a script returns. Do not put credentials or other sensitive values in that document.
 
 ### The environment of the tool-server
 
-The tool-server is a long-lived shared process, and its environment is a snapshot from its first start. A later `export` in your shell never reaches it. `PATH` is a snapshot for the same reason, and this is the limit you meet first: an editor that starts the tool-server can give it a short login `PATH`, so a script that runs `adb` or a version-manager shim fails on a host where the same command works in your own shell. A `.sh` meets it as exit code 127.
+The tool-server keeps the environment from its start, including `PATH`. A later shell `export` does not change it. `scripts.env.allow` adds variable names to the allowlist; it does not update their values.
 
-Flow `env` values, `flow-execute` `env` values, and `{{secret:NAME}}` are the input channels of a script. A shell variable is not.
-
-The remedies are to restart the tool-server, which replaces the snapshot, or to pass the value through an `env` value. A failure that reads as a missing command carries a note that says so. `scripts.env.allow` is not one of the remedies, though it reads like one: that key only widens which names are copied out of the same snapshot, so it cannot recover a value exported after the server started, and `PATH` is copied already.
-
-Unlike the environment, the secret sources are read on **each** resolution. A secrets file you add while the server is up applies with no restart.
+If a script reports `command not found`, supply the required `PATH` through `env` or restart the tool-server with that `PATH`. Changes to secrets files apply without a restart.
 
 ## The `argent flow` command
 
@@ -500,7 +462,7 @@ Unlike the environment, the secret sources are read on **each** resolution. A se
 | `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                                                            |
 | `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                   |
 | `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                            |
-| `--env <NAME=value>` | An environment value for every `script` step in the run. Repeatable. See [Environment values](#environment-values)                                                |
+| `--env <NAME=value>` | Set a script environment value for this run. Repeat for each variable. See [Environment values](#environment-values)                                                |
 | `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                         |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                       |
 | `--`                 | End of options, for a flow name that starts with `-`                                                                                                              |
@@ -513,13 +475,13 @@ argent flow run .argent/flows --recursive
 argent flow run checkout --env BUILD=1421 --env BASE_URL=https://staging.example.com
 ```
 
-`--env` takes everything after the first `=` as the value, so a value can hold an `=`. Quote a value that holds a space, as `--env "AUTH=Bearer abc"` or `--env AUTH="Bearer abc"`, or the shell splits it and Argent reports the leftover word as an unexpected argument. A repeated name keeps the last value.
+`--env` uses everything after the first `=` as the value. Quote values with spaces, for example `--env "LABEL=Test account"`. If you repeat a name, Argent uses its last value.
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
 A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
 
-A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. So does a refusal about the CALL rather than the file: every flow in the batch runs with the same arguments apart from its own path, so a bad `--env` name is one fault, not one per file. Argent counts the flows after the failure as skipped.
+A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Invalid run arguments, such as a bad `--env` name, also stop the directory run. Argent counts the flows after the failure as skipped.
 
 The outcome line of a flow that produced a report gives the result and the step counts of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
 

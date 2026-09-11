@@ -306,17 +306,10 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.env.allow",
     description:
-      "Extra environment variable names a flow `script` process inherits from the tool " +
-      "server, on top of argent's built-in allowlist (PATH, HOME, the toolchain names and " +
-      "so on). A project input rather than a host control, so both scopes are read and the " +
-      "two lists are unioned. Any name starting with `ARGENT_` is ignored here — the whole " +
-      "prefix, not a list of the names argent uses today — and so is a name that steers the " +
-      "runner's own process, or one that is not an environment variable name at all; the " +
-      "run's notes say when a name was dropped, and when an entry is not a string or is " +
-      "blank — the key's own parser drops those, and the run names them off the raw " +
-      "file. `argent config set` echoes back the list it stored. Remember the server's " +
-      "environment is a snapshot " +
-      "from its first start, so a later `export` in your shell does not reach it.",
+      "Additional environment variable names that scripts read from the tool-server. " +
+      "Use an array of names. Argent combines the project and global lists. " +
+      "Argent ignores invalid entries, reserved names and names with the `ARGENT_` prefix. " +
+      "After you change a shell variable, restart the tool-server to use its new value.",
     scopes: ["project", "global"],
     parse: asStringArray,
     // Additive: a project names what its own scripts read, on top of whatever

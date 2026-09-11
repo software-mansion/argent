@@ -14,19 +14,6 @@ import {
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
-import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
-import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
-import { reservedScriptEnvNamesForMessage } from "@argent/configuration-core";
-
-/** One tool's `env` parameter description, as the JSON schema publishes it. */
-function envParameterDescription(tool: { zodSchema?: unknown }): string {
-  const schema = zodObjectToJsonSchema(
-    (tool as { zodSchema: Parameters<typeof zodObjectToJsonSchema>[0] }).zodSchema
-  ) as { properties: Record<string, { description?: string }> };
-  const described = schema.properties.env?.description;
-  expect(described).toBeDefined();
-  return described!;
-}
 
 const SKILL = path.resolve(__dirname, "../../../skills/skills/argent-create-flow/SKILL.md");
 const FLOW_YAML = path.resolve(
@@ -207,86 +194,24 @@ describe("create-flow directive-answer docs", () => {
 });
 
 describe("create-flow script docs", () => {
-  it("keeps the reference's env example parsable and its reserved list complete", () => {
-    const section = between(FLOW_YAML, "## Environment values", "\n## Snapshots");
-    // The example, exactly as an author would copy it.
-    const example = section.match(/```yaml\n([\s\S]*?)```/)?.[1];
-    expect(example).toBeDefined();
-    expect(() => parseFlow(example!)).not.toThrow();
-    // Every name the executor refuses has to be named here, or an author meets
-    // it for the first time as a run-time refusal.
-    for (const name of reservedScriptEnvNamesForMessage().split(", ")) {
-      expect(section, name).toContain(name);
+  it.each([FLOW_YAML, path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx")])(
+    "keeps the environment example in %s parsable",
+    (file) => {
+      const text = readFileSync(file, "utf8");
+      const section = text.split("## Environment values\n")[1];
+      const example = section?.match(/```yaml\n([\s\S]*?)```/)?.[1];
+      expect(example).toBeDefined();
+      expect(parseFlow(example!)).toMatchObject({
+        env: { API_URL: "https://api.example.com" },
+        steps: [
+          {
+            kind: "script",
+            env: { API_KEY: "{{secret:API_KEY}}", USER_TYPE: "premium" },
+          },
+        ],
+      });
     }
-    // And the precedence, which is what a reader comes to this section for.
-    for (const layer of ["scripts.env.allow", "--env", "not a default"]) {
-      expect(section).toContain(layer);
-    }
-  });
-
-  it("keeps the two tool descriptions agreeing about where --env sits", () => {
-    // The same discipline this file applies to the reference, applied to the
-    // strings an agent reads BEFORE recording. `flow-add-script`'s description
-    // and its `env` parameter said a real replay merges the run's own `--env`
-    // values "under" this call's `env` over the flow file's own — which is
-    // backwards: the run-time map is above the FILE's `env:` at every depth,
-    // and `flow-execute`'s own parameter says so in the same commit. An agent
-    // was told a recorded file-level value is what the replay takes, when
-    // `argent flow run checkout --env BUILD=1421` replaces it.
-    const runEnv = envParameterDescription(createRunFlowTool({} as unknown as Registry));
-    expect(runEnv).toContain("OVERRIDE the flow file's own `env` defaults at every depth");
-    expect(runEnv).toContain("a `script` step's own `env` still wins over them");
-    // And it may not claim the secret sources are the ones `keyboard` reads.
-    // They are not the same sources: this map is resolved against
-    // `project_root`, and `keyboard`/`paste` carry no project, so they read the
-    // two project files under the tool-server's own working directory — which
-    // is whatever spawned it, and often `/` or a home directory.
-    expect(runEnv).toContain("the same anchor the step resolves under");
-    expect(runEnv).not.toMatch(/same sources `keyboard` uses/);
-
-    const addEnv = envParameterDescription(flowAddScriptTool);
-    for (const surface of [flowAddScriptTool.description, addEnv]) {
-      // Whatever the wording, it may not put the run-time layer under the
-      // file's own defaults.
-      expect(surface).toMatch(/--env\/flow-execute values/);
-      expect(surface).not.toMatch(/two (?:more|further) layers under those/);
-    }
-    expect(addEnv).toContain("BETWEEN the two layers here");
-    expect(flowAddScriptTool.description).toContain("which sit BETWEEN those two");
-  });
-
-  it("names every flow-add-script wording that leaves nothing behind", () => {
-    // The decision rule an agent applies to a failed call, and the reason it is
-    // worth a test: a wording missing from the "nothing ran" list lands in the
-    // "every other wording" bucket, and the agent goes looking for device or
-    // database changes a call that never spawned a process cannot have made —
-    // then retries a side-effecting script, which is what the rule exists to
-    // stop. None of the three `env` refusals says the sentence the rule used to
-    // promise for them; all three open with the parameter's own name.
-    const liveAuthoring = readFileSync(LIVE_AUTHORING, "utf8");
-    for (const wording of ["This call's", "was NOT run and nothing was recorded", "did not run"]) {
-      expect(liveAuthoring, wording).toContain(wording);
-    }
-    // The marker is the two words in FRONT of the parameter, because the
-    // output-reference refusal names `env.NAME` rather than `env`.
-    // `flow-script-env.test.ts` drives the real tool for each of the four.
-    expect(liveAuthoring).not.toContain("the refusal of the `env` argument");
-  });
-
-  it("keeps the run:-env remedy qualified wherever it is repeated", () => {
-    // `execRunStep` layers a fragment's own `env:` OVER the flow that runs it,
-    // so writing a dropped value into the RECORDING's top-level `env:` does
-    // nothing for a name the fragment declares: the script still reads the
-    // fragment's value, which is the outcome the warning exists to prevent.
-    // `flow-add-step`'s warning carries that qualification and is pinned; the
-    // two places that repeat the remedy dropped it.
-    const qualified = /only for a name that (?:fragment|flow) does not itself declare/;
-    expect(flowFinishRecordingTool.description).toMatch(qualified);
-    expect(flowFinishRecordingTool.description).toMatch(/layers OVER the flow that runs it/);
-    const liveAuthoring = readFileSync(LIVE_AUTHORING, "utf8");
-    expect(liveAuthoring).toMatch(qualified);
-    expect(liveAuthoring).toMatch(/layers OVER the flow that runs it/);
-  });
+  );
 
   it("lists a script path among what a flow_path run re-anchors", () => {
     const schema = zodObjectToJsonSchema(

@@ -30,18 +30,22 @@ command: "gesture-tap"
 args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 ```
 
-A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`. A `run:` step carries no environment of its own, so an `env` you passed the recorded call is **not** part of the recorded step and the replay runs without it. The call says so, and so does `flow-finish-recording` — in `summary` under the step, and counted in `message`. Write the values into the sibling flow's own `env:`. Write them into this recording's only for a name that flow does not itself declare, because a fragment's `env:` layers OVER the flow that runs it. Or keep the raw `flow-execute` step by recording the call with a `delayMs`. The call and `flow-finish-recording` also warn about a second difference. At replay, the sibling's scripts get the values of this recording's own `env:`. The live call ran those scripts without these values. To make the two runs match, declare the name in the sibling flow's own `env:`, or keep the raw step.
+A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
-When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, its own message says whether the script ran. Nothing started when the message opens with `This call's` - an argument was refused before the process. Nothing ran when it says `was NOT run and nothing was recorded` (the pre-run read of the flow file) or `did not run`. Every other wording (`failed`, `may have run`, `passed, but the step was not recorded`) leaves changes to check before you retry.
+A `run:` step omits the call's `env` and inherits the recording's environment at replay. If the recorder warns about different values, put the required values in the sibling flow's top-level `env`. To keep the raw `flow-execute` call and its `env`, record with `delayMs: 0`.
 
-Its `env` map is recorded verbatim as the step's `env`, and the flow file's own top-level `env:` is layered under it. That is the whole environment the recorder can take: a replay merges two more layers under the step — the run's own `--env`/`flow-execute` values, and each parent flow's `env:` when a `run:` step composes this fragment — so the tool's "It runs the file the way a replay OF THIS FILE will" says all it can. Write a credential as `{{secret:NAME}}`; never in the clear, because this map is written into a file that gets committed. An answer that adds `but the flow file's own env changed while the script was running` still recorded the step, so do not call again: a second call appends a SECOND step and runs the script's side effect twice. Remove the step first if you want it recorded under the environment now on disk. Read [Flow YAML: Environment values](flow-yaml.md#environment-values).
+When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, read its message to determine whether the script ran. Before a retry, inspect any changes the script could have made.
+
+`flow-add-script` saves its `env` as the script step's `env`. These values replace the flow's defaults during recording and take priority over run values during replay. Use `{{secret:NAME}}` for credentials. See [Environment values](flow-yaml.md#environment-values).
+
+If the call reports that the flow's `env` changed, the step is already recorded. Remove that step before you record it again.
 
 Obey these lifecycle rules:
 
 1. Pass the same `name` and absolute `project_root` to every recording tool.
 2. Choose a name unique to the task. Another caller can take over the same pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/flows` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
-4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. It truncates the top-level `env:` too, and no recording tool writes that header, so copy it aside before you record the flow again. `restarted` reports only a displaced live take.
+4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. Save the top-level `env` before you record again. Restore it after recording. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `flow-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
 7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
@@ -166,7 +170,7 @@ The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree
 
 A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
 
-Do not edit YAML before finishing because edits can drop recorded verdicts. A dropped verdict can be about any recorded step, not only a wait. If the finish reports drops, record those steps again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
+Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports dropped verdicts, record the affected steps again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
 
 ### Wrong turns
 

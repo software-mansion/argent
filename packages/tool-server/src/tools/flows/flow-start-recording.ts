@@ -65,7 +65,7 @@ export const flowStartRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to start recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one. The reset discards everything the file held, including the top-level \`env:\`. No recording tool writes that header, so write it back by hand if the steps you record need one.
+  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one. Save any top-level \`env\` defaults before this call. Restore them after recording.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
 Whether this server writes that file depends on where your project is: co-located, it creates it and fails if the .argent/flows/ directory cannot be created or the file cannot be written; against a remote tool-server it writes nothing and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
