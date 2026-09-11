@@ -129,46 +129,6 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("the call to {{secret:API_KEY}} failed");
   }, 30_000);
 
-  // A PEM key or a service-account blob spans lines, and `echo "…$KEY" >&2` is
-  // the idiomatic way to report one. The reason keeps only the LAST line the
-  // script wrote to stderr — here the value's own closing line, with its
-  // trailing newline left behind as a blank line — so no whole-value spelling
-  // is in it to find. The log keeps every line.
-  it("replaces every line of a multi-line secret, in the reason and in the log", async () => {
-    const multiline: FlowScriptSecret = {
-      name: "PEM",
-      value: "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0\n-----END PRIVATE KEY-----\n",
-    };
-    const ws = workspace();
-    const script = ws.write(
-      "edge-reason.sh",
-      `echo "signing failed with key: $PEM" >&2
-       exit 1`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      env: { PEM: multiline.value },
-      secrets: [multiline],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(result.failure?.kind).toBe("exit");
-    expect(message).toMatch(/ \{\{secret:PEM}}$/);
-    expect(result.log).toContain("signing failed with key: {{secret:PEM}}");
-    for (const line of multiline.value.split("\n").filter(Boolean)) {
-      expect(message).not.toContain(line);
-      expect(result.log).not.toContain(line);
-    }
-  }, 30_000);
-
-  // The shell's own encoders WRAP: `base64` breaks its output every 76 columns
-  // and `xxd -p` every 60, so the last line such a script writes to stderr is
-  // the encoding's last line, and on its own that decodes to a large piece of
-  // the value. Nothing in the line says it ends a run; the stderr text ahead of
-  // it does, which is what the log's own pass reads. The output is written with
-  // printf, so these cases do not depend on which `base64` the host has.
   const JWT: FlowScriptSecret = {
     name: "JWT",
     value:
@@ -187,82 +147,8 @@ describe("flow script executor — redaction of a bash step", () => {
        exit 1`;
   }
 
-  /**
-   * Every four-byte piece of `value` that a base64 or hex run in `text` decodes
-   * to, at any frame offset. Four bytes is the floor the executor's own decode
-   * searches at. A contiguous `xxd -p` run is read too, which a reader of dumps
-   * with a space between the bytes would pass over.
-   */
-  function decodedPieces(text: string, value: string): string[] {
-    const bytes = Buffer.from(value, "utf8");
-    const views = [
-      { encoding: "base64", runs: /[A-Za-z0-9+/]{4,}/g, frame: 4 },
-      { encoding: "hex", runs: /[0-9A-Fa-f]{2,}/g, frame: 2 },
-    ] as const;
-    const found = new Set<string>();
-    for (const { encoding, runs, frame } of views) {
-      for (const [run] of text.matchAll(runs)) {
-        for (let offset = 0; offset < frame; offset++) {
-          const decoded = Buffer.from(run.slice(offset), encoding);
-          for (let at = 0; at + 4 <= bytes.length; at++) {
-            const piece = bytes.subarray(at, at + 4);
-            if (decoded.includes(piece)) found.add(piece.toString("latin1"));
-          }
-        }
-      }
-    }
-    return [...found];
-  }
-
-  it("replaces a base64 run the encoder wrapped onto the last stderr line", async () => {
-    const [first, ...rest] = BASIC;
-    const ws = workspace();
-    const script = ws.write(
-      "basic-auth.sh",
-      stderrLines([`login failed (401) with Authorization: Basic ${first}`, ...rest])
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      secrets: [JWT],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(result.failure?.kind).toBe("exit");
-    expect(decodedPieces(message, JWT.value)).toEqual([]);
-    // The replacement starts in the frame the value starts in, on the line the
-    // payload began, so the reason ends as that line reads in the log.
-    const line = "login failed (401) with Authorization: Basic YXBp{{secret:JWT}}";
-    expect(message.slice(-(line.length + 3))).toBe(`). ${line}`);
-    expect(result.log).toContain(`${line}\n`);
-  }, 30_000);
-
-  it("replaces a hex run xxd -p wrapped onto the last stderr line", async () => {
-    const ws = workspace();
-    const script = ws.write(
-      "xxd.sh",
-      stderrLines(
-        Buffer.from(KEY.value)
-          .toString("hex")
-          .match(/.{1,60}/g)!
-      )
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      secrets: [KEY],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(result.failure?.kind).toBe("exit");
-    expect(decodedPieces(message, KEY.value)).toEqual([]);
-    expect(message).toMatch(/\)\. \{\{secret:KEY}}$/);
-  }, 30_000);
-
-  // What came before the last line is only read, never reported: a secret on an
-  // earlier line is replaced where it stood, and an unrelated last line ends the
+  // Only the last stderr line joins the reason: a secret on an earlier line is
+  // replaced where it stands in the log, and an unrelated last line ends the
   // reason exactly as the script wrote it.
   it("ends the reason with an unrelated last line when a secret came before it", async () => {
     const ws = workspace();
@@ -286,8 +172,8 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("using key {{secret:KEY}}\n");
   }, 30_000);
 
-  // With nothing to hide, nothing is re-read: the reason ends with the last
-  // line exactly as the script wrote it, even one that is the tail of a run.
+  // With no secrets there is nothing to replace: the reason ends with the last
+  // stderr line exactly as the script wrote it.
   it("leaves the last stderr line as written when the step has no secrets", async () => {
     const [first, ...rest] = BASIC;
     const ws = workspace();
@@ -334,7 +220,7 @@ describe("flow script executor — redaction of a bash step", () => {
   // either. One of V8's parse messages — and only one, the rest name a position
   // — hands back a window of the text: `Unexpected token 's', "s3cr3t-tok"… is
   // not valid JSON`. A window is a cut, so what it holds of a value is a
-  // fragment, and a fragment matches no spelling a whole-value scrub looks for.
+  // fragment, and a fragment matches no form of the value the scrub looks for.
   it("quotes no window of the output document back", async () => {
     const ws = workspace();
     const script = ws.write("bad-output.sh", `printf '%s' "$API_KEY" > "$ARGENT_OUTPUT"`);
@@ -454,81 +340,6 @@ describe("flow script executor — redaction of a bash step", () => {
     },
     30_000
   );
-
-  // `printf %q` is bash's own quoter and the idiomatic way for a `.sh` step to
-  // report the argument it sent. It backslashes a SPACE, and no spelling in the
-  // list rewrites one: the JSON, single-quoted and backtick bodies all leave a
-  // space alone, and the URI encoders write `%20` or `+`. So `sk live …`
-  // arrived as `sk\ live\ …` and the whole-value scrub matched nothing.
-  // `repairBackslashEscapes` is the only pass that answers it, and the `.mjs`
-  // case that names an escaper holds quotes and a backslash — which the
-  // backtick spelling already covers, so it passes with that repair removed.
-  it("replaces a value bash's own printf %q backslashed", async () => {
-    const spaced: FlowScriptSecret = { name: "SPACED", value: "sk live 9d3f0a1bcdef" };
-    const ws = workspace();
-    const script = ws.write(
-      "quoted-reason.sh",
-      `printf %q "$SPACED" >&2
-       exit 1`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      env: { SPACED: spaced.value },
-      secrets: [spaced],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(result.failure?.kind).toBe("exit");
-    expect(message).toContain("{{secret:SPACED}}");
-    // The log holds the same line, and no spelling matches it there either: it
-    // is the repair pass over the finished log that takes it.
-    expect(result.log).toContain("{{secret:SPACED}}");
-    // Raw and in the spelling the quoter wrote: the escaping is one `sed` away
-    // from reversed, so leaving it is disclosure rather than obfuscation.
-    for (let n = spaced.value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= spaced.value.length; at += 1) {
-        const part = spaced.value.slice(at, at + n);
-        for (const text of [message, result.log]) {
-          expect(text).not.toContain(part);
-          expect(text).not.toContain(part.replace(/ /g, "\\ "));
-        }
-      }
-    }
-  }, 30_000);
-
-  // The parent TRIMS the stderr line it keeps, so a secret that ends the line
-  // arrives without its own trailing whitespace: one character short of the
-  // value, and a whole-value replacement finds nothing. The multi-line case
-  // above is answered by the LINE spellings `encodedSpellings` adds for a value
-  // holding a newline. A one-line value stored with the padding a `.env` line
-  // carries every day has no line spelling to fall back on, and nothing else in
-  // the list is the value minus its own edge whitespace. The log keeps the line
-  // untrimmed, so the whole value is there to replace.
-  it("replaces a one-line secret whose own trailing space the reason trim ate", async () => {
-    const padded: FlowScriptSecret = { name: "PADDED", value: "sk-live-9d3f0a1bcdef " };
-    const ws = workspace();
-    const script = ws.write(
-      "padded-reason.sh",
-      `echo "rejected key: $PADDED" >&2
-       exit 1`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      interpreter: "bash",
-      projectRoot: ws.dir,
-      env: { PADDED: padded.value },
-      secrets: [padded],
-    });
-
-    const message = result.failure?.message ?? "";
-    expect(result.failure?.kind).toBe("exit");
-    expect(message).toContain("rejected key: {{secret:PADDED}}");
-    expect(message).not.toContain(padded.value.trimEnd());
-    expect(result.log).toContain("rejected key: {{secret:PADDED}}");
-    expect(result.log).not.toContain(padded.value.trimEnd());
-  }, 30_000);
 });
 
 describe("flow script executor — the heap verdict", () => {
@@ -610,10 +421,9 @@ describe("flow script executor — redaction", () => {
   });
 
   // The list is per REQUEST, and two runs of one executor share a queue, a
-  // process pool and this module. Nothing drove two at once with different
-  // lists, so a scrub that reached for anything module-scoped — a compiled set,
-  // a memo — would have passed CI while replacing one run's marker in the
-  // other's failure.
+  // process pool and this module, so a scrub that reached for anything
+  // module-scoped - a compiled set, a memo - would replace one run's marker in
+  // the other's failure.
   it("keeps two concurrent runs' secret lists apart", async () => {
     const ws = workspace();
     const first: FlowScriptSecret = { name: "FIRST", value: "value-of-the-first-run" };
@@ -712,6 +522,32 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.message).toBe("id={{secret:OKEN}} and {{secret:TOKEN_ABC}}");
   });
 
+  // `Q` stands inside its own placeholder, and a placeholder is not scrubbed
+  // again: the escape beside it stays as written, in the reason and in the log.
+  it("does not nest a placeholder that stands beside an escape", async () => {
+    const Q: FlowScriptSecret = { name: "Q0", value: "Q" };
+    const ws = workspace();
+    const script = ws.write(
+      "beside-escape.mjs",
+      `const line = "value=" + process.env.K + "%2C next";
+       console.log(line);
+       throw new Error(line);`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: Q.value },
+      secrets: [Q],
+    });
+
+    expect(result.ok).toBe(false);
+    const reason = `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+    expect(reason).toContain("value={{secret:Q0}}%2C next");
+    expect(result.log).toContain("value={{secret:Q0}}%2C next");
+    expect(reason).not.toContain("{{secret:{{secret:");
+    expect(result.log).not.toContain("{{secret:{{secret:");
+  }, 30_000);
+
   it("replaces a value that starts inside marker-shaped text the script wrote", async () => {
     const ws = workspace();
     const script = ws.write("echoed.mjs", `throw new Error("head {{secret:TOK}}TAIL tail");`);
@@ -809,15 +645,10 @@ describe("flow script executor — redaction", () => {
 
   it("repairs the straddling cut even when another secret's value is in the marker", async () => {
     const ws = workspace();
-    // The repair reads the marker to know the text was cut. Read off the
-    // SCRUBBED text, any secret whose value occurs inside the marker defeats it
-    // — and the marker is argent's own sentence around a character COUNT, so a
-    // value of `0` is enough. `PIN` is stored with the padding a secrets file
-    // carries every day, and the trimmed spelling the scrub adds for it is that
-    // bare digit. The marker was rewritten, neither pattern matched it, the
-    // repair was skipped, and the half of API_KEY the cut left stayed in the
-    // step reason, the --json report and the MCP call log.
-    const PIN: FlowScriptSecret = { name: "PIN", value: " 0 " };
+    // The marker is argent's own sentence around a character COUNT, so a value
+    // of `0` occurs in it. It is read off the raw text and only the head is
+    // scrubbed, so that value cannot rewrite the marker and hide the cut.
+    const PIN: FlowScriptSecret = { name: "PIN", value: "0" };
     const script = ws.write(
       "long-throw-pin.mjs",
       `throw new Error(
@@ -837,6 +668,10 @@ describe("flow script executor — redaction", () => {
       secrets: [SECRET],
     });
 
+    // The count holds a `0`, or this case asserts nothing the one above does
+    // not.
+    expect(control.failure?.message).toMatch(/… \[\d*0\d* more characters omitted]$/);
+
     const message = result.failure?.message ?? "";
     // Every prefix of the value that is still the secret's own.
     for (let n = SECRET.value.length; n > 3; n -= 1) {
@@ -848,6 +683,69 @@ describe("flow script executor — redaction", () => {
     expect(message.slice(message.lastIndexOf("… ["))).toBe(
       (control.failure?.message ?? "").slice((control.failure?.message ?? "").lastIndexOf("… ["))
     );
+  });
+
+  // One secret can hold another - a database URL holds its user - and the
+  // encoding of the outer one carries the inner one's raw text. The outer one
+  // is still taken whole, in the reason and in the log.
+  it("replaces an encoded value that holds another secret, whole", async () => {
+    const ws = workspace();
+    const user: FlowScriptSecret = { name: "DB_USER", value: "dbadmin" };
+    const url: FlowScriptSecret = {
+      name: "DATABASE_URL",
+      value: "postgres://dbadmin:Sup3rS3cretPw@db.internal:5432/prod",
+    };
+    const script = ws.write(
+      "nested.mjs",
+      `const url = encodeURIComponent(process.env.DATABASE_URL);
+       console.log("connect " + url);
+       throw new Error("connect failed: " + url);`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { DB_USER: user.value, DATABASE_URL: url.value },
+      secrets: [user, url],
+    });
+
+    expect(result.failure?.message).toBe("connect failed: {{secret:DATABASE_URL}}");
+    expect(result.log).toBe("connect {{secret:DATABASE_URL}}\n");
+  });
+
+  // The front a cut leaves can hold a shorter secret. The front is dropped
+  // whole, so neither the shorter secret's placeholder nor the rest of the
+  // front stands in front of the marker.
+  it("drops the whole front of a cut value that holds another secret", async () => {
+    const ws = workspace();
+    const user: FlowScriptSecret = { name: "DB_USER", value: "dbadmin" };
+    const url: FlowScriptSecret = {
+      name: "DATABASE_URL",
+      value: "postgres://dbadmin:Sup3rS3cretPw@db.internal:5432/prod",
+    };
+    // The padding puts the child's cut about thirty characters into the URL,
+    // past the user it holds.
+    const script = ws.write(
+      "nested-cut.mjs",
+      `throw new Error(
+         "p".repeat(${SCRIPT_MAX_FAILURE_MESSAGE_CHARS} - 62) + process.env.DATABASE_URL + "t".repeat(1000)
+       );`
+    );
+    const run = (secrets: FlowScriptSecret[]) =>
+      executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { DB_USER: user.value, DATABASE_URL: url.value },
+        secrets,
+      });
+
+    // With nothing to hide, the cut is inside the URL and past the user.
+    const control = (await run([])).failure?.message ?? "";
+    expect(control).toContain("postgres://dbadmin:");
+    expect(control).not.toContain(url.value);
+
+    const message = (await run([user, url])).failure?.message ?? "";
+    expect(message).toMatch(/p… \[\d+ more characters omitted]$/);
+    expect(message).not.toContain("{{secret:");
   });
 
   it("reads the secret set live, so a value added mid-run still redacts", async () => {
@@ -875,16 +773,13 @@ describe("flow script executor — redaction", () => {
 });
 
 /**
- * The scrub searches for a value's RAW bytes, so every re-encoding between the
- * child and the report defeated it — and the encoders are the ones a
- * verification script reaches for in one line. The values below are the shapes
- * the feature is documented for: a PEM key, a value holding a quote and a
- * backslash, and one holding nothing but a SPACE, which is the brief's own
- * worked run-time value (`--env "AUTH=Bearer abc"`).
+ * A value reaches the failure text re-encoded as often as written, by the
+ * encoders a verification script reaches for in one line. The values are the
+ * shapes the feature is documented for: a PEM key, a value holding a quote and
+ * a backslash, and one holding a SPACE, as in `--env "AUTH=Bearer abc"`.
  *
- * Each case runs beside `FLAT`, whose value no encoder touches: that control
- * redacted correctly before the fix and is what isolates the encoding as the
- * cause rather than the scrub being off altogether.
+ * Each case runs beside `FLAT`, whose value no encoder touches, so a failure
+ * points at the encoding rather than at the scrub being off altogether.
  */
 describe("flow script executor — redaction through an encoder", () => {
   const FLAT: FlowScriptSecret = { name: "FLAT", value: "sk-live-9d3f-topvalue" };
@@ -931,21 +826,6 @@ describe("flow script executor — redaction through an encoder", () => {
     return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
   }
 
-  it("replaces a value util.inspect quoted, escaped and split by line", async () => {
-    // `assert.strictEqual(process.env.K, …)` is one line, and the most likely
-    // line in a verification script. Node renders its diff with `util.inspect`,
-    // which escapes — and writes a multi-line value as one quoted chunk PER
-    // LINE, joined by `' +`, so no whole-value match survives the glue.
-    for (const secret of ALL) {
-      const text = await failWith(
-        `import assert from "node:assert";
-         assert.strictEqual(process.env.K, "expected-value");`,
-        secret
-      );
-      expectNoValue(text, secret);
-    }
-  }, 60_000);
-
   it("replaces a value the runner's own JSON encoder wrote", async () => {
     // Anything thrown that is not an `Error` message goes through the runner's
     // `describeThrown`, so an object `cause` — the idiomatic way to carry a
@@ -972,606 +852,43 @@ describe("flow script executor — redaction through an encoder", () => {
       expectNoValue(text, secret);
     }
   }, 60_000);
-});
 
-/**
- * The encoders above are all CHARACTER-LOCAL: each byte of the value lands in
- * the same place in the output whatever surrounds it, so a spelling of the
- * whole value still appears in the text. The three shapes here are not, and
- * each one left the credential whole and losslessly recoverable in a report
- * that held no spelling of it at all.
- */
-describe("flow script executor — redaction of a re-framed, wrapped or cut value", () => {
-  const KEY: FlowScriptSecret = { name: "KEY", value: "key-p2b-live-7f3c9a1e5b2d8046" };
-  // No fragment of a value may spell part of the placeholder that replaces it,
-  // or the sweep below flags argent's own `{{secret:…}}` as a leak.
-  const CUT: FlowScriptSecret = { name: "CUT", value: "sk-live-9d3f-topvalue-abcdef123456" };
-  const ODD: FlowScriptSecret = { name: "ODD", value: "pa'ss\"w\\ord-9d3f7a2b" };
-  const ALL = [KEY, CUT, ODD];
-
-  async function failWith(source: string, name: string): Promise<string> {
-    const ws = workspace();
-    const script = ws.write("reframed.mjs", source);
-    const secret = ALL.find((entry) => entry.name === name)!;
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { K: secret.value },
-      secrets: ALL,
-    });
-    expect(result.ok).toBe(false);
-    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
-  }
-
-  /** No run of six or more characters of the value survives anywhere. */
-  function expectNoValue(text: string, name: string): void {
-    const value = ALL.find((entry) => entry.name === name)!.value;
-    expect(text).toContain(`{{secret:${name}}}`);
-    for (let n = value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= value.length; at += 1) {
-        expect(text).not.toContain(value.slice(at, at + n));
-      }
-    }
-  }
-
-  // base64 frames in THREE-byte groups, so a prefix whose length is not a
-  // multiple of three moves every following byte into a different frame and no
-  // spelling of the value appears. `Basic base64(user:secret)` is the standard
-  // HTTP credential idiom, and the comment that justifies having base64 in the
-  // spelling list cites Basic auth as the reason for it.
-  it("replaces a value base64 re-framed behind a prefix", async () => {
-    const text = await failWith(
-      `throw new Error("Basic " + Buffer.from(\`api:\${process.env.K}\`).toString("base64"));`,
-      "KEY"
-    );
-    expectNoValue(text, "KEY");
-  }, 30_000);
-
-  // Every frame offset a run can START on. A prefix glued straight onto the
-  // encoded output — no separator to align it — puts the payload one, two or
-  // three characters into its first frame.
-  it("replaces a value in a run that starts mid-frame, at every offset", async () => {
-    for (const prefix of ["", "x", "xy", "xyz"]) {
-      const text = await failWith(
-        `throw new Error(${JSON.stringify(prefix)} + Buffer.from("ab" + process.env.K).toString("base64"));`,
-        "KEY"
-      );
-      expectNoValue(text, "KEY");
-    }
-  }, 60_000);
-
-  // `=` is padding, so a decoder stops there: read as one run, `?token=<payload>`
-  // decoded the word in front of the credential and nothing after it.
-  it("replaces a value behind a query key the padding character would have merged", async () => {
-    const text = await failWith(
-      `throw new Error("https://api.example.com/?token=" + Buffer.from("ab" + process.env.K).toString("base64"));`,
-      "KEY"
-    );
-    expectNoValue(text, "KEY");
-  }, 30_000);
-
-  // The shell's own tools wrap at a fixed column, so a value merely long enough
-  // to wrap has a newline through the middle of its encoding. No prefix is
-  // needed for this one.
-  it("replaces a value whose encoding a wrap split over lines", async () => {
-    for (const encoding of ["hex", "base64"]) {
-      const text = await failWith(
-        `const e = Buffer.from(process.env.K).toString(${JSON.stringify(encoding)});
-         throw new Error(e.replace(/(.{7})/g, "$1\\n"));`,
-        "KEY"
-      );
-      expectNoValue(text, "KEY");
-    }
-  }, 60_000);
-
-  // `encodedSpellings` writes lower-case hex; a signature printed upper-case is
-  // the same bytes in the same order.
-  it("replaces a value printed as upper-case hex", async () => {
-    const text = await failWith(
-      `throw new Error("sig " + Buffer.from(process.env.K).toString("hex").toUpperCase());`,
-      "KEY"
-    );
-    expectNoValue(text, "KEY");
-  }, 30_000);
-
-  // Node embeds a fixed-length PREFIX of a string argument in the error it
-  // raises — 10 characters for `JSON.parse`, 25 for ERR_INVALID_ARG_TYPE. The
-  // repair for that required the value to begin one character after the opening
-  // quote, so a credential built into a larger string first disabled it.
-  it("replaces a cut prefix that starts inside the quoted fragment", async () => {
-    const parsed = await failWith('JSON.parse(`{"token":${process.env.K}}`);', "CUT");
-    expectNoValue(parsed, "CUT");
-
-    const timed = await failWith(
-      `setTimeout("Bearer " + process.env.K, 1);
-       await new Promise((r) => setTimeout(r, 50));`,
-      "CUT"
-    );
-    expectNoValue(timed, "CUT");
-  }, 60_000);
-
-  // `util.inspect` picks a BACKTICK body for a value holding both quotes and
-  // escapes neither of them, and `RegExp.source` writes `/` as `\/`. Read as
-  // one rule: a backslash takes the character after it.
-  it("replaces a value an escaper backslashed", async () => {
-    const inspected = await failWith(
-      `import assert from "node:assert";
-       assert.strictEqual(process.env.K, "expected-value");`,
-      "ODD"
-    );
-    expectNoValue(inspected, "ODD");
-  }, 30_000);
-
-  // The floor and the alphabets must not rewrite argent's own text: hex- and
-  // base64-shaped words decode to bytes as well, and nothing about them says
-  // they were ever an encoding.
+  // A form is found by encoding the value, never by decoding the text, so prose
+  // that merely looks encoded stays as the script wrote it.
   it("leaves hex- and base64-shaped prose that holds no value alone", async () => {
     const text = await failWith(
       `throw new Error("deadbeefcafe0123 aGVsbG8gd29ybGQ= ordinary words");`,
-      "KEY"
+      FLAT
     );
     expect(text).toContain("deadbeefcafe0123 aGVsbG8gd29ybGQ= ordinary words");
     expect(text).not.toContain("{{secret:");
   }, 30_000);
-});
 
-/**
- * `util.inspect` prints a `Buffer` or a `TypedArray` as its NUMBERS, so no
- * spelling of the value is in the text at all and only the byte-space pass can
- * answer. Every other case in this file reaches that pass through an ENCODER —
- * `.toString("base64")` or `.toString("hex")` — which is `repairEncodedRuns`,
- * a different function; nothing here produced the numeric rendering
- * `repairByteRenderings` exists for, so both of the shapes below printed the
- * credential in full while the suite stayed green.
- */
-describe("flow script executor — redaction of a value rendered as bytes", () => {
-  const KEY: FlowScriptSecret = { name: "KEY", value: "sec-9d3f-topvalue-abcdef" };
-
-  async function failWith(source: string, secret: FlowScriptSecret): Promise<string> {
-    const ws = workspace();
-    const script = ws.write("bytes.mjs", source);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { K: secret.value },
-      secrets: [secret],
-    });
-    expect(result.ok).toBe(false);
-    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
-  }
-
-  /** No run of six or more characters of the value survives, in any spelling. */
-  function expectNoValue(text: string, secret: FlowScriptSecret): void {
-    expect(text).toContain(`{{secret:${secret.name}}}`);
-    for (let n = secret.value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= secret.value.length; at += 1) {
-        const part = secret.value.slice(at, at + n);
-        expect(text).not.toContain(part);
-        // And not as the bytes the rendering wrote it in either.
-        const bytes = Buffer.from(part, "utf8");
-        expect(text).not.toContain(bytes.toString("hex").replace(/../g, "$& ").trim());
-        expect(text).not.toContain([...bytes].join(", "));
-      }
-    }
-  }
-
-  // `<Buffer 73 65 …>` is followed by ordinary prose, and the first word of it
-  // opens with hex characters of its own: `did`, `expected`, `and` and `from`
-  // all contribute an odd-length prefix that is no byte at radix 16. Only a
-  // LETTER ended a run, and the `>` between them is none — so that prefix
-  // joined the run, the run stopped decoding, and every byte of the credential
-  // printed.
-  it("replaces a Buffer rendering the next word's hex prefix runs into", async () => {
-    for (const word of ["did", "expected", "and", "from"]) {
-      const text = await failWith(
-        `import util from "node:util";
-         throw new Error(util.inspect(Buffer.from(process.env.K)) + " ${word} not match the digest");`,
-        KEY
-      );
-      expect(text).toContain(`${word} not match the digest`);
-      expectNoValue(text, KEY);
-    }
-  }, 60_000);
-
-  // Node's OWN cut, which every rendering of a real credential meets before
-  // argent's: `util.inspect` writes the first 50 bytes of a `Buffer` and a
-  // `... N more bytes` trailer, and the first 100 elements of a `TypedArray`
-  // with `... N more items`. That trailer's COUNT is the token after the
-  // ellipsis, and it is no byte whenever it has the wrong number of digits —
-  // three at radix 16, or over 255 at radix 10 — so the rule that drops a
-  // non-byte token has to read the GAP first, or it throws away the ellipsis
-  // that had just marked the run as cut and the visible prefix stands.
-  //
-  // The two cases above pass `maxArrayLength: Infinity`, which removes the
-  // trailer, so neither exercises the shape an ordinary `util.inspect` writes.
-  it("replaces the visible prefix of a value Node's own renderer cut", async () => {
-    const long: FlowScriptSecret = { name: "K", value: `sk-live-${"a9f3b1c7d5e2".repeat(20)}xy` };
-    for (const render of [
-      "util.inspect(Buffer.from(process.env.K))",
-      "util.inspect(new Uint8Array(Buffer.from(process.env.K)))",
-    ]) {
-      const text = await failWith(
-        `import util from "node:util";
-         throw new Error(${render});`,
-        long
-      );
-      // The trailer is Node's own wording and stays, so the reader still knows
-      // how much was dropped.
-      expect(text).toMatch(/\.\.\. \d+ more (bytes|items)/);
-      expectNoValue(text, long);
-    }
-  }, 60_000);
-
-  // `assert.deepStrictEqual(Buffer.from(k), expected)` renders the two buffers
-  // INTERLEAVED, one byte per line, with the diff's own `+` and `-` down the
-  // left and a line both sides agree on carrying neither. Read whole, the run
-  // holds the script's bytes with the expected side's mixed through it, so no
-  // contiguous stretch spells the value and every byte printed — while the
-  // neighbouring shapes all redacted correctly, which is what made the gap easy
-  // to miss. Keeping the lines the expected side does not own recovers the
-  // credential exactly, so that is the reading the repair has to make too.
-  it("replaces a value an assert diff interleaved with the other side's bytes", async () => {
-    const text = await failWith(
-      `import assert from "node:assert";
-       assert.deepStrictEqual(Buffer.from(process.env.K, "utf8"), Buffer.from("expected", "utf8"));`,
-      KEY
-    );
-    expect(text).toContain("Expected values to be strictly deep-equal");
-    expectNoValue(text, KEY);
-    // The bytes of the value, read off the lines the expected side does not own
-    // — the recovery the reviewer's own repro performed.
-    const kept = text
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("-"))
-      .join("\n");
-    const numbers = [...kept.matchAll(/\d+/g)].map((match) => Number(match[0]));
-    expect(Buffer.from(numbers.filter((code) => code <= 255)).toString("utf8")).not.toContain(
-      KEY.value
-    );
-  }, 30_000);
-
-  // Over 255 elements a rendering prints its own COUNT immediately in front of
-  // the bytes — `Uint8Array(298) [` — and `(`, `)` and `[` are not letters
-  // either. The count joined the run, no byte is written as 298, and the whole
-  // run was rejected at decimal radix. A PEM block, a service-account JSON and
-  // a long JWT are all past that length, and all are shapes `env` is documented
-  // to carry.
-  it("replaces a rendering whose element count precedes the bytes", async () => {
-    const long: FlowScriptSecret = { name: "PEM", value: `sk-live-${"a9f3b1c7d5e2".repeat(24)}` };
-    expect(long.value.length).toBeGreaterThan(255);
-    const text = await failWith(
-      `import util from "node:util";
-       throw new Error("digest mismatch " + util.inspect(new Uint8Array(Buffer.from(process.env.K)), { maxArrayLength: Infinity }));`,
-      long
-    );
-    expect(text).toContain("digest mismatch");
-    expectNoValue(text, long);
-  }, 30_000);
-});
-
-/**
- * The cut argent itself makes, which no repair could see.
- *
- * A repair that answers a cut reads the ellipsis the cutter left. Argent's own
- * clamp leaves a marker instead, and `redactTruncated` takes that marker off
- * before the scrub — so the head handed to the repairs held no ellipsis and
- * every one of them read an uncut text. The same value in the same rendering
- * came back repaired when NODE cut it and in the clear when argent did.
- */
-describe("flow script executor — redaction of a value argent's own clamp cut", () => {
-  const KEY: FlowScriptSecret = { name: "LIVEKEY", value: "sk-live-9d3f2a7c41b8e05f6a2d" };
-
-  /**
-   * A failure whose last `room` characters are `tail`, so argent's own ceiling
-   * cuts inside it. The runner's marker eats about thirty of those, which is
-   * why each case names its own room rather than sharing one.
-   */
-  async function clampedAt(tail: string, room: number): Promise<string> {
-    const ws = workspace();
-    const script = ws.write(
-      "clamped.mjs",
-      `throw new Error("x".repeat(${SCRIPT_MAX_FAILURE_MESSAGE_CHARS} - ${room}) + " " + ${tail});`
-    );
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { K: KEY.value },
-      secrets: [KEY],
-    });
-    expect(result.ok).toBe(false);
-    const message = result.failure?.message ?? "";
-    expect(message).toMatch(/more characters omitted]$/);
-    return message;
-  }
-
-  /** No run of six or more characters of the value survives, decoded or raw. */
-  function expectNoFragment(text: string, decode: (fragment: string) => string): void {
-    for (let n = KEY.value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= KEY.value.length; at += 1) {
-        expect(decode(text)).not.toContain(KEY.value.slice(at, at + n));
-      }
-    }
-  }
-
-  // The rendering the clamp cuts through, so its visible head is a PREFIX of
-  // the credential in byte space. `byteRunSpans` has the branch that answers
-  // one; it was gated on an ellipsis argent's own marker never leaves.
-  it("replaces the front of a value left standing in a cut byte rendering", async () => {
-    const message = await clampedAt(
-      `(await import("node:util")).inspect(new Uint8Array(Buffer.from(process.env.K)), { maxArrayLength: Infinity })`,
-      142
-    );
-
-    expect(message).toContain("{{secret:LIVEKEY}}");
-    // Read the numbers back as bytes, which is how the disclosure reads.
-    expectNoFragment(message, (text) =>
-      Buffer.from(
-        [...text.matchAll(/\b\d{1,3}\b/g)].map((match) => Number(match[0])).filter((n) => n <= 255)
-      ).toString("utf8")
-    );
-  }, 30_000);
-
-  // `repairEncodedRuns` had no cut branch at all — the only cut guard on its
-  // path is `partialSecretTail`, which searches for a prefix of a SPELLING, and
-  // that works only while the encoding is character-local. Base64 is the
-  // encoding that is not, which is the reason the pass exists.
-  it("replaces the front of a value left standing in a cut base64 payload", async () => {
-    const message = await clampedAt(
-      `"Basic " + Buffer.from("api:" + process.env.K).toString("base64") + " and more text"`,
-      62
-    );
-
-    expect(message).toContain("{{secret:LIVEKEY}}");
-    // Every base64 run in the report, decoded at each frame offset it can
-    // start on — the reading that recovers a credential from a cut payload.
-    expectNoFragment(message, (text) =>
-      [...text.matchAll(/[A-Za-z0-9+/]{8,}/g)]
-        .flatMap((match) => [0, 1, 2, 3].map((offset) => match[0].slice(offset)))
-        .map((run) => Buffer.from(run, "base64").toString("utf8"))
-        .join("\n")
-    );
-  }, 30_000);
-});
-
-/**
- * Two defects the frame widening and the loosened cut anchor introduced, each
- * the mirror of the other: one replaced too little and disclosed a credential,
- * one replaced too much and corrupted argent's own text.
- */
-describe("flow script executor — what the byte-space repairs must not do", () => {
-  const USER: FlowScriptSecret = { name: "USER", value: "apiuser" };
-  const KEY: FlowScriptSecret = { name: "KEY", value: "sk-live-9d3f4a1b2c8e" };
-  const BOTH = [USER, KEY];
-
-  async function failWith(source: string): Promise<string> {
-    const ws = workspace();
-    const script = ws.write("pair.mjs", source);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { U: USER.value, K: KEY.value },
-      secrets: BOTH,
-    });
-    expect(result.ok).toBe(false);
-    return `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
-  }
-
-  // `encodedRunSpans` widens a byte match out to the base64 frames it lies in,
-  // so two values in one payload share a frame whenever the first leaves the
-  // second starting mid-frame. `spliceSpans` dropped the second span whole and
-  // copied out everything from the end of the first — 19 of the 20 characters
-  // of the key, one base64 hop away. `Basic base64(user:key)` is the idiom the
-  // whole pass exists for, and `len(user) % 3 == 1` is a third of all users.
-  it("replaces BOTH values when two share a base64 frame", async () => {
-    const text = await failWith(
-      `throw new Error("POST /v1/session -> 401  Basic " +
-         Buffer.from(process.env.U + ":" + process.env.K).toString("base64"));`
-    );
-    expect(text).toContain("{{secret:USER}}");
-    expect(text).toContain("{{secret:KEY}}");
-    for (let n = KEY.value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= KEY.value.length; at += 1) {
-        const part = KEY.value.slice(at, at + n);
-        expect(text).not.toContain(part);
-        // And not in the alphabet the payload was written in either.
-        expect(text).not.toContain(Buffer.from(part, "utf8").toString("base64").replace(/=+$/, ""));
-      }
-    }
-  }, 30_000);
-
-  // The mirror: with the prefix free to start anywhere inside the fragment,
-  // one character before an ellipsis matched the first character of SOME
-  // spelling nearly always, and argent's own diagnostic lost a letter to a
-  // placeholder that named a credential nothing had disclosed.
-  it("leaves argent's own quoted, elided wording alone", async () => {
-    for (const wording of [
-      "Command failed: '/bin/sh -c npm run seeds...'",
-      "The runner reported 'ERR_STREAM_PREMATURE_CLOSE' after 3s...",
-      "timed out waiting for 'settle'...",
-    ]) {
-      const text = await failWith(`throw new Error(${JSON.stringify(wording)});`);
-      expect(text).toContain(wording);
-      expect(text).not.toContain("{{secret:");
-    }
-  }, 60_000);
-});
-
-/**
- * The spellings hold what four percent-encoders write, and every other encoder
- * a step meets escapes a different set: `new URL()` by the WHATWG set of the
- * component the value lands in, Python's `quote`, `jq @uri` and `curl` by
- * RFC 3986. A value that mixes a character its encoder escaped with one it kept
- * matched no spelling, and reached the reason and the log one `%XX` away from
- * written. The values are the reviewer's, and each holds characters those
- * tables disagree on.
- */
-describe("flow script executor - redaction of a value another table percent-encoded", () => {
-  const TOKEN: FlowScriptSecret = { name: "TOKEN", value: 'Tr0ub4dor"&3^xYz-9' };
-  const DB_PASS: FlowScriptSecret = { name: "DB_PASS", value: "P@ssw0rd$2026" };
-  const PW: FlowScriptSecret = { name: "PW", value: "P@ss w0rd~2026!" };
-  const ALL = [TOKEN, DB_PASS, PW];
-
-  /** The failure text and the log of one run, with the value in `K`. */
-  async function failWith(
-    source: string,
-    secret: FlowScriptSecret,
-    secrets: FlowScriptSecret[] = ALL
-  ): Promise<{ reason: string; log: string }> {
-    const ws = workspace();
-    const script = ws.write("percent.mjs", source);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      env: { K: secret.value },
-      secrets,
-    });
-    expect(result.ok).toBe(false);
-    return {
-      reason: `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`,
-      log: result.log,
-    };
-  }
-
-  /** No run of six or more characters of the value survives, as written or decoded. */
-  function expectNoValue(text: string, secret: FlowScriptSecret): void {
-    expect(text).toContain(`{{secret:${secret.name}}}`);
-    const decoded = text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
-      try {
-        return decodeURIComponent(run);
-      } catch {
-        return run;
-      }
-    });
-    for (let n = secret.value.length; n >= 6; n -= 1) {
-      for (let at = 0; at + n <= secret.value.length; at += 1) {
-        const part = secret.value.slice(at, at + n);
-        for (const view of [text, decoded, decoded.replace(/\+/g, " ")]) {
-          expect(view).not.toContain(part);
-        }
-      }
-    }
-  }
-
-  // A query is escaped by the WHATWG query set, which keeps `&` and `^` as
-  // written. `Tr0ub4dor%22&3^xYz-9` is no spelling in the list: every one of the
-  // four encoders escapes the `^`.
-  it("replaces a value new URL() percent-encoded into a query", async () => {
-    for (const secret of ALL) {
-      const { reason, log } = await failWith(
-        `const u = new URL("https://api.example.com/v1/items?token=" + process.env.K);
-         console.log("GET " + u);
-         throw new Error("GET " + u + " returned 401");`,
-        secret
-      );
-      const line = `GET https://api.example.com/v1/items?token={{secret:${secret.name}}}`;
-      expect(reason).toContain(`${line} returned 401`);
-      expect(log).toContain(line);
-      expectNoValue(reason, secret);
-      expectNoValue(log, secret);
-    }
-  }, 60_000);
-
-  // A userinfo is escaped by a wider set, which takes the `@` and keeps the
-  // `$`. None of the four encoders does both, so `P%40ssw0rd$2026` is no
-  // spelling either.
-  it("replaces a value new URL() percent-encoded into a userinfo", async () => {
-    for (const secret of ALL) {
-      const { reason, log } = await failWith(
-        `const u = new URL("postgres://app:" + process.env.K + "@db.internal:5432/orders");
-         console.log("connecting to " + u.href);
-         throw new Error("could not connect to " + u.href + ": ECONNREFUSED");`,
-        secret
-      );
-      const url = `postgres://app:{{secret:${secret.name}}}@db.internal:5432/orders`;
-      expect(reason).toContain(`could not connect to ${url}: ECONNREFUSED`);
-      expect(log).toContain(`connecting to ${url}`);
-      expectNoValue(reason, secret);
-      expectNoValue(log, secret);
-    }
-  }, 60_000);
-
-  // Python's `quote(v, safe="")` and `jq @uri` escape `!*'()` as well, which
-  // `encodeURIComponent` keeps, and Python before 3.7 escaped `~` too.
-  // Simulated here, so the case needs no Python on the host.
-  it("replaces a value a strict RFC 3986 encoder wrote", async () => {
-    for (const reserved of ["[!'()*]", "[!'()*~]"]) {
-      for (const secret of ALL) {
-        const { reason, log } = await failWith(
-          `const strict = (v) => encodeURIComponent(v).replace(/${reserved}/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-           const line = "GET https://api.example.com/v1?pw=" + strict(process.env.K);
-           console.error(line);
-           throw new Error(line + " returned 401");`,
-          secret
-        );
-        const line = `GET https://api.example.com/v1?pw={{secret:${secret.name}}}`;
-        expect(reason).toContain(`${line} returned 401`);
-        expect(log).toContain(line);
-        expectNoValue(reason, secret);
-        expectNoValue(log, secret);
-      }
-    }
-  }, 60_000);
-
-  // Form encoding writes a space as `+`, as `URLSearchParams` does, but
-  // Python's `quote_plus` and `urlencode` escape around it by RFC 3986: `~`
-  // stays and `!` goes. `curl --data-urlencode` does the same in lower-case hex.
-  // A value with nothing else to escape leaves no `%XX` in the text at all, so
-  // the `+` reading cannot wait for one.
-  it("replaces a value a form encoder wrote a space of as +", async () => {
-    const PHRASE: FlowScriptSecret = { name: "PHRASE", value: "correct horse~2026" };
-    for (const hexCase of ["toUpperCase", "toLowerCase"]) {
-      for (const secret of [...ALL, PHRASE]) {
-        const { reason, log } = await failWith(
-          `const form = (v) => encodeURIComponent(v)
-             .replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16))
-             .replace(/%[0-9A-Fa-f]{2}/g, (escape) => escape.${hexCase}())
-             .replace(/%20/g, "+");
-           const line = "POST /v1/login pw=" + form(process.env.K);
-           console.error(line);
-           throw new Error(line + " returned 401");`,
-          secret,
-          [...ALL, PHRASE]
-        );
-        const line = `POST /v1/login pw={{secret:${secret.name}}}`;
-        expect(reason).toContain(`${line} returned 401`);
-        expect(log).toContain(line);
-        expectNoValue(reason, secret);
-        expectNoValue(log, secret);
-      }
-    }
-  }, 60_000);
-
-  // Decoding is only how a value is found. An escape that spells none stays
-  // exactly as the script wrote it, `+` and all.
+  // Only a whole form of a value is replaced. `P%40ss` is the start of `PW`
+  // percent-encoded, and every escape in the line stays as the script wrote it,
+  // `+` and all.
   it("leaves percent-escaped text that holds no value alone", async () => {
+    const PW: FlowScriptSecret = { name: "PW", value: "P@ss w0rd~2026!" };
     const line =
       "GET https://api.example.com/v1/search?q=caf%C3%A9+menu%20P%40ss&page=1%2C2 returned 500 (100%25 of retries)";
-    const { reason, log } = await failWith(
+    const ws = workspace();
+    const script = ws.write(
+      "percent.mjs",
       `console.log(${JSON.stringify(line)});
-       throw new Error(${JSON.stringify(line)});`,
-      PW
+       throw new Error(${JSON.stringify(line)});`
     );
-    expect(reason).toContain(line);
-    expect(log).toContain(line);
-    expect(reason).not.toContain("{{secret:");
-    expect(log).not.toContain("{{secret:");
-  }, 30_000);
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { K: PW.value },
+      secrets: [PW],
+    });
 
-  // A hit has to cover something decoded. `Q` stands inside its own
-  // placeholder, where the whole-value scrub leaves it alone on purpose, and
-  // decoding the `%2C` beside that placeholder must not find it there again.
-  it("does not nest a placeholder that stands beside an escape", async () => {
-    const Q: FlowScriptSecret = { name: "Q0", value: "Q" };
-    const { reason, log } = await failWith(
-      `const line = "value=" + process.env.K + "%2C next";
-       console.log(line);
-       throw new Error(line);`,
-      Q,
-      [Q]
-    );
-    expect(reason).toContain("value={{secret:Q0}}%2C next");
-    expect(log).toContain("value={{secret:Q0}}%2C next");
-    expect(reason).not.toContain("{{secret:{{secret:");
-    expect(log).not.toContain("{{secret:{{secret:");
+    expect(result.ok).toBe(false);
+    const reason = `${result.failure?.message ?? ""}\n${result.failure?.stack ?? ""}`;
+    expect(reason).toContain(line);
+    expect(result.log).toContain(line);
+    expect(reason).not.toContain("{{secret:");
+    expect(result.log).not.toContain("{{secret:");
   }, 30_000);
 });

@@ -37,6 +37,7 @@ import {
   SCRIPT_ENV_NAME_PATTERN,
   type ConfigDefinition,
 } from "@argent/configuration-core";
+import { makeSensitiveBank } from "@zapier/secret-scrubber/lib/utils";
 import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
 import {
@@ -65,20 +66,6 @@ const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
  * what a reader sees first, on the step's own line, so it stays short.
  */
 const STDERR_REASON_LINE_CHARS = 1_000;
-/**
- * How much of the stderr text ahead of that line is kept, to redact the line
- * in. Never reported: it is read once, on a step that failed with secrets.
- *
- * The line alone is out of context. `base64` and `xxd -p` wrap at a fixed
- * column, so when a script's last words are the encoding of a credential, the
- * line is the encoding's LAST line, and on its own it decodes to a piece of the
- * value that no whole-text repair can see. So the window has to hold the whole
- * wrapped run behind it. A 4096-bit RSA key in PEM, as `openssl genpkey` writes
- * one, is 3,272 bytes: `xxd -p` spells that as 6,544 hex digits in lines of 60,
- * 6,654 characters with the newlines, and `base64` as 4,422. An 8192-bit key is
- * 12,989 characters of hex, still inside with room for the line in front.
- */
-const STDERR_REASON_CONTEXT_CHARS = 16 * 1024;
 const SETTLE_TIMEOUT_MS = 500;
 const STOP_GRACE_MS = 1_500;
 /**
@@ -903,7 +890,7 @@ export class FlowScriptExecutor {
     lifeline?.destroy?.();
     if (child.connected) child.disconnect();
 
-    const { text: log, truncated: logTruncated } = capture.finish();
+    const log = capture.text;
     const outcome = classifyOutcome({
       exit,
       spawnProblem,
@@ -917,15 +904,7 @@ export class FlowScriptExecutor {
       heapLimitMb: bounds.heapLimitMb,
     });
     const verdict = redactSecrets(
-      run.interpreter === "bash"
-        ? withStderrLine(outcome, () =>
-            stderrLineInContext(
-              capture.lastStderrLine,
-              capture.stderrBeforeLastLine,
-              request.secrets ?? []
-            )
-          )
-        : outcome,
+      run.interpreter === "bash" ? withStderrLine(outcome, capture.lastStderrLine) : outcome,
       request.secrets ?? []
     );
 
@@ -960,7 +939,7 @@ export class FlowScriptExecutor {
     return {
       ...verdict,
       log,
-      logTruncated,
+      logTruncated: capture.truncated,
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
@@ -1086,18 +1065,12 @@ function redactSecrets(
  * does, so the last line it wrote there ends the reason. Only on `exit`: a
  * signal, a time limit or a document the runner could not read already carries
  * the runner's own account, and the log has every line either way.
- *
- * The line is read only past that gate, because reading it is what redacts it
- * ({@link stderrLineInContext}). One gate then decides both: no line is
- * redacted that the reason will not carry, and none is carried unredacted.
  */
 function withStderrLine(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
-  readLine: () => string
+  line: string
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
-  if (verdict.failure?.kind !== "exit") return verdict;
-  const line = readLine();
-  if (!line) return verdict;
+  if (!line || verdict.failure?.kind !== "exit") return verdict;
   return {
     ...verdict,
     failure: {
@@ -1105,35 +1078,6 @@ function withStderrLine(
       message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
-}
-
-/**
- * The line {@link withStderrLine} ends the reason with, redacted in the text
- * stderr carried before it.
- *
- * Redacted on its own, the line is out of context. When a script's last words
- * are a `base64` or `xxd -p` of a credential, the encoder has wrapped them, and
- * the line is only the run's LAST line: on its own it decodes to a large piece
- * of the value, and the repairs that take the whole run in the log never see
- * the rest of it. So the text ahead of the line is redacted with it, as ONE
- * text, by the pass a failure message gets, and only the last line of the
- * result is kept. A replacement that began on an earlier line brings that
- * line's start with it, which says where the value began.
- *
- * Only where there is something to hide, so a step with no secrets reports the
- * line exactly as the script wrote it, and only when {@link withStderrLine}
- * reads it, which is when the reason will carry it. `redactSecrets` scrubs the
- * whole reason again after the join, as the log is scrubbed live and again
- * when it is finished.
- */
-function stderrLineInContext(
-  line: string,
-  before: string,
-  secrets: readonly FlowScriptSecret[]
-): string {
-  if (secrets.length === 0 || !line) return line;
-  const redacted = redactTruncated(`${before}${line}`, secrets);
-  return redacted.slice(redacted.lastIndexOf("\n") + 1).trim();
 }
 
 /**
@@ -1347,214 +1291,38 @@ function memberPath(key: string): string {
 }
 
 /**
- * A value whose own edge whitespace the child ATE, as spellings to replace
- * beside the value itself.
+ * Each resolved value, and each form of it `@zapier/secret-scrubber` looks
+ * for, under the value's own name: the value as written, at any length, and
+ * for a value of six characters or more its `encodeURIComponent` form, that
+ * form with a space as `+`, its JSON-escaped body and its base64.
  *
- * The parent trims the stderr line a `.sh` exited on, and a whole-value
- * replacement then finds nothing: a secret sitting at the edge of that line
- * arrives with its own leading or trailing whitespace gone, which is one
- * character short of the value the scrub looks for. A PEM key and a
- * service-account blob both end in a newline, and `echo "…$KEY" >&2` is the
- * idiomatic way to report one — so the shape the redaction promise exists for
- * was the shape that missed it.
- *
- * Each spelling is the value minus whitespace only. That is not a promise that
- * a hit is always the credential: a secret stored with padding around a short
- * core — `" 3 "` — contributes `"3"`, and an unrelated `exited with code 3`
- * is then rewritten. A value of `"3"` with no padding already behaves that way,
- * because the design has no minimum secret length by decision, so this follows
- * the rule rather than adding to it — and over-redacting a step's own text is
- * the lesser fault against reporting a credential in the clear.
- *
- * An all-whitespace value trims to "", which `scrubSecretValues` skips.
+ * Only the list comes from the scrubber. {@link scrubSecretValues} and
+ * {@link scrubSecretChunk} replace every form in one pass, longest first
+ * across every secret, so a value that holds another one is taken whole in
+ * each of its forms - its encoding carries the other value's raw text.
  */
-function withTrimmedSpellings(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
-  const spellings: FlowScriptSecret[] = [];
-  for (const secret of secrets) {
-    spellings.push(secret);
-    for (const value of [secret.value.trimEnd(), secret.value.trimStart(), secret.value.trim()]) {
-      if (value.length === 0 || value === secret.value) continue;
-      if (spellings.some((seen) => seen.value === value)) continue;
-      spellings.push({ name: secret.name, value });
+function secretForms(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
+  const forms = [...secrets];
+  for (const { name, value } of secrets) {
+    for (const form of Object.keys(makeSensitiveBank([value]))) {
+      if (!forms.some((seen) => seen.value === form)) forms.push({ name, value: form });
     }
   }
-  return spellings;
+  return forms;
 }
 
 /**
- * What an ENCODER between the child and this report wrote the value as.
- *
- * The scrub searches for the value's raw bytes, so every re-encoding on the way
- * here defeats it — and the encoders in the path are ordinary ones a
- * verification script reaches for in one line. Each of these was reproduced end
- * to end, against a control with a value holding nothing an encoder touches:
- *
- *   - `assert.strictEqual(process.env.K, …)` renders its diff with
- *     `util.inspect`, which quotes and escapes;
- *   - the runner's own `describeThrown` JSON-encodes anything thrown that is
- *     not an `Error` message, so `throw { key }` and an object `cause` arrive
- *     escaped;
- *   - `new URL(…).searchParams.set("t", value)` percent-encodes, and writes a
- *     PLAIN SPACE as `+` — which is why this is not a special-characters case:
- *     the brief's own worked run-time value is `--env "AUTH=Bearer abc"`.
- *
- * The same argument settles the binary-to-text encoders, which are one call
- * each and lossless: `Buffer.from(k).toString("base64")` is how a Basic auth
- * header is built and `"hex"` is how a signing key is printed, so a script that
- * reports the header it sent reports the credential. `base64` and `hex` are
- * also what `base64` and `xxd -p` write on the `.sh` side of the same step.
- *
- * The escaping is trivially reversible, so leaving it is disclosure rather than
- * obfuscation. The reasoning already existed for one character: the `env`
- * resolver refuses a value holding a NUL because Node quotes it back escaped
- * "so the scrub — which searches for the raw bytes — finds nothing". It was
- * never carried past NUL to `\n`, `"`, `\`, a tab, or a space.
- *
- * Every spelling is derived by the REAL encoder wherever there is one, so a
- * rule that differs from a hand-written table — `URLSearchParams` writing `+`
- * for a space and `%27` for an apostrophe where `encodeURIComponent` writes
- * neither — cannot drift apart from it.
- *
- * The LINES of a multi-line value are spellings of their own, because
- * `util.inspect` writes a long one as one quoted chunk per line joined by
- * `' +`, and no whole-value match survives the glue between them. A PEM key and
- * a service-account blob are the shapes this feature is documented for. A
- * single-line value, which is nearly all of them, gains no line spelling at
- * all.
- *
- * Only a line holding at least {@link CUT_MIN_PREFIX_CHARS} characters that
- * are not whitespace, which is the shortest fragment of a credential this file
- * treats as a disclosure anywhere else. A service-account key is pretty-printed
- * JSON whose first and last lines are `{` and `}`, so without the floor every
- * brace any JSON-printing script wrote became a placeholder. The rescan in
- * {@link ScriptLogCapture.finish} then took the braces inside the placeholders
- * it had just written, nesting them, and the growth pushed a real log past its
- * limit and cut its last line. A whitespace-only line did the same to every
- * run of spaces. A line that short says nothing about the value, and the lines
- * above the floor still take every `util.inspect` chunk that carries one.
- *
- * A value the URI encoders refuse — a lone surrogate is the one way in — simply
- * contributes no spelling for them. Throwing here would take down the verdict
- * the redaction exists to make safe.
- */
-function encodedSpellings(value: string): string[] {
-  const spellings: string[] = [];
-  spellings.push(...quotedSpellings(value));
-  try {
-    spellings.push(encodeURIComponent(value));
-    spellings.push(encodeURI(value));
-    spellings.push(new URLSearchParams([["", value]]).toString().slice(1));
-    // `escape` is the third percent-encoder in the language and the one a
-    // pre-`encodeURIComponent` idiom still reaches for. Deprecated, not gone.
-    spellings.push(escape(value));
-  } catch {
-    // A lone surrogate. The raw value and every other spelling still stand.
-  }
-  // The binary-to-text encoders. Each is one call on a credential and each is
-  // lossless, so what reaches the report is the value itself in another
-  // alphabet — a `Basic` header is base64 and a signing key is hex.
-  const bytes = Buffer.from(value, "utf8");
-  for (const encoding of ["base64", "base64url", "hex", "latin1"] as const) {
-    spellings.push(bytes.toString(encoding));
-  }
-  // Case and Unicode form. Neither is an encoder a script applies on purpose,
-  // but both come off an ordinary comparison — `tr a-z A-Z`, a `toUpperCase`
-  // before a lookup, a `normalize` before a signature — and a case fold is a
-  // TOTAL disclosure of a hex or base32 key, whose alphabet has one case.
-  spellings.push(value.toUpperCase(), value.toLowerCase());
-  for (const form of ["NFC", "NFD", "NFKC", "NFKD"] as const) {
-    spellings.push(value.normalize(form));
-  }
-  // Each line RAW and escaped alike. `util.inspect` picks the quote per chunk
-  // and escapes the rest, so a line holding anything its `strEscape` rewrites —
-  // a trailing `\r` from CRLF is the ordinary case, and a Windows-authored PEM
-  // has one on every line but the last — never matches its raw spelling. The
-  // escaped set is a C0 or C1 control, a backslash, a lone surrogate, and an
-  // apostrophe on a line that also holds both other quotes; a line free of all
-  // of them is why the raw spelling covers LF-only values today.
-  if (value.includes("\n")) {
-    for (const line of value.split("\n")) {
-      if (line.trim().length < CUT_MIN_PREFIX_CHARS) continue;
-      spellings.push(line, ...quotedSpellings(line));
-    }
-  }
-  return spellings;
-}
-
-/**
- * The body a JSON encoder writes, which is also `util.inspect`'s double-quoted
- * form; then its single-quoted form, which is what inspect prefers and differs
- * in exactly the two quotes; then its BACKTICK form, which inspect picks for a
- * value holding both other quotes and which escapes neither of them.
- *
- * Each body again with `\xNN` where JSON writes `\u00nn`. That is the one
- * character class the two encoders spell differently — inspect's own escape for
- * a control character — and an ESC or a NEL inside a token is enough to reach
- * it. `\n`, `\t`, `\r`, `\b`, `\f` and `\v` are named the same way by both, so
- * they need no second form.
- */
-function quotedSpellings(text: string): string[] {
-  const json = JSON.stringify(text).slice(1, -1);
-  const unquoted = json.replace(/\\"/g, '"');
-  const bodies = [
-    json,
-    unquoted.replace(/'/g, "\\'"),
-    unquoted.replace(/`/g, "\\`").replace(/\$\{/g, "\\${"),
-  ];
-  return [...bodies, ...bodies.map(inspectEscapes)];
-}
-
-/**
- * One JSON body as `util.inspect` would have written it, which differs in the
- * control characters and in nothing else.
- *
- * Two classes, not one. Below U+0020 both encoders escape and only the spelling
- * differs: JSON writes `\u001b` where inspect writes `\x1B`. From U+007F to
- * U+009F, `JSON.stringify` escapes NOTHING and inspect still writes `\xNN`, so
- * the raw character reaches the body and no rewrite of `\u00nn` can find it.
- * NEL (U+0085) is the one that turns up: a line break to a YAML reader, an
- * ordinary character to everything else.
- */
-function inspectEscapes(body: string): string {
-  return body
-    .replace(/\\u00([0-9a-f]{2})/g, (_match, code: string) => `\\x${code.toUpperCase()}`)
-    .replace(
-      /[\u007f-\u009f]/g,
-      (character) => `\\x${character.charCodeAt(0).toString(16).toUpperCase()}`
-    );
-}
-
-/**
- * Every spelling of every resolved value this report may hold, for one scrub.
- *
- * {@link scrubSecretValues} takes them as one list and orders it longest first,
- * so a value that contains another — or a spelling that contains the value it
- * came from — is still taken whole.
- */
-function scriptSecretSpellings(raw: readonly FlowScriptSecret[]): FlowScriptSecret[] {
-  const spellings = withTrimmedSpellings(raw);
-  for (const secret of raw) {
-    for (const value of encodedSpellings(secret.value)) {
-      if (value.length === 0 || spellings.some((seen) => seen.value === value)) continue;
-      spellings.push({ name: secret.name, value });
-    }
-  }
-  return spellings;
-}
-
-/**
- * One text of a failed script step with every resolved value replaced, in every
- * spelling this report can hold one in.
+ * One text of a failed script step with every form of each resolved value
+ * replaced by its `{{secret:NAME}}` placeholder.
  *
  * Exported for the one caller that DECODES after the scrub has run:
  * `scriptFrames` reads the already-scrubbed stack and turns each `file://…`
- * frame back into a path, so a value that stood in a path reached the scrub
- * percent-encoded and reached the reader raw. Whatever decodes has to scrub
- * again, and this is that scrub.
+ * frame back into a path. Whatever decodes has to scrub again, and this is
+ * that scrub.
  */
 export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
   if (secrets.length === 0) return text;
-  return scrubSecretValues(text, scriptSecretSpellings(secrets));
+  return scrubSecretValues(text, secretForms(secrets));
 }
 
 /**
@@ -1563,1424 +1331,21 @@ export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret
  * the cut leaves a prefix that a whole-value replacement never matches. That
  * tail is dropped and counted, and only on text whose marker says it was cut.
  *
- * The marker is read off the RAW text, and the scrub runs on the head alone.
- * Read off the scrubbed text instead, the repair was defeated by any secret
- * whose value occurs inside the marker — which is argent's own sentence around
- * a character COUNT, so a value of `"0"` is enough, and `withTrimmedSpellings`
- * hands one over for a secret stored as `" 0 "`. The marker was then rewritten,
- * neither pattern matched it, the repair was skipped, and the OTHER secret's
- * partial half stayed in the step reason, the `--json` report and the MCP call
- * log. Every character of the marker is written by argent — the runner's own
- * wording and a number it counted — so nothing in it is a value to find, and
- * leaving it out of the scrub is also what stops a count reading `2{{secret:…}}43`.
+ * Both are read off the RAW text, before the scrub. Every character of the
+ * marker is argent's own - the runner's wording and a number it counted - so a
+ * secret whose value occurs in it (a value of `"0"` is enough) must not rewrite
+ * it and hide the cut. And the tail is the front of one value, which can hold a
+ * shorter secret that a scrub would replace, leaving a front no prefix matches.
  */
-function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string {
-  const secrets = scriptSecretSpellings(raw);
-  // The part ENDS at a cut, which nothing in the text can say any more: the
-  // marker is argent's own and is taken off before the scrub runs, so the head
-  // handed over holds no ellipsis and every repair that reads one saw an uncut
-  // text. The repair that answers a foreign cut was then off on the one cut
-  // argent itself makes — a `<Buffer …>` rendering came back repaired when NODE
-  // cut it and in the clear when argent did, from the same value and the same
-  // rendering.
+function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
+  const forms = secretForms(secrets);
   const omission = OMISSION_RE.exec(text);
-  if (!omission) return scrubScriptPart(text, secrets, false);
-  const head = scrubScriptPart(text.slice(0, omission.index), secrets, true);
-  const partial = partialSecretTail(head, secrets);
-  return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
+  if (!omission) return scrubSecretValues(text, forms);
+  const head = text.slice(0, omission.index);
+  const partial = partialSecretTail(head, forms);
+  const kept = scrubSecretValues(head.slice(0, head.length - partial), forms);
+  return `${kept}${omissionMarker(Number(omission[1]) + partial)}`;
 }
-
-/**
- * Every spelling replaced, then every repair: the whole-text pass a failed
- * step's message, its stack and its log all get. `cutAtEnd` says the text ends
- * at a cut argent made, which the repairs that answer a cut prefix have to be
- * told.
- *
- * Whole values first, then the prefixes a cut somewhere else left behind. The
- * order is what keeps the second pass off a value the first one already took:
- * it searches only for prefixes SHORTER than the value they came from.
- */
-function scrubScriptPart(part: string, spellings: FlowScriptSecret[], cutAtEnd: boolean): string {
-  return SCRUB_REPAIRS.reduce(
-    (carried, repair) => repair(carried, spellings, cutAtEnd),
-    scrubSecretValues(part, spellings)
-  );
-}
-
-/**
- * What runs after the whole-value scrub, in order. Each one answers a rendering
- * that leaves no spelling of the value in the text: a prefix another process
- * cut, a dump tool's rows, a rendering of the bytes, an escaper's backslashes,
- * a percent-encoder's escapes, a re-encoding into another alphabet. Each reads
- * the text the ones before it left, so a value that two of them rewrote is
- * still taken.
- */
-const SCRUB_REPAIRS = [
-  repairQuotedCuts,
-  repairDumpRows,
-  repairByteRenderings,
-  repairBackslashEscapes,
-  repairPercentEscapes,
-  repairEncodedRuns,
-] as const;
-
-/**
- * A value some OTHER process cut, repaired where the cut left a quoted prefix.
- *
- * {@link redactTruncated} answers argent's own clamp, which cuts at the end of
- * the text and says so in a marker. V8 and Node cut in the MIDDLE of a message
- * and say so with an ellipsis, embedding a fixed-length prefix of a string
- * argument in the error they raise:
- *
- *   - `JSON.parse(k)` — 10 characters, V8's own window;
- *   - any API raising `ERR_INVALID_ARG_TYPE` with the value as the offending
- *     argument — 25 characters, and `setTimeout(k, 1)` is enough to reach it;
- *   - `ERR_INVALID_ARG_VALUE` — 128 characters.
- *
- * A prefix is not the value, so the whole-value scrub cannot match it, and none
- * of these ends in a marker {@link redactTruncated} reads — so a `.mjs` that
- * handed a resolved secret to a Node API reported the front of that credential
- * in the step reason, the `--json` report and the recorder's own result. The
- * cut only bites a value LONGER than the window, which is why short fixture
- * values came back correctly scrubbed and real-length tokens did not.
- *
- * Anchored on the QUOTES Node renders the cut value in, not on the ellipsis
- * alone. Every one of these writes the fragment as `'…...'` or `"…"...`, so the
- * repair asks for a whole quoted fragment that is a prefix of a value — which
- * an ordinary `timed out...` in a script's own prose is not. Keyed on the
- * ellipsis alone, a single character before any `...` in the text would answer,
- * and the report would lose a letter of its own wording to a placeholder.
- *
- * The window count itself is left alone: it is Node's wording, and there are
- * three different ones. What the reader needs is that the fragment was a
- * credential, which the placeholder says.
- */
-function repairQuotedCuts(text: string, secrets: readonly FlowScriptSecret[]): string {
-  const cuts = [...text.matchAll(FOREIGN_CUT_RE)];
-  if (cuts.length === 0) return text;
-  const quotes = openingQuotes(text);
-  const ends = prefixEnds(secrets);
-  let out = "";
-  let copied = 0;
-  for (const cut of cuts) {
-    const hit = quotedCutBefore(text, cut.index, copied, secrets, quotes, ends);
-    if (!hit) continue;
-    out += `${text.slice(copied, hit.from)}${SECRET_PLACEHOLDER_MARKER}${hit.name}}}`;
-    copied = hit.from + hit.length;
-  }
-  return copied === 0 ? text : out + text.slice(copied);
-}
-
-/**
- * For each position, the nearest quote at or before it, or `-1`.
- *
- * Read once for the whole text rather than at each candidate, because the
- * candidates are the PRODUCT of the ellipses in the text and the length of a
- * spelling, and neither is bounded by anything smaller than the 8 KiB message
- * and 16 KiB stack ceilings. A failure text that is dense in ellipses and a
- * value long enough to be a PEM key — the shape the docs recommend an `env`
- * value for — met as a walk of one against the other, on the shared tool
- * server's own event loop, after the child had already exited. Neither factor
- * costs anything alone, which is what made the product easy to miss.
- */
-function openingQuotes(text: string): Int32Array {
-  const quotes = new Int32Array(text.length);
-  let last = -1;
-  for (let at = 0; at < text.length; at++) {
-    if (CUT_QUOTES.has(text[at]!)) last = at;
-    quotes[at] = last;
-  }
-  return quotes;
-}
-
-/**
- * The longest value prefix that runs from just after a quote to the cut, over
- * every spelling. Two ends are tried, because the cut sits inside the quotes
- * for one Node shape (`'sk-live-ab...'`) and outside the closing one for the
- * other (`"sk-live-9d"...`).
- *
- * Shorter than the value it came from, always: a whole value is what
- * `scrubSecretValues` has already replaced, and searching for one here would
- * only find text that pass left alone on purpose.
- *
- * The quote that OPENS the fragment is the nearest one before the cut, and it
- * bounds the descent: nothing before it is inside the fragment, so no prefix
- * can start there. A cut with no quote in front of it at all answers nothing
- * and is skipped whole. For a value that holds a quote of its own the nearest
- * quote can be the value's, which anchors the repair short — the raw scrub
- * still takes such a value whole, and every credential shape this repair was
- * written for holds none.
- *
- * The prefix starts ANYWHERE inside that fragment, not one character after the
- * quote. Node puts its window over the argument it was handed, and a script
- * hands it the credential built into a larger string — `JSON.parse` on
- * `{"token":<value>}` reports `"{"token":sk-live-9d"...`, and `setTimeout` on
- * `"Bearer " + value` reports `('Bearer sk-live-9d3f-topse...')`. Both are one
- * quoted fragment whose prefix is argent's to leave alone and whose tail is the
- * front of a credential. Requiring the value at the quote answered neither.
- *
- * That freedom is why {@link CUT_MIN_PREFIX_CHARS} exists. Anchored at the
- * quote, a one-character "prefix" had to be the first character of the
- * fragment; anchored anywhere, every character before an ellipsis inside quotes
- * is a candidate, and one of them matches the first character of SOME spelling
- * nearly always. `Command failed: '/bin/sh -c npm run seeds...'` came back as
- * `… npm run seed{{secret:API_KEY}}...` — argent's own diagnostic corrupted,
- * and a credential announced where none stood.
- */
-function quotedCutBefore(
-  text: string,
-  at: number,
-  floor: number,
-  secrets: readonly FlowScriptSecret[],
-  quotes: Int32Array,
-  ends: ReadonlyArray<ReadonlyMap<string, number[]>>
-): { from: number; length: number; name: string } | undefined {
-  const cuts = at - 1 > floor && CUT_QUOTES.has(text[at - 1]!) ? [at, at - 1] : [at];
-  let best: { from: number; length: number; name: string } | undefined;
-  for (const end of cuts) {
-    const quote = end > 0 ? quotes[end - 1]! : -1;
-    if (quote < floor) continue;
-    const last = text[end - 1]!;
-    for (const [index, { name, value }] of secrets.entries()) {
-      const longest = Math.min(value.length - 1, end - quote - 1);
-      // Only the lengths whose LAST character is the one before the cut can
-      // match, and they arrive longest first. A character no spelling ends on
-      // costs one map lookup, which is what keeps an ellipsis-dense text off
-      // the whole descent.
-      for (const n of ends[index]!.get(last) ?? []) {
-        if (n > longest) continue;
-        if (n <= (best?.length ?? 0)) break;
-        if (!holdsPrefix(text, end - n, value, n)) continue;
-        best = { from: end - n, length: n, name };
-        break;
-      }
-    }
-  }
-  return best;
-}
-
-/**
- * Per spelling, the prefix lengths that END on a given character, longest
- * first — the index {@link quotedCutBefore} reads its candidates out of.
- *
- * Built once for the whole text rather than walked per cut. The descent it
- * replaces was bounded by the nearest quote, which answers a quote-dense text
- * but not a text holding ONE quote and then thousands of ellipses: there the
- * bound stayed at the spelling's own length and the product came back. A PEM
- * key against the 16 KiB stack ceiling took 1.7 s of the shared server's event
- * loop; the same run is now flat against a text with no ellipsis at all.
- */
-function prefixEnds(secrets: readonly FlowScriptSecret[]): Array<Map<string, number[]>> {
-  return secrets.map(({ value }) => {
-    const ends = new Map<string, number[]>();
-    for (let n = value.length - 1; n >= CUT_MIN_PREFIX_CHARS; n--) {
-      const last = value[n - 1]!;
-      const lengths = ends.get(last);
-      if (lengths) lengths.push(n);
-      else ends.set(last, [n]);
-    }
-    return ends;
-  });
-}
-
-/**
- * The shortest cut prefix worth repairing, which is also the shortest fragment
- * of a credential this file treats as a disclosure at all: the redaction tests
- * sweep every run down to six characters, on the reasoning that anything an
- * encoder wrote is trivially reversible. Below it a match says more about the
- * alphabet than about the value — six specific characters landing in argent's
- * own wording is a coincidence no failure text has produced, and one character
- * is a coincidence nearly every failure text produces.
- *
- * What it gives up is the tail of a window a long non-secret prefix already ate
- * — `setTimeout("<24 characters> " + key, 1)` leaves one character of the key
- * inside Node's 25-character window. Five characters of a credential is the
- * most this can leave standing, against corrupting the report on text that
- * holds none.
- */
-const CUT_MIN_PREFIX_CHARS = 6;
-
-/**
- * Whether `text` carries the first `n` characters of `value` at `from`.
- *
- * Compared in place rather than through `startsWith` on a slice: the slice
- * allocates the whole prefix on every candidate, and a candidate is rejected on
- * its first character nearly always.
- */
-function holdsPrefix(text: string, from: number, value: string, n: number): boolean {
-  for (let at = 0; at < n; at++) {
-    if (text[from + at] !== value[at]) return false;
-  }
-  return true;
-}
-
-/**
- * A value RENDERED AS BYTES, which is neither a spelling of it nor a cut of it.
- *
- * `util.inspect` prints a `Buffer` or a `TypedArray` as its NUMBERS, so nothing
- * a whole-value or per-spelling search looks for is in the text at all — and
- * the disclosure is total and lossless, character for character. Two shapes
- * reach a step reason, both from one line a seeding script plausibly writes:
- *
- *   assert.deepStrictEqual(Buffer.from(process.env.API_KEY), expected)
- *
- * renders decimal, one byte per line, with the assert diff's own `+ ` down the
- * left — so the bytes are not even contiguous — and `util.inspect(Buffer.from(k))`
- * renders `<Buffer 73 6b 2d …>` in hex, cut to the first 50 with a `… N more
- * bytes` trailer of Node's own.
- *
- * Read as numbers rather than matched as text, which is what makes one rule of
- * it: whatever sits between the numbers — a comma, a newline, a diff marker, an
- * indent — is separator, and the run is decoded and searched in byte space. A
- * run is broken wherever a LETTER appears between two numbers, which is what
- * keeps `Buffer(49) [Uint8Array] [` out of the bytes that follow it.
- *
- * Both readings of a run are tried, because the two shapes disagree on the
- * radix and neither announces it: decimal admits one to three digits under 256,
- * hex exactly two digits. A run that is not a byte rendering decodes to bytes
- * that hold no value, and nothing is replaced.
- */
-function repairByteRenderings(
-  text: string,
-  secrets: readonly FlowScriptSecret[],
-  cutAtEnd = false
-): string {
-  const needles = secrets
-    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
-    .filter(({ bytes }) => bytes.length > 0)
-    .sort((a, b) => b.bytes.length - a.bytes.length);
-  if (needles.length === 0) return text;
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  const sides = diffSides(text);
-  for (const { radix, numbers } of BYTE_VIEWS) {
-    for (const dropped of sides) {
-      const runs = byteRuns(text, numbers, radix, dropped);
-      // The run nearest argent's own cut is the one whose tail may be a value's
-      // front. Nothing in the text says so — the marker is gone — so the caller
-      // does.
-      const last = runs[runs.length - 1];
-      if (cutAtEnd && last) {
-        last.cut = true;
-        last.argentCut = true;
-      }
-      for (let at = 0; at < runs.length; at++) {
-        spans.push(...byteRunSpans(runs[at]!, radix, needles));
-        spans.push(...stitchedSpans(runs[at]!, runs[at + 1], radix, needles));
-      }
-    }
-  }
-  return spliceSpans(text, spans);
-}
-
-/**
- * The readings of one text a DIFF asks for: the text whole, and then each side
- * of it with the other side's lines gone.
- *
- * `assert.deepStrictEqual(Buffer.from(k), expected)` renders the two buffers
- * INTERLEAVED, one byte per line, each line carrying the `+` or `-` of the side
- * it belongs to and a line both sides agree on carrying neither. Read whole,
- * the run holds one side's bytes with the other's mixed through it, so no
- * contiguous stretch of it spells the value and every byte of the credential
- * printed. {@link stitchedSpans} does not answer it either: it joins a run's
- * tail to the next run's head, and an interleaving is not one break but one per
- * line.
- *
- * Read with the `-` lines dropped, the same run is exactly what the script's
- * own buffer held. Dropping them at the CHARACTER level rather than dropping
- * their tokens is what makes that work — `- Buffer(8) [Uint8Array] [` is a line
- * of the other side, and its letters would otherwise end the run in the middle
- * of the value.
- *
- * Only when the text carries both markers, which is the shape a diff has and
- * ordinary prose with a hyphen at a line start does not. Everything else reads
- * once, exactly as before.
- */
-function diffSides(text: string): Array<Uint8Array | undefined> {
-  const marks = lineMarkers(text);
-  if (!marks) return [undefined];
-  return [undefined, marks.minus, marks.plus];
-}
-
-/**
- * A mask per side, marking every character on a line that side owns, or nothing
- * when the text is no diff. A line's side is its first non-blank character.
- */
-function lineMarkers(text: string): { minus: Uint8Array; plus: Uint8Array } | undefined {
-  const minus = new Uint8Array(text.length);
-  const plus = new Uint8Array(text.length);
-  let sawMinus = false;
-  let sawPlus = false;
-  for (let from = 0; from <= text.length; ) {
-    const brk = text.indexOf("\n", from);
-    const to = brk < 0 ? text.length : brk + 1;
-    let at = from;
-    while (at < to && (text[at] === " " || text[at] === "\t")) at++;
-    const mark = at < to ? text[at] : undefined;
-    if (mark === "-" || mark === "+") {
-      const side = mark === "-" ? minus : plus;
-      side.fill(1, from, to);
-      if (mark === "-") sawMinus = true;
-      else sawPlus = true;
-    }
-    if (brk < 0) break;
-    from = to;
-  }
-  return sawMinus && sawPlus ? { minus, plus } : undefined;
-}
-
-/**
- * The two readings, each with the digits its own radix writes a byte in.
- *
- * Tokenized apart rather than tokenized once and filtered, because a hex letter
- * standing next to a decimal rendering — the `B` of the `- Buffer(4)` line an
- * assert diff puts between two halves of the actual buffer — would otherwise
- * join the run and stop it decoding as decimal at all.
- */
-const BYTE_VIEWS = [
-  { radix: 10, numbers: /[0-9]+/g },
-  { radix: 16, numbers: /[0-9A-Fa-f]+/g },
-] as const;
-
-/**
- * A value the rendering itself SPLIT, across the break that split it.
- *
- * `assert.deepStrictEqual(Buffer.from(k), expected)` writes the two buffers
- * interleaved — the expected side's `Buffer(4) [Uint8Array] [` lands in the
- * middle of the actual side's bytes — so the credential ends one run and
- * resumes in the next, and neither run holds it whole.
- *
- * The gate is that the two halves reconstruct the WHOLE value: the tail of one
- * run and the head of the next have to be a value's own two pieces, at the same
- * radix, with nothing left over. That is what lets this run without a length
- * floor, which the design has none of — a one-byte tail that happens to open a
- * value answers nothing unless the rest of that value follows it exactly.
- */
-function stitchedSpans(
-  run: ByteRun,
-  next: ByteRun | undefined,
-  radix: number,
-  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
-): Array<{ from: number; to: number; name: string }> {
-  if (!next) return [];
-  const head = decodeByteRun(run, radix);
-  const tail = decodeByteRun(next, radix);
-  if (!head || !tail) return [];
-  for (const { name, bytes } of needles) {
-    for (let n = Math.min(bytes.length - 1, head.length); n > 0; n--) {
-      const rest = bytes.length - n;
-      if (rest > tail.length) continue;
-      if (head.compare(bytes, 0, n, head.length - n, head.length) !== 0) continue;
-      if (tail.compare(bytes, n, bytes.length, 0, rest) !== 0) continue;
-      return [...runSpans(run, head.length - n, n, name), ...runSpans(next, 0, rest, name)];
-    }
-  }
-  return [];
-}
-
-interface ByteRun {
-  tokens: Array<{
-    from: number;
-    to: number;
-    text: string;
-    /**
-     * Whether the text between this token and the one before it is entirely in
-     * the reading that built the run. False where a dropped diff line lies
-     * between them, which is where a span has to break: the placeholder stands
-     * for the bytes, and the other side's lines are not them.
-     */
-    joined: boolean;
-  }>;
-  /** The run stopped at an ellipsis, so its last bytes may be a cut value. */
-  cut: boolean;
-  /**
-   * The cut was ARGENT's own clamp rather than a renderer's ellipsis. Only that
-   * one is under the ceiling, so only that one has to floor what it matches.
-   */
-  argentCut?: boolean;
-}
-
-/**
- * Maximal sequences of numbers separated by anything that is not a letter, and
- * holding only numbers this radix writes a byte as.
- *
- * A letter between two numbers ends the run: a rendering's own numbers are
- * separated by punctuation and whitespace only, so this is what tells
- * `Uint8Array(8) [` from the bytes it introduces. An ellipsis ends one too, and
- * says why — the renderer cut there, and what precedes it is a prefix.
- *
- * A number that is NO byte at this radix ends the run as well, and is dropped
- * rather than carried into it. Extra bytes cost a run nothing — the search
- * inside it is a substring search, so a byte the rendering did not write is
- * simply a byte no value starts at — but a number that does not decode sinks
- * the WHOLE run, and the two shapes that produce one both sit flush against a
- * rendering:
- *
- *   - the element count a `Buffer`/`TypedArray` over 255 bytes prints in front
- *     of its own bytes, `Uint8Array(298) [`, which no separator rule keeps out
- *     because `(`, `)` and `[` are not letters;
- *   - the leading hex characters of the first WORD after a `<Buffer …>`, whose
- *     `>` is not a letter either — `did`, `expected`, `and` and `from` all open
- *     with an odd-length hex prefix, which is no byte at radix 16.
- *
- * Both left the run undecodable, so no span was produced and the credential the
- * rendering spelled reached the step reason, the `--json` report and the MCP
- * call log in full.
- *
- * A lone number is no rendering, so a run of one is dropped: it costs two
- * decodes and can only match a one-byte value, which the raw scrub already has.
- */
-function byteRuns(text: string, numbers: RegExp, radix: number, dropped?: Uint8Array): ByteRun[] {
-  const runs: ByteRun[] = [];
-  let run: ByteRun = { tokens: [], cut: false };
-  let end = -1;
-  const close = (cut: boolean) => {
-    if (run.tokens.length > 1) runs.push({ tokens: run.tokens, cut });
-    run = { tokens: [], cut: false };
-  };
-  for (const token of text.matchAll(numbers)) {
-    if (dropped?.[token.index]) continue;
-    const gap = end < 0 ? "" : keptGap(text, end, token.index, dropped);
-    const joined = end < 0 || gap.length === token.index - end;
-    end = token.index + token[0].length;
-    // The GAP is read before the token is judged, because a run ends for the
-    // reason its gap gives whatever follows it. Judged the other way round, a
-    // token that is no byte closed the run with `cut: false` and threw away the
-    // ellipsis that had just closed it with `cut: true` — and the token after
-    // an ellipsis is a COUNT, which is no byte whenever it has the wrong number
-    // of digits. `<Buffer …> … 200 more bytes` is that shape, and it is Node's
-    // own rendering of any value over 50 bytes.
-    if (/[A-Za-z]/.test(gap)) close(false);
-    else if (GAP_CUT_RE.test(gap)) close(true);
-    if (byteToken(token[0], radix) === undefined) {
-      close(false);
-      continue;
-    }
-    run.tokens.push({ from: token.index, to: end, text: token[0], joined });
-  }
-  close(false);
-  return runs;
-}
-
-/** The text between two tokens, with the other side's lines taken out of it. */
-function keptGap(text: string, from: number, to: number, dropped?: Uint8Array): string {
-  if (!dropped) return text.slice(from, to);
-  let gap = "";
-  for (let at = from; at < to; at++) if (!dropped[at]) gap += text[at];
-  return gap;
-}
-
-/** Where in `text` this run spells a value, read at one radix. */
-function byteRunSpans(
-  run: ByteRun,
-  radix: number,
-  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
-): Array<{ from: number; to: number; name: string }> {
-  const decoded = decodeByteRun(run, radix);
-  if (!decoded) return [];
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  let at = 0;
-  while (at < decoded.length) {
-    const hit = needles.find(
-      ({ bytes }) =>
-        at + bytes.length <= decoded.length &&
-        decoded.compare(bytes, 0, bytes.length, at, at + bytes.length) === 0
-    );
-    if (!hit) {
-      at += 1;
-      continue;
-    }
-    spans.push(...runSpans(run, at, hit.bytes.length, hit.name));
-    at += hit.bytes.length;
-  }
-  if (spans.length > 0 || !run.cut) return spans;
-  // Nothing whole, and the rendering was cut here — so the tail may be the
-  // front of a value. Longest first, and shorter than the value, exactly as
-  // {@link quotedCutBefore} reads a cut in text space.
-  //
-  // Floored only when the cut is ARGENT's, because only that cut sits at the
-  // ceiling. There the substitution can GROW the text — `{{secret:NAME}}` is
-  // longer than the `115` it would stand in for — `redactBounded` re-clamps
-  // what the scrub grew, and the placeholder itself came back cut. A
-  // renderer's ellipsis is under no such pressure, and flooring it there would
-  // leave a byte standing that the pass took before.
-  //
-  // Six bytes buys the growth back for an ordinary name and no more: a name as
-  // long as `GOOGLE_APPLICATION_CREDENTIALS_JSON` still outgrows the seventeen
-  // characters six hex bytes occupy. What is left is cosmetic — the re-clamp
-  // cuts text the scrub has already been over.
-  //
-  // Two ends, because argent's own clamp does not cut where a renderer does. A
-  // renderer stops between elements; a character ceiling stops wherever it
-  // falls, so the last number of the run can be half of one — `… 99,\n   5` —
-  // and that half decodes to a byte no value has there, which sank the whole
-  // tail. Dropping it is the second reading.
-  //
-  // The LONGEST prefix across every needle, not the first needle that answers
-  // at any length. Read the other way round — needle first, then length — a
-  // spelling that happens to open with the run's last byte answered at one
-  // byte and returned, and the value's own hundred-byte prefix behind it was
-  // never asked for. Bounded by the best length so far, as
-  // {@link quotedCutBefore} bounds its own descent, and gated on the last byte
-  // before the compare so a needle that cannot end here costs one lookup.
-  const floor = run.argentCut ? CUT_MIN_PREFIX_CHARS : 1;
-  for (const end of [decoded.length, decoded.length - 1]) {
-    if (end < floor) continue;
-    let best: { from: number; count: number; name: string } | undefined;
-    for (const { name, bytes } of needles) {
-      for (let n = Math.min(bytes.length - 1, end); n > (best?.count ?? floor - 1); n--) {
-        if (bytes[n - 1] !== decoded[end - 1]) continue;
-        if (decoded.compare(bytes, 0, n, end - n, end) !== 0) continue;
-        best = { from: end - n, count: n, name };
-        break;
-      }
-    }
-    if (best) return runSpans(run, best.from, best.count, best.name);
-  }
-  return spans;
-}
-
-/**
- * Where a stretch of one run's tokens sits in the text, as one span per piece
- * that is really contiguous there.
- *
- * A run read with one side of a diff dropped holds tokens the other side's
- * lines sit between, and a span says the text it covers spells a value — so one
- * span across the whole stretch would swallow the other side's bytes into the
- * placeholder. Broken at each token the reading skipped instead, which leaves
- * the diff readable and still replaces every byte of the value.
- */
-function runSpans(
-  run: ByteRun,
-  first: number,
-  count: number,
-  name: string
-): Array<{ from: number; to: number; name: string }> {
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  let start = first;
-  for (let at = first + 1; at < first + count; at++) {
-    if (run.tokens[at]!.joined) continue;
-    spans.push({ from: run.tokens[start]!.from, to: run.tokens[at - 1]!.to, name });
-    start = at;
-  }
-  spans.push({ from: run.tokens[start]!.from, to: run.tokens[first + count - 1]!.to, name });
-  return spans;
-}
-
-/**
- * The byte one number spells at this radix, or nothing when it spells none.
- * Decimal takes one to three digits below 256; hex takes exactly the two a byte
- * is always written as, so a decimal run is not read as hex by accident.
- */
-function byteToken(text: string, radix: number): number | undefined {
-  if (radix === 16 && text.length !== 2) return undefined;
-  if (radix === 10 && text.length > 3) return undefined;
-  const code = parseInt(text, radix);
-  return code >= 0 && code <= 255 ? code : undefined;
-}
-
-/**
- * The run's bytes. Every token was read as one byte when the run was built, so
- * this cannot fail; the guard stands for the caller that decodes a run it did
- * not build.
- */
-function decodeByteRun(run: ByteRun, radix: number): Buffer | undefined {
-  const codes: number[] = [];
-  for (const { text } of run.tokens) {
-    const code = byteToken(text, radix);
-    if (code === undefined) return undefined;
-    codes.push(code);
-  }
-  return Buffer.from(codes);
-}
-
-/**
- * A value a DUMP TOOL laid out in rows, read back a row at a time.
- *
- * `xxd`, `hexdump -C` (`hd`) and `od -c` are what a `.sh` step types to look at
- * the bytes it is about to send, and none of them writes a value in a shape the
- * other passes read. `xxd` and `hexdump -C` print sixteen bytes a row and then
- * the same bytes as TEXT, in a column on the right, so the credential stands in
- * the log in plain sixteen-character slices. `od -c` prints it one character to
- * a cell. `xxd` groups its hex in words of two bytes, which {@link byteToken}
- * does not read as bytes at all. And every row opens with an offset, which ends
- * a run for {@link repairByteRenderings}, whose {@link stitchedSpans} joins two
- * runs and no more. A value longer than two rows came back whole; a value short
- * enough for one row lost its text column to the whole-value scrub and kept its
- * hex words, which spell it just as well.
- *
- * So each line is read as a row of one layout, and a block of consecutive rows
- * - each offset the one before plus that row's byte count - is decoded to bytes
- * in order and searched for every spelling. A hit replaces, row by row, the hex
- * or the `od` cells of its bytes AND their characters in the text column. One
- * row is a block too, which is the short value's case.
- *
- * Strict, because nothing but the layout says a line is a row: the offset in
- * the tool's radix and width, the hex in the tool's groups and spacing, and a
- * text column that renders exactly the bytes the hex spells. The one thing
- * allowed to differ there is a placeholder the whole-value scrub already wrote,
- * which stands for some of those bytes. Prose meets none of this, and a line
- * that does is a dump.
- *
- * BEFORE {@link repairByteRenderings}, not after it. That pass stitches the
- * two-digit layouts across one row break, so it replaces the hex of a value
- * one or two rows long - and a row whose hex it rewrote no longer parses, so
- * the text column beside it, which spells the same value, was left standing.
- *
- * Linear in the text: a line is tested for a leading offset before anything
- * else, which ordinary text fails on its first character, a row is one pass
- * over its line, and a block is one `indexOf` per spelling.
- */
-function repairDumpRows(text: string, secrets: readonly FlowScriptSecret[]): string {
-  if (!DUMP_OFFSET_RE.test(text)) return text;
-  const needles = secrets
-    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
-    .filter(({ bytes }) => bytes.length > 0);
-  if (needles.length === 0) return text;
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  let block: DumpRow[] = [];
-  for (let from = 0; from <= text.length; ) {
-    const brk = text.indexOf("\n", from);
-    const end = brk < 0 ? text.length : brk;
-    const row = dumpRow(text, from, text[end - 1] === "\r" ? end - 1 : end);
-    const last = block[block.length - 1];
-    if (
-      !row ||
-      (last && (row.layout !== last.layout || row.offset !== last.offset + last.cells.length))
-    ) {
-      spans.push(...dumpBlockSpans(block, needles));
-      block = [];
-    }
-    if (row) block.push(row);
-    if (brk < 0) break;
-    from = brk + 1;
-  }
-  spans.push(...dumpBlockSpans(block, needles));
-  return spliceSpans(text, spans);
-}
-
-/** A line that opens with seven hex digits, as every offset these layouts write does. */
-const DUMP_OFFSET_RE = /^[0-9A-Fa-f]{7}/m;
-
-interface DumpRow {
-  /** Which tool's layout the row is in. A block holds rows of one. */
-  layout: "xxd" | "hexdump -C" | "od -t x1" | "od -c";
-  offset: number;
-  /** One per byte, in order. */
-  cells: DumpCell[];
-  /** The text column `xxd` and `hexdump -C` print beside the hex. */
-  column?: DumpColumn;
-}
-
-interface DumpCell {
-  /**
-   * Where the byte's hex digits sit, or its `od -c` cell. An `xxd` word is one
-   * token, so every byte in it points at the whole word.
-   */
-  from: number;
-  to: number;
-  /** The byte; -1 for a BSD `**`, which is the next byte of the character before it. */
-  byte: number;
-  /** The character a BSD `od -c` cell printed whole, in a UTF-8 locale. */
-  char?: string;
-}
-
-interface DumpColumn {
-  /** Where the column's first character sits, and where its last one ends. */
-  at: number;
-  end: number;
-  /**
-   * How many of the row's bytes render one character each from `at` forward,
-   * and from `end` back. All of them and none, unless the whole-value scrub
-   * wrote a placeholder in between - which then stands for the bytes left.
-   */
-  head: number;
-  tail: number;
-}
-
-/** The row this line is in one of the layouts, or nothing when it is in none. */
-function dumpRow(text: string, from: number, to: number): DumpRow | undefined {
-  return xxdRow(text, from, to) ?? hexdumpRow(text, from, to) ?? odRow(text, from, to);
-}
-
-/**
- * `xxd`: an offset of eight or more hex digits and a colon, then the hex in
- * groups of one size - two bytes unless `-g` said otherwise, the last group of
- * a row shorter - and, after at least two blanks, the text column, padded out
- * so that it lines up with the rows above it.
- */
-function xxdRow(text: string, from: number, to: number): DumpRow | undefined {
-  const digits = runEnd(text, from, to, isHexDigit);
-  if (digits - from < 8 || !text.startsWith(": ", digits)) return undefined;
-  const cells: DumpCell[] = [];
-  let size = 0;
-  let short = false;
-  let at = digits + 2;
-  let end: number;
-  for (;;) {
-    end = runEnd(text, at, to, isHexDigit);
-    const width = end - at;
-    // Whole bytes, and no group wider than the first or after a shorter one.
-    if (width === 0 || width % 2 !== 0 || short || (size > 0 && width > size)) return undefined;
-    if (size === 0) size = width;
-    short = width < size;
-    for (let byte = at; byte < end; byte += 2) {
-      cells.push({ from: at, to: end, byte: parseInt(text.slice(byte, byte + 2), 16) });
-    }
-    if (text[end] !== " " || end + 1 >= to || !isHexDigit(text.charCodeAt(end + 1))) break;
-    at = end + 1;
-  }
-  const column = dumpColumn(text, end, to, cells, true);
-  return column && { layout: "xxd", offset: parseInt(text.slice(from, digits), 16), cells, column };
-}
-
-/**
- * `hexdump -C` and `hd`: an offset of eight or more hex digits, then each byte
- * as two lower-case hex digits at a FIXED column - two blanks in, three columns
- * a byte, one more past the eighth - and the text column between bars, the
- * first of them where a full row's would be.
- */
-function hexdumpRow(text: string, from: number, to: number): DumpRow | undefined {
-  const digits = runEnd(text, from, to, isHexDigit);
-  const bar = digits + HEXDUMP_BAR_COLUMN;
-  if (digits - from < 8 || text[bar] !== "|" || bar >= to - 1 || text[to - 1] !== "|") {
-    return undefined;
-  }
-  const cells: DumpCell[] = [];
-  for (let at = digits; at < bar; at++) {
-    if (text[at] === " ") continue;
-    const index = cells.length;
-    if (at !== digits + 2 + 3 * index + (index >= 8 ? 1 : 0) || !isLowerHexPair(text, at)) {
-      return undefined;
-    }
-    cells.push({ from: at, to: at + 2, byte: parseInt(text.slice(at, at + 2), 16) });
-    at++;
-  }
-  const column = cells.length > 0 ? dumpColumn(text, bar + 1, to - 1, cells, false) : undefined;
-  return (
-    column && {
-      layout: "hexdump -C",
-      offset: parseInt(text.slice(from, digits), 16),
-      cells,
-      column,
-    }
-  );
-}
-
-/** How far past the offset `hexdump -C` opens its text column: 2 + 16 × 3 + 2. */
-const HEXDUMP_BAR_COLUMN = 52;
-
-/**
- * `od -t x1` and `od -c`: an offset of seven or more OCTAL digits, then a cell
- * per byte. No text column, and nothing to check one against - so each cell has
- * to be one the tool writes, exactly as wide as it writes it.
- */
-function odRow(text: string, from: number, to: number): DumpRow | undefined {
-  const digits = runEnd(text, from, to, isOctalDigit);
-  if (digits - from < 7 || text[digits] !== " ") return undefined;
-  const offset = parseInt(text.slice(from, digits), 8);
-  const hex = odHexCells(text, digits, to);
-  if (hex) return { layout: "od -t x1", offset, cells: hex };
-  // GNU writes the first cell straight after the offset, BSD one blank later.
-  const chars = odCharCells(text, digits, to) ?? odCharCells(text, digits + 1, to);
-  return chars && { layout: "od -c", offset, cells: chars };
-}
-
-/**
- * `od -t x1`'s bytes: two lower-case hex digits each, one blank apart from GNU
- * and two from BSD - which starts two blanks further in and pads a short row.
- */
-function odHexCells(text: string, at: number, to: number): DumpCell[] | undefined {
-  const cells: DumpCell[] = [];
-  let gap = 0;
-  for (;;) {
-    const start = runEnd(text, at, to, isBlank);
-    if (start === to) break;
-    const blanks = start - at;
-    if (cells.length === 0) gap = blanks === 1 ? 1 : blanks === 4 ? 2 : 0;
-    else if (blanks !== gap) return undefined;
-    const whole = start + 2 >= to || text[start + 2] === " ";
-    if (gap === 0 || !whole || !isLowerHexPair(text, start)) return undefined;
-    cells.push({ from: start, to: start + 2, byte: parseInt(text.slice(start, start + 2), 16) });
-    at = start + 2;
-  }
-  return cells.length > 0 ? cells : undefined;
-}
-
-/**
- * `od -c`'s cells, four columns each with the character to the right: a
- * printable one as itself, a blank as four blanks, `\n` and the other C
- * escapes, three octal digits for anything else. BSD in a UTF-8 locale writes a
- * multi-byte character whole in its first byte's cell, `**` in the cells of the
- * rest, and gives a WIDE character one blank fewer.
- */
-function odCharCells(text: string, at: number, to: number): DumpCell[] | undefined {
-  const cells: DumpCell[] = [];
-  while (at < to) {
-    if (text.startsWith("    ", at)) {
-      cells.push({ from: at, to: at + 4, byte: 0x20 });
-      at += 4;
-      continue;
-    }
-    const start = runEnd(text, at, Math.min(at + 3, to), isBlank);
-    const cell = odCell(text, start, start - at);
-    if (!cell || cell.to > to) return undefined;
-    cells.push(cell);
-    at = cell.to;
-  }
-  return cells.length > 0 ? cells : undefined;
-}
-
-/** One `od -c` cell's content at `at`, behind the blanks that right-align it. */
-function odCell(text: string, at: number, blanks: number): DumpCell | undefined {
-  const code = text.codePointAt(at) ?? 0;
-  if (blanks === 3 && code > 0x20 && code < 0x7f) return { from: at, to: at + 1, byte: code };
-  if (blanks === 2 && code === 0x5c) {
-    const byte = OD_ESCAPES[text.charAt(at + 1)];
-    return byte === undefined ? undefined : { from: at, to: at + 2, byte };
-  }
-  if (blanks === 2 && text.startsWith("**", at)) return { from: at, to: at + 2, byte: -1 };
-  const octal = text.slice(at, at + 3);
-  if (blanks === 1 && /^[0-3][0-7]{2}$/.test(octal)) {
-    return { from: at, to: at + 3, byte: parseInt(octal, 8) };
-  }
-  // U+FFFD is no character a tool wrote: it is a raw byte the log could not
-  // decode, and which byte it was is gone.
-  if ((blanks === 2 || blanks === 3) && code > 0x7f && code !== 0xfffd) {
-    const char = String.fromCodePoint(code);
-    return { from: at, to: at + char.length, byte: -1, char };
-  }
-  return undefined;
-}
-
-/** The byte behind each C escape `od -c` writes, by the letter after the backslash. */
-const OD_ESCAPES: Readonly<Record<string, number>> = {
-  "0": 0,
-  "a": 7,
-  "b": 8,
-  "f": 12,
-  "n": 10,
-  "r": 13,
-  "t": 9,
-  "v": 11,
-};
-
-/**
- * Where a row's text column sits in `text[from, to)`, or nothing when what is
- * there is not its bytes' own rendering: a printable ASCII byte as itself, any
- * other byte as a dot. `padded` says blanks stand in front of the column, as
- * `xxd` writes them; otherwise the column is the whole range.
- */
-function dumpColumn(
-  text: string,
-  from: number,
-  to: number,
-  cells: readonly DumpCell[],
-  padded: boolean
-): DumpColumn | undefined {
-  const n = cells.length;
-  let rendered = "";
-  for (const { byte } of cells) {
-    rendered += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
-  }
-  const region = text.slice(from, to);
-  const open = region.indexOf(SECRET_PLACEHOLDER_MARKER);
-  if (open < 0) {
-    const at = to - n;
-    if (padded ? at - from < 2 || runEnd(text, from, at, isBlank) !== at : at !== from) {
-      return undefined;
-    }
-    return text.slice(at, to) === rendered ? { at, end: to, head: n, tail: 0 } : undefined;
-  }
-  const close = region.lastIndexOf("}}") + 2;
-  if (close < open + SECRET_PLACEHOLDER_MARKER.length + 2) return undefined;
-  let at = from;
-  if (padded) {
-    // The blanks in front of the column are the tool's, but the column can
-    // open with blanks of its own: those are the bytes', as many as it has.
-    const first = runEnd(text, from, from + open, isBlank);
-    if (first - from < 2) return undefined;
-    at = first - Math.min(runEnd(rendered, 0, n, isBlank), first - from - 2);
-  }
-  const head = from + open - at;
-  const tail = to - (from + close);
-  if (head + tail >= n) return undefined;
-  const fits =
-    text.slice(at, from + open) === rendered.slice(0, head) &&
-    text.slice(from + close, to) === rendered.slice(n - tail);
-  return fits ? { at, end: to, head, tail } : undefined;
-}
-
-/**
- * Every place a block's rows spell a value: its bytes decoded in order, one
- * search per spelling, and each hit mapped back row by row to the hex or the
- * cells of its bytes and to their characters in the text column.
- */
-function dumpBlockSpans(
-  block: DumpRow[],
-  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
-): Array<{ from: number; to: number; name: string }> {
-  const final = block[block.length - 1];
-  if (!final) return [];
-  // BSD pads the last `od -c` row with blank cells, which read as spaces. A
-  // value that really ended in one is still taken by its trimmed spelling.
-  if (final.layout === "od -c") {
-    while (final.cells[final.cells.length - 1]?.byte === 0x20) final.cells.pop();
-  }
-  const bytes: number[] = [];
-  const rowOf: number[] = [];
-  const firstOf: number[] = [];
-  let pending: Buffer | undefined;
-  let taken = 0;
-  for (const [index, row] of block.entries()) {
-    firstOf.push(bytes.length);
-    for (const cell of row.cells) {
-      let byte = cell.byte;
-      if (cell.char !== undefined) {
-        pending = Buffer.from(cell.char, "utf8");
-        taken = 1;
-        byte = pending[0]!;
-      } else if (byte < 0) {
-        // A `**` with no character in front of it in this block continues one
-        // the block does not hold. No value that starts in the block runs
-        // through it, so any byte will do.
-        byte = pending && taken < pending.length ? pending[taken++]! : 0x80;
-      } else {
-        pending = undefined;
-      }
-      bytes.push(byte);
-      rowOf.push(index);
-    }
-  }
-  const decoded = Buffer.from(bytes);
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  for (const { name, bytes: needle } of needles) {
-    for (let found = decoded.indexOf(needle); found >= 0; ) {
-      const end = found + needle.length;
-      for (let at = rowOf[found]!; at <= rowOf[end - 1]!; at++) {
-        const row = block[at]!;
-        const first = Math.max(found, firstOf[at]!) - firstOf[at]!;
-        const last = Math.min(end, firstOf[at]! + row.cells.length) - firstOf[at]!;
-        spans.push({ from: row.cells[first]!.from, to: row.cells[last - 1]!.to, name });
-        if (row.column) spans.push(columnSpan(row.column, row.cells.length, first, last, name));
-      }
-      found = decoded.indexOf(needle, end);
-    }
-  }
-  return spans;
-}
-
-/** Where bytes `[first, last)` of a row of `n` stand in its text column. */
-function columnSpan(
-  column: DumpColumn,
-  n: number,
-  first: number,
-  last: number,
-  name: string
-): { from: number; to: number; name: string } {
-  const { at, end, head, tail } = column;
-  const from = first < head ? at + first : first >= n - tail ? end - (n - first) : at + head;
-  const to = last <= head ? at + last : last > n - tail ? end - (n - last) : end - tail;
-  return { from, to, name };
-}
-
-/** Where the run of characters `accept` takes from `at` ends, `to` at the latest. */
-function runEnd(text: string, at: number, to: number, accept: (code: number) => boolean): number {
-  while (at < to && accept(text.charCodeAt(at))) at++;
-  return at;
-}
-
-function isHexDigit(code: number): boolean {
-  return (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x46) || isLowerHexLetter(code);
-}
-
-function isLowerHexLetter(code: number): boolean {
-  return code >= 0x61 && code <= 0x66;
-}
-
-/** Two lower-case hex digits, which is how `hexdump -C` and `od -t x1` write a byte. */
-function isLowerHexPair(text: string, at: number): boolean {
-  for (const code of [text.charCodeAt(at), text.charCodeAt(at + 1)]) {
-    if (!((code >= 0x30 && code <= 0x39) || isLowerHexLetter(code))) return false;
-  }
-  return true;
-}
-
-function isOctalDigit(code: number): boolean {
-  return code >= 0x30 && code <= 0x37;
-}
-
-function isBlank(code: number): boolean {
-  return code === 0x20;
-}
-
-/**
- * A value an ESCAPER put backslashes through, read back with them taken out.
- *
- * A spelling is a transform of the WHOLE value, so the list only answers an
- * escaper it names. Three that a step meets are one line of an ordinary script
- * each, and each writes the value with a backslash in front of a character the
- * spellings leave alone: `util.inspect` picks a BACKTICK body for a value
- * holding both quotes and escapes only the backslashes in it, `RegExp.source`
- * writes `/` as `\/`, and bash's `printf %q` backslashes a space, an
- * apostrophe and a backslash alike.
- *
- * Read as one rule instead of three, because the three tables disagree and
- * bash's is not even the same across versions: a backslash takes the character
- * after it, whatever that character is, and the decoded text is searched for
- * the value. What that misses is the escapes that MEAN something else — `\n`,
- * and the `\xNN` the spellings carry — and reading `\n` as `n` can only
- * over-redact, never leave a value standing.
- */
-function repairBackslashEscapes(text: string, secrets: readonly FlowScriptSecret[]): string {
-  if (!text.includes("\\")) return text;
-  let decoded = "";
-  const at: number[] = [];
-  const to: number[] = [];
-  for (let cursor = 0; cursor < text.length; cursor++) {
-    const escaped = text[cursor] === "\\" && cursor + 1 < text.length;
-    decoded += text[escaped ? cursor + 1 : cursor];
-    at.push(cursor);
-    to.push(escaped ? cursor + 2 : cursor + 1);
-    if (escaped) cursor++;
-  }
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  for (const { name, value } of secrets) {
-    if (value.length === 0) continue;
-    for (let found = decoded.indexOf(value); found >= 0; ) {
-      spans.push({ from: at[found]!, to: to[found + value.length - 1]!, name });
-      found = decoded.indexOf(value, found + value.length);
-    }
-  }
-  return spliceSpans(text, spans);
-}
-
-/**
- * A value PERCENT-ENCODED by a table no spelling was derived from, read back
- * with its escapes decoded.
- *
- * The spellings hold what `encodeURIComponent`, `encodeURI`, `URLSearchParams`
- * and `escape` write, and the other percent-encoders a step meets each escape a
- * different set. `new URL()` escapes by the WHATWG set of the component the
- * value lands in: a query keeps `&` and `^` as written, and a userinfo escapes
- * `@` but keeps `$`. Python's `quote`, `jq @uri` and `curl --data-urlencode`
- * escape `!*'()`, which `encodeURIComponent` keeps. A value that mixes a
- * character its encoder escaped with one it kept matched no spelling, so
- * `postgres://app:P%40ssw0rd$2026@…` reported the password one `%40` away from
- * written, in the step reason and in the log.
- *
- * Read as one rule instead of more tables, for the reason
- * {@link repairBackslashEscapes} is: a table the list does not name still
- * leaks. Decoded in byte space, as {@link repairByteRenderings} reads a
- * rendering - a `%XX` is one byte and every other character is its UTF-8
- * bytes - so a character escaped byte by byte comes back whole. A second
- * reading also takes `+` as a space, which is form encoding: Python's
- * `quote_plus` and `urlencode` write a space as `URLSearchParams` does and
- * escape a different set around it. That reading runs without a `%XX` too,
- * because `urlencode` writes `pass word~1` as `pass+word~1`, with no escape in
- * it and still no spelling of it.
- *
- * A hit counts only where it covers something decoded: a `%XX`, or a `+` the
- * second reading took as a space. One that covers neither stood in the text
- * literally, where the whole-value scrub either replaced it or left it alone on
- * purpose inside a `{{secret:NAME}}` placeholder - and finding it there again
- * would nest one placeholder inside another.
- */
-function repairPercentEscapes(text: string, secrets: readonly FlowScriptSecret[]): string {
-  const readings: boolean[] = [];
-  if (PERCENT_ESCAPE_RE.test(text)) readings.push(false);
-  if (text.includes("+") && secrets.some(({ value }) => value.includes(" "))) readings.push(true);
-  if (readings.length === 0) return text;
-  const needles = secrets
-    .filter(({ value }) => value.length > 0)
-    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }));
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  for (const plusIsSpace of readings) {
-    const { bytes, from, to, decoded } = percentReading(text, plusIsSpace);
-    for (const { name, bytes: needle } of needles) {
-      for (let found = bytes.indexOf(needle); found >= 0; ) {
-        const end = found + needle.length;
-        if (!decoded.subarray(found, end).includes(1)) {
-          found = bytes.indexOf(needle, found + 1);
-          continue;
-        }
-        spans.push({ from: from[found]!, to: to[end - 1]!, name });
-        found = bytes.indexOf(needle, end);
-      }
-    }
-  }
-  return spliceSpans(text, spans);
-}
-
-/** One text as bytes, with where each byte was read from and how. */
-interface PercentReading {
-  bytes: Buffer;
-  /** Per byte, the first character of the text it was read from. */
-  from: Int32Array;
-  /** Per byte, the character just past the text it was read from. */
-  to: Int32Array;
-  /** Per byte, 1 where it was decoded from a `%XX` or a `+`, 0 where it was written as is. */
-  decoded: Uint8Array;
-}
-
-/**
- * The text's bytes with each `%XX` decoded, and each `+` read as a space when
- * `plusIsSpace` says so. Every other character is its own UTF-8 bytes, which is
- * what `Buffer.from` makes of a value, a lone surrogate included.
- */
-function percentReading(text: string, plusIsSpace: boolean): PercentReading {
-  // Three bytes is the most one UTF-16 unit writes, and an escape writes one.
-  const bytes = Buffer.alloc(text.length * 3);
-  const from = new Int32Array(bytes.length);
-  const to = new Int32Array(bytes.length);
-  const decoded = new Uint8Array(bytes.length);
-  let length = 0;
-  for (let cursor = 0; cursor < text.length; ) {
-    const code = text.charCodeAt(cursor);
-    let next = cursor + 1;
-    let width = 1;
-    if (code === 0x25 && PERCENT_ESCAPE_RE.test(text.slice(cursor, cursor + 3))) {
-      bytes[length] = parseInt(text.slice(cursor + 1, cursor + 3), 16);
-      decoded[length] = 1;
-      next = cursor + 3;
-    } else if (plusIsSpace && code === 0x2b) {
-      bytes[length] = 0x20;
-      decoded[length] = 1;
-    } else if (code < 0x80) {
-      bytes[length] = code;
-    } else {
-      if (text.codePointAt(cursor)! > 0xffff) next = cursor + 2;
-      width = bytes.write(text.slice(cursor, next), length, "utf8");
-    }
-    for (const last = length + width; length < last; length++) {
-      from[length] = cursor;
-      to[length] = next;
-    }
-    cursor = next;
-  }
-  return { bytes: bytes.subarray(0, length), from, to, decoded };
-}
-
-/** A `%` and the two hex digits of the byte it stands for. */
-const PERCENT_ESCAPE_RE = /%[0-9A-Fa-f]{2}/;
-
-/**
- * A value RE-ENCODED into another alphabet, decoded back in byte space.
- *
- * The spellings hold what `base64` and `hex` write the value ON ITS OWN as,
- * which only answers while the encoder is character-local — while each byte of
- * the value lands in the same place in the output whatever surrounds it.
- * Neither of these is: base64 frames in THREE-byte groups, so a prefix whose
- * length is not a multiple of three moves every following byte into a different
- * frame, and the shell's own tools wrap their output at a fixed column, so a
- * value merely long enough to wrap has a newline through the middle of its
- * encoding. Both leave the credential whole and losslessly recoverable in text
- * that no spelling appears in — `"Basic " + Buffer.from(\`api:${k}\`)
- * .toString("base64")` and `printf %s "$K" | xxd -p` are one line each, and the
- * first is the standard HTTP credential idiom.
- *
- * So the run is decoded rather than matched, exactly as
- * {@link repairByteRenderings} reads a rendering's numbers: every maximal run
- * of one alphabet is decoded whole — a newline inside it is the wrap and is
- * skipped — and the bytes are searched. A byte span maps back to the characters
- * of the frames it lies in, so a frame the value SHARES with its prefix goes
- * with it; over-redacting argent's own text is the lesser fault. Case comes for
- * free, which is what covers a hex signature printed upper-case.
- *
- * Floored at {@link ENCODED_RUN_MIN_BYTES}, unlike every other pass here. A run
- * of ordinary letters decodes to bytes too, and nothing about it says it was
- * ever an encoding, so a short value would be found in the noise: four bytes
- * puts a chance hit past one in four billion per position, and a credential
- * shorter than that is not one.
- */
-function repairEncodedRuns(
-  text: string,
-  secrets: readonly FlowScriptSecret[],
-  cutAtEnd = false
-): string {
-  const needles = secrets
-    .map(({ name, value }) => ({ name, bytes: Buffer.from(value, "utf8") }))
-    .filter(({ bytes }) => bytes.length >= ENCODED_RUN_MIN_BYTES)
-    .sort((a, b) => b.bytes.length - a.bytes.length);
-  if (needles.length === 0) return text;
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  for (const view of ENCODED_VIEWS) {
-    for (const run of encodedRuns(text, view.runs)) {
-      const found = encodedRunSpans(run, view, needles);
-      // A run that reaches the END of a text argent cut may hold the FRONT of a
-      // value rather than the whole of it, and this pass had no branch for one:
-      // `partialSecretTail` is the only cut guard on the path, and it searches
-      // for a prefix of a SPELLING — which works only while the encoding is
-      // character-local, and base64 is the encoding that is not. So the idiom
-      // this pass exists for, `"Basic " + base64("api:" + key)`, left a
-      // decodable prefix of the credential standing whenever argent's own 8 KiB
-      // ceiling cut inside the payload.
-      spans.push(...found);
-      if (found.length === 0 && cutAtEnd && endsTheText(run, text)) {
-        spans.push(...encodedCutSpans(run, view, needles));
-      }
-    }
-  }
-  return spliceSpans(text, spans);
-}
-
-/** Whether this run runs to the last character of the text. */
-function endsTheText(run: EncodedRun, text: string): boolean {
-  return run.at[run.at.length - 1] === text.length - 1;
-}
-
-/**
- * Where a run that argent's clamp cut spells the FRONT of a value.
- *
- * Longest first, and shorter than the value, exactly as {@link byteRunSpans}
- * reads a cut run and {@link quotedCutBefore} reads one in text space. Read at
- * every frame offset for the same reason the whole-value search is: a payload
- * does not have to start on one.
- *
- * Floored at {@link ENCODED_RUN_MIN_BYTES}, like the needles themselves — a
- * shorter tail says more about the alphabet than about the value, and this
- * branch asks about one position rather than every position in the run.
- */
-function encodedCutSpans(
-  run: EncodedRun,
-  view: (typeof ENCODED_VIEWS)[number],
-  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
-): Array<{ from: number; to: number; name: string }> {
-  for (let offset = 0; offset < view.chars && offset < run.chars.length; offset++) {
-    const decoded = Buffer.from(run.chars.slice(offset), view.encoding);
-    for (const { name, bytes } of needles) {
-      const longest = Math.min(bytes.length - 1, decoded.length);
-      for (let n = longest; n >= ENCODED_RUN_MIN_BYTES; n--) {
-        if (decoded.compare(bytes, 0, n, decoded.length - n, decoded.length) !== 0) continue;
-        const first = offset + Math.floor((decoded.length - n) / view.bytes) * view.chars;
-        return first < run.at.length
-          ? [{ from: run.at[first]!, to: run.at[run.at.length - 1]! + 1, name }]
-          : [];
-      }
-    }
-  }
-  return [];
-}
-
-const ENCODED_RUN_MIN_BYTES = 4;
-
-/**
- * The alphabets a re-encoding is read in, with the frame each one writes.
- *
- * `base64url` is its own view rather than a lenient read of the standard
- * alphabet: `-` and `_` widen a run across ordinary hyphenated words, which
- * would move a standard payload out of its frame.
- */
-const ENCODED_VIEWS = [
-  { encoding: "hex", runs: /[0-9A-Fa-f][0-9A-Fa-f\r\n]*[0-9A-Fa-f]/g, chars: 2, bytes: 1 },
-  {
-    // `=` is left OUT of the alphabet on purpose. It is padding, so it only
-    // ever ends a payload — and a decoder stops there, so `?token=<payload>`
-    // read as one run decoded the word in front of the credential and nothing
-    // after it. Ending the run at the `=` instead leaves the payload a run of
-    // its own, which is what it is.
-    encoding: "base64",
-    runs: /[A-Za-z0-9+/][A-Za-z0-9+/\r\n]*[A-Za-z0-9+/]/g,
-    chars: 4,
-    bytes: 3,
-  },
-  {
-    encoding: "base64url",
-    runs: /[A-Za-z0-9\-_][A-Za-z0-9\-_\r\n]*[A-Za-z0-9\-_]/g,
-    chars: 4,
-    bytes: 3,
-  },
-] as const;
-
-/** One run's alphabet characters, with where each of them sits in the text. */
-interface EncodedRun {
-  chars: string;
-  at: number[];
-}
-
-/** Maximal runs of one alphabet, with the wrap newlines inside them dropped. */
-function encodedRuns(text: string, pattern: RegExp): EncodedRun[] {
-  const runs: EncodedRun[] = [];
-  for (const match of text.matchAll(pattern)) {
-    const run: EncodedRun = { chars: "", at: [] };
-    for (let cursor = 0; cursor < match[0].length; cursor++) {
-      const character = match[0][cursor]!;
-      if (character === "\n" || character === "\r") continue;
-      run.chars += character;
-      run.at.push(match.index + cursor);
-    }
-    if (run.chars.length >= ENCODED_RUN_MIN_BYTES) runs.push(run);
-  }
-  return runs;
-}
-
-/** Where in the text this run spells a value, read in one alphabet. */
-function encodedRunSpans(
-  run: EncodedRun,
-  view: (typeof ENCODED_VIEWS)[number],
-  needles: ReadonlyArray<{ name: string; bytes: Buffer }>
-): Array<{ from: number; to: number; name: string }> {
-  const spans: Array<{ from: number; to: number; name: string }> = [];
-  // Every frame offset the run can start on, because a run does not have to
-  // start on one. The separator in front of a payload is what aligns it, and a
-  // prefix glued straight on — `"u" + …`, or a query key the `=` no longer
-  // ends — puts the whole payload one, two or three characters into its first
-  // frame, where a single decode reads only rubbish. There are `chars` of them
-  // and each is one linear decode.
-  for (let offset = 0; offset < view.chars && offset < run.chars.length; offset++) {
-    const decoded = Buffer.from(run.chars.slice(offset), view.encoding);
-    for (const { name, bytes } of needles) {
-      for (let found = decoded.indexOf(bytes); found >= 0; ) {
-        const first = offset + Math.floor(found / view.bytes) * view.chars;
-        const last = Math.min(
-          run.at.length,
-          offset + Math.ceil((found + bytes.length) / view.bytes) * view.chars
-        );
-        if (first < last) spans.push({ from: run.at[first]!, to: run.at[last - 1]! + 1, name });
-        found = decoded.indexOf(bytes, found + bytes.length);
-      }
-    }
-  }
-  return spans;
-}
-
-/**
- * The spans replaced by their placeholders, earliest first.
- *
- * A span that STARTS inside one already replaced is clipped to what is left of
- * it, not dropped. Dropping it lost a whole credential: {@link encodedRunSpans}
- * widens a byte match out to the base64 frames it lies in, so two values inside
- * one payload — `Basic base64(user:key)`, the idiom this pass exists for —
- * produce spans that share a frame whenever the first value's length leaves the
- * second starting mid-frame. The first was replaced, the second was discarded
- * whole, and everything from the end of the first span to the end of the second
- * was copied out in the clear: one base64 hop from the key.
- *
- * Clipping can only ever over-redact, because a span says the text it covers
- * spells a value. Two placeholders then sit side by side, which is what two
- * values in one payload really are.
- */
-function spliceSpans(
-  text: string,
-  spans: Array<{ from: number; to: number; name: string }>
-): string {
-  if (spans.length === 0) return text;
-  let out = "";
-  let copied = 0;
-  for (const { from, to, name } of spans.sort((a, b) => a.from - b.from || b.to - a.to)) {
-    if (to <= copied) continue;
-    out += `${text.slice(copied, Math.max(from, copied))}${SECRET_PLACEHOLDER_MARKER}${name}}}`;
-    copied = to;
-  }
-  return out + text.slice(copied);
-}
-
-/** Node's ellipsis, in both spellings; argent's own markers carry a count. */
-const FOREIGN_CUT_RE = /\.\.\.|…/g;
-
-/** The same, without the `g` whose `lastIndex` a repeated `test` would carry. */
-const GAP_CUT_RE = /\.\.\.|…/;
-
-const CUT_QUOTES = new Set(['"', "'", "`"]);
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
 
@@ -3893,25 +2258,18 @@ interface StreamState {
  * Redaction runs on the live stream, ahead of both limits: a value can straddle
  * two pipe chunks and a per-chunk replacement sees neither half, and one
  * straddling the truncation cut would leave a prefix that a whole-value
- * replacement never matches. The live scrub takes every spelling the failure
- * text is scrubbed for; the repairs that need the whole text run once, in
- * {@link finish}.
+ * replacement never matches. It takes every form of each value that
+ * {@link secretForms} lists.
  */
 class ScriptLogCapture {
   private readonly parts: string[] = [];
   private readonly streams = new Map<string, StreamState>();
   private stepRemaining: number;
-  private charged = 0;
   private truncatedFlag = false;
   private cut = false;
   private heapFatalFlag = false;
   private heapFatalTail = "";
   private stderrLastLine = "";
-  private stderrBeforeLast = "";
-  private spelledFrom: readonly FlowScriptSecret[] | undefined;
-  private spelledCount = -1;
-  private spelled: FlowScriptSecret[] = [];
-  private finished: { text: string; truncated: boolean } | undefined;
 
   constructor(
     private readonly secrets: () => readonly FlowScriptSecret[],
@@ -3938,57 +2296,17 @@ class ScriptLogCapture {
         this.append(state.collapser.end());
         if (state.collapser.collapsed) this.truncatedFlag = true;
       }
-      if (state.lastLine) {
-        this.stderrLastLine = state.lastLine.end();
-        this.stderrBeforeLast = state.lastLine.before;
-      }
+      if (state.lastLine) this.stderrLastLine = state.lastLine.end();
     }
     this.streams.clear();
   }
 
-  /**
-   * The log as the report carries it, once the streams have ended.
-   *
-   * The live scrub took every spelling whole, across chunks as well. What is
-   * left is what only the whole text shows: a rendering of the bytes, a
-   * re-encoding at an offset, a prefix the log's own limit cut. So the repairs
-   * run here, once, over the bounded text, told whether it ends at that cut,
-   * and the half of a value the cut left at the end is taken off.
-   *
-   * A repair can make the text LONGER - a short value's placeholder is longer
-   * than the value. The growth is paid from what the step and the run have
-   * left, and the text is cut where that runs out. A log the limit already cut
-   * gets no more room: it is held to the bytes it was charged. The budget is
-   * not given back when the text gets shorter.
-   */
-  finish(): { text: string; truncated: boolean } {
-    if (this.finished) return this.finished;
-    let text = this.parts.join("");
-    let truncated = this.truncatedFlag;
-    const spellings = this.spellings();
-    if (spellings.length > 0) {
-      text = scrubScriptPart(text, spellings, this.cut);
-      if (this.cut) text = text.slice(0, text.length - partialSecretTail(text, spellings));
-      const buffer = Buffer.from(text, "utf8");
-      const runRemaining = this.runBudget
-        ? Math.max(0, this.runBudget.remainingBytes)
-        : Number.POSITIVE_INFINITY;
-      const room = this.cut ? 0 : Math.max(0, Math.min(this.stepRemaining, runRemaining));
-      let kept = buffer.length;
-      if (kept > this.charged + room) {
-        kept = withoutPartialMarker(buffer, utf8SafeCut(buffer, this.charged + room));
-        text = buffer.subarray(0, kept).toString("utf8");
-        truncated = true;
-      }
-      const grown = kept - this.charged;
-      if (grown > 0) {
-        this.charged += grown;
-        this.stepRemaining -= grown;
-        if (this.runBudget) this.runBudget.remainingBytes -= grown;
-      }
-    }
-    this.finished = { text, truncated };
-    return this.finished;
+  get text(): string {
+    return scrubSecretValues(this.parts.join(""), secretForms(this.secrets()));
+  }
+
+  get truncated(): boolean {
+    return this.truncatedFlag;
   }
 
   get heapFatalSeen(): boolean {
@@ -3998,28 +2316,6 @@ class ScriptLogCapture {
   /** The last line stderr carried that was not blank; see {@link LastLineTracker}. */
   get lastStderrLine(): string {
     return this.stderrLastLine;
-  }
-
-  /**
-   * The end of what stderr carried before {@link lastStderrLine}, as the script
-   * wrote it: read to redact that line in, never reported.
-   */
-  get stderrBeforeLastLine(): string {
-    return this.stderrBeforeLast;
-  }
-
-  /**
-   * Every spelling of every value the step may print, for the live scrub. Read
-   * once per chunk, so it is worked out again only when the list changes.
-   */
-  private spellings(): FlowScriptSecret[] {
-    const raw = this.secrets();
-    if (raw !== this.spelledFrom || raw.length !== this.spelledCount) {
-      this.spelledFrom = raw;
-      this.spelledCount = raw.length;
-      this.spelled = raw.length === 0 ? [] : scriptSecretSpellings(raw);
-    }
-    return this.spelled;
   }
 
   /** Whether nothing more may reach the log: it was cut, or its budget is spent. */
@@ -4066,21 +2362,14 @@ class ScriptLogCapture {
     // script that floods stderr and then says why it failed still says it.
     state.lastLine?.write(text);
     // Past the cut nothing more reaches the log, so there is nothing left to
-    // scrub: with every spelling of every secret, the scrub is what a flood past
-    // the limit would otherwise spend its time on.
+    // scrub, and a flood past the limit costs no scrub at all.
     if (this.closed()) {
-      // Text refused here makes the log end at a cut, even when the budget ran
-      // out exactly at the end of the chunk before, so finish reads its end as
-      // the front of a value that may have been cut.
-      if (text || state.holdback) {
-        this.truncatedFlag = true;
-        this.cut = true;
-      }
+      if (text || state.holdback) this.truncatedFlag = true;
       state.holdback = "";
       state.holdbackAt = undefined;
       return;
     }
-    const secrets = this.spellings();
+    const secrets = secretForms(this.secrets());
     const held = state.holdback;
     const pending = held + text;
     const { emit, held: keep } = scrubSecretChunk(pending, secrets, final);
@@ -4098,7 +2387,7 @@ class ScriptLogCapture {
       this.append(state.collapser ? state.collapser.write(emit) : emit);
       return;
     }
-    const head = scrubSecretValues(released, this.spellings());
+    const head = scrubSecretValues(released, secretForms(this.secrets()));
     const headText = emit.startsWith(head) ? head : "";
     this.append(state.collapser ? state.collapser.write(headText) : headText, at);
     const tailText = emit.slice(headText.length);
@@ -4116,7 +2405,6 @@ class ScriptLogCapture {
     // character, a partial marker — are room enough to admit some of it.
     if (this.cut || allowed <= 0) {
       this.truncatedFlag = true;
-      this.cut = true;
       return;
     }
     const buffer = Buffer.from(text, "utf8");
@@ -4134,7 +2422,6 @@ class ScriptLogCapture {
       const kept = taken === buffer.length ? text : buffer.subarray(0, taken).toString("utf8");
       if (at === undefined) this.parts.push(kept);
       else this.parts[at] += kept;
-      this.charged += taken;
       this.stepRemaining -= taken;
       if (this.runBudget) this.runBudget.remainingBytes -= taken;
     }
@@ -4168,54 +2455,26 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
  * Only the head of each line is kept, so a long line is cut at its end: that is
  * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
  * at the start would leave the other half where nothing looks.
- *
- * The end of the text that came BEFORE that line is kept too, raw, up to
- * {@link STDERR_REASON_CONTEXT_CHARS}, for {@link stderrLineInContext} to
- * redact the line in. Blank lines after the line are in neither.
  */
 class LastLineTracker {
   private head = "";
   private length = 0;
   private blank = true;
   private last = "";
-  /** The end of everything written so far. */
-  private recent = "";
-  /** The end of what came before the line now open. */
-  private openBefore = "";
-  /** The end of what came before `last`. */
-  private lastBefore = "";
 
   write(text: string): void {
-    const earlier = this.recent;
-    // Where in `text` the open line began, -1 while it began before `text`;
-    // and where the last line closed here that was not blank began.
-    let open = -1;
-    let closed: number | undefined;
     let from = 0;
     for (let nl = text.indexOf("\n"); nl !== -1; nl = text.indexOf("\n", from)) {
       this.extend(text.slice(from, nl));
-      if (this.close()) closed = open;
+      this.close();
       from = nl + 1;
-      open = from;
     }
     this.extend(text.slice(from));
-    // Once per chunk rather than once per line, so a chunk of many short lines
-    // costs no more than a chunk of one.
-    if (closed !== undefined) {
-      this.lastBefore = closed < 0 ? this.openBefore : windowBefore(earlier, text, closed);
-    }
-    if (open >= 0) this.openBefore = windowBefore(earlier, text, open);
-    this.recent = windowBefore(earlier, text, text.length);
   }
 
   end(): string {
-    if (this.close()) this.lastBefore = this.openBefore;
+    this.close();
     return this.last;
-  }
-
-  /** What came before {@link end}'s line, raw, up to {@link STDERR_REASON_CONTEXT_CHARS}. */
-  get before(): string {
-    return this.lastBefore;
   }
 
   private extend(segment: string): void {
@@ -4228,14 +2487,11 @@ class LastLineTracker {
     if (this.blank && /\S/.test(segment)) this.blank = false;
   }
 
-  /** Ends the open line, and says whether it was not blank: the last line now. */
-  private close(): boolean {
-    const nonBlank = !this.blank;
-    if (nonBlank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
+  private close(): void {
+    if (!this.blank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
     this.head = "";
     this.length = 0;
     this.blank = true;
-    return nonBlank;
   }
 
   /**
@@ -4247,19 +2503,6 @@ class LastLineTracker {
     const kept = final >= 0xd800 && final <= 0xdbff ? this.head.slice(0, -1) : this.head;
     return `${kept.trimStart()}${omissionMarker(this.length - kept.length)}`;
   }
-}
-
-/**
- * The last {@link STDERR_REASON_CONTEXT_CHARS} characters of `earlier` followed
- * by the first `at` of `text`, without building the whole of either. A window
- * cut between the halves of a surrogate pair drops the half it would start
- * with.
- */
-function windowBefore(earlier: string, text: string, at: number): string {
-  const room = STDERR_REASON_CONTEXT_CHARS - at;
-  const kept = room <= 0 ? text.slice(-room, at) : `${earlier.slice(-room)}${text.slice(0, at)}`;
-  const first = kept.charCodeAt(0);
-  return first >= 0xdc00 && first <= 0xdfff ? kept.slice(1) : kept;
 }
 
 function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {

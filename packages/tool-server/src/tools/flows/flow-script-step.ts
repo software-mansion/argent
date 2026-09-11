@@ -204,7 +204,7 @@ function isHostFrame(frame: string): boolean {
  * `)` is a legal character in a file name and the URL path encode set does not
  * escape it, so a class that stopped at one stopped INSIDE the path: the head
  * came back a readable path and the tail stayed percent-encoded. That is a
- * shape no whole-value spelling holds, so the re-scrub {@link scriptFrames}
+ * shape the scrub does not look for, so the re-scrub {@link scriptFrames}
  * runs for exactly this reason matched nothing either, and a resolved value
  * that named the file reached the reader half decoded and wholly readable. A
  * frame carrying no position at all keeps the older reading, which is the one
@@ -253,12 +253,11 @@ function readableFrame(frame: string, roots: readonly string[]): string {
  * message the reason already opens with.
  *
  * Scrubbed AGAIN at the end, because this function decodes. The stack arrives
- * already scrubbed, but V8 writes a frame's file as a `file://` URL and
- * `readableFrame` turns each one back into a path — so a resolved value that
- * stood in a path reached the scrub percent-encoded, matched nothing, and was
- * handed back raw in the text the reader gets. A script that writes and imports
- * a file named after the value is one line, and `Bearer sk-live-…` needs only
- * the space. Whatever decodes after a scrub has to scrub again.
+ * already scrubbed, but V8 writes a frame's file as a `file://` URL, whose
+ * escaping need not be a form the scrub looks for, and `readableFrame` turns
+ * each one back into a path — so a resolved value that stood in a path would
+ * reach the reader raw. A script that writes and imports a file named after
+ * the value is one line. Whatever decodes after a scrub has to scrub again.
  */
 function scriptFrames(
   stack: string | undefined,

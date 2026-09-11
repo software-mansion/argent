@@ -455,16 +455,20 @@ Argent replaces each value that a `{{secret:NAME}}` resolved to with that same p
 
 So a script that throws `"401 from " + process.env.API_URL + " for key " + process.env.API_KEY` under the map above reports `401 from https://api.example.com for key {{secret:API_KEY}}`. `API_URL` is not a secret and reads as written.
 
-An encoder can write the value differently on its way into that text. Argent replaces each of these spellings in all three places:
+An encoder can write the value differently on its way into that text. Argent replaces each of these forms in all three places:
 
-- The plain value, and the value without the whitespace at its start or end
-- The JSON-quoted and `util.inspect` forms. `node:assert` prints its diff through `util.inspect`, and a thrown object goes through a JSON encoder
-- The percent-encoded forms, such as a value in a URL query
-- The base64 and hex forms, such as a `Basic` authorization header
-- The rows of a hex dump from `xxd`, `hexdump -C` or `od -c`, in the hex and in the text column
-- Each line of a multi-line value, such as a PEM key. `util.inspect` writes one quoted chunk per line. Argent does not hide a line with fewer than six characters other than whitespace, such as the `{` that opens a JSON value
+- The plain value
+- The value as `encodeURIComponent` percent-encodes it, and the same value with a space as `+`
+- The JSON-escaped value, such as a value in an object that a script throws
+- The base64 value, such as a token that a script prints with `base64`
 
-When a length limit cuts a value, Argent also hides the part of the value that is left. This applies to the failure text and to the log.
+Argent replaces the plain value at any length. Argent replaces the other forms only for a value with six or more characters. Argent does not replace any other form of the value. For example:
+
+- `URLSearchParams` also percent-encodes `!`, `'`, `(`, `)`, `*` and `~`. Argent does not replace that form of a value that holds one of these characters.
+- A `Basic` authorization header is the base64 of a user name, a colon and a password. Argent does not replace the password in it.
+- Argent does not replace the hex form of a value.
+
+When Argent cuts one of these forms at a length limit, Argent also hides the part of the value that is left. This applies to the failure text and to the log.
 
 Every other `env` value is flow data. It appears as written in the report, in the file that `flow-finish-recording` returns and in `echo` output. Argent does not check whether a plaintext value is a credential, and does not compare an `env` value against the secrets it can resolve. Write a credential as `{{secret:NAME}}`.
 
