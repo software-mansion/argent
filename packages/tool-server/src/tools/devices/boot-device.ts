@@ -1301,6 +1301,17 @@ function bootVega(params: {
   return promise;
 }
 
+/**
+ * `udid` boots an iOS simulator only; the other platforms have their own
+ * parameter. The capability declaration covers those forms, so the capability
+ * gate passes a Chromium/Vega/Android device id sent as a `udid`.
+ */
+const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
+  android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
+  chromium: "Boot an Electron app by passing `electronAppPath`.",
+  vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
+};
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -1377,8 +1388,21 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
             }
           );
         }
-        if (classifyDevice(params.udid!) === "ios-remote") {
+        const platform = classifyDevice(params.udid!);
+        if (platform === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
+        }
+        if (platform !== "ios") {
+          throw new FailureError(
+            `\`udid\` takes an iOS simulator UDID from \`list-devices\`; \`${params.udid}\` is not one. ` +
+              NON_IOS_UDID_HINT[platform],
+            {
+              error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+              failure_stage: "boot_device_target_selection",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
+          );
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
