@@ -1,9 +1,10 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
-  buildAppStateMessage,
+  adviseOnUninjectedApp,
   isInjectableBundleId,
   NON_INJECTABLE_NATIVE_WARNING,
+  UNINJECTED_NATIVE_WARNING,
   nativeDevtoolsRef,
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
@@ -141,6 +142,15 @@ const NON_INJECTABLE_HINT =
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
+// Recovery half of the MEASURED terminal state, for the same reason
+// NON_INJECTABLE_HINT above has its own: this hint is reached only once
+// `describe`'s accessibility path has already returned empty, so the blueprint's
+// wording — which leads with `describe` — would be circular here. Leads with
+// `screenshot` and shares the native-* dead-end warning verbatim with the
+// precheck's version of this state.
+const INJECTION_FAILED_DESCRIBE_RECOVERY =
+  "Take a `screenshot` to see the screen and interact by coordinate. " + UNINJECTED_NATIVE_WARNING;
+
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
     role: "AXGroup",
@@ -165,6 +175,15 @@ interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  // Whether this read's `hint` is rendered for an agent rather than discarded.
+  // Only the `describe` tool's own handlers set it, since only they return the
+  // hint as a field. await-ui-element shows one, but one poll's worth and only
+  // on timeout, while the record is written per read — opting it in would arm a
+  // relaunch hand-out on waits that go on to succeed, and a later process
+  // replacement would then read as a relaunch nobody performed. The rest never
+  // show one to an agent (the Lens preview serialises a hint for a human, which
+  // is not who the record must be promised to).
+  hintReachesAgent?: boolean;
 }
 
 // The ax-service blueprint factory shells out to `xcrun simctl spawn`. Without
@@ -310,12 +329,24 @@ export async function describeIos(
       // and retry", the loop instruction with no escape.
       //
       // `should_restart` stays limited to the states a relaunch fixes:
-      // `unregistered` already launched under the terms a restart recreates, and
-      // `connecting` is the handshake exec begins, so flagging either would
-      // rebuild the restart-app → describe loop.
-      const diagnosis = buildAppStateMessage(target.bundleId, state);
-      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
-      return state === "unregistered" || state === "connecting"
+      // `unregistered` already launched under the terms a restart recreates,
+      // `connecting` is the handshake exec begins, `provider_attached` is
+      // someone else's process to relaunch, and a terminal verdict says
+      // outright that no restart on either side changes anything — flagging any
+      // of them would rebuild the restart-app → describe loop, and the last
+      // two would contradict the message shipped beside them.
+      const advice = adviseOnUninjectedApp(
+        nativeApi,
+        target.bundleId,
+        state,
+        INJECTION_FAILED_DESCRIBE_RECOVERY,
+        { recordAdvice: options.hintReachesAgent === true }
+      );
+      const merged = hint ? `${hint} ${advice.message}` : advice.message;
+      return advice.terminal ||
+        state === "unregistered" ||
+        state === "connecting" ||
+        state === "provider_attached"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };
     }

@@ -43,6 +43,8 @@ function makeNativeDevtoolsApi(options: {
   describeScreenResult?: unknown;
 }): NativeDevtoolsApi {
   const connected = new Set(options.connectedBundleIds ?? []);
+  const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   return {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
@@ -54,6 +56,15 @@ function makeNativeDevtoolsApi(options: {
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
     listConnectedBundleIds: () => [...connected],
+    holdsEndpoint: () => true,
+    noteRelaunchAdvice: (bundleId: string) => {
+      relaunchAdvised.add(bundleId);
+    },
+    wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
     appConnectionState: async () =>
       options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
     activateNetworkInspection: () => {},
@@ -485,6 +496,30 @@ describe("describe tool", () => {
     // "…more than once" cannot pass off one relaunch as permitted: here the
     // first one is already the one that discards the handshake.
     expect(result.hint).toContain("Do NOT restart the app:");
+    expect(result.hint).not.toMatch(/restart-app/);
+  });
+
+  it("does NOT return should_restart when devtools are an external provider's lent agent", async () => {
+    // The provider armed the injection and owns the app's lifecycle, so the
+    // message for this state says restarting anything is the provider's call
+    // rather than argent's — `should_restart` beside it would contradict the
+    // prose it ships with and send the agent at a restart-app that re-points
+    // nothing.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "provider_attached",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("external provider's agent");
     expect(result.hint).not.toMatch(/restart-app/);
   });
 

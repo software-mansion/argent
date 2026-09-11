@@ -87,23 +87,48 @@ function mockRegistry(props?: Record<string, unknown>): Registry {
     // iOS launch steps gate on a native-devtools connection: report connected
     // so the run proceeds. The selector directives that do run here read a
     // com.apple.* target, so they are refused before the stubs below matter.
-    resolveService: vi.fn(async () => ({
-      isConnected: () => true,
-      listConnectedBundleIds: () => [],
-      // No windows, so a read that does reach the tree source fails there
-      // rather than degrading to an empty tree.
-      queryViewHierarchy: async () => ({ windows: [] }),
-      getAppState: async (bundleId: string) => ({
-        bundleId,
-        applicationState: "active",
-        foregroundActiveSceneCount: 1,
-        foregroundInactiveSceneCount: 0,
-        backgroundSceneCount: 0,
-        unattachedSceneCount: 0,
-        isFrontmostCandidate: true,
-      }),
-    })),
+    resolveService: vi.fn(
+      stubNativeDevtools({
+        isConnected: () => true,
+        listConnectedBundleIds: () => [],
+        // No windows, so a read that does reach the tree source fails there
+        // rather than degrading to an empty tree.
+        queryViewHierarchy: async () => ({ windows: [] }),
+        getAppState: async (bundleId: string) => ({
+          bundleId,
+          applicationState: "active",
+          foregroundActiveSceneCount: 1,
+          foregroundInactiveSceneCount: 0,
+          backgroundSceneCount: 0,
+          unattachedSceneCount: 0,
+          isFrontmostCandidate: true,
+        }),
+      })
+    ),
   } as unknown as Registry;
+}
+
+/**
+ * One native-devtools stub, resolved repeatedly the way the registry hands back
+ * the same per-device service. `noteRelaunchAdvice` / `wasAdvisedToRelaunch`
+ * back the record `adviseOnUninjectedApp` reads, so it has to survive across
+ * resolutions exactly as the real instance-scoped set does.
+ */
+function stubNativeDevtools<T extends object>(api: T): () => Promise<T> {
+  const advised = new Set<string>();
+  const terminalVerdict = new Set<string>();
+  const service = {
+    ...api,
+    noteRelaunchAdvice: (bundleId: string) => {
+      advised.add(bundleId);
+    },
+    wasAdvisedToRelaunch: (bundleId: string) => advised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
+  };
+  return async () => service;
 }
 
 async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]): Promise<void> {
@@ -2610,14 +2635,16 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => false,
-        listConnectedBundleIds: () => [],
-        // The launchd env carrying the bootstrap dylib is simulator-wide, so a
-        // system app's process inherits the injection tokens and scores as a
-        // live app the service merely never registered.
-        appConnectionState: async () => "unregistered" as const,
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => false,
+          listConnectedBundleIds: () => [],
+          // The launchd env carrying the bootstrap dylib is simulator-wide, so a
+          // system app's process inherits the injection tokens and scores as a
+          // live app the service merely never registered.
+          appConnectionState: async () => "unregistered" as const,
+        })
+      ),
     } as unknown as Registry;
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -2658,11 +2685,13 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => false,
-        listConnectedBundleIds: () => [],
-        appConnectionState,
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => false,
+          listConnectedBundleIds: () => [],
+          appConnectionState,
+        })
+      ),
     } as unknown as Registry;
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -2891,11 +2920,13 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => true,
-        listConnectedBundleIds: () => [],
-        appConnectionState: async () => "unregistered" as const,
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => true,
+          listConnectedBundleIds: () => [],
+          appConnectionState: async () => "unregistered" as const,
+        })
+      ),
     } as unknown as Registry;
 
     const result = asRun(
@@ -2923,16 +2954,18 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => false,
-        listConnectedBundleIds: () => [],
-        appConnectionState: async () => "unregistered" as const,
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => false,
+          listConnectedBundleIds: () => [],
+          appConnectionState: async () => "unregistered" as const,
+        })
+      ),
     } as unknown as Registry;
 
     // Leave setImmediate real: the run reads the flow off disk between sleeps,
     // and that I/O needs actual event-loop turns. Pumping one between advances
-    // elapses the 1.5 s settle and 8 s connect wait in fake time.
+    // elapses the 1.5 s settle and the whole connect wait in fake time.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       const pending = createRunFlowTool(registry).execute(
@@ -3003,6 +3036,22 @@ describe("flow composition (run:)", () => {
       expect(reason).toMatch(/Re-running the flow repeats the same launch/);
     });
 
+    // This is the one reader that deliberately does NOT consume the terminal
+    // injection_failed diagnosis: its relaunch is the step's own and the
+    // reading arrives one launch-wait later, where a slow cold start produces
+    // the identical unregistered reading (#778). If someone ever routes the
+    // gate through adviseOnUninjectedApp, an agent's earlier native-devtools
+    // hand-out plus this step's own launch would flip the arm terminal and
+    // tell the author to stop re-running a flow that a re-run would fix. Pin
+    // the divergence so that unification fails here first.
+    it("keeps the unregistered arm worth a re-run instead of terminal", () => {
+      const reason = flowLaunchGateReason("com.acme.app", "unregistered");
+
+      expect(reason).toMatch(/re-run the flow to relaunch and wait again/);
+      expect(reason).not.toMatch(/was told to relaunch/);
+      expect(reason).not.toMatch(/injection_failed/);
+    });
+
     // The `not.toContain` guards below compare rendered substrings, so they only
     // mean anything while neither figure is a suffix of the other: 500/1500 would
     // make `"1500 ms".includes("500 ms")` true and fail them for the wrong
@@ -3059,11 +3108,13 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => false, // never connects during the poll…
-        listConnectedBundleIds: () => [],
-        appConnectionState: async () => "connected" as const, // …but has by the measurement
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => false, // never connects during the poll…
+          listConnectedBundleIds: () => [],
+          appConnectionState: async () => "connected" as const, // …but has by the measurement
+        })
+      ),
     } as unknown as Registry;
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -3106,13 +3157,15 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => ({
-        isConnected: () => false,
-        listConnectedBundleIds: () => [],
-        appConnectionState: async () => {
-          throw new Error("Invalid device: UDID");
-        },
-      })),
+      resolveService: vi.fn(
+        stubNativeDevtools({
+          isConnected: () => false,
+          listConnectedBundleIds: () => [],
+          appConnectionState: async () => {
+            throw new Error("Invalid device: UDID");
+          },
+        })
+      ),
     } as unknown as Registry;
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

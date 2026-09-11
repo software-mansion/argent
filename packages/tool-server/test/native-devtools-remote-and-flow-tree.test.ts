@@ -74,8 +74,19 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
   // state means an EMPTY set, hence an app auto-targeting cannot name; the id the
   // flow launched is what makes it nameable.
   function registryWith(connected: string[], overrides: Partial<NativeDevtoolsApi> = {}): Registry {
+    // Instance-scoped in the real service, so one set per registry here.
+    const advised = new Set<string>();
+    const terminalVerdict = new Set<string>();
     const api = {
       listConnectedBundleIds: () => connected,
+      noteRelaunchAdvice: (bundleId: string) => {
+        advised.add(bundleId);
+      },
+      wasAdvisedToRelaunch: (bundleId: string) => advised.has(bundleId),
+      noteTerminalVerdict: (bundleId: string) => {
+        terminalVerdict.add(bundleId);
+      },
+      verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
       isConnected: (bundleId: string) => connected.includes(bundleId),
       getAppState: async (bundleId: string) => ({
         bundleId,
