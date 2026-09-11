@@ -68,15 +68,8 @@ describe("create-flow selector-scope docs", () => {
   });
 });
 
-describe("bash script exchange docs", () => {
+describe("bash script failure docs", () => {
   const REFERENCE = path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx");
-
-  it("teaches the sibling-and-mv pattern in the Bash documentation", () => {
-    const text = readFileSync(REFERENCE, "utf8");
-    expect(text).toContain("$ARGENT_OUTPUT");
-    expect(text).toMatch(/\$ARGENT_OUTPUT\.new/);
-    expect(text).toMatch(/mv .\$ARGENT_OUTPUT\.new/);
-  });
 
   it.each([REFERENCE, FLOW_YAML, LIVE_AUTHORING, SKILL])("names no reason file in %s", (file) => {
     expect(readFileSync(file, "utf8")).not.toContain("ARGENT_REASON");

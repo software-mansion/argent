@@ -356,17 +356,6 @@ Start the script with `set -euo pipefail` to stop on command failures and undefi
 *.sh text eol=lf
 ```
 
-`$ARGENT_OUTPUT` gives the path to a file that initially contains `{}`. To return data, write a UTF-8 JSON object to this file. The size limit is 1 MiB. Write to a temporary file first, as shown below:
-
-```bash
-set -euo pipefail
-id="$(date +%s)"
-printf '{"order":{"id":"%s"}}\n' "$id" > "$ARGENT_OUTPUT.new"
-mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"
-```
-
-If the script returns no data, leave `$ARGENT_OUTPUT` unchanged. Invalid output fails the step even with exit code 0. An empty or missing output file also fails the step.
-
 Stop each background job by its process ID before the script exits. Do not use `trap 'kill 0' EXIT`; it can stop Bash itself.
 
 #### Check failures

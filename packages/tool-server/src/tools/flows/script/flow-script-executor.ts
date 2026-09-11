@@ -1439,11 +1439,8 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
  * The file carries the document, and the document may hold values derived from
  * a secret, so it is written 0600 rather than left to the umask. The barrier
  * that holds is the 0700 `mkdtemp` directory around it, not the mode on the
- * file: `docs/reference/flow-yaml.mdx` teaches writing a sibling and `mv`-ing
- * it into place - which is the way past the empty-file failure a redirection
- * straight into `$ARGENT_OUTPUT` gives - and a `mv` replaces the inode, so the
- * document Argent reads back carries the script's own umask, 0644 on an
- * ordinary host.
+ * file. A script can replace the file with a sibling via `mv`. The replacement
+ * then has permissions from the script's own umask, typically 0644.
  *
  * The directory carries the moment it stops being this step's own, in its own
  * name: `$TMPDIR` is shared by every argent install on the host, and the sweep
