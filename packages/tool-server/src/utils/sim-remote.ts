@@ -253,6 +253,37 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
   }
 }
 
+/**
+ * Start recording the remote simulator's screen. Returns as soon as the runner
+ * has begun recording — the recording then runs unattended until
+ * `screenRecordStop`, which is what lets it span other tool calls.
+ *
+ * `showTouches` draws the touch visualizer into the capture; it stays on in
+ * the live stream until the stop turns it off. How much the runner buffers is
+ * its own business, so nothing here sizes it.
+ */
+export async function screenRecordStart(
+  udid: string,
+  opts: { showTouches: boolean }
+): Promise<void> {
+  const args = ["screen-record", "start", stripRemotePrefix(udid)];
+  if (opts.showTouches) args.push("--show-touches");
+  await run(args);
+}
+
+/**
+ * Stop the recording and download the mp4 to `outputFile`, overwriting it.
+ *
+ * The transfer is the whole video over the control connection, so it gets its
+ * own budget rather than the default: a long capture of a high-resolution
+ * device is hundreds of megabytes.
+ */
+export async function screenRecordStop(udid: string, outputFile: string): Promise<void> {
+  await run(["screen-record", "stop", stripRemotePrefix(udid), outputFile, "--force"], {
+    timeoutMs: 10 * 60_000,
+  });
+}
+
 export interface MoqInfo {
   url: string;
   fingerprint: string;

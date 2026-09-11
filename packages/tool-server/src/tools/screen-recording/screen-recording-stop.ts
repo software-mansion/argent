@@ -9,6 +9,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { stopCapture } from "./capture";
+import { stopRemoteCapture } from "./capture-remote";
 
 const zodSchema = z.object({
   udid: z
@@ -41,6 +42,7 @@ interface ScreenRecordingStopResult {
 
 const capability = {
   apple: { simulator: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -58,6 +60,7 @@ export const screenRecordingStopTool: ToolDefinition<
   capability,
   description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
 Also retrieves the video when the recording already ended on its own (time limit reached, capture process died) — call it even after the cap fired.
+On a remote (\`remote:\`) simulator this is what ends the runner-side recording and downloads the mp4, so a large capture takes a moment to transfer.
 Use when the interaction being captured is finished, or a tool-result note reminds you a recording is still running.
 Returns { video, durationMs, wallClockMs?, trimmedMs?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut.
 Fails if no recording (running or finished-but-unretrieved) exists for the given udid.`,
@@ -71,9 +74,11 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     const device = resolveDevice(params.udid);
     assertSupported("screen-recording-stop", capability, device);
 
-    // The capture encodes straight to the final mp4, so the file is ready as
-    // soon as this returns — no post-processing pass.
-    const stopped = await stopCapture(api);
+    // A local capture encodes straight to the final mp4, so the file is ready
+    // as soon as this returns; a remote one ends the runner-side recording,
+    // downloads it, and post-processes it here.
+    const stopped =
+      device.platform === "ios-remote" ? await stopRemoteCapture(api) : await stopCapture(api);
 
     // After the stop, so a "no active recording" failure isn't masked by a
     // missing artifact store.
