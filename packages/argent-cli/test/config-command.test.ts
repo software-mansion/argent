@@ -4,11 +4,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { config } from "../src/config.js";
 
-// Real-filesystem integration test: drives the actual `config()` entry point
-// against a sandboxed global home (HOME) and project cwd (a tmp dir with a
-// `.git` marker so the project root resolves there). No fs mocks — this
-// exercises the command → configuration-core → disk path end to end.
-
 let homeDir: string;
 let projectDir: string;
 let originalHome: string | undefined;
@@ -64,7 +59,6 @@ describe("argent config — set/get across scopes", () => {
     logSpy.mockClear();
     config(["get", "lens.agent"]);
     expect(output()).toBe("claude");
-    // Landed in the global config file.
     const globalCfg = JSON.parse(
       fs.readFileSync(path.join(homeDir, ".argent", "config.json"), "utf8")
     );
@@ -77,7 +71,6 @@ describe("argent config — set/get across scopes", () => {
     logSpy.mockClear();
     config(["get", "lens.agent"]);
     expect(output()).toBe("codex");
-    // The project file lives under the project root, not HOME.
     const projCfg = JSON.parse(
       fs.readFileSync(path.join(projectDir, ".argent", "config.json"), "utf8")
     );
@@ -100,11 +93,9 @@ describe("argent config — set/get across scopes", () => {
       "project",
     ]);
     logSpy.mockClear();
-    // Effective value = global baseline + project extras, deduplicated.
     config(["get", "ios.additionalDeviceSets"]);
     expect(output()).toBe('["/tmp/sets/a","/tmp/sets/b","/tmp/sets/c"]');
     logSpy.mockClear();
-    // Each scope still stores (and reports) only its own entries.
     config(["get", "ios.additionalDeviceSets", "--scope", "project"]);
     expect(output()).toBe('["/tmp/sets/b","/tmp/sets/c"]');
   });
@@ -154,9 +145,7 @@ describe("argent config — set/get across scopes", () => {
 
   it("a project-scope write echoes the resolved project root", () => {
     config(["set", "lens.agent", "codex", "--scope", "project"]);
-    // (Assert on the un-colorized segment after the bold key.)
     expect(output()).toContain(`(project: ${projectDir}).`);
-    // A real project (a `.git` marker at projectDir) is not degenerate — no warning.
     expect(errors()).toBe("");
     logSpy.mockClear();
     config(["unset", "lens.agent", "--scope", "project"]);
@@ -164,8 +153,6 @@ describe("argent config — set/get across scopes", () => {
   });
 
   it("warns when project scope resolves to the home directory", () => {
-    // Materialize ~/.argent via a global write, then run from a non-project dir
-    // under HOME: the marker walk stops at ~/.argent, so "project" IS global.
     config(["set", "lens.agent", "claude"]);
     const nested = path.join(homeDir, "not-a-project");
     fs.mkdirSync(nested);
@@ -174,7 +161,6 @@ describe("argent config — set/get across scopes", () => {
     config(["set", "lens.agent", "codex", "--scope", "project"]);
     expect(errors()).toContain("resolved to the home directory");
     expect(output()).toContain(`(project: ${homeDir}).`);
-    // The write landed in the global config file.
     const globalCfg = JSON.parse(
       fs.readFileSync(path.join(homeDir, ".argent", "config.json"), "utf8")
     );
@@ -200,7 +186,6 @@ describe("argent config — validation & errors", () => {
   });
 
   it("rejects a value that fails the schema validator", () => {
-    // lens.agent must be a non-blank string; a JSON number is invalid.
     expect(() => config(["set", "lens.agent", "42"])).toThrow(ExitError);
     expect(errors()).toMatch(/Invalid value/);
   });
@@ -243,7 +228,6 @@ describe("argent config — list & json", () => {
 
 describe("argent config — a rejected value says what to type instead", () => {
   it("names the expected shape and suggests the user's own value, correctly wrapped", () => {
-    // The reported case: a list-valued key given a single path.
     expect(() =>
       config([
         "set",
@@ -256,8 +240,6 @@ describe("argent config — a rejected value says what to type instead", () => {
 
     const err = errors();
     expect(err).toContain("expected an array of strings");
-    // The suggestion carries the path they typed, not a stand-in from the docs,
-    // and keeps them on the scope they asked for.
     expect(err).toContain(
       `Did you mean: argent config set ios.additionalDeviceSets '["~/Library/Developer/Radon/Devices"]' --scope project`
     );
@@ -271,6 +253,14 @@ describe("argent config — a rejected value says what to type instead", () => {
     expect(err).toContain("expected a non-empty string");
     expect(err).not.toContain("Did you mean");
     expect(err).toContain("Example: argent config set lens.agent claude");
+  });
+
+  it("suggests no wrapping for a key whose reader keeps a value its writer refuses", () => {
+    expect(() => config(["set", "scripts.bash", "bin/bash"])).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected an absolute path to Bash on the tool-server host");
+    expect(err).not.toContain("Did you mean");
   });
 
   it("keeps the global default out of the suggestion when no scope was given", () => {
@@ -315,8 +305,6 @@ describe("argent config — unset leaves no empty parent behind", () => {
   });
 
   it("does not rewrite a file to tidy an empty group it did not create", () => {
-    // A no-op unset must not touch the file at all — that guarantee is why the
-    // fast path exists, and tidying would quietly break it.
     const dir = path.join(projectDir, ".argent");
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, "config.json");

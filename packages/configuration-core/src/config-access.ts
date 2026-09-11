@@ -1,9 +1,3 @@
-// Schema-driven read/write for scoped configuration values: `getConfigValue`
-// reads every scope the value's schema entry allows, merges them under the
-// entry's policy and falls back to its default; `setConfigValue` /
-// `unsetConfigValue` validate against the schema before writing. `argent config`
-// and the lens getters wrap these.
-
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
 import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
@@ -16,7 +10,6 @@ import {
   type ConfigDefinition,
 } from "./config-schema.js";
 
-/** Read + parse one scope's value for a definition (no merge, no default). */
 function readScopeValue<T>(
   def: ConfigDefinition<T>,
   scope: FlagScope,
@@ -27,10 +20,6 @@ function readScopeValue<T>(
   return raw === undefined ? undefined : def.parse(raw);
 }
 
-/**
- * The effective value: the project and global scopes read, validated, merged
- * under the entry's policy, then defaulted.
- */
 export function getConfigValue<T>(
   def: ConfigDefinition<T>,
   options: ConfigPathOptions = {}
@@ -41,8 +30,6 @@ export function getConfigValue<T>(
   return merged ?? def.default;
 }
 
-/** The raw parsed value stored at a single scope (no merge/default). Throws on
- * an unknown key. Backs `argent config get --scope`. */
 export function getConfigValueAtScope(
   key: string,
   scope: FlagScope,
@@ -53,7 +40,6 @@ export function getConfigValueAtScope(
   return readScopeValue(def, scope, options);
 }
 
-/** Same as `getConfigValue` but looked up by key; throws on an unknown key. */
 export function getConfigValueByKey(
   key: string,
   options: ConfigPathOptions = {},
@@ -74,7 +60,6 @@ function requireDefinition(
   return def;
 }
 
-/** Thrown when a key is not present in the schema. */
 export class UnknownConfigKeyError extends Error {
   constructor(public readonly key: string) {
     super(`Unknown configuration key "${key}".`);
@@ -82,7 +67,6 @@ export class UnknownConfigKeyError extends Error {
   }
 }
 
-/** Thrown when a write targets a scope the value's schema does not allow. */
 export class ConfigScopeError extends Error {
   constructor(
     public readonly key: string,
@@ -94,10 +78,6 @@ export class ConfigScopeError extends Error {
   }
 }
 
-/**
- * Thrown when a value fails the schema's `parse` validator. Carries what the key
- * accepts and an example, so a caller can tell the user what to type instead.
- */
 export class ConfigValidationError extends Error {
   constructor(
     public readonly key: string,
@@ -113,10 +93,6 @@ export class ConfigValidationError extends Error {
   }
 }
 
-/**
- * Thrown when a key is delegated to a dedicated command (`manageCommand`) and
- * must not be written through the generic `argent config` path.
- */
 export class ConfigManagedElsewhereError extends Error {
   constructor(
     public readonly key: string,
@@ -127,12 +103,6 @@ export class ConfigManagedElsewhereError extends Error {
   }
 }
 
-/**
- * Validate and persist a configuration value at a scope. `rawValue` is a
- * pre-parsed JSON value (the CLI coerces its string argument first). Returns the
- * normalized value written, so callers can report what landed on disk rather
- * than the raw input.
- */
 export function setConfigValue(
   key: string,
   rawValue: unknown,
@@ -143,17 +113,13 @@ export function setConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  const parsed = def.parse(rawValue);
+  const parsed = (def.validateWrite ?? def.parse)(rawValue);
   if (parsed === undefined)
     throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);
   return parsed;
 }
 
-/**
- * Remove a value at a scope. Returns true when an entry was removed. Refuses
- * keys delegated to a dedicated command.
- */
 export function unsetConfigValue(
   key: string,
   scope: FlagScope = "global",
@@ -163,9 +129,6 @@ export function unsetConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  // Skip the write path when the key is absent: `updateConfig` would mkdir the
-  // scope's `.argent` dir and rewrite an unchanged config.json, materializing a
-  // project file (and dirtying git status) for an unset that removed nothing.
   if (getAtPath(readConfigObject(scope, options), key) === undefined) return false;
   let removed = false;
   updateConfig(
@@ -178,25 +141,18 @@ export function unsetConfigValue(
   return removed;
 }
 
-/** A schema entry plus its current per-scope and effective values, for display. */
 export interface ConfigEntryView {
   key: string;
   description: string;
   scopes: readonly FlagScope[];
   manageCommand?: string;
-  /** What a valid value looks like, in words. */
   expected?: string;
-  /** An example of a valid value, as it would be typed. */
   example?: string;
-  /** Effective (merged + defaulted) value. */
   effective: unknown;
-  /** Raw parsed value stored at the project scope, or undefined. */
   project: unknown;
-  /** Raw parsed value stored at the global scope, or undefined. */
   global: unknown;
 }
 
-/** Every schema entry with its current values — backs `argent config list`. */
 export function listConfig(
   options: ConfigPathOptions = {},
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA
@@ -214,11 +170,6 @@ export function listConfig(
   }));
 }
 
-/**
- * Coerce a raw CLI string into a JSON value for `setConfigValue`. JSON first (so
- * `true`, `42`, `["a","b"]` keep their types), falling back to the literal
- * string so bare paths like `/tmp/set` don't need quoting.
- */
 export function coerceCliValue(raw: string): unknown {
   try {
     return JSON.parse(raw);
@@ -229,30 +180,21 @@ export function coerceCliValue(raw: string): unknown {
 
 const LENS_AGENT_KEY = "lens.agent";
 
-/** The remembered `argent lens` agent id, or null when none is stored. */
 export function getRememberedAgent(options: ConfigPathOptions = {}): string | null {
   const value = getConfigValueByKey(LENS_AGENT_KEY, options);
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-/** Persist the chosen `argent lens` agent id so later runs skip the picker. */
 export function setRememberedAgent(agentId: string, options: ConfigPathOptions = {}): void {
   setConfigValue(LENS_AGENT_KEY, agentId, "global", options);
 }
 
-/** Forget the remembered `argent lens` agent (so the picker shows again). */
 export function clearRememberedAgent(options: ConfigPathOptions = {}): void {
   unsetConfigValue(LENS_AGENT_KEY, "global", options);
 }
 
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
-/**
- * The extra CoreSimulator device-set directories, as normalized absolute paths.
- * Relative entries resolve per scope — project root for project, home for global
- * — and `~`/`~/…` expands to home in either. Order follows the `union` preset
- * (global first, project after), duplicates dropped after normalization.
- */
 export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
   const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
   // Path resolution must happen per scope *before* deduplication, so the union
@@ -274,9 +216,6 @@ export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): str
   return Array.from(new Set([...global, ...project]));
 }
 
-/** Resolve one scope's entries against its base. `path.resolve` rather than
- * join/normalize in every branch, so trailing separators are stripped and the
- * post-resolution dedup collapses equivalent spellings. */
 function resolveDeviceSetEntries(
   entries: string[] | undefined,
   baseDir: string,

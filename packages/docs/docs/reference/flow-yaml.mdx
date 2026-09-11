@@ -125,7 +125,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
 | `run`        | `<path>`                                                           | Run another flow file inline. See [Composition](#composition)                                     |
-| `script`     | `{ path, timeout }`                                                | Run a local `.mjs` file in a new Node process. See [Local scripts](#local-scripts)                |
+| `script`     | `{ path, timeout }`                                                | Run a local `.mjs` or `.sh` file in a new process. See [Local scripts](#local-scripts)            |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
@@ -205,8 +205,8 @@ A negative condition passes before the element appears, for a typo, and on the w
 Each screen change needs two checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. `idle` waits until the screen has content and stops changing in the UI tree and in the pixels.
@@ -269,19 +269,22 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
-Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local `.mjs` file.
+Use a `script` step for setup or cleanup that device steps cannot do. The script is a local `.mjs` or `.sh` file.
+
+An `.mjs` file runs under Node.js. A `.sh` file runs under Bash. See [Bash scripts](#bash-scripts).
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
-The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
+The value is always a map. Parsing rejects a bare path, such as `script: scripts/seed-order.sh`.
 
-| Key       | Required | Description                                                                                                                        |
-| --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | yes      | An `.mjs` file, relative to the flow file that holds the step. Write the extension in lowercase, and match the letter case on disk |
-| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                           |
+| Key       | Required | Description                                                                                                                      |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs` or `.sh` file, relative to the flow file that holds the step. Use a lowercase extension. Match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                         |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -296,7 +299,15 @@ Argent removes each other name. Argent removes its own token, its own port and e
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
-`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. An `.mjs` script runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell. In a `.sh` script, a `node` command uses this `PATH`.
+
+The script log contains stdout and stderr from the script and its commands. Argent keeps at most 64 KiB per step and 256 KiB per flow. The log appears in these places:
+
+- `scriptLog` in the step report. `scriptLogTruncated` is `true` if the log is incomplete.
+- `log` in the result of `flow-add-script`. `logTruncated` is `true` if the log is incomplete.
+- The output of `argent flow run`, below the step.
+
+If log collection stops before the commands finish, the step report includes a note.
 
 A failed step stops the flow. The verdict names the side that caused the failure.
 
@@ -309,15 +320,62 @@ A step that a thrown error stopped reports the message of the error and the fram
 
 The split holds only when the `timeout` is generous. Argent needs about a second to tell a script that never settles from a script the host stopped. Below that, the same defect of the script becomes a time limit, and the step is errored. Give a script a second or more before you read `errored` as a fact about the machine.
 
-Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
+Parsing rejects a `timeout` below 100 milliseconds. The step starts a process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
 
-`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
+Bash selection and log collection also occur outside `timeout`.
+
+`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the Node process. The heap limit does not apply to Bash. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
 On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
 
 On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
+
+### Bash scripts
+
+Argent runs `.sh` files with Bash. The file needs no execute permission. Argent ignores the `#!` line and supplies no arguments or standard input.
+
+#### Select Bash
+
+Argent searches for Bash in this order:
+
+1. The absolute path in the global `scripts.bash` key.
+2. `bash` on the `PATH` of the tool-server.
+3. `/bin/bash`, then `/usr/bin/bash`. On Windows, Argent searches the Git for Windows installation.
+
+An invalid `scripts.bash` value stops the step with an error. Argent does not support the Windows WSL launcher.
+
+To use a specific Bash version, set `scripts.bash` to its absolute path. See [Available keys](/docs/reference/configuration#available-keys).
+
+#### Write a script
+
+Start the script with `set -euo pipefail` to stop on command failures and undefined variables. Use LF line endings. To preserve LF in Git, add this rule to `.gitattributes`:
+
+```gitattributes
+*.sh text eol=lf
+```
+
+Stop each background job by its process ID before the script exits. Do not use `trap 'kill 0' EXIT`; it can stop Bash itself.
+
+#### Check failures
+
+A nonzero exit code fails the step. The failure reason includes the exit code and the last non-blank line from stderr. Argent includes stdout only in the log, not in the reason.
+
+To report a failure, write the explanation to stderr. Then exit with a nonzero code:
+
+```bash
+echo "The orders API returned 503" >&2
+exit 1
+```
+
+| Symptom                    | Action                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Exit code `126`            | Check that Bash can read the script and execute its commands.                                              |
+| Exit code `127`            | Check that the command is on the `PATH` of the tool-server. Restart the tool-server after a `PATH` change. |
+| `$'\r': command not found` | Convert the script from CRLF to LF line endings.                                                           |
+
+On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 
 ## The `argent flow` command
 

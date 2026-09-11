@@ -145,8 +145,6 @@ const zodSchema = z
             ? "Pass exactly one flow source: name or flow_path."
             : "Pass exactly one flow source: name or flow_path. flow-execute needs the flow's " +
               "name in `name` — it resolves <project_root>/.argent/flows/<name>.yaml.",
-        // The ROOT, not `flow_path`: the rule spans both source fields, and a
-        // path would prefix the message with "`flow_path`:".
         path: [],
       });
     }
@@ -154,12 +152,6 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-// A dual-source call (name + flow_path) must be diagnosed by the schema's
-// exactly-one rule, not by whether either unused file happens to exist:
-// - unwrapWhenSet: flow_path is caller-authored, so alongside name zod still
-//   sees it — dropping it would silently run the saved flow instead.
-// - skipWhenSet: flow_file is client-derived, so alongside flow_path it is
-//   dropped; the caller never authored it.
 const fileInputs: FileInputSpec[] = [
   {
     target: "flow_path",
@@ -182,34 +174,12 @@ export interface StepReport {
   index: number;
   kind: FlowStep["kind"];
   status: StepStatus;
-  /**
-   * Machine-readable explanation of the outcome. Always set when the step did
-   * not pass; also set on some passing reports whose result is self-narrating —
-   * the `when:` guard marker, snapshot passes, a `script` step carrying an
-   * executor note (`scriptVerdict`, in flow-script-step.ts), and a chromium
-   * `launch` whose instance the runner booted and owns. An attach to an instance
-   * the runner does not own reports no reason.
-   */
   reason?: string;
-  /**
-   * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
-   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
-   * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
-   */
   warning?: string;
-  /** Underlying tool id for `tool` steps. */
   tool?: string;
-  /** Tool result for `tool` steps. */
   result?: unknown;
-  /** The tool's adapter output hint (e.g. "image"), for clients that render it. */
   outputHint?: string;
-  /** The args the tool ran with (device id injected). */
   args?: unknown;
-  /** Echo message. */
   message?: string;
   /**
    * The fragment a step belongs to (set on `run` and the steps it expands) —
@@ -220,19 +190,8 @@ export interface StepReport {
    * disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
    */
   flow?: string;
-  /**
-   * Human-readable "what this step acts on" — the selector for directive
-   * steps, the snapshot name — so a report line reads `tap "Clear logs"`,
-   * not a bare `tap`. Display-only.
-   */
   target?: string;
-  /**
-   * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
-   * cropOn snapshots) for snapshot steps that carry artifacts — clients
-   * exporting them (the CLI's `--output`) name files by it.
-   */
   snapshotKey?: string;
-  /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
   scriptLog?: string;
   scriptLogTruncated?: boolean;
@@ -249,10 +208,6 @@ export interface FlowRunResult {
   device: string;
   executionPrerequisite: string;
   ok: boolean;
-  /**
-   * The run was cancelled mid-flight — set so a FAIL whose step statuses are
-   * all pass/skip is self-explanatory. Absent on completed runs.
-   */
   aborted?: boolean;
   passed: number;
   failed: number;
@@ -267,17 +222,8 @@ export interface FlowPrerequisiteNotice {
   executionPrerequisite: string;
 }
 
-/**
- * Longest `run:` chain a flow may nest. Exported so the boundary tests build
- * their chains from the real limit.
- */
 export const MAX_RUN_DEPTH = 20;
 
-/**
- * Grace period to let a freshly (re)launched app settle before the first step
- * runs. A cold start can outlast the first directive's default auto-wait, so the
- * head start goes here rather than inflating every step's timeout.
- */
 const POST_LAUNCH_SETTLE_MS = 1500;
 
 /**
@@ -298,13 +244,6 @@ const POST_LAUNCH_SETTLE_MS = 1500;
 export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
 const NATIVE_READY_POLL_MS = 250;
 
-/**
- * How long the launch step has spent on the app by the time the gate takes its
- * verdict: the post-launch settle plus the whole connect wait. The gate's own
- * timeout is only the second half, so quoting it alone understates the age of a
- * process the step launched — the fact the remedies below rest on. Exported so
- * they can be pinned against it.
- */
 export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
 /**
@@ -326,17 +265,6 @@ const FOREGROUND_CHANGING_TOOLS = new Set([
   "button",
 ]);
 
-/**
- * Poll until native-devtools is connected for `bundleId`. Returns null once
- * connected, on abort (the caller reports the cancellation itself), and for an
- * app whose hierarchy this gate cannot wait for at all. Otherwise the reason the
- * connection never came up: the resolution error when the service is
- * unreachable, else the state measured off the running process, rewritten for
- * the one thing that distinguishes this caller — it has just launched the app.
- *
- * Measured rather than guessed: "re-run to relaunch" here would be the same
- * restart loop `appConnectionState` exists to break.
- */
 async function waitForNativeDevtools(
   registry: Registry,
   device: DeviceInfo,
@@ -348,8 +276,6 @@ async function waitForNativeDevtools(
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
-    // Withheld for the same reason as the timeout below: an app the native
-    // tools refuse to target was never going to be served by this service.
     if (!isInjectableBundleId(bundleId)) return null;
     return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
@@ -371,27 +297,11 @@ async function waitForNativeDevtools(
   // Only the VERDICT is withheld — before a measurement no arm below would
   // consult for such an app, costing several uninterruptible simctl round-trips.
   if (!isInjectableBundleId(bundleId)) return null;
-  // Measure why — the state may have flipped to connected since the last poll.
-  // The loop's abort check covers every exit but this one (`break` follows it
-  // synchronously); an abort during the uninterruptible measurement is caught by
-  // the caller, which drops the reason.
   const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
   if (state === "connected") return null;
   return flowLaunchGateReason(bundleId, state);
 }
 
-/**
- * The measured diagnosis, rewritten for the one fact that separates this caller
- * from every other consumer of {@link buildAppStateMessage}: it has just run
- * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
- *
- * Those messages are written for a reader who has not launched anything, so
- * emitted verbatim they hand back the action this step just took and an author
- * who obeys re-runs the flow into the identical state. Each state gets the
- * sentence that is true *after* a launch instead; the switch is exhaustive so a
- * state added later cannot inherit a remedy written for a reader who never
- * launched.
- */
 export function flowLaunchGateReason(
   bundleId: string,
   state: Exclude<NativeDevtoolsAppState, "connected">
@@ -399,8 +309,6 @@ export function flowLaunchGateReason(
   const measured = buildAppStateMessage(bundleId, state);
   switch (state) {
     case "not_running":
-      // The step launched it and it is gone: a relaunch provably reproduces
-      // this, so the measured remedy reads as advice to change nothing.
       return (
         `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
         `so it exited after launch rather than failing to connect. Re-running the flow repeats the same launch: ` +
@@ -421,20 +329,11 @@ export function flowLaunchGateReason(
         `(boot-device with force) before re-running.`
       );
     case "unregistered":
-      // Everywhere else this verdict reads the app's whole lifetime; here only
-      // this step's launch plus its wait, which a cold start can outlast — so the
-      // measured remedy would have the author restart a healthy tool-server. The
-      // figure is the whole spend: the poll checks the live map once before its
-      // first sleep, so a dial during the post-launch settle counts too.
       return (
         `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
         `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`
       );
     case "connecting":
-      // A process seconds old, though this step launched the app
-      // LAUNCH_TO_VERDICT_MS ago — something relaunched it in between, so the
-      // handshake being waited on belongs to that later process. "Wait" is
-      // still right; crediting this step with that launch is not.
       return (
         `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
         `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
@@ -446,9 +345,6 @@ export function flowLaunchGateReason(
         `before restarting the tool-server rather than the app.`
       );
     case "provider_attached":
-      // The measured text offers a retry to a reader whose app has only just
-      // started; this step already spent that wait. What survives is the half
-      // that does not ask argent to restart a process the provider owns.
       return (
         `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
         `provider is lending a different app rather than one still connecting. Re-run the flow only ` +
@@ -500,29 +396,6 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
   }
 }
 
-/**
- * Gate a launch on the platform's full-hierarchy tree source being ready. If
- * it never comes up, every selector read would fail — `fetchFlowTree` refuses
- * to degrade to the trimmed AX tree — so the launch step fails outright with an
- * actionable, platform-specific reason instead of letting the first directive
- * surface a raw tree-source error.
- *
- * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and for an iOS app the native tools refuse to target (see
- * {@link waitForNativeDevtools}) — there the launch is not what failed.
- * Otherwise the reason to report.
- *
- * The iOS wait is per bundle, and it does more than confirm readiness. A
- * successful launch pins later tree reads to this bundle
- * ({@link FlowTreeTarget}), so the read no longer has to agree with
- * auto-targeting about which app is frontmost — but the pin only names the app,
- * it does not prove the app can serve a hierarchy. This wait is the closest
- * evidence the gate has, so a launch that skips it hands the next selector step
- * a pin to a process whose tree source is not up yet. It is not a guarantee:
- * the wait ends on `isConnected`, which simulator-wide injection lets a
- * `com.apple.*` process satisfy, and the first selector read refuses that pin
- * anyway (see `queryFullHierarchyTree`).
- */
 async function treeSourceGate(
   registry: Registry,
   device: DeviceInfo,
@@ -530,8 +403,6 @@ async function treeSourceGate(
   signal?: AbortSignal
 ): Promise<string | null> {
   if (isIosPhysicalDevice(device) && !signal?.aborted) {
-    // Physical devices read the XCUITest runner, not native devtools.
-    // Resolve it here. Cold start must not eat the next step's auto-wait.
     try {
       const ref = iosDeviceRunnerRef(device);
       await registry.resolveService(ref.urn, ref.options);
@@ -546,8 +417,6 @@ async function treeSourceGate(
   if (device.platform === "ios" && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {
-      // Every reason names the bundle id, so the prefix must not: doubled, it
-      // reads as two failures reported back to back.
       return `could not connect to native devtools. ${reason}`;
     }
   }
@@ -572,24 +441,10 @@ async function treeSourceGate(
   return null;
 }
 
-/**
- * Execute a `launch` step: start the app from a clean state — terminate and
- * relaunch via `restart-app`, so a copy left running by a prior run can't leak
- * state in — then settle and wait for the platform's full-hierarchy tree source
- * ({@link treeSourceGate}). Failures are reported as step outcomes, not thrown,
- * so the run still returns a structured report; a run cancelled mid-launch
- * returns the shared aborted outcome (reported as a skip).
- *
- * Chromium can't relaunch in place — see {@link runChromiumLaunch}.
- */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
   const { registry, device, signal } = env;
 
-  // Relaunching is the repair the tree source asks for by name, so a verdict
-  // recorded before it is spent. Cleared up front rather than on success:
-  // nothing past this point leaves the source in the state the memo describes,
-  // and a gesture can follow a launch with no read in between to clear it.
   if (state.treeOutage) state.treeOutage.proven = undefined;
 
   if (device.platform === "chromium") return runChromiumLaunch(state, app);
@@ -601,15 +456,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
-  // The previous app is terminating and the new one has not started, so a
-  // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
   let restart: unknown;
   try {
     restart = await invokeOnDevice(env, "restart-app", { bundleId });
   } catch (err) {
-    // A cancellation makes the sub-tool reject; that rejection is the abort,
-    // not an app failure, so it must not be attributed to restart-app.
     if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
   }
@@ -622,8 +473,6 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
-  // The gate returns null (ready) on abort — check the signal before trusting
-  // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
   // A FRESH object every time, never a mutation of the previous target: the
@@ -650,9 +499,6 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
 
   const owned = ownedInstance(state);
   if (owned) {
-    // The hoist booted what an EARLIER read of the flow declared, and a leading
-    // run: chain re-reads the file at execution — so settling is only valid
-    // while this step still names the booted app.
     const declared = await resolveAppPath(spec.path, state.flowsDir);
     if (declared !== owned.appPath) {
       return {
@@ -660,9 +506,6 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
         reason: `launch declares "${declared}" but the instance booted for this run is "${owned.appPath}" — the flow file changed after the run started`,
       };
     }
-    // Seconds old and already fronted; just settle. Reported as a boot all the
-    // same — a reason's presence is how a consumer tells an instance the run
-    // owns (and will kill) from one it merely attached to.
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
     return { ok: true, reason: `booted chromium instance ${device.id}` };
   }
@@ -678,10 +521,6 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
       reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
     };
   }
-  // The launch just named what the attached instance runs. Record the canonical
-  // path as its capture identity — a later boot of this same app must compare
-  // equal in the snapshot guard — and fold captures already attributed to the
-  // anonymous attached identity into it: attaching restarts nothing.
   state.attachedAppPath = await resolveAppPath(spec.path, state.flowsDir);
   for (const [key, appId] of state.snapshotApps) {
     if (appId === `attached:${device.id}`) state.snapshotApps.set(key, state.attachedAppPath);
@@ -699,14 +538,11 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
  * not own are never killed.
  */
 async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
-  // The device the run is on now — read before the boot below moves it.
   const { registry, device, signal } = deviceEnv(state);
 
   const spec = chromiumLaunchSpec(app);
   if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
   const appPath = await resolveAppPath(spec.path, state.flowsDir);
-  // Captured before the run moves: the success reason marks the step where the
-  // run left this instance.
   const prevId = device.id;
 
   // Path equality, so two app directories shipping one Electron `name` (a v1/v2
@@ -727,16 +563,11 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   } catch (err) {
     return { ok: false, reason: await chromiumBootFailureReason(state, err) };
   }
-  // Recorded before the next await so a cancelled run still reclaims it.
   state.owned.push(booted);
   state.device = resolveDevice(booted.deviceId);
 
   await frontChromiumPage(registry, state.device);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-  // "retired" only for the instance actually killed: the one the run leaves
-  // stays alive unless the relaunch is of its own app. A relaunch of a
-  // different owned app kills an older instance the run is not on — named
-  // alongside the move, since nothing else in the report accounts for it.
   const move =
     retiredId === prevId ? `retired ${prevId} (same app relaunched)` : `run moved off ${prevId}`;
   const alsoRetired =
@@ -749,7 +580,6 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   };
 }
 
-/** Bound on the lock-hint liveness re-probe — an already-failing step must stay quick. */
 const LOCK_SUSPECT_PROBE_TIMEOUT_MS = 800;
 
 /**
@@ -773,29 +603,13 @@ function singleInstanceLockSignal(err: unknown): FailureSignal | null {
   return signal;
 }
 
-/**
- * The instances that could be holding the lock a boot just lost to, each one
- * re-probed for liveness ({@link liveLockSuspects}) — the hint must not assert
- * that a process "is running" when it has since exited.
- */
 interface LockSuspects {
-  /** The un-owned instance the run attached to, when it still answers CDP. */
   attached: string | null;
-  /** Instances this run booted and still holds, oldest first, that still answer CDP. */
   owned: BootedChromium[];
 }
 
-/** The hoisted boot's suspects: it attached to nothing and owns nothing yet. */
 const NO_LOCK_SUSPECTS: LockSuspects = Object.freeze({ attached: null, owned: [] });
 
-/**
- * The lock explanation, shared by both boot sites so the mid-run failure and
- * the hoisted one name one cause in one wording. Both suspect kinds are named
- * when both are live: the attached instance is the one the reader can actually
- * close, while a run-owned holder is what makes "close it and rerun" a lie — the
- * runner kills that one at run end, so a rerun loses the identical lock. With
- * neither the hint stays general rather than sending the agent after a ghost.
- */
 function singleInstanceLockHint(suspects: LockSuspects): string {
   const clauses: string[] = [];
   if (suspects.attached) {
@@ -804,10 +618,6 @@ function singleInstanceLockHint(suspects: LockSuspects): string {
     );
   }
   if (suspects.owned.length > 0) {
-    // Every owned instance is listed rather than one guess: the failing app path
-    // matched none of them (a match is retired before the boot), so what is left
-    // is exactly the set the runner cannot rule out — naming WHICH one ships the
-    // colliding Electron `name` would take reading each app's manifest.
     const owned = suspects.owned.map((o) => `${o.deviceId} (${o.appPath})`).join(", ");
     clauses.push(
       `This run booted ${owned}, alive until run end — an app path that shares an Electron \`name\` with this one shares its lock. That holder is the runner's own, so closing it is not on offer and a rerun fails identically; launch them in separate runs, or give this launch its own \`--user-data-dir\` in \`args\`.`
@@ -818,22 +628,12 @@ function singleInstanceLockHint(suspects: LockSuspects): string {
   return `A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${clauses.join(" ")}`;
 }
 
-/**
- * Reason for a failed mid-run chromium boot: the underlying error, plus the
- * lock explanation when the failure carries that signature. The liveness
- * re-probe sits behind the shape check, so an ordinary boot failure never pays
- * the round-trip.
- */
 async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
   const base = `could not boot the chromium app: ${errMsg(err)}`;
   if (!singleInstanceLockSignal(err)) return base;
   return `${base} ${singleInstanceLockHint(await liveLockSuspects(state))}`;
 }
 
-/**
- * Every instance that could still hold the lock, probed in parallel so an
- * already-failing step pays one probe timeout rather than one per instance.
- */
 async function liveLockSuspects(state: ExecState): Promise<LockSuspects> {
   const [attached, owned] = await Promise.all([
     liveAttachedInstance(state),
@@ -842,10 +642,6 @@ async function liveLockSuspects(state: ExecState): Promise<LockSuspects> {
   return { attached, owned };
 }
 
-/**
- * The attached (un-owned) chromium instance re-probed for liveness. Null when
- * the run never attached or the instance's CDP endpoint no longer answers.
- */
 async function liveAttachedInstance(state: ExecState): Promise<string | null> {
   const id = state.attachedDeviceId;
   if (id === undefined) return null;
@@ -854,17 +650,11 @@ async function liveAttachedInstance(state: ExecState): Promise<string | null> {
   return (await answersCdp(port)) ? id : null;
 }
 
-/**
- * The run's own instances, re-probed like the attached one: owning a process is
- * not evidence it lives — it can crash or be closed after its boot — and a dead
- * one holds no lock.
- */
 async function liveOwnedInstances(state: ExecState): Promise<BootedChromium[]> {
   const alive = await Promise.all(state.owned.map((o) => answersCdp(o.port)));
   return state.owned.filter((_, i) => alive[i]);
 }
 
-/** Whether an instance still answers CDP, within the hint's probe budget. */
 async function answersCdp(port: number): Promise<boolean> {
   try {
     await ensureCdpReachable(port, AbortSignal.timeout(LOCK_SUSPECT_PROBE_TIMEOUT_MS));
@@ -874,7 +664,6 @@ async function answersCdp(port: number): Promise<boolean> {
   }
 }
 
-/** The instance the runner booted for the current device, when it owns it. */
 function ownedInstance(state: ExecState): BootedChromium | undefined {
   return state.owned.find((o) => o.deviceId === state.device?.id);
 }
@@ -889,8 +678,6 @@ function ownedInstance(state: ExecState): BootedChromium | undefined {
  * chromium-scoped in effect.
  */
 function snapshotAppIdentity(state: ExecState): string {
-  // Only reached from a `snapshot` step, which acts on a device — `deviceEnv`
-  // is the contradiction guard, not an expected path.
   return (
     ownedInstance(state)?.appPath ??
     state.attachedAppPath ??
@@ -898,92 +685,30 @@ function snapshotAppIdentity(state: ExecState): string {
   );
 }
 
-/**
- * Reason for a launch naming no chromium app while the run is on chromium —
- * names the device, since a run can move onto one mid-flight.
- */
 function noChromiumAppReason(device: DeviceInfo): string {
   return `no chromium app declared — the run is on ${device.id}; add a \`chromium:\` entry to this launch`;
 }
 
-// `device` is null for a run whose flow touches none. Narrowed rather than
-// inherited from ActionEnv so every site that acts on the device has to say so
-// (via `deviceEnv`) and the compiler can find the ones that don't.
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
-  /**
-   * Whether {@link device} is the one the CALLER named, rather than one
-   * auto-detected. Only a named device may override a scope a recording already
-   * carries — see {@link bindDeviceArgs}.
-   */
   deviceIsExplicit: boolean;
-  /**
-   * The ROOT flow file's canonical (realpath'd) directory — the anchor for
-   * snapshot baselines and a chromium launch's relative app path, so a
-   * symlinked root flow anchors beside its real file. `run:` targets instead
-   * anchor to the containing flow file's own directory ({@link scopeFlowDir}).
-   */
   flowsDir: string;
-  /**
-   * Whether the flow arrived as an upload, making {@link flowsDir} a server temp
-   * dir — a launch step's relative chromium app path can't be anchored there.
-   */
   viaUpload: boolean;
-  /**
-   * The `__baselines__/<segment>` this run's snapshots key their store under —
-   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}
-   * (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
-   * identity: the report's `flow`, the runStack seed's display name, and the
-   * CLI's `--output` directory all keep the as-written name.
-   */
   baselineKey: string;
   updateBaselines: boolean;
   reports: StepReport[];
   stopped: boolean;
-  /** Whether the status bar was pinned for this run (and so must be restored). */
   pinned: boolean;
-  /**
-   * Chromium instances the runner booted, oldest first — torn down in reverse at
-   * run end. A chromium e2e flow's leading launch has its boot hoisted into
-   * {@link resolveRunDevice}, so that one is here before step 1.
-   */
   owned: BootedChromium[];
-  /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
-  /**
-   * App identity ({@link snapshotAppIdentity}) each snapshot key in this run was
-   * first captured from — run-scoped memory for runSnapshot's cross-app
-   * baseline-collision guard, never persisted and never part of the key.
-   */
   snapshotApps: Map<string, string>;
-  /**
-   * The un-owned chromium instance the run started attached to, if any — the
-   * one instance the runner never kills, so it stands as a single-instance lock
-   * suspect for every later lock-shaped boot failure, even after the run moves
-   * on. {@link ExecState.owned} are the other suspects: the runner does kill
-   * those, but only at run end.
-   */
   attachedDeviceId?: string;
-  /**
-   * Canonical app path the attaching launch declared for that instance — the
-   * capture identity for snapshots taken on it ({@link snapshotAppIdentity}).
-   * Unset until a launch attaches; a launch-free run keeps the anonymous
-   * `attached:` identity, having never been told what the instance runs.
-   */
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
-  /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
 
-/**
- * The run state as an environment that acts on a device.
- *
- * The throw is a contradiction guard, not an expected path: it fires only if the
- * step classification and the executor disagree, and says so rather than
- * dereferencing null somewhere further in.
- */
 function deviceEnv(state: ExecState): ActionEnv {
   if (!state.device) {
     throw new Error("internal: a step that acts on a device ran in a flow resolved as device-free");
@@ -991,46 +716,19 @@ function deviceEnv(state: ExecState): ActionEnv {
   return { ...state, device: state.device };
 }
 
-/** A chromium instance the runner booted and must tear down after the run. */
 interface BootedChromium {
   deviceId: string;
   port: number;
   pid: number;
-  /** Absolute app path it was booted from — identifies a relaunch of the same app. */
   appPath: string;
 }
 
-/**
- * Flow name for interaction messages: the display half of resolveFlowSource
- * (basename stem on the flow_path branch) without its validation — these
- * messages render before validation and must still say something on a call
- * validation is about to reject. path.basename keeps a bare ".yaml" filename
- * intact, and the fallbacks keep a pathological source from rendering as "" or
- * "undefined".
- */
 function displayFlowName(params: { name?: string; flow_path?: string }): string {
   const stem =
     params.flow_path === undefined ? undefined : path.basename(params.flow_path, ".yaml");
   return params.name || stem || params.flow_path || "(unspecified)";
 }
 
-/**
- * Yield every parsed step, recursing into a block directive's children through
- * {@link blockSteps}: this is the sole feeder of
- * {@link assertUploadSelfContained}, so a block absent from the recursion would
- * carry an uploaded flow's nested `run:`, `script:` or `snapshot` past the
- * preflight.
- *
- * Each step arrives with its AUTHORED position - its place in the file as
- * written, every entry counted, `echo` included. A pre-run refusal has no report
- * line to point at, so the file is the one thing its reader can count against;
- * the CLI and MCP renderers number differently again, and already disagree with
- * each other. {@link retiredArgReason} says which counting its number uses.
- *
- * A `run:` target is deliberately not followed: the fragment resolves at run
- * time, so reading it here would duplicate that lookup.
- * {@link execRunStep} repeats the pass where the fragment loads.
- */
 function* walkSteps(steps: FlowStep[], within = ""): Generator<{ step: FlowStep; where: string }> {
   for (const [i, step] of steps.entries()) {
     const where = `step ${i + 1}${within}`;
@@ -1040,7 +738,6 @@ function* walkSteps(steps: FlowStep[], within = ""): Generator<{ step: FlowStep;
   }
 }
 
-/** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
 interface RetiredArgUse {
   where: string;
   tool: string;
@@ -1060,18 +757,15 @@ interface RetiredArgUse {
 function retiredKeyGuidance(prop: unknown): string | undefined {
   const schema = prop as { not?: Record<string, unknown>; description?: string } | undefined;
   if (!schema?.not || Object.keys(schema.not).length > 0) return undefined;
-  // Minus the "Retired: " label - every caller already says retired.
   return (schema.description ?? "").replace(/^Retired:\s*/, "");
 }
 
-/** The schema properties a registered tool declares, or undefined for a tool this registry lacks. */
 function toolArgProps(registry: Registry, tool: string): Record<string, unknown> | undefined {
   return (
     registry.getTool(tool)?.inputSchema as { properties?: Record<string, unknown> } | undefined
   )?.properties;
 }
 
-/** The first retired key in one invocation's args, against the properties its tool declares. */
 function retiredArgIn(
   props: Record<string, unknown>,
   tool: string,
@@ -1118,20 +812,6 @@ function* nestedInvocations(
   }
 }
 
-/**
- * The first retired key a raw `tool:` step in these steps passes - in its own
- * args, or in an invocation those args carry inline (a recorded run-sequence
- * batch).
- *
- * The typed directives refuse a retired spelling at parse time (`swipe.settle`),
- * but a recorded `tool:` step carries its args opaquely - the parser knows no
- * tool schemas - so the same key reached `registry.invokeTool` and failed only
- * there, with every earlier step already run against the device. Callers use
- * this to move that refusal to load time.
- *
- * An unknown tool is skipped: that step already fails on its own, with a better
- * message than a missing schema could produce here.
- */
 function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUse | undefined {
   for (const { step, where } of walkSteps(steps)) {
     if (step.kind !== "tool") continue;
@@ -1142,8 +822,6 @@ function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUs
     for (const call of nestedInvocations(props, step.args)) {
       const nestedProps = toolArgProps(registry, call.tool);
       if (!nestedProps) continue;
-      // Spelled like walkSteps' block position, so both nestings read alike:
-      // "step 1 of the run-sequence step at step 2".
       const hit = retiredArgIn(
         nestedProps,
         call.tool,
@@ -1156,12 +834,6 @@ function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUs
   return undefined;
 }
 
-/**
- * The refusal text for {@link findRetiredToolArg}'s hit, shared by both callers.
- * The position carries its counting rule, since "step 2" alone is ambiguous: the
- * CLI renderers would call that same step step 1 (see {@link walkSteps}).
- * Qualified once at the end of `use.where`, not once per nesting level.
- */
 function retiredArgReason(use: RetiredArgUse): string {
   return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
 }
@@ -1172,7 +844,7 @@ function retiredArgReason(use: RetiredArgUse): string {
  * mid-run or guard-gated error cannot execute half the flow first. All three
  * anchor at the flow file's real directory, which an uploaded flow does not
  * have: a run: step's referenced files stayed on the client, a script step's
- * `.mjs` (and whatever it imports) stayed there too, and against a per-call temp
+ * own file (and whatever it imports) stayed there too, and against a per-call temp
  * materialization a plain snapshot can only fail (no baseline) while
  * updateBaselines writes PNGs no later run can find.
  */
@@ -1193,7 +865,7 @@ function assertUploadSelfContained(flow: FlowFile): void {
     }
     if (step.kind === "script") {
       throw new FailureError(
-        `This flow uses a script step ("script: { path: ${step.path} }"), whose .mjs file lives ` +
+        `This flow uses a script step ("script: { path: ${step.path} }"), whose script file lives ` +
           `beside the flow's file on the CLIENT — an uploaded flow carries only its own YAML, so ` +
           `the script is not on this host and never could be. Use name + project_root with a ` +
           `co-located client and tool server for flows that run scripts.`,
@@ -1250,18 +922,10 @@ Returns a per-step report: the first failure stops the run and the rest report a
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );
-      // Canonicalize the root path ONCE and derive every root anchor from it:
-      // flowsDir (a relative chromium app path + snapshot baselines) and the
-      // runStack seed (`run:` targets) must agree, or a symlinked root flow
-      // would resolve `run:` beside its real file while the app path and
-      // baselines anchored at the symlink's spelling.
       const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
-      // Refused before the prerequisite handshake and before any step touches
-      // the device: a mid-run refusal would land after earlier steps had already
-      // driven it (see findRetiredToolArg).
       const retiredArg = findRetiredToolArg(registry, flow.steps);
       if (retiredArg) {
         throw new FailureError(`Flow "${flowName}" ${retiredArgReason(retiredArg)}`, {
@@ -1271,33 +935,11 @@ Returns a per-step report: the first failure stops the run and the rest report a
           error_kind: "validation",
         });
       }
-      // One seed for all three `run:` walks — the prerequisite guard, the
-      // chromium hoist, and the executor itself — so none can accept a chain
-      // another refuses.
       const rootEntry: RunStackEntry = { canonical: canonicalPath, display: flowName };
 
-      // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
-      // one file, but a leading `run:` chain crosses files — a fragment whose
-      // chain reaches a launch still (re)starts the app at step 1, destroying
-      // the state the prerequisite demands. Checked before the notice handshake
-      // so a caller is never asked to establish state the run would throw away,
-      // and (resolving the pin by shape alone) before any device listing or boot.
-      //
-      // Exempt: a run pinned to a chromium instance, whose leading launch
-      // provably restarts nothing. An explicit `device` skips resolveRunDevice's
-      // hoist, so the runner owns no instance at step 1 and the run's FIRST
-      // chromium launch can only attach (a viewport refresh — see
-      // runChromiumLaunch) or, declaring no chromium app, error; either way the
-      // prerequisite state survives. Pinning buys nothing on ios/android/vega:
-      // `launch` there is restart-app, which terminates and relaunches whatever
-      // device it is handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
         const leading = await leadingLaunch(flow, [rootEntry]);
         if (leading) {
-          // Offer the pin only where it is a real way out (see
-          // chromiumPinnable): the guard also fires for unpinned runs of every
-          // platform and for pinned native ones, and sending the caller of an
-          // android flow after a chromium id would only misdirect.
           const pinRemedy = chromiumPinnable(leading.app, params.platform)
             ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
             : "";
@@ -1313,11 +955,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
         }
       }
 
-      // LLM-path prerequisite handshake (fragments only; a flow with a leading
-      // launch step cannot declare one — validated at parse, and a leading
-      // run: chain into a launch is rejected just above unless that launch
-      // merely attaches). The chromium-pinned run exempted above lands here and
-      // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
           flow: flowName,
@@ -1328,9 +965,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
         };
       }
 
-      // Resolve the run device (a run whose leading launch — direct, or reached
-      // through a leading run: chain — is chromium boots + owns its own app; see
-      // resolveRunDevice). Any instance it booted is torn down in the finally.
       const resolved = await resolveRunDevice(
         registry,
         ctx,
@@ -1340,15 +974,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
         rootEntry,
         viaUpload
       );
-      // The device the run STARTS on — `state.device` moves when a chromium
-      // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
 
-      // Normalize the status bar (clock/battery/signal) for the whole run so it
-      // never drives a snapshot diff. Pinned before step 1 — it's a device-level
-      // override independent of the app, so an e2e flow's leading launch step
-      // (relaunch + settle) doubles as propagation headroom. No-op (returns
-      // false) on chromium/vega; restored on teardown.
       const statusBarPinned = device !== null && (await pinStatusBar(device));
 
       // The chromium equivalent: front the page so a backgrounded window doesn't
@@ -1368,11 +995,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
         device,
         deviceIsExplicit: Boolean(params.device),
         signal,
-        // One holder per ExecState, shared by nested `run:` flows: `deviceEnv`
-        // spreads the reference, so what one step's settle learns about the
-        // tree source the next one already has. A `tool: flow-execute` builds
-        // its own, which is why that step spends this verdict rather than
-        // inheriting whatever the sub-run proved.
         treeOutage: {},
         flowsDir,
         viaUpload,
@@ -1403,18 +1025,12 @@ Returns a per-step report: the first failure stops the run and the rest report a
         // status-bar restore / chromium teardown lands after every step
         // already ran, and must not flip a finished run to FAIL.
         aborted = state.signal?.aborted === true;
-        // Restored on the device the pin was applied to — `state.device` may
-        // have moved on since.
         if (state.pinned && device) await restoreStatusBar(device);
-        // Reverse order: a nested flow's instance goes before the parent's.
         for (let i = state.owned.length - 1; i >= 0; i--) {
           await teardownBootedChromium(registry, state.owned[i]!);
         }
       }
 
-      // The starting device: a run that switched says so on the launch step.
-      // Empty when the flow needed no device — the run is not attributed to one
-      // it never touched.
       return summarize(
         flowName,
         device?.id ?? "",
@@ -1426,22 +1042,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
   };
 }
 
-/**
- * Resolve the device a flow *starts* on. When the run's leading launch is
- * unambiguously chromium (see {@link chromiumBootSpec}) and no explicit
- * `device` is given, this boots a fresh Electron instance from the launch's
- * app path and returns it for teardown — a fragment whose leading `run:` chain
- * reaches a chromium e2e flow boots just the same ({@link leadingLaunch}).
- * Otherwise it attaches to an already-booted device. An explicit `device`
- * never boots here — only a launch step beyond the first moves off it onto an
- * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
- * root flow file's canonical directory — the base for a relative chromium app
- * path.
- *
- * Returns null when no step in the flow acts on a device: demanding one would
- * fail a flow that could have succeeded, and picking whichever device happens to
- * be booted would make the report depend on what else is running.
- */
 async function resolveRunDevice(
   registry: Registry,
   ctx: ToolContext | undefined,
@@ -1452,8 +1052,6 @@ async function resolveRunDevice(
   viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
-    // The executor's own runStack seed, so a boot can never precede a chain it
-    // then refuses.
     const leading = await leadingLaunch(flow, [rootEntry]);
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
@@ -1465,8 +1063,6 @@ async function resolveRunDevice(
       }
       return { device: resolveDevice(booted.deviceId), booted };
     }
-    // Checked after the chromium boot path, which only applies to a flow led by
-    // a `launch` step — and a launch needs a device, so the two never compete.
     if (!flowRequiresDevice(registry, flow.steps)) {
       if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
       // A flow that only SCOPES to a device (a cleanup flow) takes one when one
@@ -1499,68 +1095,23 @@ function resolveOpts(params: Params): { device?: string; platform?: FlowPlatform
   return { device: params.device, platform: params.platform as FlowPlatform | undefined };
 }
 
-/**
- * The hoisted boot's failure, carrying the lock explanation when it is
- * lock-shaped. This is the likeliest way of all to meet the lock — the app is
- * already open on the developer's desktop when the run starts — and the one
- * path with no step report to hang a reason on, so the diagnosis has to ride the
- * thrown error itself. A hoist has attached to nothing, so there is never a
- * suspect to name. {@link wrapFailure} keeps the `error_code` (and the original
- * error as `cause`) that the CLI and the failure taxonomy key on; the fallback
- * argument is unreachable here, since a lock-shaped failure carries a signal by
- * definition.
- */
 function hoistedBootFailure(err: unknown): unknown {
   const signal = singleInstanceLockSignal(err);
   if (!signal) return err;
   return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
 }
 
-/**
- * Does an explicit `device` param pin the run to a chromium instance? Answered
- * from the id's shape, which is the whole of what {@link resolveFlowDevice}
- * does with an explicit device ({@link resolveDevice}) — so the answer is
- * exactly the platform the first `launch` step will see, available before the
- * runner has talked to any device. False for an unpinned run, which stays
- * refused — not because a boot is certain there, but because it is undecidable
- * at this point: an unambiguously chromium leading launch ({@link
- * chromiumBootSpec}) has {@link resolveRunDevice} hoist-boot a fresh instance,
- * so the prerequisite state is gone, while an only *ambiguously* chromium one
- * (multi-platform map, no `platform`) hoists nothing and would attach to
- * whatever auto-detection lands on. Telling those apart needs a device listing,
- * and the refusal has to come before the caller is asked to establish state.
- */
 function pinnedToChromium(device: string | undefined): boolean {
   return device !== undefined && resolveDevice(device).platform === "chromium";
 }
 
-/**
- * Does this leading launch declare a chromium target — i.e. would the
- * {@link pinnedToChromium} exemption be any use to the caller staring at the
- * refusal? Pinned to an instance, a launch naming no chromium app doesn't
- * attach, it errors ({@link noChromiumAppReason}), so an ios/android/vega-only
- * launch must not advertise the pin. A multi-platform map counts: pinning is
- * what picks chromium out of it (only the *boot* hoist demands an unambiguous
- * one). A bare string names no platform and is the native bundle-id shape, so it
- * counts under `--platform chromium` alone.
- */
 function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
   if (typeof app === "string") return platform === "chromium";
   return chromiumLaunchSpec(app) !== null;
 }
 
-/** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
 const NO_EXECUTABLE_STEP = "no-executable-step";
 
-/**
- * The launch the RUN begins with, following a leading `run:` — a fragment whose
- * first step composes an e2e flow starts with that flow's launch, and the runner
- * has to know that before step 1 to boot a chromium app for it (and to refuse a
- * prerequisite that launch would invalidate). `flow` names the flow whose first
- * step IS the launch, so a rejection can point at the right file. Null when the
- * run doesn't begin with a launch, or when the chain can't be read (a broken
- * `run:` target is reported by {@link execRunStep} when it executes).
- */
 async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[]
@@ -1569,24 +1120,6 @@ async function leadingLaunch(
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
-/**
- * {@link leadingLaunch}'s recursion, plus the third outcome it needs internally:
- * {@link NO_EXECUTABLE_STEP} — this flow, and everything its leading `run:`s
- * pulled in, contribute no executable step. That is not a reason to give up on
- * the run: {@link execRunStep} inlines such a fragment and carries straight on
- * to the *parent's* next step, so the scan resumes there too. Abandoning the
- * whole scan instead would make `[run: <echo-only frag>, run: <e2e>]` look
- * launch-free while the run really does launch first thing — the chromium hoist
- * would skip and the prerequisite guard would wave through a run that destroys
- * the state it just asked the caller to establish.
- *
- * The walk below IS the executor's, run ahead of time: it takes the same
- * `runStack` (seeded with the root flow) and resolves each hop through the same
- * {@link resolveFlowRelativeFile} {@link execRunStep} uses, then applies the
- * same cycle, depth, and on-disk-casing guards. A chain the executor refuses
- * never reaches its launch, so any hop it would error on stays `null` (give up)
- * here, never transparent. Anything unreadable is `null` too.
- */
 async function scanLeadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[]
@@ -1621,12 +1154,6 @@ async function scanLeadingLaunch(
   return NO_EXECUTABLE_STEP;
 }
 
-/**
- * The Chromium app-path spec to boot for this run, or null when the run's
- * leading launch isn't unambiguously a chromium one — `--platform chromium`, or
- * a single-platform `{ chromium: ... }` map. A multi-platform or bare launch
- * with no hint defers to device auto-detection.
- */
 function chromiumBootSpec(
   app: Launch,
   platform: string | undefined
@@ -1635,11 +1162,6 @@ function chromiumBootSpec(
   return chromiumLaunchSpec(app);
 }
 
-/**
- * The platform a leading launch targets: an explicit `platform`, else the sole
- * key of a single-key launch map. Null when ambiguous (bare string, or several
- * keys) — the caller then auto-detects a booted device.
- */
 function launchTargetPlatform(launch: Launch, platform: string | undefined): string | null {
   if (platform) return platform;
   if (typeof launch === "object") {
@@ -1649,14 +1171,6 @@ function launchTargetPlatform(launch: Launch, platform: string | undefined): str
   return null;
 }
 
-/**
- * The absolute app path a chromium launch names — relative resolves against the
- * root flow file's canonical directory, the same anchor baselines (and the root
- * file's own `run:` targets) use, so the target is intrinsic to the flow, not
- * the caller's cwd. Canonicalized through realpath (symlinks and on-disk casing
- * fold), so two spellings of one app compare equal; a path not on disk keeps the
- * lexical resolution and lets the boot report the missing app itself.
- */
 async function resolveAppPath(specPath: string, flowDir: string): Promise<string> {
   const lexical = path.resolve(flowDir, specPath);
   try {
@@ -1666,23 +1180,11 @@ async function resolveAppPath(specPath: string, flowDir: string): Promise<string
   }
 }
 
-/**
- * Boot the Electron app a chromium launch declares. Boot failures propagate out
- * untouched, and the two callers surface them differently: from the
- * {@link resolveRunDevice} hoist the tool call rejects with no report, while
- * {@link bootChromiumForLaunch} catches and reports a step error inside the run.
- * Either way a lock-shaped failure picks up the same explanation
- * ({@link singleInstanceLockHint}) — in the thrown message on the hoist
- * ({@link hoistedBootFailure}), in the step reason mid-run.
- */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
   flowDir: string,
   viaUpload: boolean
 ): Promise<BootedChromium> {
-  // An uploaded flow's flowDir is a server temp dir — resolving a relative app
-  // path there would produce a misleading ENOENT or launch a same-named host
-  // path, so reject with the contract error instead.
   if (viaUpload && !path.isAbsolute(spec.path)) {
     throw new FailureError(
       `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
@@ -1701,14 +1203,6 @@ async function bootChromiumForFlow(
   return { deviceId: res.id, port: res.port, pid: res.pid, appPath: res.appPath };
 }
 
-/**
- * Tear down a Chromium instance the runner booted. Best-effort — never fail a
- * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it. The kill is awaited
- * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
- * because every next boot of the same app would otherwise race the dying
- * instance's lock.
- */
 async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
   const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
   try {
@@ -1725,11 +1219,6 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
   }
 }
 
-/**
- * Focus the chromium page for the run. Best-effort: a flow must never fail
- * over focus housekeeping, so resolution/CDP errors are swallowed — any
- * genuinely blocked step reports its own failure.
- */
 async function frontChromiumPage(registry: Registry, device: DeviceInfo): Promise<void> {
   try {
     const ref = chromiumCdpRef(device);
@@ -1752,8 +1241,6 @@ function summarize(
   let skipped = 0;
   let errored = 0;
   for (const s of steps) {
-    // Echo is narration, not a test step — counting it would let the summary
-    // disagree with the renderers' step numbering (which skips echo too).
     if (s.kind === "echo") continue;
     if (s.status === "pass") passed++;
     else if (s.status === "fail") failed++;
@@ -1764,10 +1251,6 @@ function summarize(
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
-    // A cancelled run must never read as PASS — it may contain skips alone
-    // (no fail/error report), so the verdict folds the abort in directly. A
-    // skip by itself is NOT a failure: an unmet `when:` guard skips its block
-    // as a successful omission.
     ok: failed === 0 && errored === 0 && !aborted,
     ...(aborted ? { aborted: true } : {}),
     passed,
@@ -1778,95 +1261,44 @@ function summarize(
   };
 }
 
-/**
- * Append a report to the run and hand it to any live progress consumer. The
- * single choke point for every report — a push site that bypasses it would
- * silently drop steps from the progress stream.
- */
 function pushReport(state: ExecState, report: StepReport): void {
   state.reports.push(report);
   state.onStepReport?.(report);
 }
 
-/**
- * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
- * paths; error messages render the human-readable display names.
- */
 interface RunStackEntry {
   canonical: string;
   display: string;
 }
 
-/**
- * Where a list of steps executes: the `run:` chain (cycle/depth guards) plus
- * the display nesting depth. Attribution and anchor directory derive from the
- * chain's top entry ({@link scopeFlow} / {@link scopeFlowDir}), so no second
- * field can drift out of lockstep with the stack.
- */
 interface StepScope {
   runStack: RunStackEntry[];
   depth: number;
 }
 
-/** The flow name steps in this scope are attributed to (StepReport.flow). */
 function scopeFlow(scope: StepScope): string {
   return scope.runStack[scope.runStack.length - 1]!.display;
 }
 
-/**
- * The report attribution for a `run:` target: its basename stem
- * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
- * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
- * when the spelling is bare (stripping would reproduce the stem). Two
- * different files may legitimately share a stem (root `login.yaml` composing
- * `helpers/login.yaml`), and a bare-stem attribution there would make
- * `StepReport.flow` equal the report's top-level `flow`, so renderers that mark
- * fragment steps by that inequality would read the fragment's failures as the
- * root flow's. A bare spelling has no directory component to keep, yet still
- * names a genuinely different file when written in a nested fragment
- * (`run: login.yaml` inside `helpers/steps.yaml` resolves against the
- * CONTAINING file's dir), so it gets the equivalent spelling `./<stem>`. Only
- * against the root is the comparison needed, and the inequality is then
- * guaranteed: both disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN
- * forbids in the root's name.
- */
 function runDisplayName(target: string, scope: StepScope): string {
   return runDisplayFor(target, scope.runStack[0]!.display);
 }
 
-/**
- * {@link runDisplayName} against a root name rather than a scope, so
- * {@link scanLeadingLaunch} — which walks the same chain before any scope
- * exists — attributes a hop exactly as the executor will.
- */
 function runDisplayFor(target: string, rootDisplay: string): string {
   const stem = runTargetName(target);
   if (stem !== rootDisplay) return stem;
-  // Parse guarantees the target ends in lowercase ".yaml", so slicing the
-  // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
   return spelled === stem ? `./${stem}` : spelled;
 }
 
-/**
- * Attribution for one report line: a `run:` step belongs to the fragment it
- * references ({@link runDisplayName}) — identical across the executed,
- * errored, and every skip path — everything else to the containing flow.
- */
 function stepFlow(step: FlowStep, scope: StepScope): string {
   return step.kind === "run" ? runDisplayName(step.flow, scope) : scopeFlow(scope);
 }
 
-/**
- * The directory a step's file reference resolves against — a `run:` target and
- * a `script:` path alike. The canonical containing file's, so a symlinked flow
- * anchors where its real file, its sibling fragments and its scripts live.
- */
 function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
 }
 
-/** The scope a nesting step's children execute in — one level deeper. */
 function childScope(
   scope: StepScope,
   overrides: Partial<Omit<StepScope, "depth">> = {}
@@ -1882,21 +1314,11 @@ function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
   return scope.depth ? { depth: scope.depth } : {};
 }
 
-/** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
 async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope): Promise<void> {
   for (const step of steps) {
     const index = state.reports.length;
 
     if (state.stopped) {
-      // A hard stop needs no reason of its own: the step above it carries the
-      // failure that explains every line below. A CANCELLED run does — and it
-      // reaches this branch rather than the abort guard below, because a
-      // `script` step cancelled after its process started reports `error`
-      // (what it already did to the backend is done) and an error stops the
-      // run. Without this the steps after a cancelled script read as collateral
-      // of a failure, with nothing on the line saying the run was cancelled,
-      // while the same cancellation during any other step reports "run
-      // aborted" on each of them.
       const stopReason = state.signal?.aborted ? "run aborted" : undefined;
       pushReport(state, {
         index,
@@ -1906,22 +1328,12 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         target: stepTarget(step),
         ...depthOf(scope),
         ...(stopReason ? { reason: stopReason } : {}),
-        // Carry the echo's message so a skipped narration renders as a skip
-        // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      // A block directive's literal steps are known — expand them so the report
-      // keeps one line per authored step no matter where the stop landed.
       const inner = blockSteps(step);
       if (inner) reportBlockSkipped(state, inner, childScope(scope), stopReason);
       continue;
     }
-    // The flow was resolved as needing no device, yet a step that acts on one
-    // reached execution — the two decisions disagree. Report it as this step's
-    // error and stop, rather than letting it fail obscurely further in.
-    // They cannot disagree today, nor for a future block directive whichever way
-    // stepRequiresDevice classifies it — flowRequiresDevice recurses through
-    // blockSteps, so no nesting hides a step.
     if (!state.device && stepRequiresDevice(state.registry, step)) {
       state.stopped = true;
       pushReport(state, {
@@ -1969,16 +1381,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
   }
 }
 
-/**
- * Report every step of a block directive that will not run as skipped — so a
- * run where the block was skipped (a `when:` guard unmet or errored, a hard
- * stop, a cancellation) produces the same report shape (one line per authored
- * step, at the same depth) as a run where it entered. Nested blocks expand
- * (their literal steps are known); a `run:` composition stays one line, matching
- * how post-hard-stop skips report a fragment that was never loaded. `scope` is
- * the scope the steps would have executed in — already the block's child scope,
- * not the marker's.
- */
 function reportBlockSkipped(
   state: ExecState,
   steps: FlowStep[],
@@ -2020,15 +1422,6 @@ async function execBlockStep(state: ExecState, step: BlockStep, scope: StepScope
   }
 }
 
-/**
- * Execute a `when:` block: evaluate the guard (a platform test is static; a UI
- * condition probes with the short assert grace), then either expand the
- * guarded steps inline — where failures are real failures, hard-stopping as
- * usual — or report the whole block as skipped. An unreadable tree errors the
- * step instead: "could not evaluate" is not "condition false", and silently
- * skipping would let a broken tree source turn every guarded dismissal into a
- * green no-op.
- */
 async function execWhenStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "when" }>,
@@ -2037,8 +1430,6 @@ async function execWhenStep(
   const index = state.reports.length;
   const label = describeWhenCondition(step.condition);
   const target = stepTarget(step);
-  // The marker sits at the enclosing depth; the guarded steps one deeper —
-  // whether they execute or report as skipped.
   const marker = {
     index,
     kind: "when",
@@ -2050,9 +1441,6 @@ async function execWhenStep(
 
   let met: boolean;
   if (step.condition.kind === "platform") {
-    // "ios-remote" is an iOS simulator driven through sim-remote — for a
-    // platform guard it IS ios. The parser rejects "ios-remote" as a guard
-    // spelling, so without this fold iOS-only blocks would silently skip there.
     const guardEnv = deviceEnv(state);
     const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
     met = platform === step.condition.platform;
@@ -2087,8 +1475,6 @@ async function execWhenStep(
     return;
   }
 
-  // Marker for the block, then the guarded steps inline — same fragment
-  // attribution, one level deeper, failures hard-stop as anywhere else.
   pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
   await execSteps(state, step.steps, inner);
 }
@@ -2119,8 +1505,6 @@ async function execWhenStep(
  * mid-run.
  */
 function baselineKeyFor(canonicalPath: string, flowName: string): string {
-  // path.basename leaves a bare ".yaml" intact (stripping it would leave
-  // nothing) — the pattern rejects that spelling too, so it falls back as well.
   const stem = path.basename(canonicalPath, ".yaml");
   return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
 }
@@ -2132,9 +1516,6 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
-  // Shared with stepFlow so the marker/error reports here and every skip path
-  // there attribute the same `run:` step identically; the fragment's expanded
-  // steps inherit it through the runStack entry pushed below.
   const display = runDisplayName(target, scope);
 
   const fail = (reason: string): void => {
@@ -2150,12 +1531,6 @@ async function execRunStep(
     state.stopped = true;
   };
 
-  // The cycle guard deliberately runs before the depth guard. A loop that
-  // happens to close on the MAX_RUN_DEPTH-th hop is still a loop, and reporting
-  // it as "max run depth exceeded" would send the author looking for excessive
-  // nesting instead of the repeated reference — and would drop the chain, the
-  // one piece of output that identifies the offending edge. The depth guard
-  // immediately below still stops the recursion.
   const { canonical, spelling } = await resolveFlowRelativeFile(
     scopeFlowDir(scope),
     target,
@@ -2171,21 +1546,8 @@ async function execRunStep(
     return fail("max run depth exceeded");
   }
 
-  // The canonical path above resolves the spelling by the FILESYSTEM's rules,
-  // and a case-insensitive one (APFS, NTFS) opens a file really named
-  // "frag.yaml" for `run: Frag.yaml`. Every expanded step is then attributed to
-  // a fragment no directory entry carries, and the identical tree fails with
-  // ENOENT on a case-sensitive volume (Linux CI). Only a case-folded verdict
-  // refuses: a basename matching nothing at all is an ordinary missing fragment,
-  // which the read's own ENOENT reports far better, and an unreadable listing
-  // vouches for nothing so it must refuse nothing.
   const suppliedBase = path.posix.basename(target);
   if (spelling.state === "case_folded") {
-    // Quote a replacement target only when parseRunTarget would accept one —
-    // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies —
-    // keeping the target's own directory prefix so the hint is a line the author
-    // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
-    // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
       ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
       : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — flow files must be ` +
@@ -2213,16 +1575,9 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  // The root flow's load-time gate, applied to the fragment at the only moment
-  // its steps exist. Charged to the run: step, so the fragment is refused whole
-  // rather than part-executed up to the offending step.
   const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
   if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
 
-  // Marker for the composition point, then expand the fragment's steps inline,
-  // one level deeper, attributed to the fragment. The fragment's own directory
-  // becomes the anchor for `run:` paths inside it; baselines stay anchored to
-  // the root flow (state.flowsDir / state.baselineKey).
   pushReport(state, {
     index,
     kind: "run",
@@ -2309,8 +1664,6 @@ async function execLeafStep(
 
     case "launch": {
       const r = await runLaunch(state, step.app);
-      // A run cancelled mid-launch is a skip (matching the pre-step guard and
-      // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
       return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
     }
@@ -2325,22 +1678,9 @@ async function execLeafStep(
     case "scroll-to":
     case "pinch":
     case "rotate": {
-      // A directive that *throws* (vs. reporting a failed outcome) must still
-      // land in the structured report rather than abort the whole run
-      // unreported.
       try {
         const r = await runDirective(deviceEnv(state), step);
-        // A run cancelled mid-directive is a skip (matching the pre-step guard
-        // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-        // `indeterminate` is `idle`'s only non-passing outcome: a screen that
-        // merely kept moving passes with a warning, and so does one that
-        // rendered nothing, so what is left here is a wait that could not run
-        // at all — a tree source that failed, or one that answered and then
-        // wedged. Scoring that `fail` would make CI read an environment problem
-        // as a regression. `error` keeps the run non-ok while saying plainly
-        // that the app was never judged. Scoped to `idle`, whose whole verdict
-        // rests on being able to observe the screen.
         if (!r.ok && r.indeterminate && step.kind === "idle") {
           return { ...base, status: "error", reason: r.reason };
         }
@@ -2407,21 +1747,11 @@ async function execLeafStep(
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }
-      // A raw tool step's effect on the device is opaque to the runner, so it
-      // stops vouching for the foreground app: reads go back to auto-resolve,
-      // the only honest target after it, keeping the launched app as an
-      // unpinned hint unless the tool could change the foreground app outright.
-      // Applied BEFORE invoking, since a tool that throws mid-way may still
-      // have switched apps. The next `launch` step re-pins.
       if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
         state.treeTarget = undefined;
-        // A relaunch is also the repair a proven tree outage asks for by name -
-        // the same clear `runLaunch` makes for the directive spelling.
         if (state.treeOutage) state.treeOutage.proven = undefined;
       } else if (state.treeTarget?.pinned) {
         state.treeTarget = { ...state.treeTarget, pinned: false };
-        // A verdict proven against the pinned branch's gates says nothing
-        // about the auto-resolve path the demote switches reads onto.
         if (state.treeOutage) state.treeOutage.proven = undefined;
       }
       // A nested orchestrator runs its tools outside this run's holder -
@@ -2459,11 +1789,6 @@ async function execLeafStep(
           };
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {
-          // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
           return {
             ...base,
             status: "fail",
@@ -2490,13 +1815,6 @@ async function execLeafStep(
             args,
           };
         }
-        // The target the clear above dropped, restored for the two tools whose
-        // args name the app they just started: they change WHICH app is in
-        // front, not whether the run has one, so discarding the id sends the
-        // iOS tree source back to auto-targeting's "Launch or restart the app
-        // first" — the very advice the measured diagnosis replaces. UNPINNED,
-        // like any other raw tool step. After the invoke, like `runLaunch`: a
-        // tool that threw started nothing.
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {
@@ -2505,9 +1823,6 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
-        // A gesture tool that consults the signal rejects when the run is
-        // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
-        // step failure carrying the tool's own "aborted after N frames".
         if (signal?.aborted) {
           return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
         }
@@ -2588,14 +1903,6 @@ export async function resolveFlowSource(
     });
   }
 
-  // Before either branch, so both are covered. `getFlowPath` validates the root
-  // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
-  // here, unconditionally, and whose body is today's assertValidProjectRoot —
-  // removed the check on the `flow_path` branch entirely, letting relative and
-  // ".."-bearing roots through. That branch is no longer free of reads either:
-  // ExecState.projectRoot carries it to a script: step as the child's
-  // working directory, so this guard is what keeps a relative or
-  // ".."-bearing root from becoming a script's cwd.
   assertValidProjectRoot(params.project_root);
 
   if (params.flow_path !== undefined) {
@@ -2640,17 +1947,6 @@ export async function resolveFlowSource(
       );
     }
 
-    // The two rules below are about the shape of the path string itself, not
-    // about how it reached us, so they are reported apart from the boundary
-    // gate above — a caller that did use the boundary must not be told to use
-    // the boundary.
-
-    // Reject a relative path: this string seeds canonicalFlowPath in execute(),
-    // which requires an absolute input — its realpath, the read, and every root
-    // anchor derived from the one canonical result would otherwise resolve
-    // against the tool server's working directory, which is not the caller's.
-    // `argent flow list` prints relative paths, so this is the spelling an agent
-    // is most likely to pass back.
     if (!path.isAbsolute(params.flow_path)) {
       throw new FailureError(
         `Invalid flow_path "${params.flow_path}": flow paths must be absolute — a relative path ` +
@@ -2700,7 +1996,6 @@ export async function resolveFlowSource(
     // check and let assertSafeFlowName name it.
     const bareExtension = path.basename(clientPath).toLowerCase() === ".yaml";
     if (!bareExtension && clientExt !== ".yaml") {
-      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
       const detail =
         clientExt.toLowerCase() === ".yaml"
           ? `flow files must use the lowercase .yaml extension, not "${clientExt}".`
@@ -2718,22 +2013,9 @@ export async function resolveFlowSource(
     const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
     assertSafeFlowName(flowName);
 
-    // The boundary's stat matched the basename by the filesystem's rules, which
-    // on a case-insensitive filesystem (APFS, NTFS) finds a file really named
-    // "uppercase.yaml" for "UpperCase.yaml" — the flow name derived from it
-    // (which keys the report and __baselines__/) would then be one no directory
-    // entry carries, and a baseline seeded under it is unfindable the moment the
-    // tree lands on a case-sensitive volume. Require the supplied basename to
-    // appear in the parent directory byte-for-byte. Absence from the listing
-    // refuses either way here — unlike the name branch below, this path arrives
-    // with the boundary's stat vouching for the file, so a listing that lacks it
-    // entirely is the same phantom spelling.
     const suppliedBase = path.basename(clientPath);
     const spelling = await classifyOnDiskSpelling(path.dirname(params.flow_path), suppliedBase);
     if (spelling.state !== "listed") {
-      // Hint the real spelling only when this same ladder would accept it (a
-      // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
-      // needs a rename.
       const recovery =
         spelling.state === "absent"
           ? `Pass the basename exactly as it appears on disk.`
@@ -2761,17 +2043,6 @@ export async function resolveFlowSource(
   const flowName = params.name!;
   assertSafeFlowName(flowName);
   const expected = getFlowPath(params.project_root, flowName);
-  // A path the boundary materialized from uploaded content is a fresh temp file
-  // this process itself created (see file-inputs.ts) — trusted as-is, and
-  // returned ahead of the on-disk-spelling gate below deliberately: the only
-  // directory there is to list is that temp dir, whose single entry this server
-  // named from `name` itself, so the comparison could only ever agree with
-  // itself. The listing that could disagree is the remote client's, on a host
-  // this process cannot read. That temp dir is also what a run takes flowsDir
-  // from, so a remote `name` run resolves `run:` targets and `__baselines__/`
-  // there and finds neither — what this branch buys a remote caller is a
-  // self-contained flow, and one that composes or snapshots fails against that
-  // temp dir rather than naming the missing co-location that is the real cause.
   if (params.flow_file && fileInput?.viaUpload)
     return { filePath: params.flow_file, flowName, viaUpload: true };
   if (
@@ -2793,19 +2064,8 @@ export async function resolveFlowSource(
     );
   }
 
-  // Same invariant as the flow_path branch, on the route every remote/MCP
-  // caller takes: nothing above consulted the directory, so on a
-  // case-insensitive filesystem `name: "Snap"` opens a file really named
-  // snap.yaml and then keys the report and __baselines__/ under "Snap" — a
-  // spelling no entry carries, whose baselines vanish the moment the tree lands
-  // on a case-sensitive volume. Only a case-folded match refuses: a name that
-  // matches nothing at all is an ordinary missing flow, and the read that
-  // follows says so far better than a casing complaint would.
   const spelling = await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`);
   if (spelling.state === "case_folded") {
-    // Hand back a name only when one can reach the file: an on-disk .YAML is
-    // addressable by no name at all (this branch always builds "<name>.yaml"),
-    // it is omitted from `argent flow list`, and flow_path refuses it too.
     const recovery = spelling.addressable
       ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
       : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
@@ -2824,7 +2084,5 @@ export async function resolveFlowSource(
     );
   }
 
-  // Either the boundary's own path for this flow (containment-checked above,
-  // so it resolves to `expected`) or `expected` itself.
   return { filePath: params.flow_file || expected, flowName, viaUpload: false };
 }

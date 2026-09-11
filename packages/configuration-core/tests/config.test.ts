@@ -3,15 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { argentHomeDir, configFilePath } from "../src/paths.js";
-import { readConfigObject, updateConfig } from "../src/config.js";
+import { configDocumentProblem, readConfigObject, updateConfig } from "../src/config.js";
 import {
   getRememberedAgent,
   setRememberedAgent,
   clearRememberedAgent,
 } from "../src/config-access.js";
 
-// Redirect the `~/.argent` home into a tmp dir by mutating process.env.HOME
-// (consumed by os.homedir() via argentHomeDir).
 let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
@@ -106,7 +104,6 @@ describe("remembered agent (lens config)", () => {
     setRememberedAgent("claude");
     clearRememberedAgent();
     expect(getRememberedAgent()).toBeNull();
-    // Siblings survive; the emptied `lens` container does not.
     expect(readConfigFile()).toEqual({ telemetry: { enabled: true } });
   });
 
@@ -114,4 +111,48 @@ describe("remembered agent (lens config)", () => {
     expect(() => clearRememberedAgent()).not.toThrow();
     expect(getRememberedAgent()).toBeNull();
   });
+});
+
+describe("configDocumentProblem", () => {
+  it("says nothing for a host that has no document", () => {
+    expect(configDocumentProblem()).toBeUndefined();
+  });
+
+  it("says nothing for a document that reads and parses", () => {
+    updateConfig((config) => ({ ...config, telemetry: { enabled: false } }));
+
+    expect(configDocumentProblem()).toBeUndefined();
+  });
+
+  it("names the file and the parse error for half-written JSON", () => {
+    fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+    fs.writeFileSync(configFilePath(), '{"scripts":{"bash":"/bin/ba');
+
+    const problem = configDocumentProblem();
+
+    expect(problem).toContain(configFilePath());
+    expect(problem).toContain("is not valid JSON");
+    expect(readConfigObject()).toEqual({});
+  });
+
+  it("refuses a document that is not a JSON object", () => {
+    fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+    fs.writeFileSync(configFilePath(), "[1,2,3]");
+
+    expect(configDocumentProblem()).toContain("does not hold a JSON object");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "names the file and the read error for one it may not open",
+    () => {
+      fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+      fs.writeFileSync(configFilePath(), "{}");
+      fs.chmodSync(configFilePath(), 0o000);
+      try {
+        expect(configDocumentProblem()).toContain("could not be read");
+      } finally {
+        fs.chmodSync(configFilePath(), 0o600);
+      }
+    }
+  );
 });

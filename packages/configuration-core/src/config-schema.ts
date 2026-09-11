@@ -1,23 +1,14 @@
-// Every recognized config value: its shape, where it may be set, and how the
-// two scopes merge. `argent config`, the merged reader (config-access.ts) and
-// validation all read this registry.
-
+import * as path from "node:path";
 import type { FlagScope } from "./flags.js";
 import type { MergePolicy } from "./merge.js";
 
-/** One recognized configuration value. */
 export interface ConfigDefinition<T = unknown> {
-  /** Dotted path into config.json. */
   readonly key: string;
-  /** One-line summary shown by `argent config` / `argent config list`. */
   readonly description: string;
-  /** Scopes this value may be written to. Reads only merge the listed scopes. */
   readonly scopes: readonly FlagScope[];
-  /** Validate + normalize a raw JSON value; `undefined` means absent/invalid. */
   readonly parse: (raw: unknown) => T | undefined;
-  /** How the project and global values combine into the effective value. */
+  readonly validateWrite?: (raw: unknown) => T | undefined;
   readonly merge: MergePolicy<T>;
-  /** Effective value when no scope contributes one. */
   readonly default?: T;
   /**
    * `argent config set/unset` refuses this key and points at this command
@@ -26,29 +17,45 @@ export interface ConfigDefinition<T = unknown> {
    * through `argent config`.
    */
   readonly manageCommand?: string;
-  /** Example value, shown by `argent config list` and when a value is rejected. */
   readonly example?: string;
-  /**
-   * What a valid value looks like, in words, for the message shown when one is
-   * rejected. Only needed for a bespoke `parse` — a shared helper describes
-   * itself, see {@link describeExpectedValue}.
-   */
   readonly expected?: string;
 }
 
-/** Accept a JSON boolean. */
 export function asBoolean(raw: unknown): boolean | undefined {
   return typeof raw === "boolean" ? raw : undefined;
 }
 
-/** Accept a non-blank string, trimmed. Blank/whitespace reads as unset. */
 export function asString(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** Accept a finite JSON number. */
+function asPresentText(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string") return raw.trim();
+  return JSON.stringify(raw) ?? "(a value with no JSON form)";
+}
+
+/**
+ * What a rooted Windows path looks like: a drive letter, or a UNC share. The
+ * one rule, shared with the tool server's own interpreter check, because this
+ * is the WRITE gate for a value that check reads back — and
+ * `path.win32.isAbsolute("/usr/bin/bash")` is true, so on Windows the two
+ * disagreed in exactly one direction: `argent config set` stored a POSIX path
+ * that every `.sh` step then refused with "names no drive".
+ */
+export const WINDOWS_ROOTED_PATH_RE = /^(?:[A-Za-z]:[\\/]|[\\/][\\/])/;
+
+function asAbsolutePath(raw: unknown): string | undefined {
+  const text = asString(raw);
+  if (text === undefined) return undefined;
+  const win32 = process.platform === "win32";
+  if (!(win32 ? path.win32 : path.posix).isAbsolute(text)) return undefined;
+  if (win32 && !WINDOWS_ROOTED_PATH_RE.test(text)) return undefined;
+  return text;
+}
+
 export function asNumber(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
@@ -61,8 +68,9 @@ export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
 
 /**
  * The smallest ceiling a flow `script` step can run under and still report on
- * the script rather than on the host. The step starts a Node process before
- * the script runs, and that start alone costs tens of milliseconds, so under
+ * the script rather than on the host. The step starts a process before the
+ * script runs — a bash one as well as a Node one — and that start alone costs
+ * tens of milliseconds, so under
  * this the same script passes or times out according to how busy the machine
  * was. Floored rather than defaulted for the reason the heap limit is: the
  * step that loses the race errors, and names neither this bound nor the value
@@ -70,7 +78,6 @@ export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
  */
 export const MIN_SCRIPT_TIMEOUT_MS = 100;
 
-/** Accept an array of non-blank strings (blank entries dropped). */
 export function asStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
@@ -80,11 +87,6 @@ export function asStringArray(raw: unknown): string[] | undefined {
   return out;
 }
 
-/**
- * How each shared validator describes the value it accepts. Keyed on the
- * validator itself, so swapping a key's `parse` swaps its description with it
- * instead of letting a per-entry wording drift from what is enforced.
- */
 const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
   [asBoolean, "a boolean (true or false)"],
   [asString, "a non-empty string"],
@@ -93,10 +95,6 @@ const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
   [asStringArray, "an array of strings"],
 ]);
 
-/**
- * What a valid value for this key looks like, in words — undefined for a bespoke
- * validator that set no `expected`, so callers describe nothing rather than guess.
- */
 export function describeExpectedValue(def: ConfigDefinition): string | undefined {
   return def.expected ?? PARSER_EXPECTATIONS.get(def.parse);
 }
@@ -111,8 +109,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     scopes: ["project", "global"],
     parse: asBoolean,
     merge: "prioritize-restrictive",
-    // Opt-out: consent.ts reads an unstored value as enabled, so the config
-    // surface must show the same rather than "(unset)".
     default: true,
     // Opt-in/out goes through the dedicated command so the live client is
     // drained/reset, not just the file rewritten.
@@ -147,9 +143,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "the project root (project scope) or home (global scope).",
     scopes: ["project", "global"],
     parse: asStringArray,
-    // Additive rather than shadowing: global baseline first, project extras
-    // after, deduplicated. `getAdditionalIosDeviceSets` re-implements this union
-    // (path resolution must precede dedup) and guards on the preset staying "union".
     merge: "union",
     example: '["~/DeviceSets/ci"]',
   },
@@ -166,16 +159,19 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-local",
     example: "~/Movies/argent",
   },
-  // Global-scope only: a checked-in `.argent/config.json` must not raise the
-  // ceiling on how much of the machine a script step may occupy. `merge` is
-  // nominal here — the project scope of a global-only key is never read.
+  // All three `scripts.` keys below are global-scope only, for two reasons. The
+  // two bounds: a checked-in `.argent/config.json` must not raise the ceiling on
+  // how much of the machine a script step may occupy. `scripts.bash`: the value
+  // is an absolute path judged against `process.platform`, so no one spelling
+  // suits a mixed-OS team. `merge` is nominal for all three — the project scope
+  // of a global-only key is never read.
   {
     key: "scripts.maxTimeoutMs",
     description:
       "Upper bound, in milliseconds, on the time limit a flow `script` step may ask for " +
       "(default 300000 — five minutes). Bounds how long one script can occupy the host. " +
-      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a Node process ` +
-      "before the script runs, so a smaller ceiling ends a script that did nothing wrong.",
+      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a process before ` +
+      "the script runs, so a smaller ceiling ends a script that did nothing wrong.",
     scopes: ["global"],
     parse: (raw) => {
       const value = asPositiveInteger(raw);
@@ -189,7 +185,8 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.heapLimitMb",
     description:
-      "Old-space heap limit, in MiB, given to each flow `script` process (default 512). " +
+      "Old-space heap limit, in MiB, for `.mjs` flow scripts (default 512). " +
+      "This limit does not apply to Bash. " +
       `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
       "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
       "V8's own startup before any script runs.",
@@ -203,9 +200,38 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     default: 512,
     example: "512",
   },
+  {
+    key: "scripts.bash",
+    description:
+      "Absolute path to Bash for `.sh` flow scripts. Global scope only. " +
+      "If unset, Argent searches PATH, then standard install locations. " +
+      "On Windows, use Bash from Git for Windows.",
+    scopes: ["global"],
+    // Deliberately permissive: `readScopeValue` hands back `undefined` for a
+    // value its `parse` rejected, which is indistinguishable from an absent key
+    // — so a schema that refused a relative path, an empty string or a number
+    // would make a hand-edited config file fall through to PATH and hide the
+    // mistake behind a bash that happens to exist on this machine. Everything
+    // PRESENT is kept, as the text the refusal names it by; the resolver checks
+    // the value and refuses the step, naming the key. `asString` was not that:
+    // it maps an empty, whitespace-only or non-string value to `undefined`.
+    parse: asPresentText,
+    validateWrite: asAbsolutePath,
+    expected:
+      "an absolute path to Bash on the tool-server host (`/bin/bash`; on Windows, `C:\\...\\bash.exe`)",
+    merge: "prioritize-global",
+    // Host-specific for the same reason the check above is: the example is
+    // printed back as a command to run, and one this host would refuse is a
+    // command that reproduces the error it is offered to fix. So both strings
+    // name the one path every host of that family has: macOS ships no
+    // `/usr/bin/bash` at all, and `/opt/homebrew/bin/bash` exists only on an
+    // arm64 Mac with Homebrew. `asAbsolutePath` checks shape and never
+    // existence, so a spelling this host lacks is written and only fails later,
+    // at every `.sh` step.
+    example: process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash",
+  },
 ] as const;
 
-/** Look up a schema entry by key, or `undefined` when the key is unknown. */
 export function getConfigDefinition(
   key: string,
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA

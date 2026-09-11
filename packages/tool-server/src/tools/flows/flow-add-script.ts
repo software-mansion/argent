@@ -31,7 +31,7 @@ const zodSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to the .mjs file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
+      'Path to the .mjs (Node.js) or .sh (Bash) file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
     ),
   timeout: z
     .number()
@@ -61,18 +61,6 @@ interface FlowAddScriptResult {
   savedTo?: FlowSavedTo;
 }
 
-/**
- * Steps in the recording, counted off the file — as {@link appendStepToFlow}
- * counts them on the success path. The session's in-memory copy only catches up
- * on each append, so a hand-edit made mid-recording would otherwise make the two
- * paths report counts of two different things.
- *
- * A file that will not read or parse leaves only that in-memory copy, which is a
- * count of a third thing again: the steps as of the last append. The number
- * still comes back, since nothing else in the answer depends on it, but it says
- * where it came from — the sibling recorder qualifies the same state the same
- * way, and a bare number here would be the one writer that does not.
- */
 async function recordedStepCount(
   session: RecordingSession
 ): Promise<{ stepCount: number; note?: string }> {
@@ -84,13 +72,6 @@ async function recordedStepCount(
   };
 }
 
-/**
- * How a failed call opens, and what it asks the author to do next. The two are
- * written as one entry because the lead may claim no more than the move below
- * it: an agent reads the first clause and stops, so a headline saying the
- * script could not be run answers "is there state to check?" with a no that the
- * rest of the same message then takes back.
- */
 const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehind: string }> = {
   yes: {
     lead: "failed",
@@ -131,7 +112,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
+  description: `Run a local .mjs or .sh file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
@@ -159,9 +140,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
-    // Validated by the flow parser's own helpers, against the entry they would
-    // read out of YAML: a path this tool accepts is a path parseFlow accepts,
-    // and a rejection reads the same as in a hand-written flow.
     const entry = {
       script: {
         path: params.path,
@@ -201,17 +179,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
 
     if (outcome.status !== "pass") {
       const { lead, nextMove, leftBehind } = FAILED_CALL[ran];
-      // The script ran outside the flow-file lock, so the recording this call
-      // resolved up front may have been finished or restarted in that window —
-      // the same race `appendStepToFlow` catches for a script that PASSED. This
-      // exit writes nothing and so never reaches that guard, and both claims it
-      // would otherwise make are then about a file another take owns: that the
-      // flow is as it was, and the count read back off it. Say what is true
-      // instead, and do not send the author back to a key that is no longer
-      // theirs — the retry `nextMove` invites appends into the take that
-      // replaced it. Split the two losses the way the guard does: a restart put
-      // a live take on the key, a finish left it free with a finished flow on
-      // disk, and only the first makes the file another take's.
       const state = recordingSessionState(session);
       if (state !== "live") {
         const lost =
@@ -242,13 +209,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     try {
       ({ savedTo, stepCount } = await appendStepToFlow(session, step));
     } catch (err) {
-      // A host-mode append re-parses the WHOLE file before it pushes, so the
-      // scan that refuses an output reference judges the steps already in it as
-      // well — and a mid-recording hand edit is a supported way for one of those
-      // to carry one. A `script` step spells none of the fields that scan reads,
-      // so a refusal on this path is never about the step just run: saying
-      // "recording it failed" would send the author back over the one call that
-      // did nothing wrong, and never name the edit that has to be undone.
       const refusedAnEarlierStep = getFailureSignal(err)?.failure_stage === "flow_output_reference";
       throw wrapFailure(
         err,

@@ -1,14 +1,3 @@
-/**
- * The IPC protocol between the flow script executor and the
- * `flow-script-runner.mjs` child it forks: an `execute` request out, then
- * `started` and one terminal response back.
- *
- * Script logs never travel here — they ride stdout/stderr, so that console text
- * and any subprocess the script starts land in one stream in written order, and
- * so that a limit can apply while draining rather than after a whole message
- * has been serialized.
- */
-
 export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /**
@@ -22,8 +11,16 @@ export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const SCRIPT_MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 export const SCRIPT_MAX_FAILURE_STACK_CHARS = 16 * 1024;
 
-export interface ScriptExecuteRequest {
+type ScriptInterpreter = "node" | "bash";
+
+interface ScriptExecuteCommon {
   type: "execute";
+  deadlineMs: number;
+  maxOutputBytes: number;
+}
+
+export interface ScriptExecuteNodeRequest extends ScriptExecuteCommon {
+  interpreter: Extract<ScriptInterpreter, "node">;
   /**
    * The script, as the real-path file URL Node resolved its entry module to.
    * The runner re-imports it — a cache hit — to tell a script that finished
@@ -31,17 +28,36 @@ export interface ScriptExecuteRequest {
    */
   scriptUrl: string;
   outputJson: string;
-  deadlineMs: number;
-  maxOutputBytes: number;
 }
 
-export type ScriptFailureType = "load" | "runtime" | "output" | "exit" | "protocol";
+export interface ScriptExecuteBashRequest extends ScriptExecuteCommon {
+  interpreter: Extract<ScriptInterpreter, "bash">;
+  interpreterPath: string;
+  scriptPath: string;
+  outputFile: string;
+  outputJson: string;
+  /**
+   * The parent's OWN time limit - {@link ScriptExecuteCommon.deadlineMs} minus
+   * the stall margin the child's watchdog sits behind it. The runner needs it
+   * because it has one wait of its own: when bash dies by a signal it holds the
+   * answer briefly, in case the same signal is still on its way to the group.
+   * Bounded by nothing, that wait outlived the parent's timer on a short step,
+   * and a signalled bash was reported as a time limit that was never exceeded.
+   */
+  timeoutMs: number;
+}
 
-/**
- * Child → parent. `started` is the only thing that lets the parent tell "the
- * runner never began the script" apart from "the script stopped its own
- * process".
- */
+export type ScriptExecuteRequest = ScriptExecuteNodeRequest | ScriptExecuteBashRequest;
+
+export type ScriptFailureType =
+  | "load"
+  | "runtime"
+  | "output"
+  | "exit"
+  | "protocol"
+  | "spawn"
+  | "signal";
+
 export type ScriptResponse =
   | { type: "started" }
   | { type: "result"; outputJson: string }
@@ -62,7 +78,22 @@ const FAILURE_TYPES: readonly ScriptFailureType[] = [
   "protocol",
 ];
 
-export function parseScriptResponse(raw: unknown): ScriptResponse | null {
+/**
+ * The two the runner can only reach in bash mode, where it spawns its own child
+ * and so is the side that learns bash could not be started or was killed by a
+ * signal. Refused in node mode, where the parent reaches both conclusions
+ * itself: there the script runs INSIDE the runner with the protocol descriptor
+ * open, and `spawn` is a kind the step reports as "nothing ran, so there is
+ * nothing to clean up" — an answer a script that has already done its work must
+ * not be able to write for itself. Bash cannot: the runner hands its own child
+ * a null device in that slot.
+ */
+const BASH_ONLY_FAILURE_TYPES: readonly ScriptFailureType[] = ["spawn", "signal"];
+
+export function parseScriptResponse(
+  raw: unknown,
+  interpreter: ScriptInterpreter
+): ScriptResponse | null {
   if (typeof raw !== "object" || raw === null) return null;
   const msg = raw as Record<string, unknown>;
   switch (msg.type) {
@@ -75,7 +106,9 @@ export function parseScriptResponse(raw: unknown): ScriptResponse | null {
     case "failure": {
       const failureType = msg.failureType;
       if (typeof failureType !== "string") return null;
-      if (!FAILURE_TYPES.includes(failureType as ScriptFailureType)) return null;
+      const accepted =
+        interpreter === "bash" ? [...FAILURE_TYPES, ...BASH_ONLY_FAILURE_TYPES] : FAILURE_TYPES;
+      if (!accepted.includes(failureType as ScriptFailureType)) return null;
       if (typeof msg.message !== "string") return null;
       return {
         type: "failure",
