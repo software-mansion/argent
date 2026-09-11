@@ -388,6 +388,45 @@ describe("flow script executor — redaction of a bash step", () => {
     },
     30_000
   );
+
+  // The note for a directory the cleanup could not remove names the entry
+  // that refused, and the script chose that name. Root ignores the mode.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "replaces a secret in the name of an entry the cleanup could not remove",
+    async () => {
+      const ws = workspace();
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "argent-redaction-exchange-"));
+      longRoots.push(root);
+      const script = ws.write(
+        "leave.sh",
+        `d="$(dirname "$ARGENT_OUTPUT")/cache"
+         mkdir -p "$d"
+         : > "$d/session-$API_KEY"
+         chmod 500 "$d"`
+      );
+      try {
+        const result = await executor({ exchangeRoot: root }).execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          env: { API_KEY: SECRET.value },
+          secrets: [SECRET],
+        });
+
+        const notes = result.notes.join(" ");
+        expect(result.ok).toBe(true);
+        expect(notes).toContain("could not be removed");
+        expect(notes).toContain("session-{{secret:API_KEY}}");
+        expect(notes).not.toContain(SECRET.value);
+      } finally {
+        for (const entry of fs.readdirSync(root)) {
+          const cache = path.join(root, entry, "cache");
+          if (fs.existsSync(cache)) fs.chmodSync(cache, 0o700);
+        }
+      }
+    },
+    30_000
+  );
 });
 
 describe("flow script executor — the heap verdict", () => {

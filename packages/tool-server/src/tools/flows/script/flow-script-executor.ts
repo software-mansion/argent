@@ -644,7 +644,7 @@ export class FlowScriptExecutor {
           : { ...common, interpreter: "node" }
       );
     } finally {
-      if (exchange) await removeExchange(exchange, notes);
+      if (exchange) await removeExchange(exchange, notes, request.secrets ?? []);
       if (pendingSweep) await pendingSweep;
     }
   }
@@ -1576,13 +1576,18 @@ function createExchange(
   }
 }
 
-async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise<void> {
+async function removeExchange(
+  exchange: ExchangeFiles,
+  notes: string[],
+  secrets: readonly FlowScriptSecret[]
+): Promise<void> {
   try {
     await removeTree(exchange.dir);
   } catch (err) {
+    // The error names the entry that refused, and the script chose that name.
     notes.push(
       `The script's private directory ${exchange.dir} could not be removed ` +
-        `(${errorMessage(err)}); it still holds the document the script wrote. A later bash ` +
+        `(${scrubScriptText(errorMessage(err), secrets)}); it still holds the document the script wrote. A later bash ` +
         `step sweeps it with the same recursive remove once this step's own time limit has ` +
         `passed, so a cause that call cannot get past - a mode the script changed on the ` +
         `directory itself - needs the directory removed by hand.`
