@@ -19,6 +19,7 @@ import {
   MAX_RECORDINGS,
   getFlowPath,
   appIdForPlatform,
+  authoringPlatform,
   chromiumLaunchSpec,
   writeNewFlowFile,
   blockSteps,
@@ -1526,6 +1527,47 @@ describe("native launch shorthand", () => {
   it("native never applies to chromium (chromium takes a path, not an id)", async () => {
     expect(appIdForPlatform({ native: "com.acme.app" }, "chromium")).toBeNull();
     expect(chromiumLaunchSpec({ native: "com.acme.app" })).toBeNull();
+  });
+});
+
+// ── the authoring platform fold ──────────────────────────────────────
+
+describe("the authoring platform fold", () => {
+  it("folds only ios-remote, and leaves every writable platform alone", async () => {
+    expect(authoringPlatform("ios-remote")).toBe("ios");
+    for (const p of ["ios", "android", "chromium", "vega"]) {
+      expect(authoringPlatform(p)).toBe(p);
+    }
+  });
+
+  it("a launch map resolves its ios entry on a remote simulator", async () => {
+    // A remote sim runs the same app from the same store as a local one, and a
+    // flow file names no host — so the author's `ios` key is its entry.
+    const app = { ios: "com.acme.app", android: "com.acme.app.android" };
+    expect(appIdForPlatform(app, "ios-remote")).toBe("com.acme.app");
+    expect(appIdForPlatform(app, "ios")).toBe("com.acme.app");
+  });
+
+  it("declares nothing on a remote simulator when the map has no ios and no native key", async () => {
+    // The fold shares iOS's entry; it does not invent one out of another
+    // platform's. A flow that only ever ran on Android still fails here.
+    expect(appIdForPlatform({ android: "com.acme.app.android" }, "ios-remote")).toBeNull();
+  });
+
+  it("still falls back to native on a remote simulator", async () => {
+    expect(appIdForPlatform({ native: "com.acme.app" }, "ios-remote")).toBe("com.acme.app");
+    // …and a specific ios key still wins over it.
+    expect(appIdForPlatform({ native: "com.acme.app", ios: "com.acme.dev" }, "ios-remote")).toBe(
+      "com.acme.dev"
+    );
+  });
+
+  it("keeps `ios-remote` unwritable: the launch map still rejects the key", async () => {
+    // The fold exists so no flow file needs a remote key. Accepting one would
+    // let a flow name the host, which is the thing a flow deliberately cannot do.
+    expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
+      /allowed keys: native, ios, android, chromium, vega/
+    );
   });
 });
 
