@@ -8,7 +8,6 @@
 //   --name value     (kind: "value")
 //   --name=value
 //   -n value         (single-letter alias of a value option)
-//   --name a --name b (kind: "values" — every occurrence collected)
 //   --name / -n      (kind: "boolean")
 //   --               (end of options; the rest are positionals)
 //
@@ -41,9 +40,6 @@ export type OptionSpec =
 
 export type OptionSpecs = Readonly<Record<string, OptionSpec>>;
 
-/** The parsed options: `true` for a boolean that was given, the string for a
- * value option, the list of occurrences for a repeatable one, absent when not
- * given. A repeated `"value"` option keeps the last value. */
 type ParsedOptions = Record<string, string | boolean | string[] | undefined>;
 
 interface ParsedCommandArgs {

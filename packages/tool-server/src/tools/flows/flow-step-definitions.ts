@@ -412,24 +412,9 @@ const FLOW_STEP_DEFINITIONS: {
     // author would open. `timeout` rides the summary alone: it changes what
     // replays, the way tap's `times` does, while a report target names only
     // what the step acts on.
-    // The `env` too: it is part of what the step DOES, the way a `tool:`
-    // step's args are — a script carrying nineteen values summarized
-    // identically to a bare one, and this line is the only view of the
-    // appended step the recorder returns. Values as written, like every
-    // other field of the file.
     summary: (step) =>
       `${step.path}` +
       `${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}` +
-      //
-      // Through the flow parser's own entry ceiling, though. This line is
-      // returned twice — as `flow-add-script`'s `recorded` and again in the
-      // finish `summary` — and `env` is the field documented as carrying a PEM
-      // key or a service-account blob, so a 10 KB value became 20 KB of agent
-      // context for a one-line summary. 200 characters still shows a real env
-      // map whole; the same ceiling, for the same reason, that `renderedValue`
-      // already applies to a rendered flow entry. Only the `script` arm: a
-      // `tool:` step's args render doubles as the warning anchor, where two
-      // truncated maps sharing a prefix would collide.
       `${step.env ? ` env ${renderedValue(renderToolArgs(step.env))}` : ""}`,
     target: (step) => step.path,
   },

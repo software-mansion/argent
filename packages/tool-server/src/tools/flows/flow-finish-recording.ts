@@ -52,20 +52,6 @@ function attachStepWarnings(
   });
 }
 
-/**
- * What `message` says about the warnings the summary carries, by KIND — and
- * about the ones it does NOT carry.
- *
- * The kinds are different news, and only one is about conversion. A wait that
- * came back `success: false` was never probed: it failed live, and at replay it
- * stops the run. An `env` warning is about neither: the step replays, just not
- * under the env the live call had. Counting any of them as a conversion
- * warning states the opposite of the actionable fact.
- *
- * `discarded` is what the anchor checks threw away. Dropping is the right
- * answer, but reporting it as a pass is not: a recording where every wait
- * diverged would otherwise return the same payload as a clean one.
- */
 function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: number): string {
   const counts = { conversion: 0, wait: 0, env: 0 };
   for (const { kind } of warnings.values()) counts[kind] += 1;
@@ -97,8 +83,6 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
     `${discarded} ${one ? "warning" : "warnings"} raised during this recording ${one ? "is" : "are"} ` +
     `NOT in \`summary\`: a hand edit to the .yaml moved the ${one ? "step it judged" : "steps they judged"}, ` +
     `so which step ${one ? "it belongs" : "they belong"} to is no longer knowable — re-record ` +
-    // Not "that wait": a dropped warning can be any of the three kinds, and an
-    // `env` one is not about a wait at all.
     `${one ? "that step" : "those steps"} to see ${one ? "it" : "them"} again`;
   return carried === "" ? ` — ${drop}` : `${carried}. ${drop}`;
 }

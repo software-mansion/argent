@@ -6,7 +6,6 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const WORKFLOW = ".github/workflows/windows-e2e.yml";
 
-/** Importing this reaches every tool the registry holds, and most of the server. */
 const WHOLE_SERVER = "packages/tool-server/src/tools/flows/flow-run.ts";
 
 const PACKAGE_SOURCES: Record<string, string> = {
@@ -88,13 +87,6 @@ describe("the Windows job's path filter", () => {
       expect(fs.existsSync(path.join(WORKSPACE_ROOT, seed))).toBe(true);
     }
 
-    // A seed that reaches `flow-run.ts` reaches every tool behind the registry
-    // with it: 164 files for `flow-script-env.test.ts` against 31 for each of
-    // the others. That puts it with the seven above rather than here, for the
-    // same reason - naming a graph that size file by file would run this job on
-    // nearly every pull request, which is the opposite of what a path filter is
-    // for. The entries such a seed does need are named in the filter by hand,
-    // each beside the reason it decides a Windows outcome.
     const narrow = seeds.filter((seed) => !importGraph([seed]).includes(WHOLE_SERVER));
     expect(narrow.length).toBeGreaterThan(0);
 

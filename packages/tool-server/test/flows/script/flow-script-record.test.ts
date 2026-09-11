@@ -319,9 +319,6 @@ describe("recording a script step", () => {
   });
 
   it("refuses a recording file that is gone, asking for a restart rather than a repair", async () => {
-    // "Repair it and call this again" cannot be followed when there is nothing
-    // to repair, and this tool cannot re-create the file: only
-    // flow-start-recording establishes the key.
     const marker = path.join(root, "gone.txt");
     await start("erased");
     await write(
@@ -366,11 +363,6 @@ describe("recording a script step", () => {
   });
 
   it("refuses a file that will not parse before it runs the script", async () => {
-    // The append would refuse the same file afterwards, with the script already
-    // run and nothing rolled back — and the flow-level `env` the run has to
-    // share with the replay is read off that file, so a fallback to the
-    // in-memory copy would hand the script an environment the recorded step
-    // never takes.
     const marker = path.join(root, "seeded.txt");
     await start("broken");
     await write(
@@ -693,9 +685,6 @@ describe("a script that did not pass records nothing", () => {
   });
 
   it("says when the step count could not come off the file", async () => {
-    // The file parses when the call starts — an unparseable one is refused
-    // before the run — so the break has to land while the script is running,
-    // which is the window a mid-recording hand edit really occupies.
     await start("counted");
     await flowInsertEchoTool.execute(
       {},

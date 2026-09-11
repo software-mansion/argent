@@ -878,53 +878,16 @@ describe("parseFlow", () => {
     }
   });
 
-  // `String.prototype.trim` strips the whole Unicode whitespace class; YAML's
-  // plain scalars strip only the ASCII one. So a value ending in one of these
-  // was intact in the file and gone from the parse, whenever it was the LAST
-  // scalar — which is where the serializer puts a recorded script step's `env`
-  // value. A token pasted out of a web UI or a chat client with a trailing
-  // U+00A0 is the ordinary way in, and nothing said the character was lost.
   it("still accepts a file whose first line opens with a tab", async () => {
-    // The trim that lost a trailing non-ASCII space also covered the LEADING
-    // edge, where YAML refuses a tab as indentation. Nothing at that edge can
-    // be part of a value — the top level of a flow file is a map — so it is
-    // still trimmed, and a hand-edited file with a stray leading tab still
-    // parses rather than reporting "Tabs are not allowed as indentation".
     expect(parseFlow("\tsteps:\n  - echo: hi\n").steps).toEqual([{ kind: "echo", message: "hi" }]);
   });
 
   it("still parses a file whose last line holds nothing but a stray whitespace character", async () => {
-    // The other half of the same edge. A character past the last line break is
-    // on a line of its own, so it is part of no value — and YAML accepts only
-    // space and tab there, reading anything else as a second top-level node at
-    // column 1. The file then failed to parse AT ALL, for every caller of
-    // parseFlow, naming a character nobody can see.
-    //
-    // A bare carriage return is the everyday way in — a CRLF file that lost one
-    // LF, or a half-applied line-ending conversion — and the trailing U+00A0 is
-    // the same paste artefact the round-trip below exists for, landing one line
-    // lower.
-    //
-    // Written as escapes, like the round trip below: the characters are
-    // invisible in a source file, and one silently reformatted is a test that
-    // stops testing anything.
-    const strays = [
-      "\r", // lone CR: a CRLF file that lost its LF
-      "\v", // vertical tab
-      "\f", // form feed
-      "\u00a0", // no-break space — what a paste out of a web UI carries
-      "\u1680",
-      "\u2028", // line separator
-      "\u202f",
-      "\u3000", // ideographic space
-      "\ufeff", // zero-width no-break space
-    ];
+    const strays = ["\r", "\v", "\f", "\u00a0", "\u1680", "\u2028", "\u202f", "\u3000", "\ufeff"];
     for (const stray of strays) {
       expect(parseFlow(`steps:\n  - echo: hi\n${stray}`).steps).toEqual([
         { kind: "echo", message: "hi" },
       ]);
-      // Beside a space or tab, which YAML reads as indentation and which was
-      // never the failing half.
       expect(parseFlow(`steps:\n  - echo: hi\n \t${stray}`).steps).toEqual([
         { kind: "echo", message: "hi" },
       ]);
@@ -932,14 +895,6 @@ describe("parseFlow", () => {
   });
 
   it("still parses a CRLF file whose final LF a conversion dropped", async () => {
-    // The trailing trim is anchored on a line BREAK, so a file that ends
-    // without one never reaches it — and a CRLF flow that lost its final LF
-    // ends on the CR of that break. The character then read as the last one of
-    // the last value: a block-style `echo` came back `"hello\r"` and a `TOK:`
-    // value `"abc\r"`, one character longer than the author wrote, while the
-    // flow-style spelling of the same file stopped parsing at all. A
-    // half-applied line-ending conversion is the ordinary way in, and it
-    // applies to every flow file rather than only the ones that use `env`.
     expect(parseFlow("steps:\r\n  - echo: hello\r").steps).toEqual([
       { kind: "echo", message: "hello" },
     ]);
@@ -950,20 +905,15 @@ describe("parseFlow", () => {
       parseFlow("steps:\r\n  - script:\r\n      path: seed.mjs\r\n      env:\r\n        TOK: abc\r")
         .steps
     ).toEqual([{ kind: "script", path: "seed.mjs", env: { TOK: "abc" } }]);
-    // The same conversion applied twice ends the file in two.
     expect(parseFlow("steps:\r\n  - echo: hello\r\r").steps).toEqual([
       { kind: "echo", message: "hello" },
     ]);
-    // The file that kept its LF was never affected, and still is not.
     expect(parseFlow("steps:\r\n  - echo: hello\r\n").steps).toEqual([
       { kind: "echo", message: "hello" },
     ]);
   });
 
   it("keeps a trailing non-ASCII space in the last scalar when a stray line follows it", async () => {
-    // The two edges at once, and the case that says the trailing trim stops at
-    // the line break rather than eating everything whitespace: the value keeps
-    // the U+00A0 it was written with AND the stray line below it is dropped.
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: "abc\u00a0" } }],
@@ -972,13 +922,6 @@ describe("parseFlow", () => {
   });
 
   it("keeps an env name YAML's core schema would resolve", async () => {
-    // `TRUE`, `False` and `NULL` are resolved in KEY position the way they are
-    // in value position, so `env: { TRUE: on }` reached the guards as the string
-    // "true" — which satisfies the name rule — and the script was handed
-    // `process.env.true`. `NULL` resolved to nothing and was refused as
-    // `env` holds "", naming no key a reader can find. Same class as the
-    // `__proto__` guard beside it: the name argent carries is not the name the
-    // author wrote.
     for (const name of ["TRUE", "True", "FALSE", "NULL", "Null"]) {
       const flow = parseFlow(
         `env: { ${name}: v }\nsteps:\n  - script: { path: seed.mjs, env: { ${name}: v } }\n`
@@ -988,42 +931,30 @@ describe("parseFlow", () => {
         [name]
       );
     }
-    // The YAML 1.1 resolvers were never affected, and still are not.
     for (const name of ["YES", "ON", "NO", "OFF"]) {
       expect(Object.keys(parseFlow(`env: { ${name}: v }\nsteps: []\n`).env ?? {})).toEqual([name]);
     }
   });
 
   it("accepts a bare `env:` header with no entries under it", async () => {
-    // Every entry commented out is an ordinary authoring state, so a header
-    // with nothing under it is a map with no entries rather than a malformed
-    // one. YAML resolves it to `null`, and `null` is not `undefined` — so it
-    // reaches `describeScriptEnvProblem`, whose first line takes it. Without
-    // that line the walk asks `Object.getPrototypeOf(null)` inside `isPlainMap`
-    // and the whole file dies on "Cannot convert undefined or null to object",
-    // which names neither the key nor the file, for every caller of `parseFlow`.
     const flow = parseFlow("env:\nsteps:\n  - echo: hi\n");
     expect(flow.env).toEqual({});
     expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
-    // And it is the same environment `env: {}` spells, so the two headers
-    // cannot drift apart.
     expect(flow).toEqual(parseFlow("env: {}\nsteps:\n  - echo: hi\n"));
   });
 
   it("round-trips a trailing non-ASCII space in the file's last scalar", async () => {
-    // Written as escapes: the characters are invisible in a source file, and
-    // one of them silently reformatted is a test that stops testing anything.
     const spaces = [
-      "\u00a0", // no-break space — what a paste out of a web UI carries
+      "\u00a0",
       "\u1680",
       "\u2000",
       "\u200a",
-      "\u2028", // line separator
-      "\u2029", // paragraph separator
+      "\u2028",
+      "\u2029",
       "\u202f",
       "\u205f",
-      "\u3000", // ideographic space
-      "\ufeff", // zero-width no-break space
+      "\u3000",
+      "\ufeff",
     ];
     for (const space of spaces) {
       const flow: FlowFile = {
@@ -1032,10 +963,6 @@ describe("parseFlow", () => {
         steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: `abc${space}` } }],
       };
       expect(parseFlow(serializeFlow(flow))).toEqual(flow);
-      // A value that is NOTHING BUT the character is the same loss one step
-      // further: it re-parsed as an empty scalar, i.e. null, and the step then
-      // failed the `strings only` rule — so the recorded flow could no longer
-      // be finished or run at all.
       const lone: FlowFile = {
         executionPrerequisite: "",
         steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: space } }],
@@ -1528,18 +1455,12 @@ describe("output references", () => {
     }
     const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
-    // Counted, not a bare ellipsis: the refusal names a MARKER inside the
-    // value, and a cut long enough to hide it leaves the author reading two
-    // hundred characters that do not contain the thing complained about.
     expect(quoted!.endsWith("…(+218 chars)")).toBe(true);
     expect(quoted!.startsWith("{{output:user.id}}")).toBe(true);
     expect(message.length).toBeLessThan(1000);
   });
 
   it("says how much of a value it cut when the marker itself was past the cut", () => {
-    // The value the message is about opens with 400 ordinary characters and
-    // carries the marker after them, so the quote holds no marker at all. A
-    // bare `…` said nothing about the rest existing.
     let message = "";
     try {
       parseFlow(`steps:\n  - echo: "${"x".repeat(400)}{{output:user.id}}"\n`);

@@ -37,15 +37,7 @@ interface FlowScriptStepRequest {
   step: Extract<FlowStep, { kind: "script" }>;
   projectRoot: string;
   logBudget?: FlowScriptLogBudget;
-  /**
-   * Every environment value this invocation runs with, already layered by the
-   * caller in the order {@link mergeScriptEnv} fixes — the step's own `env`
-   * included, so this is the whole map and the step is not read again here.
-   * `{{secret:NAME}}` placeholders are still unresolved: they are substituted
-   * below, once, on the one path both callers share.
-   */
   env?: ScriptEnv;
-  /** Notes an earlier step of the same run already carried. */
   runNotes?: FlowScriptRunNotes;
   signal?: AbortSignal;
 }
@@ -92,18 +84,6 @@ export async function runFlowScriptStep(
     };
   }
 
-  // The secret chain is anchored at the run's project, not at the tool server's
-  // working directory: that is a snapshot from whatever spawned the server, and
-  // an editor sets it to `/` or `$HOME`. Left to the default, a project's own
-  // `.argent/secrets.env` and `.env` would never be found — on exactly the hosts
-  // this feature is most used on. The chain reads those files on each call, so
-  // a secret added while the server is up applies without a restart; the
-  // server's own environment does not work that way.
-  //
-  // A name no source defines is an `error`, not a `fail`: the step never
-  // started, and the fault is the host's missing secret rather than anything
-  // the script did. The resolver's own message lists the available names and
-  // every source it looked in, which is what the author acts on.
   let env: ScriptEnv;
   let secrets: FlowScriptSecret[];
   try {
@@ -121,19 +101,11 @@ export async function runFlowScriptStep(
     flowDir,
     ...(request.logBudget ? { logBudget: request.logBudget } : {}),
     ...(Object.keys(env).length > 0 ? { env } : {}),
-    // The values THIS step's `{{secret:NAME}}` placeholders resolved to, and
-    // nothing else — not the whole resolvable chain, not the plaintext values
-    // beside them. A secret the step never referenced is not in its
-    // environment, so scanning its failure text for one finds nothing and
-    // costs a walk over every failure.
     ...(secrets.length > 0 ? { secrets } : {}),
     ...(request.runNotes ? { runNotes: request.runNotes } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
 
-  // Added to the executor's own notes rather than appended after the verdict:
-  // this IS a note about the host, and `scriptVerdict` is where a note joins
-  // the script's own message.
   const shellLimit = describeShellEnvironmentLimit(result, env);
   const verdict = scriptVerdict(
     shellLimit ? { ...result, notes: [...result.notes, shellLimit] } : result
@@ -167,19 +139,6 @@ function isHostFrame(frame: string): boolean {
   );
 }
 
-/**
- * The `file://` URL of one frame, taken to the `:line:column` V8 always writes
- * after it rather than to the first `)`.
- *
- * `)` is a legal character in a file name and the URL path encode set does not
- * escape it, so a class that stopped at one stopped INSIDE the path: the head
- * came back a readable path and the tail stayed percent-encoded. That is a
- * shape the scrub does not look for, so the re-scrub {@link scriptFrames}
- * runs for exactly this reason matched nothing either, and a resolved value
- * that named the file reached the reader half decoded and wholly readable. A
- * frame carrying no position at all keeps the older reading, which is the one
- * thing the closing paren has to end.
- */
 const FRAME_FILE_URL_RE = /file:\/\/\S*?:\d+:\d+(?=[\s)]|$)|file:\/\/[^\s)]+/g;
 
 /**
@@ -237,200 +196,31 @@ function scriptFrames(
   return scrubScriptText(`\n${frames.join("\n")}`, secrets);
 }
 
-/**
- * How a shell says a command was not on `PATH`, in the shapes the shells write
- * it in. Each matches a whole LINE rather than the phrase inside it, AND a line
- * that ENDS the failure text. `execSync` folds the child's stderr into the
- * message it throws, so a script that greps an install log, asserts on an error
- * path, or wraps a build that failed on its own carries the words with nothing
- * missing — line-anchoring alone made a quoted shell line the best possible
- * match, and the note then ended that verdict with a confident instruction
- * pointing at the wrong subsystem.
- *
- * The tail anchor is what the note is bought with, and it buys less than it
- * looks like it does. What it rules out is a transcript that CONTINUES after
- * the shell line — a step that greps an install log and reports the lines
- * around the one it was looking for. It does not rule out a script sentence in
- * FRONT of one, which is the commoner shape: the script says what it was doing
- * and the captured stderr is appended last, so
- * `could not parse the captured log as JSON at position 0\nsh: 1: adb: command
- * not found` still earns the note. That is a shape where the note is usually
- * right — the command really was not found, and it is why the parse failed —
- * so it is left alone rather than tightened against. A missed note is the safe
- * direction, which is what the tail anchor picks when it is wrong.
- *
- * A shell line has a shape a sentence does not, and it is the shape that is
- * matched, not a length: the writer, then optionally a line number, then the
- * command, then the phrase and nothing after it —
- *
- *   sh: adb: command not found            bash, ksh, macOS /bin/sh
- *   /path/to/build.sh: line 3: adb: command not found
- *   /bin/sh: 1: adb: not found            dash, i.e. Debian/Ubuntu and CI
- *   zsh:1: command not found: adb         zsh puts the phrase first
- *
- * `not found` without `command` is dash's wording, and `/bin/sh` IS dash on
- * Debian and Ubuntu — which is what a bare `execSync` runs and what the unit
- * test workflow runs on, so the host where the note is most useful was the one
- * host it never appeared on. That wording is its own pattern, and it requires
- * the LINE NUMBER dash always writes: without it, `<a>: <b>: not found` is the
- * shape of an ordinary two-part application error — `fixture: users.json: not
- * found`, `HTTP 404: /api/users: not found` — and a step that failed on a
- * missing fixture would end its verdict with a confident instruction to restart
- * the tool server. Script steps exist to seed databases and read fixtures,
- * which is exactly where that message shape lives.
- *
- * The line number alone does not separate the two: a THREE-part error with a
- * numeric second field has it as well (`request failed: 404: /api/users: not
- * found`), and so does an application that writes a PATH in front of its own
- * line number — `fixtures/orders.json: 12: customerId: not found` is the same
- * missing-fixture shape one field longer. Asking merely for a path in front of
- * the number therefore separates nothing.
- *
- * What dash writes there is the shell it is, or the script it is running: the
- * name ends in `sh`, either as the whole name (`sh`, `bash`, `dash`, `ksh`,
- * `zsh`, `ash`) or as the extension a `.sh` file carries. That is what the
- * pattern asks for, and it is the fact a fixture path does not have. What comes
- * BEFORE the extension is not restricted — a script may be named
- * `run tests.sh`, `seed(1).sh` or in a script other than Latin, and each of
- * those is an ordinary name. A script named with no extension at all —
- * `/usr/local/bin/seed: 3: adb: not found` — is missed, and a missed note is
- * the safe direction.
- *
- * EVERY signature asks for that writer, not only dash's. The longer phrase
- * reads as an English sentence, which made it look like it carried its own
- * proof — but `command not found` is a two-part application error just as
- * readily as `not found` is: `tenant acme: seed: command not found` is a seeder
- * naming the tenant it could not find a seed for, and it earned the note and
- * the instruction with it. The line number does not save the `command not
- * found` wordings either, because bash omits it whenever it is not running a
- * file, which is what a bare `execSync` gives it. The writer is the one field
- * that separates a shell from an application in all three.
- *
- * The end anchor is what makes the phrase safe to accept at all: `for: command
- * not found never appeared in it` has the words but keeps going. Nothing caps
- * how long the line may be, either — bash prefixes the failing script's own
- * path, and a deep enough checkout would push a genuine miss past a fixed cap.
- *
- * That path may open with a drive letter. Git Bash names a script by the path
- * it was handed, which on Windows is `C:/…`, and its colon is the one the
- * writer's path may hold.
- */
 const COMMAND_NOT_FOUND_SIGNATURES: readonly RegExp[] = [
   /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?(?:\d+: )?[^\n:]+: command not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh: (?:line )?\d+: [^\n:]+: ?not found[ \t\r]*$(?![\s\S]*\S)/im,
   /^(?:[A-Za-z]:)?(?:[^\n:]*[/\\])?(?:[^\n:/\\]*\.)?(?:ba|da|k|z|a)?sh:(?:\d+:)? command not found: [^\s:]+[ \t\r]*$(?![\s\S]*\S)/im,
-  // cmd.exe writes TWO lines, and both are asked for, ending the failure text
-  // the way the three signatures above do. The opening quote alone let any
-  // sentence QUOTING the message match — `AssertionError: 'foo' is not
-  // recognized as an internal or external command`, or a step that parsed a
-  // Windows build log and reported what it read — because `/m` anchors `^` at
-  // every line start and nothing guarded the other end.
   /^'[^\n']+' is not recognized as an internal or external command,\r?\noperable program or batch file\.[ \t\r]*$(?![\s\S]*\S)/im,
 ];
 
-/**
- * Node's own spelling, for a command it spawned without a shell. Read to the
- * end of the line rather than to the first space: a path with a space in it is
- * the flagship case (`spawnSync /Applications/Android Studio.app/… ENOENT`).
- *
- * It is kept apart from the shell wordings because it does not say the same
- * thing. Node raises this when the COMMAND is missing and, identically, when
- * the `cwd` it was given does not exist — same `syscall`, same `path`, same
- * message — so a note claiming a command was missing would send an author
- * looking for one that was there all along, at an absolute path. Bare `ENOENT`
- * is still not matched at all: that is also how a missing data file reads.
- *
- * What stands between the two words is what Node writes there: ONE token with
- * no spaces in it, or a path that OPENS with a separator — `/`, `\`, `~`, `.`
- * or a drive letter — which may then hold spaces. Anything else is a sentence
- * — `could not spawn the seeder because the fixture directory is missing
- * ENOENT` — and a sentence is not what Node writes. Excluding `:`, `;` and `,`
- * is not enough on its own, since a sentence carries none of them either.
- *
- * The opening character is what separates the two, so what is missed is a name
- * holding a space that does NOT open with one: a bare `spawn Android Studio
- * ENOENT`, or a relative path whose first segment has a space in it. There is
- * nothing in either to tell it from a sentence, and a missed note is the safe
- * direction.
- */
 const SPAWN_ENOENT = /spawn(?:Sync)? (?:[A-Za-z]:)?(?:[/\\~.][^\n:;,]*|[^\s:;,]+) ENOENT/;
 
-/**
- * A `.sh` says it in an exit code as well as in words.
- *
- * Code 127 is bash's own name for exactly this, and the parent ends the
- * failure message with the last line the script wrote to stderr — for a
- * missing command, the shell's own `command not found` line. Matched on the
- * sentence the runner composes rather than on a bare `127`, which is also an
- * ordinary exit code for a script that chose it.
- *
- * And a script may choose it while EXPLAINING itself: `echo "no such tenant"
- * >&2; exit 127` is a step that said what went wrong, and the exit code alone
- * cannot tell that apart from bash's own. What can is the stderr line after the
- * runner's 127 hint — so this captures whatever follows the hint and
- * {@link describeShellEnvironmentLimit} reads it: nothing at all is a script
- * that wrote nothing to stderr, and the shell's OWN wording is the command bash
- * could not find. Anything else is the script explaining something the remedy
- * does not answer.
- *
- * The hint's own tail is quoted here, in step with `exitCodeHint` in
- * `flow-script-runner.mjs`, which this file cannot import — a wording that
- * drifts apart stops matching and the note is dropped, which is the safe
- * direction.
- */
 const BASH_EXIT_127 =
   /^The script exited with code 127 \(bash: [^\n]*CRLF line endings\.[ \t\r]*([\s\S]*)$/m;
 
-/** Whether any shell's `command not found` wording is what this text ends on. */
 function saysCommandNotFound(text: string): boolean {
   return COMMAND_NOT_FOUND_SIGNATURES.some((signature) => signature.test(text));
 }
 
-/**
- * The note a `command not found` earns, or null when the failure was something
- * else.
- *
- * On its own that failure points nowhere: the command plainly exists, and works
- * in the author's own shell. What it does not say is that the tool server is a
- * long-lived process whose environment — `PATH` included — is a snapshot from
- * its first start, so a later `export`, or an editor that spawned the server
- * with a short login `PATH`, leaves a version-manager shim or an `adb` out of
- * reach.
- *
- * `scripts.env.allow` is NOT one of the remedies, though it reads like one: it
- * widens which names are copied out of that snapshot, and `PATH` is on the
- * built-in allowlist already, so naming it there does nothing. Restarting the
- * server is what replaces the snapshot.
- *
- * None of that holds when the RUN set `PATH` itself, and this feature gives it
- * four ways to — the flow's `env:`, a fragment's, `--env`, the step's own. That
- * value replaces the snapshot outright, so the snapshot is not what the command
- * was looked up in, restarting the server changes nothing, and the one place
- * the author has to look is the one the paragraph above excludes. `env` names
- * the cause in that case instead.
- */
 function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv): string | null {
   if (result.ok) return null;
-  // The FAILURE only, not the log: a script that greps an install log, asserts
-  // on an error path, or echoes a CI transcript could print this phrase while
-  // failing for an unrelated reason.
   const text = result.failure?.message ?? "";
-  // Bash FIRST, and the order is load-bearing. The last line a `.sh` wrote to
-  // stderr ends its failure message, and for a missing command that line is
-  // the shell's own wording — in the same message as the runner's own 127
-  // hint. Tested the other way round, such a step matched the `.mjs` branch and
-  // earned a prefix on top of a hint that had already named the cause.
   const bash127 = BASH_EXIT_127.exec(text);
-  // The stderr line after the hint, if there is one. Judged on its OWN, so the
-  // line-anchored signatures can read it: the parent joins it to the hint with
-  // a space, which leaves the shell's line with no line start of its own.
   const wrote = bash127?.[1].trim();
   if (wrote !== undefined && wrote !== "" && !saysCommandNotFound(wrote)) return null;
   const what =
     bash127 !== null
-      ? // Nothing: the runner's own 127 hint sits immediately before this note
-        // and has already said what the code means.
-        ""
+      ? ""
       : saysCommandNotFound(text)
         ? "A command was not found. "
         : SPAWN_ENOENT.test(text)
@@ -438,17 +228,6 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
             "which Node reports the same way. "
           : null;
   if (what === null) return null;
-  // Which machine's shell said it is not something the wording answers. `adb
-  // shell` and `ssh` hand back the far end's own line unchanged, so a seeding
-  // or deploy step reports a command missing on a device or a build host in the
-  // exact words a local shell uses — and every remedy below is about THIS
-  // machine, with restarting a shared tool server the most disruptive of them.
-  // Nothing in the text separates the two, so the note says so rather than
-  // picking; a reader who ran the command locally reads past one clause.
-  //
-  // Only where a shell is what wrote the words. Node's `spawn … ENOENT` is
-  // Node's own, raised here for a child it was spawning here, and a bare exit
-  // 127 with no reason is this run's own bash — neither can have been relayed.
   const relayed = bash127 !== null ? saysCommandNotFound(wrote ?? "") : saysCommandNotFound(text);
   const whose = relayed
     ? " A shell reached through `adb shell` or `ssh` reports a command missing on the OTHER " +
@@ -479,13 +258,6 @@ function describeShellEnvironmentLimit(result: FlowScriptResult, env: ScriptEnv)
   );
 }
 
-/**
- * The name this environment spells `PATH` under, or undefined when it sets none.
- *
- * Case-folded on Windows only, which reads one variable however it is spelled —
- * the same rule `mergeScriptEnv` and `buildChildEnv` follow, and for the same
- * reason: a `Path` there IS the search path.
- */
 function pathEnvName(env: ScriptEnv): string | undefined {
   if (env.PATH !== undefined) return "PATH";
   if (process.platform !== "win32") return undefined;

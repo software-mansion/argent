@@ -109,15 +109,6 @@ const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehin
   },
 };
 
-/**
- * Whether two environments are the same map, as the CHILD would see them.
- *
- * Keyed through {@link envNameKey}, because that is what the merge above these
- * two maps folds by: on Windows a case-only rename is one variable with one
- * value to the script, and comparing the raw names reported drift the script
- * never saw — then told the author to delete the step and run a side-effecting
- * script again.
- */
 function sameEnv(before: ScriptEnv | undefined, after: ScriptEnv | undefined): boolean {
   const a = before ?? {};
   const b = after ?? {};
@@ -127,20 +118,11 @@ function sameEnv(before: ScriptEnv | undefined, after: ScriptEnv | undefined): b
   return names.every((name) => byKey.get(envNameKey(name)) === a[name]);
 }
 
-/** The flow-level names in force, for a message that reports a change. */
 function envNames(env: ScriptEnv | undefined): string {
   const names = Object.keys(env ?? {});
   return names.length > 0 ? `env ${names.join(", ")}` : "no flow-level env";
 }
 
-/**
- * What changed, in names.
- *
- * {@link sameEnv} compares VALUES and {@link envNames} renders NAMES, so an
- * edit that only changed a value would otherwise print the same text on both
- * sides of the sentence — a difference the message announces and then does not
- * show. That case says so in words instead; the file at `savedTo` holds both.
- */
 function describeEnvDrift(before: ScriptEnv | undefined, after: ScriptEnv | undefined): string {
   const names = Object.keys(before ?? {});
   const sameNames =
@@ -202,19 +184,8 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
-    // The `env` ARGUMENT is judged before the entry is built, for the reason
-    // flow-execute judges its own: this is a caller's parameter, so it earns a
-    // caller's refusal — named after the parameter and answered 400 — rather
-    // than the flow parser's "Unrecognized flow entry", which is worded for a
-    // step already written into a file. The parser's own helper below then has
-    // nothing left to reject on this path; it still guards the shape the entry
-    // is built into.
     const envProblem = describeScriptEnvProblem(params.env ?? {});
     if (envProblem) {
-      // Named after the channel, like the sibling refusal in `flow-run.ts` and
-      // like the two `assertNoEnvOutputReferences` raises: this recording's
-      // file can carry a top-level `env:` of its own, and a bare `env` does not
-      // say which of the two the author must edit.
       throw new InvalidToolInputError(`This call's \`env\` ${envProblem}`, {
         failure_stage: "flow_add_script_env",
       });
@@ -236,12 +207,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       ...(params.env !== undefined ? { env: parseScriptEnv(entry, params.env) } : {}),
     };
 
-    // Before the script runs, not after. The append re-parses the whole file
-    // and would refuse this map there — but by then the script has run for real
-    // and nothing it did is rolled back, and that refusal is written for a step
-    // ALREADY in the file, so it would send the caller to edit a flow that does
-    // not hold this step yet. Re-raised as caller input, like the name rule
-    // above it: this is the same argument that rule judges.
     try {
       assertNoEnvOutputReferences(step.env, "This call's");
     } catch (err) {
@@ -250,31 +215,10 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       });
     }
 
-    // The recording's own flow-level `env` goes UNDER the step's map, exactly as
-    // the runner will layer it at replay. Read off the FILE, because that is
-    // where a top-level `env:` the agent hand-added lives before the first
-    // append catches the in-memory copy up — and without this the live run and
-    // the replay would take different environments, which is the one failure a
-    // recorded script step exists to prevent.
-    //
-    // A file that will not read or parse STOPS the call rather than falling back
-    // to the in-memory copy. That copy is a different environment — in practice
-    // an empty one, since a hand-added `env:` has never been through an append —
-    // so the script would run without the map, silently. The append after the
-    // run would refuse the same file anyway, by which time the script has run
-    // and nothing is rolled back.
     let flowEnv: ScriptEnv | undefined;
     try {
       flowEnv = await flowEnvOnDisk(session);
     } catch (err) {
-      // Three states, three different things to do. A file that is GONE cannot
-      // be repaired and this tool cannot re-create it — only
-      // flow-start-recording establishes the key. A file that could not be READ
-      // is a permission or a device problem, and "it may not parse, or it may
-      // parse and break a rule" sends the author to look for a fault in content
-      // argent never saw. Only the third is a flow to repair. The read failure
-      // is what carries an errno; a parse refusal is a FailureError and carries
-      // none.
       const errno = (err as NodeJS.ErrnoException).code;
       const missing = errno === "ENOENT";
       const unreadable = typeof errno === "string" && !missing;
@@ -388,16 +332,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
-    // The file's `env:` was read before a run that may have taken minutes, and
-    // the append re-read it afterwards. An edit landing in that window is
-    // recorded and replays under an environment this run never took, so the
-    // promise the message makes has to be withdrawn when it no longer holds.
-    //
-    // Compared as the STEP will see them, not as the file spells them: the
-    // step's own map sits over both, so an edit to a name it already overrides
-    // changes nothing the script reads. Comparing the flow-level maps alone
-    // withdrew the promise for an environment that had not moved, and told the
-    // author to delete the step and run a side-effecting script again.
     const envDrifted = !sameEnv(
       mergeScriptEnv(flowEnv, step.env),
       mergeScriptEnv(appendedEnv, step.env)
@@ -405,10 +339,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      // The plain form is the one the tool already answered with, unchanged:
-      // what a caller reads on a normal call is "the step is in the flow", and
-      // the layering `env` adds is the parameter's own documentation, not news
-      // to repeat on every success.
       message: envDrifted
         ? `Added script step to "${params.name}" flow, but the flow file's own \`env\` changed ` +
           `while the script was running: ${describeEnvDrift(flowEnv, appendedEnv)}. The step IS ` +

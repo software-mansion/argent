@@ -46,11 +46,6 @@ async function asWindows<T>(body: () => Promise<T>): Promise<T> {
   return onPlatform("win32", body);
 }
 
-/**
- * The other side of each rule `asWindows` covers. Forced rather than left to
- * the host, because this file also runs on the Windows E2E job: a case-sensitive
- * expectation left to the real platform would assert the wrong branch there.
- */
 async function asPosix<T>(body: () => Promise<T>): Promise<T> {
   return onPlatform("linux", body);
 }
@@ -84,12 +79,6 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
     const ws = workspace();
-    // Both home variables are planted rather than read off the host. Read off
-    // it, the home assertion was `env.HOME` against `process.env.HOME ?? null`,
-    // which on Windows compares null to null and asserts nothing about the
-    // allowlist on the very platform this file was enabled for. USERPROFILE is
-    // the spelling Windows carries the home directory under, and is on the list
-    // beside HOME, so planting both keeps a live assertion on either host.
     withEnv("HOME", ws.dir);
     withEnv("USERPROFILE", ws.dir);
     const script = ws.write(
@@ -233,16 +222,6 @@ describe("flow script executor — the environment allowlist", () => {
   }, 30_000);
 
   it("drops the host's spelling of a name a Windows override claims", async () => {
-    // On Windows the override and the host's own name are one variable, so
-    // handing both to the fork left Node to dedupe them and keep whichever
-    // sorted first: the host's value could be the one the script read, in place
-    // of the flow's. LANG is on the allowlist, so without this branch the host
-    // entry survives beside the override.
-    //
-    // Counted by folding case rather than read under one spelling, because a
-    // real Windows child answers to either spelling while a POSIX child answers
-    // only to the one it was handed - the count is the part that means the same
-    // thing on both.
     withEnv("LANG", "en_US.UTF-8");
     const ws = workspace();
     const script = ws.write(
@@ -273,15 +252,7 @@ describe("flow script executor — the environment allowlist", () => {
 });
 
 describe("an env map holding two names that differ only in case", () => {
-  // Reached through `parseFlow` or a tool everywhere else in the suite, and
-  // neither channel can put the pair in front of these two functions on a host
-  // whose platform decides the answer. Called directly here so both sides of
-  // each rule are asserted wherever the suite runs.
-
   it("is a usable map on POSIX, where the two names are two variables", async () => {
-    // The refusal below is a platform rule, not a rule about the map: a flow
-    // authored on macOS that argent began refusing everywhere would break files
-    // that were never wrong on the host they run on.
     const problem = await asPosix(async () =>
       describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
     );
@@ -290,11 +261,6 @@ describe("an env map holding two names that differ only in case", () => {
   });
 
   it("is refused on Windows, in a clause naming both spellings", async () => {
-    // Windows carries one variable per name however it is spelled, and the two
-    // entries are one layer, so there is no precedence between them to appeal
-    // to: whichever was written last would take the other's place with nothing
-    // said. The author is reading a map where nothing marks the pair as a pair,
-    // so the clause has to name both spellings to be actionable.
     const problem = await asWindows(async () =>
       describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
     );
@@ -304,8 +270,6 @@ describe("an env map holding two names that differ only in case", () => {
   });
 
   it("merges to one variable per spelling on POSIX", async () => {
-    // Two variables on a case-sensitive host, so folding them here would drop a
-    // value the script asked for and that nothing refused on the way in.
     const merged = await asPosix(async () =>
       mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
     );
@@ -314,12 +278,6 @@ describe("an env map holding two names that differ only in case", () => {
   });
 
   it("merges to the later layer's value on Windows, whichever way round the spellings fall", async () => {
-    // Two layers spelling one variable differently are two layers setting the
-    // same thing, so the documented precedence has to decide here. Keeping both
-    // left the child environment to dedupe them, and Node keeps whichever sorts
-    // first - which is why the first pair is the one that tells the two rules
-    // apart: "API_URL" sorts before "api_url", so precedence answers "step"
-    // while ASCII order answers "flow".
     const upperFirst = await asWindows(async () =>
       mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
     );
@@ -579,15 +537,6 @@ describe("flow script executor — the working directory", () => {
 });
 
 describe("an environment near the operating system's limit", () => {
-  // `ARG_MAX` bounds the block of arguments and environment a new process is
-  // handed. Above it the fork is refused outright; just below it the fork
-  // succeeds and Node dies inside its own startup, which arrives as a runner
-  // that exited before the script started — a verdict naming an exit code and
-  // nothing else. A flow could not set `env` at all before this branch, so
-  // both bands are newly reachable and neither had a test.
-  //
-  // POSIX only: Windows has no `ARG_MAX`. CreateProcess takes an environment
-  // block of any size, so a 1.4 MB value spawns and the script runs.
   const onPosix = it.skipIf(process.platform === "win32");
 
   onPosix(
@@ -610,8 +559,6 @@ describe("an environment near the operating system's limit", () => {
         projectRoot: ws.dir,
         env: { BIG: "x".repeat(1_000_000) },
       });
-      // Whichever side of the line this host puts a megabyte on, the size is
-      // named: the refusal names it in the message, the early exit in a note.
       const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
       expect(died.ok).toBe(false);
       expect(said).toMatch(/ARG_MAX/);
@@ -623,12 +570,6 @@ describe("an environment near the operating system's limit", () => {
   onPosix(
     "names the environment's size for a .sh step too",
     async () => {
-      // A `.sh` step touches the child environment EARLIER than a `.mjs` one: the
-      // bash-version probe spawns each candidate, and that spawn is the one the
-      // operating system refuses. Every candidate then failed the probe, and the
-      // step's reason condemned the host's bash installation and pointed the
-      // author at `scripts.bash` — a different subsystem, and one that is
-      // working. The case above covers `.mjs`, which reaches the fork.
       const found = await resolveHostBash();
       if (!("path" in found)) return;
       const ws = workspace();
@@ -652,10 +593,6 @@ describe("an environment near the operating system's limit", () => {
 
   it("says nothing about the environment when an ordinary one dies early", async () => {
     const ws = workspace();
-    // The runner sends `started` from its preload, BEFORE the entry script
-    // loads, so this exits after the handshake and earns an `exit` verdict
-    // rather than the protocol one the note is for. It pins the shape; the case
-    // below is what makes the size term load-bearing.
     const script = ws.write("early.mjs", "process.exit(7);");
     const result = await executor().execute({
       scriptPath: script,
@@ -668,12 +605,6 @@ describe("an environment near the operating system's limit", () => {
   }, 30_000);
 
   it("stays off a step that was cancelled before the runner started", async () => {
-    // A cancellation lands before `started` does — the preload is fast but not
-    // instant — and the verdict is `cancelled`, which the note does not explain.
-    // The condition consulted only `!startedSeen`, so a large environment was
-    // named as the likely cause of an abort the caller raised itself. Unlike a
-    // timeout, cancellation has no floor, so an abort that arrives with the
-    // request reaches this every time.
     const ws = workspace();
     const script = ws.write("slow.mjs", "await new Promise((r) => setTimeout(r, 5000));");
     const controller = new AbortController();

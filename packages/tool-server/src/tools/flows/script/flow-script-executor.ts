@@ -201,7 +201,6 @@ const ALLOWED_ENV_NAMES: readonly string[] = [
   "CI",
 ];
 
-/** Config key holding a project's own additions to the allowlist above. */
 const SCRIPT_ENV_ALLOW_KEY = "scripts.env.allow";
 
 /**
@@ -225,13 +224,6 @@ export function createScriptLogBudget(): FlowScriptLogBudget {
   return { remainingBytes: SCRIPT_RUN_LOG_LIMIT_BYTES };
 }
 
-/**
- * Notes an earlier step of the SAME run already carried.
- *
- * A note about the host's configuration is true of every step in the run, so a
- * flow with twenty script steps would otherwise repeat the same words twenty
- * times. Run-scoped: a later run, or another project, says it again.
- */
 export type FlowScriptRunNotes = Set<string>;
 
 export function createScriptRunNotes(): FlowScriptRunNotes {
@@ -248,7 +240,6 @@ export interface FlowScriptRequest {
   flowDir?: string;
   secrets?: readonly FlowScriptSecret[];
   logBudget?: FlowScriptLogBudget;
-  /** Notes this run has already reported — see {@link FlowScriptRunNotes}. */
   runNotes?: FlowScriptRunNotes;
   signal?: AbortSignal;
   runnerDir?: string;
@@ -530,9 +521,6 @@ export class FlowScriptExecutor {
       cwd = resolveWorkingDirectory(request, notes);
       env = buildChildEnv(
         request.env,
-        // The same anchor `scripts.bash` reads under: a project-scoped key is
-        // resolved from the FLOW's project, never from the tool server's own
-        // working directory, which is whatever the editor that spawned it chose.
         configuredEnvAllowNames(request.projectRoot ?? request.flowDir, notes, request.runNotes)
       );
       runnerPath = resolveRunnerPath(request.runnerDir);
@@ -572,18 +560,6 @@ export class FlowScriptExecutor {
         );
       }
       if (!("path" in found)) {
-        // The one refusal that is not about bash at all. The probe SPAWNS each
-        // candidate, so an environment past this operating system's limit is
-        // refused there first — before the fork a `.mjs` step reaches — and
-        // every candidate then fails for that reason. The message returned
-        // condemned the host's bash installation and pointed the author at
-        // `scripts.bash`: a different subsystem, and one that is working.
-        //
-        // `env` is the channel this branch adds, so it is also the first thing
-        // that can make an environment big enough to hit this.
-        //
-        // Redacted either way: a refusal quotes what the candidate wrote to
-        // stderr, and the candidate ran under this step's resolved `env`.
         return emptyResult(
           {
             kind: "spawn",
@@ -697,10 +673,6 @@ export class FlowScriptExecutor {
       };
       child = fork(run.interpreter === "bash" ? run.runnerPath : scriptPath, [], forkOptions);
     } catch (err) {
-      // Scrubbed the way every other verdict is: a refusal the operating system
-      // raises about the environment quotes it, and this environment now
-      // carries resolved `{{secret:}}` values. This was the one outcome path
-      // that skipped it.
       return emptyResult(
         {
           kind: "spawn",
@@ -942,24 +914,6 @@ export class FlowScriptExecutor {
       request.secrets ?? []
     );
 
-    // The band the E2BIG refusal does not cover. Past `ARG_MAX` the operating
-    // system refuses the fork outright and `spawnFailureMessage` names the
-    // environment; just BELOW it the fork succeeds and Node dies inside its own
-    // startup, which arrives here as a runner that exited before it started the
-    // script — a verdict that names an exit code and nothing else. A flow could
-    // not set `env` at all before this branch, so this is the one shape of that
-    // failure an author can now cause, and the size is the lead they need.
-    //
-    // A note rather than the verdict: this is a possible cause, not a diagnosis.
-    // An ordinary environment is a few kilobytes, so the floor is well clear of
-    // one and this stays silent for every other way the runner can die early.
-    //
-    // `interrupted` is that sentence made true. A step cancelled or timed out
-    // inside the first few tens of milliseconds has not seen `started` either —
-    // the runner sends it from its preload, which is fast but not instant — and
-    // the classifier answers `cancelled` or `timeout` there, a verdict this note
-    // does not explain. Cancellation has no floor the way `timeoutMs` does, so
-    // an abort that arrives with the request reaches it every time.
     if (!startedSeen && !interrupted && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
       notes.push(
         `The environment this step would carry is ${environmentBytes(env)} bytes. An ` +
@@ -1144,22 +1098,6 @@ function withStderrLine(
   };
 }
 
-/**
- * The scrub, then the ceiling AGAIN.
- *
- * A replacement is not a shortening: every occurrence of a value becomes a
- * `{{secret:NAME}}` marker, so a value shorter than its own placeholder GROWS
- * the text. The child applies the ceiling, because it is the only side that can
- * bound what crosses the channel, and it has no secret list — so the scrub runs
- * after the bound and can carry the result far past it. A one-character PIN in
- * a message clamped to 8 KB came back as a 114 KB step reason, which is what
- * the JSON report holds and what an agent reads.
- *
- * Re-applying the ceiling can only cut text that has already been scrubbed, so
- * nothing a cut leaves behind is a secret; a marker cut in half is a
- * placeholder, not a value. The count the second marker carries is of the
- * scrubbed text, which is the text this report is a report of.
- */
 function redactBounded(text: string, secrets: readonly FlowScriptSecret[], max: number): string {
   return clampText(redactTruncated(text, secrets), max);
 }
@@ -1345,17 +1283,6 @@ function memberPath(key: string): string {
   return IDENTIFIER_RE.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
 }
 
-/**
- * Each resolved value, and each form of it `@zapier/secret-scrubber` looks
- * for, under the value's own name: the value as written, at any length, and
- * for a value of six characters or more its `encodeURIComponent` form, that
- * form with a space as `+`, its JSON-escaped body and its base64.
- *
- * Only the list comes from the scrubber. {@link scrubSecretValues} and
- * {@link scrubSecretChunk} replace every form in one pass, longest first
- * across every secret, so a value that holds another one is taken whole in
- * each of its forms - its encoding carries the other value's raw text.
- */
 function secretForms(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
   const forms = [...secrets];
   for (const { name, value } of secrets) {
@@ -1366,15 +1293,6 @@ function secretForms(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
   return forms;
 }
 
-/**
- * One text of a failed script step with every form of each resolved value
- * replaced by its `{{secret:NAME}}` placeholder.
- *
- * Exported for the one caller that DECODES after the scrub has run:
- * `scriptFrames` reads the already-scrubbed stack and turns each `file://…`
- * frame back into a path. Whatever decodes has to scrub again, and this is
- * that scrub.
- */
 export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
   if (secrets.length === 0) return text;
   return scrubSecretValues(text, secretForms(secrets));
@@ -1584,7 +1502,6 @@ async function removeExchange(
   try {
     await removeTree(exchange.dir);
   } catch (err) {
-    // The error names the entry that refused, and the script chose that name.
     notes.push(
       `The script's private directory ${exchange.dir} could not be removed ` +
         `(${scrubScriptText(errorMessage(err), secrets)}); it still holds the document the script wrote. A later bash ` +
@@ -1874,16 +1791,6 @@ export function buildChildEnv(
   return env;
 }
 
-/**
- * Why the process would not start, with the one refusal that names nothing on
- * its own spelled out.
- *
- * The operating system caps the block of arguments and environment a new
- * process is handed (`ARG_MAX`), and Node reports the refusal as a bare
- * `spawn E2BIG`. Every other environment failure in this file is diagnosed by
- * name; this one would point the author nowhere, and an `env` map is the one
- * part of that block a flow controls.
- */
 function spawnFailureMessage(err: unknown, env: NodeJS.ProcessEnv): string {
   const message = errorMessage(err);
   if (!/\bE2BIG\b/.test(message)) return `Could not start the script process: ${message}`;
@@ -1894,18 +1801,8 @@ function spawnFailureMessage(err: unknown, env: NodeJS.ProcessEnv): string {
   );
 }
 
-/**
- * When an environment is big enough to be worth naming as a possible cause of a
- * runner that died before it started the script.
- *
- * Well clear of an ordinary one — the host allowlist and a handful of flow
- * values come to a few kilobytes — so the note stays off every other way that
- * failure arrives. The smallest `ARG_MAX` argent runs on is an order of
- * magnitude above this, which is the point: the note is a lead, not a bound.
- */
 const LARGE_ENVIRONMENT_BYTES = 128 * 1024;
 
-/** What the environment costs against that limit: `NAME=value`, NUL-terminated. */
 function environmentBytes(env: NodeJS.ProcessEnv): number {
   let total = 0;
   for (const [name, value] of Object.entries(env)) {
@@ -1918,18 +1815,6 @@ function describeEnvNameProblem(name: string): string | null {
   if (name === "") return "is empty";
   if (name.includes("=")) return 'contains "=", which is what separates a name from its value';
   if (name.includes("\0")) return "contains a NUL character";
-  // The one name the operating system WOULD carry that this function still
-  // refuses: the copy above writes each entry onto a plain object, where
-  // `__proto__` is an accessor rather than an entry, so the value would vanish
-  // between here and the child with the step passing anyway.
-  //
-  // Nothing reaches it today. `describeScriptEnvProblem` refuses the name on
-  // both YAML channels — a flow file's own `env:` and a `script` step's — and
-  // `scriptEnvParameter` refuses it on the two tool channels, `flow-execute`'s
-  // `env` and `flow-add-script`'s, where it has to be caught before `z.record`
-  // rebuilds the map without it. Four call sites, not two, and the tool
-  // channels refuse rather than drop. It is the last line, not the live one,
-  // and it is kept because the hazard belongs to THIS function's own copy.
   if (name === PROTO_ENV_NAME) {
     return (
       "names an accessor on a plain object rather than an entry, so the value would be dropped " +
@@ -1984,52 +1869,17 @@ function configuredNumber(key: string): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
 }
 
-/**
- * A configuration value read against the FLOW's project, not against the tool
- * server's own working directory — which is whatever the editor that spawned it
- * chose, so the bare {@link configuredNumber} call above would read another
- * project's `.argent/config.json`, or none. `getConfigValue` resolves the
- * project scope from `options.cwd`.
- *
- * Only a key the project scope READS needs this. The script bounds do not:
- * `readScopeValue` gates a read on the key's own `scopes`, so a global-only key
- * ignores a project file whatever anchor it is given.
- */
 function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined): T | undefined {
   const def = getConfigDefinition(key) as ConfigDefinition<T> | undefined;
   if (!def) return undefined;
   return getConfigValue(def, anchor ? { cwd: anchor } : {});
 }
 
-/**
- * The names a project added to the allowlist through `scripts.env.allow`.
- *
- * The built-in list will never be complete — a project's own toolchain names
- * one the next project has never heard of — so it is extensible by
- * configuration. The extension is read from the project scope as well as the
- * global one, unlike the time and heap bounds, because it decides what a script
- * may READ rather than how much of the machine it may occupy.
- *
- * Anchored at the run's project root, not at the tool server's working
- * directory: that is a snapshot from whatever spawned the server, so the
- * default would read another project's configuration, or none at all.
- *
- * A name that would put argent's own credentials back is dropped and reported
- * in the run's notes rather than silently honoured. Without that rule a
- * checked-in `.argent/config.json` — a file an agent writes — could hand the
- * bearer token to every script in the repository.
- */
 function configuredEnvAllowNames(
   projectRoot: string | undefined,
   notes: string[],
   alreadySaid: FlowScriptRunNotes | undefined
 ): string[] {
-  // The configuration is the same for every step of a run, so each note is said
-  // once and not on each of them. `alreadySaid` is the RUN's set, and a caller
-  // that runs one script has no run — `flow-add-script` passes none — so the
-  // fallback is a set of this call's own. Without it a host where the project
-  // root IS the home directory resolves both scopes to one file and said every
-  // note about that file twice, in one `reason`.
   const said = alreadySaid ?? new Set<string>();
   const say = (note: string): void => {
     if (said.has(note)) return;
@@ -2037,22 +1887,9 @@ function configuredEnvAllowNames(
     said.add(note);
   };
   const options = projectRoot ? { cwd: projectRoot } : {};
-  // Which file each name came from, for the notes below. The key is read
-  // per-scope here and merged as a union afterwards, so this loop is the last
-  // point that still knows: by the time a name is judged, the two lists are one.
   const listedIn = new Map<string, string[]>();
-  // A value the key's own parser cannot read comes back as `undefined`, which
-  // is what an UNSET key comes back as — so `scripts.env.allow: "DATABASE_URL"`,
-  // the string spelling of a one-name list, went unread and every script ran
-  // without the name, with nothing said. The raw document is the only place
-  // that still says which of the two this was.
   for (const scope of ["project", "global"] as const) {
     const file = configFilePath(scope, options);
-    // Read here rather than through `readConfigObject`, which answers `{}` for
-    // a document it could not parse AND for one that is absent — the same
-    // silence this note exists to end. A file that does not open is absent and
-    // says nothing; one that opens and does not parse loses EVERY key it holds,
-    // this one included, and that is worth a sentence.
     let text: string;
     try {
       text = fs.readFileSync(file, "utf8");
@@ -2075,15 +1912,7 @@ function configuredEnvAllowNames(
         ? getAtPath(document as Record<string, unknown>, SCRIPT_ENV_ALLOW_KEY)
         : undefined;
     if (Array.isArray(raw)) {
-      // An entry that is not a string, or a blank one, is gone by the time the
-      // four notes below run: the key's own parser drops it. So the raw array
-      // in hand here is the last place that can name it, and without a note the
-      // drop was the same silence the notes around it exist to end — a nested
-      // list, the natural mis-grouping for a pair of names, took both of them
-      // out of every script's reach and the run said nothing.
       const unreadable: string[] = [];
-      // Trimmed, because `asStringArray` trims before the names are judged, so
-      // an untrimmed key would never be found again.
       for (const entry of raw) {
         if (typeof entry !== "string" || entry.trim() === "") {
           unreadable.push(JSON.stringify(entry) ?? String(entry));
@@ -2112,52 +1941,20 @@ function configuredEnvAllowNames(
         `e.g. ["DATABASE_URL"].`
     );
   }
-  /**
-   * Where the names a note drops are listed, as a closing sentence.
-   *
-   * The "is not a list" note beside these already names its file; these four
-   * named none, so with a project list AND a global one configured the reader
-   * was told a name was dropped and left to guess which of the two files holds
-   * it. Once per note rather than once per name: every name in one note usually
-   * comes from one file, and repeating a path after each of three names buries
-   * the sentence that says what was wrong.
-   *
-   * Silent when only one file is configured — there is nothing to disambiguate
-   * — and when the union merged the two lists into names this loop never saw.
-   */
   const configuredFiles = new Set([...listedIn.values()].flat());
   const listedInClause = (names: readonly string[]): string => {
     if (configuredFiles.size < 2) return "";
     const files = [...new Set(names.flatMap((name) => listedIn.get(name) ?? []))];
     return files.length === 0 ? "" : ` Listed in ${files.join(" and ")}.`;
   };
-  // Anchored on the flow's project: this is the one script key the project
-  // scope is read for, and the tool server's own working directory is another
-  // project's, or none.
   const configured = projectAnchoredConfigValue<string[]>(SCRIPT_ENV_ALLOW_KEY, projectRoot);
   if (!Array.isArray(configured) || configured.length === 0) return [];
   const kept: string[] = [];
-  // Two buckets, because the two answers differ. An `ARGENT_*` name is one
-  // argent keeps out of the copy it takes from its OWN environment, and the
-  // value the script wanted can be passed under a name of the project's own. A
-  // reserved name steers the RUNNER — `NODE_OPTIONS`, `npm_config_userconfig` —
-  // so it never reaches the script whatever it is called, and there is no name
-  // of your own to pass it under. Said as one sentence, each was told the
-  // other's story.
   const owned: string[] = [];
   const reserved: string[] = [];
   const malformed: string[] = [];
-  // Its own bucket. It satisfies the name rule to the letter — starts with `_`,
-  // continues with letters and `_` — so the malformed note would state a rule
-  // the name plainly meets, while the YAML channel explains the same name
-  // correctly. Two contradictory answers to one question.
   const unusable: string[] = [];
   for (const name of configured) {
-    // The name PATTERN is asked LAST, because one reserved name does not match
-    // it — `npm_config_node-options`, npm's own spelling and the one every
-    // other refusal here advertises. Asked first, it dropped that entry into
-    // the malformed bucket, which states a rule the reference table's own
-    // spelling of the name breaks.
     if (name === PROTO_ENV_NAME) unusable.push(name);
     else if (argentOwnedEnvName(name)) owned.push(name);
     else if (reservedScriptEnvName(name)) reserved.push(name);
@@ -2173,12 +1970,6 @@ function configuredEnvAllowNames(
     );
   }
   if (reserved.length > 0) {
-    // One clause for the whole list, and it is the one
-    // {@link reservedScriptEnvReason} gives each of these names: the bash
-    // output file is the only reserved name with a different reason, and its
-    // name starts with `ARGENT_`, so it was taken by the bucket above.
-    // A reserved name added later WITHOUT that prefix and with a reason of its
-    // own belongs there too, or this sentence will speak for it wrongly.
     say(
       `${SCRIPT_ENV_ALLOW_KEY} names ${reserved.join(", ")}, which ` +
         `${reserved.length > 1 ? "steer" : "steers"} the runner's own process rather than ` +
@@ -2209,25 +2000,10 @@ function configuredEnvAllowNames(
   return kept;
 }
 
-/**
- * A name argent's own process uses. The allowlist keeps these out by
- * construction; the configured extension must not be a way back in.
- *
- * The whole prefix, not a list of the names known today: the set this must keep
- * out — the bearer token, the port, every `ARGENT_SECRET_*` value, the telemetry
- * ingest token a release build exports — is exactly the set that grows without
- * this file being touched, which is the argument the built-in allowlist is
- * built on. A script that needs one of these values is asking for argent's own
- * configuration; pass what it needs under a name of the project's own.
- */
 function argentOwnedEnvName(name: string): boolean {
   return name.toUpperCase().startsWith(ARGENT_ENV_PREFIX);
 }
 
-/**
- * Prefix of every environment name argent gives its own process — the bearer
- * token, the server's address, and every `ARGENT_SECRET_` value.
- */
 const ARGENT_ENV_PREFIX = "ARGENT_";
 
 /**
@@ -2397,7 +2173,6 @@ class ScriptLogCapture {
     return this.stderrLastLine;
   }
 
-  /** Whether nothing more may reach the log: it was cut, or its budget is spent. */
   private closed(): boolean {
     if (this.cut) return true;
     const runRemaining = this.runBudget ? this.runBudget.remainingBytes : Number.POSITIVE_INFINITY;
@@ -2443,8 +2218,6 @@ class ScriptLogCapture {
     if (!text && !final) return;
     if (state.watchForHeapFatal) this.watchForHeapFatal(text);
     state.lastLine?.write(text);
-    // Past the cut nothing more reaches the log, so there is nothing left to
-    // scrub, and a flood past the limit costs no scrub at all.
     if (this.closed()) {
       if (text || state.holdback) this.truncatedFlag = true;
       state.holdback = "";
@@ -2558,11 +2331,6 @@ class LastLineTracker {
     return this.length > this.head.length ? this.cut() : this.head.trim();
   }
 
-  /**
-   * The line where it stands while the stream is still open. A line still being
-   * written is cut there by Argent, so the front of a value it ends on is
-   * dropped and counted, as `redactTruncated` does at the head's cut.
-   */
   snapshot(secrets: readonly FlowScriptSecret[]): string {
     if (this.blank || this.length > this.head.length) return this.peek();
     const line = this.head.trim();

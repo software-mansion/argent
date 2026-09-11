@@ -64,31 +64,12 @@ export function asPositiveInteger(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
 }
 
-/**
- * What the operating system will carry as an environment NAME, and the one rule
- * every channel that supplies one is held to: a flow file's own `env:`, a
- * `script` step's, a `flow-execute` argument, a `flow-add-script` one,
- * `argent flow run --env`, and a `scripts.env.allow` entry.
- *
- * Here rather than in the tool server because the CLI is one of those channels
- * and cannot import from it — the same reason the script bounds below live
- * here. A name outside this rule can never match one the tool server carries,
- * so honouring it silently is honouring nothing.
- */
 export const SCRIPT_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/**
- * The one name {@link SCRIPT_ENV_NAME_PATTERN} accepts that no channel can
- * carry: the operating system takes it, but every merge on the way to the child
- * copies the map through a plain object, where it is an accessor rather than an
- * entry — so the value is dropped and the script runs without it, silently.
- */
 export const PROTO_ENV_NAME = "__proto__";
 
-/** The flag the runner preload reads to know which process it should take over. */
 export const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
 
-/** Where a `.sh` step's output document travels in and out. */
 export const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
 
 export const NPM_CONFIG_ENV_PREFIX = "npm_config_";
@@ -141,21 +122,9 @@ export const RESERVED_SCRIPT_ENV_NAMES: readonly string[] = [
   "NODE_OPTIONS",
   "ELECTRON_RUN_AS_NODE",
   RUNNER_ACTIVATION_ENV,
-  // The bash exchange: `$ARGENT_OUTPUT` is where the document travels in and
-  // out, so a caller setting it would steer the runner's own protocol.
-  // Reserved whichever language the step runs — a flow-level map applies to
-  // every step — and set for bash only, since a `.mjs` has `output`.
   BASH_OUTPUT_ENV,
 ];
 
-/**
- * One npm config has many environment spellings: npm matches the prefix without
- * regard to case, lowercases the rest, and reads `_` and `-` as the same
- * character everywhere but the key's first — so `npm_config_node_options`,
- * `npm_config_node-options` and `NPM_CONFIG_NODE_OPTIONS` are one name to it.
- * Refusing only the one written out would leave the others open on every
- * platform, which is why this does not go through the exact list above.
- */
 function reservedNpmConfigName(name: string): string | undefined {
   const lower = name.toLowerCase();
   if (!lower.startsWith(NPM_CONFIG_ENV_PREFIX)) return undefined;
@@ -163,15 +132,6 @@ function reservedNpmConfigName(name: string): string | undefined {
   return RESERVED_NPM_CONFIG_KEYS.includes(key) ? `${NPM_CONFIG_ENV_PREFIX}${key}` : undefined;
 }
 
-/**
- * The reserved name `name` spells, or undefined when it is free to set.
- *
- * Windows environment names are case-insensitive, so a host — and a flow file
- * authored on one — may surface any of these under non-canonical casing; POSIX
- * names are exact. The platform is read at CALL time, like the other copies of
- * that rule, so a test can fake it; the executor passes the answer it already
- * folded the child environment by.
- */
 export function reservedScriptEnvName(
   name: string,
   caseInsensitive: boolean = process.platform === "win32"
@@ -183,7 +143,6 @@ export function reservedScriptEnvName(
   );
 }
 
-/** One spelling of each reserved name, for the refusal to name them all. */
 export function reservedScriptEnvNamesForMessage(): string {
   return [
     ...RESERVED_SCRIPT_ENV_NAMES,
@@ -191,16 +150,6 @@ export function reservedScriptEnvNamesForMessage(): string {
   ].join(", ");
 }
 
-/**
- * Why a reserved name is reserved, as a clause reading after it — `holds
- * ARGENT_OUTPUT, which ${reason} and cannot be set for a script`.
- *
- * The answer rather than the table it is read off: the bash exchange name is a
- * FILE the runner reads and writes, not a control over its own process, and an
- * author cannot see the difference from the name. Deciding it beside the list
- * is what keeps the reason with it — a name added to
- * {@link RESERVED_SCRIPT_ENV_NAMES} is a name this function already answers for.
- */
 export function reservedScriptEnvReason(name: string): string {
   return name === BASH_OUTPUT_ENV
     ? "names the file a `.sh` step exchanges its output document through, so argent sets " +
@@ -312,8 +261,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "After you change a shell variable, restart the tool-server to use its new value.",
     scopes: ["project", "global"],
     parse: asStringArray,
-    // Additive: a project names what its own scripts read, on top of whatever
-    // the machine's global list already carries.
     merge: "union",
     example: '["DATABASE_URL", "AWS_PROFILE"]',
   },

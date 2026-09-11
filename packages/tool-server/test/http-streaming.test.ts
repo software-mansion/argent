@@ -170,12 +170,6 @@ describe("HTTP NDJSON streaming (Accept: application/x-ndjson)", () => {
   });
 
   it("unwraps a refusal about the call the same way both channels do", async () => {
-    // The buffered path answers 400 from `InvalidToolInputError`'s own message;
-    // the stream had no such rung and fell through to the formatter, keeping
-    // `ToolExecutionError`'s `[Tool:<id>]` prefix. So one command described one
-    // fault two ways — and the prefix named a tool for a fault in a
-    // command-line flag. `argent flow run` streams by default and passes
-    // `--json` to buffer, which is exactly the pair a user would compare.
     handle = createHttpApp(
       stubRegistry(async () => {
         throw new InvalidToolInputError(

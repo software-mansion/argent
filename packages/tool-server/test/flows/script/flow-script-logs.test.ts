@@ -122,8 +122,6 @@ describe("flow script executor — cutting the log", () => {
     expect(Buffer.byteLength(result.log, "utf8")).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
   }, 30_000);
 
-  // Filling the limit to the byte is not a cut: nothing the script wrote was
-  // refused.
   it("reports a log that fills the limit exactly and then ends as whole", async () => {
     const ws = workspace();
     const script = ws.write(

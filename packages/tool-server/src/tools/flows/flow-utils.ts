@@ -505,27 +505,10 @@ export type FlowStep =
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number; env?: ScriptEnv };
 
-/**
- * Environment values a `script` step's process reads from its environment —
- * `process.env` under Node, `$NAME` under bash, since the extension decides
- * which. Strings, matching what an environment can carry; a name matching
- * `[A-Za-z_][A-Za-z0-9_]*`. A value may hold `{{secret:NAME}}`, resolved on the
- * machine running the tool server just before the process starts.
- */
 export type ScriptEnv = Record<string, string>;
 
 export type FlowFile = {
   executionPrerequisite: string;
-  /**
-   * Flow-level environment DEFAULTS for every `script` step in this file, and
-   * in the fragments it composes with `run:`. A default at any depth, so a
-   * `flow-execute` run-time value overrides it; a step's own `env` is not a
-   * default and wins over both.
-   *
-   * Modelled here rather than read straight off the YAML because
-   * {@link serializeFlow} rebuilds the whole document from this type: a key
-   * missing from it would be deleted by the next recorded step.
-   */
   env?: ScriptEnv;
   steps: FlowStep[];
 };
@@ -1181,12 +1164,6 @@ function toYamlStep(step: FlowStep): YamlStep {
     case "script": {
       const body: { path: string; timeout?: number; env?: ScriptEnv } = { path: step.path };
       if (step.timeout !== undefined) body.timeout = step.timeout;
-      // Emitted whenever the step carries one, empty included — the rule
-      // `serializeFlow` states for the top-level map, and for its reason:
-      // `parseScriptStep` sets `env` from the KEY's presence, not from its
-      // size, so dropping an empty map makes parseFlow(serializeFlow(x))
-      // something other than the identity and deletes an `env: {}` the author
-      // wrote as soon as the next step is appended.
       if (step.env) body.env = { ...step.env };
       return { script: body };
     }
@@ -2171,11 +2148,6 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
   return step;
 }
 
-/**
- * A `script` step's own `env` map. Refused here — deviceless, naming the key —
- * rather than after the run has started, for the reason
- * {@link parseScriptTimeout} is.
- */
 export function parseScriptEnv(raw: unknown, value: unknown): ScriptEnv {
   const problem = describeScriptEnvProblem(value);
   if (problem) badEntry(raw, `script \`env\` ${problem}`);
@@ -2411,10 +2383,6 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
       return;
     case "script":
-      // An `env` value is where a `{{output:` reference will belong in a later
-      // release, so it is refused here for the reason every other field is: the
-      // spelling reaches the script as literal text today, and a flow written
-      // against that release must not pass quietly on this one.
       for (const [name, value] of Object.entries(step.env ?? {})) {
         yield { where: `script.env.${name}`, value };
       }
@@ -2439,15 +2407,6 @@ export function holdsOutputReference(step: FlowStep): boolean {
   return blockSteps(step)?.some(holdsOutputReference) ?? false;
 }
 
-/**
- * A refused value as its message quotes it, cut to the shared entry ceiling.
- *
- * Counted, the way {@link badEntry} counts its own cut. The refusals this
- * serves name a MARKER inside the value — `{{output:` — and a value long
- * enough to be cut is a value whose marker may be on the far side of the cut,
- * so a bare `…` left the author reading two hundred characters that do not
- * contain the thing the message is about, with nothing to say the rest exists.
- */
 export function renderedValue(value: string): string {
   if (value.length <= MAX_ENTRY_RENDER_CHARS) return value;
   const elided = value.length - MAX_ENTRY_RENDER_CHARS;
@@ -2797,11 +2756,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 }
 
 export function serializeFlow(flow: FlowFile): string {
-  // `env` first, because it is a header the whole file reads under. Emitted
-  // whenever the flow carries one, empty included: `parseFlow` sets `env` from
-  // the KEY's presence, not from its size, so dropping an empty map is what
-  // breaks parseFlow(serializeFlow(x)) — and deletes an `env: {}` an author
-  // wrote as soon as the next step is appended.
   const doc: YamlFlowFile = {
     ...(flow.env ? { env: { ...flow.env } } : {}),
     steps: flow.steps.map(toYamlStep),
@@ -2844,15 +2798,6 @@ export function serializeFlow(flow: FlowFile): string {
   });
 }
 
-/**
- * Refuse a `{{output:` reference in an `env` map, wherever the map came from.
- *
- * The spelling belongs to a later release, and every other field that will take
- * one is refused today for the same reason: left alone it reaches the script as
- * literal text and the step PASSES, so a flow written against that release would
- * change behaviour under it without a word. `whose` names the map — "The flow's",
- * "This run's" — so the author knows which one to edit.
- */
 export function assertNoEnvOutputReferences(env: ScriptEnv | undefined, whose: string): void {
   for (const [name, value] of Object.entries(env ?? {})) {
     if (!value.includes(OUTPUT_REFERENCE_MARKER)) continue;
@@ -2885,15 +2830,6 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-/**
- * A flow file's document and its top-level shape, with the steps untouched.
- *
- * The half of {@link parseFlow} that answers questions about the FILE rather
- * than about its steps: the trims, the YAML parse, the top-level key rule and
- * the `env` rule. `parseFlow` goes on to the steps from the same result, which
- * is what keeps one reading of a file's head. `undefined` for a file holding
- * nothing.
- */
 function readFlowHead(content: string): YamlFlowFile | undefined {
   // Trimmed at the START, and at the trailing edge only back to the last line
   // break. What is left of the trim is what nothing can be part of a value.
@@ -2988,8 +2924,6 @@ function readFlowHead(content: string): YamlFlowFile | undefined {
     );
   }
 
-  // Before the steps: a file whose `env` is malformed is malformed as a whole,
-  // and the author reads the first refusal, not the deepest one.
   if (parsed.env !== undefined) {
     const problem = describeScriptEnvProblem(parsed.env);
     if (problem) {
@@ -3276,15 +3210,6 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
   }
 }
 
-/**
- * The recording's flow-level `env` as the FILE spells it right now.
- *
- * The disk copy, not `session.flow`: that one is only as fresh as the last
- * append, so a top-level `env:` the agent hand-added before the first recorded
- * step is invisible to it — and `flow-add-script` has to run the script under
- * the same map the replay will take, or the recording proves nothing. Throws
- * what `parseFlow` throws; the caller words the refusal.
- */
 export async function flowEnvOnDisk(session: RecordingSession): Promise<ScriptEnv | undefined> {
   return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
 }
@@ -3468,9 +3393,6 @@ export async function appendStepToFlow(
       // reading `session.flow.steps.length` after this returns would be racing a
       // concurrent same-key append, which can reassign `session.flow` between
       // the release here and that read.
-      // Reported from inside the lock: a caller comparing it against what it
-      // read BEFORE a run that may have taken minutes would otherwise be racing
-      // a concurrent same-key append for `session.flow`.
       return {
         savedTo: session.filePath,
         stepCount: session.flow.steps.length,

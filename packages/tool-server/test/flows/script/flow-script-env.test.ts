@@ -14,22 +14,8 @@ import { parseFlow, serializeFlow } from "../../../src/tools/flows/flow-utils";
 import { resolveHostBash } from "../../helpers/host-bash";
 import { scopeTempHome } from "../../helpers/temp-home";
 
-/**
- * Environment values reaching a `script` step, through every channel that
- * supplies one: the flow file's own `env:`, a nested flow's, the `flow-execute`
- * run-time parameter, and the step's own map.
- *
- * Real child processes, hence the generous timeout. A script reports what it
- * read by writing a mark file — nothing a script prints is reported (PR 2.6)
- * and the output document is not threaded into a run until PR 4, so the
- * filesystem is the only channel a passing step has.
- */
-
 vi.setConfig({ testTimeout: 30_000 });
 
-// The secret chain and the project/global config scopes both resolve a home
-// directory. Pointing it at a fresh one keeps a developer's own
-// `~/.argent/secrets.env` and `~/.argent/config.json` out of these assertions.
 scopeTempHome("argent-flow-env-home-");
 
 let root: string;
@@ -90,7 +76,6 @@ function readMark(mark: string): string | undefined {
   }
 }
 
-/** A `.mjs` writing the named variables, as JSON, to `<mark>.mark`. */
 function reporter(mark: string, names: readonly string[]): string {
   return (
     `import fs from "node:fs";\n` +
@@ -134,9 +119,6 @@ function skipWithoutBash(ctx: { skip: (note?: string) => void }): void {
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-env-"));
-  // `findProjectRoot` walks up for `.argent`, `.git` or `package.json`; the
-  // flows directory establishes the first, so every project-scoped read in
-  // these tests anchors here rather than at the tool server's own cwd.
   await fs.mkdir(path.join(root, ".argent", "flows"), { recursive: true });
 });
 afterEach(async () => {
@@ -166,8 +148,6 @@ describe("environment precedence", () => {
         "      env: { FROM_STEP: from-step }\n"
     );
 
-    // A `run:` step resolves a device even when the only thing it composes is a
-    // script, so this run is given one.
     const { result } = await runFlow(
       "outer",
       { env: { OVERRIDDEN: "from-run" } },
@@ -175,8 +155,6 @@ describe("environment precedence", () => {
     );
 
     expect(result.ok).toBe(true);
-    // A flow-level map is a DEFAULT at any depth, so the run-time value beats
-    // even the innermost fragment's. A step map is not a default, so it wins.
     expect(seen("probe")).toEqual({
       ONLY_FLOW: "root-value",
       OVERRIDDEN: "from-run",
@@ -185,10 +163,6 @@ describe("environment precedence", () => {
   });
 
   it("layers three nesting levels and restores each parent on the way out", async () => {
-    // Depth 1 is the only nesting any case reached, and one level cannot tell
-    // "the parent's map is restored" apart from "the child never had one of its
-    // own". Each level here overrides the SAME name and probes it again after
-    // the return, so a scope that leaked would be read.
     for (const mark of ["d0-before", "d1-before", "d2", "d1-after", "d0-after"]) {
       await write(`scripts/${mark}.mjs`, reporter(mark, ["LEVEL"]));
     }
@@ -221,9 +195,6 @@ describe("environment precedence", () => {
   });
 
   it("gives a script inside a when: block the environment in force", async () => {
-    // `execSteps` runs a guarded block's children under `childScope`, and the
-    // environment survives that hop only by the spread inside it. No case put a
-    // script in a `when:` block, so nothing read what the block's children get.
     await write("scripts/guarded.mjs", reporter("guarded", ["FROM_FLOW", "FROM_STEP"]));
     await flow(
       "guarded",
@@ -244,9 +215,6 @@ describe("environment precedence", () => {
   });
 
   it("lets a fragment's own env beat the parent's default for a recorded step", async () => {
-    // The half of `flow-add-script`'s description that says a parent flow's
-    // `env:` is another DEFAULT: a fragment composed by a parent overrides it
-    // inside itself, so the recorded step runs under the fragment's value.
     await write("scripts/frag.mjs", reporter("fragment", ["SHARED", "ONLY_PARENT"]));
     await flow(
       "parent",
@@ -296,9 +264,6 @@ describe("environment precedence", () => {
   });
 
   it("gives a nested `tool: flow-execute` only its own args.env", async () => {
-    // That step starts a separate root run with its own environment. Passing
-    // the parent's invisibly would make a fragment's behaviour depend on which
-    // of the two composition spellings reached it.
     await flow(
       "outer",
       "env: { PROBE: parent }\n" +
@@ -327,11 +292,6 @@ describe("environment shape rules", () => {
   });
 
   it("refuses a YAML tag that builds something the entry walk cannot read", async () => {
-    // `!!omap`, `!!set` and `!!timestamp` resolve to a Map, a Set and a Date:
-    // an object, not an array, and holding no entries `Object.entries` can see.
-    // Left to the walk each reports zero problems, the script runs with none of
-    // the author's values, and the next recorded step serializes it back as
-    // `env: {}` — deleting them from the file. None of the three had a case.
     await flow("omap", "env: !!omap\n  - A: one\nsteps:\n  - echo: hi\n");
     await expect(runFlow("omap")).rejects.toThrow(/a Map \(`!!omap`\).*plain map/s);
 
@@ -343,9 +303,6 @@ describe("environment shape rules", () => {
   });
 
   it("refuses a NUL character in an authored value, naming the key", async () => {
-    // The operating system carries an environment as NUL-terminated strings, so
-    // Node refuses the whole fork over one and the step would then error on a
-    // message about the spawn rather than about the map that caused it.
     await write("scripts/probe.mjs", "");
     await flow(
       "nul",
@@ -375,8 +332,6 @@ describe("environment shape rules", () => {
   });
 
   it("refuses ARGENT_OUTPUT in every env channel", async () => {
-    // Reserved whichever language the step runs: a flow-level map applies to
-    // every step, and it names the file a `.sh` exchanges its document through.
     await flow("file-env", "env: { ARGENT_OUTPUT: /tmp/x }\nsteps:\n  - echo: hi\n");
     await expect(runFlow("file-env")).rejects.toThrow(/ARGENT_OUTPUT/);
 
@@ -414,8 +369,6 @@ describe("environment shape rules", () => {
   });
 
   it("passes ARGENT_REASON to the script like any other name, in every env channel", async () => {
-    // Nothing sets it for any step - a `.sh` step's reason comes from its stderr
-    // - so reserving it would refuse an author's own name for no file at all.
     await write("scripts/reason.mjs", reporter("reason", ["ARGENT_REASON"]));
 
     await flow(
@@ -452,11 +405,6 @@ describe("environment shape rules", () => {
   });
 
   it("refuses a reserved name in a nested fragment's own env, mid-run", async () => {
-    // Every refusal above is decided BEFORE the run starts, off the file the
-    // caller named. A fragment is parsed when the `run:` step reaches it, with
-    // steps already executed behind it — a different path, and the one an
-    // author meets when the reserved name is in a shared fragment rather than
-    // in the flow they invoked.
     await write("scripts/probe.mjs", "");
     await flow("outer-reserved", "steps:\n  - echo: before\n  - run: inner-reserved.yaml\n");
     await flow(
@@ -468,14 +416,10 @@ describe("environment shape rules", () => {
 
     const { result } = await runFlow("outer-reserved", {}, { booted: true });
 
-    // The run does not throw: it fails the step that composed the fragment, so
-    // the steps in front of it keep their verdicts.
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("pass");
     expect(JSON.stringify(result.steps)).toContain("ARGENT_OUTPUT");
 
-    // `ARGENT_REASON` on the same path is an ordinary name, and reaches the
-    // fragment's script.
     await write("scripts/reason.mjs", reporter("fragment-reason", ["ARGENT_REASON"]));
     await flow("outer-reason", "steps:\n  - echo: before\n  - run: inner-reason.yaml\n");
     await flow(
@@ -500,12 +444,6 @@ describe("environment shape rules", () => {
   });
 
   it("calls a reserved name reserved, in every spelling npm gives it", async () => {
-    // `npm_config_node-options` does not match the name pattern, and the
-    // pattern used to be asked first — so the author who writes the spelling
-    // npm documents, and that this module advertises in its own reserved list,
-    // was told the name is not a name at all, while the underscore spelling
-    // beside it was refused by a message naming the hyphenated one. Two
-    // contradictory answers about one name.
     const spellings = [
       "npm_config_node-options",
       "npm_config_node_options",
@@ -519,15 +457,11 @@ describe("environment shape rules", () => {
       await expect(refused, name).rejects.toThrow(/steers the runner's own process/);
       await expect(refused, name).rejects.not.toThrow(/not an environment variable name/);
     }
-    // The name rule still answers a name no reserved entry claims.
     await flow("stillmalformed", 'env: { "2FA": x }\nsteps:\n  - echo: hi\n');
     await expect(runFlow("stillmalformed")).rejects.toThrow(/not an environment variable name/);
   });
 
   it("refuses a {{output:...}} reference in every env channel", async () => {
-    // The spelling belongs to a later release. Left alone it reaches the script
-    // as literal text and the step PASSES, so a flow written against that
-    // release would change behaviour under this one without a word.
     await write("scripts/probe.mjs", "");
     await flow("out-file", 'env: { X: "{{output:user.id}}" }\nsteps:\n  - echo: hi\n');
     await expect(runFlow("out-file")).rejects.toThrow(/env.X` uses unsupported template syntax/);
@@ -581,12 +515,6 @@ describe("serialization", () => {
   });
 
   it("keeps a top-level `env: {}` through the round trip", () => {
-    // The case above holds an empty map on the STEP; the FILE's own `env` there
-    // is non-empty, so the file-level spread had no case of its own and the two
-    // halves of one round-trip rule were covered asymmetrically. `parseFlow`
-    // sets `env` from the KEY's presence, not from its size — so a serializer
-    // that emitted the header only for a non-empty map would delete an
-    // `env: {}` an author wrote, on the next recorder append, with nothing said.
     const parsed = parseFlow("env: {}\nsteps:\n  - echo: hi\n");
     expect(parsed.env).toEqual({});
 
@@ -594,8 +522,6 @@ describe("serialization", () => {
     expect(text).toContain("env: {}");
     expect(parseFlow(text)).toEqual(parsed);
 
-    // The same header written the other way — a bare `env:` — lands on the same
-    // map and the same serialized form.
     expect(serializeFlow(parseFlow("env:\nsteps:\n  - echo: hi\n"))).toBe(text);
   });
 
@@ -626,10 +552,6 @@ describe("serialization", () => {
   });
 
   it("keeps `env` through a real recorder append", async () => {
-    // `appendStep` reads the file, parses it, pushes the step and writes the
-    // whole document back through `serializeFlow` — so a key missing from
-    // `FlowFile` is deleted by the next recorded step, whatever the parser
-    // accepted.
     await flowStartRecordingTool.execute({}, { name: "append", project_root: root });
     const filePath = path.join(root, ".argent/flows/append.yaml");
     await fs.writeFile(
@@ -656,11 +578,6 @@ describe("serialization", () => {
   });
 
   it("says an echo went unrecorded when the FILE's env is what refused it", async () => {
-    // The append re-validates the whole file, so a flow-level `env:` holding a
-    // template refuses this call. `flow-add-script` and `flow-add-step` were
-    // both given "it is already in the file, not in this call" wording when
-    // that refusal was added; this recorder returned the bare validator
-    // sentence, which names the value and never says the echo was not recorded.
     await flowStartRecordingTool.execute({}, { name: "echorefuse", project_root: root });
     await fs.writeFile(
       path.join(root, ".argent/flows/echorefuse.yaml"),
@@ -675,18 +592,10 @@ describe("serialization", () => {
 
     await expect(rejection).rejects.toThrow(/The echo was not recorded/);
     await expect(rejection).rejects.toThrow(/already in the file, not in this call/);
-    // The validator's own sentence is still carried, so the offending value is
-    // still named.
     await expect(rejection).rejects.toThrow(/unsupported template syntax/);
   });
 
   it("says the call already ran when a PARSE-stage env fault refuses the append", async () => {
-    // The case above is the ONE stage the two recorders re-worded. Every other
-    // `env:` fault the same feature introduces — a reserved name, a non-string
-    // value — arrives from the header read as `flow_file_parse` and was
-    // rethrown as a bare "Invalid flow file", AFTER the device action had
-    // already run. An agent reading that has no reason not to retry, and runs
-    // the action a second time.
     for (const [name, header] of [
       ["parse-reserved", 'env:\n  NODE_OPTIONS: "--inspect"\nsteps: []\n'],
       ["parse-number", "env:\n  RETRIES: 5\nsteps: []\n"],
@@ -711,14 +620,6 @@ describe("serialization", () => {
   });
 
   it("opens every env refusal with the two words the decision rule reads", async () => {
-    // `live-authoring.md` tells an agent that a message opening `This call's`
-    // means nothing started. Every refusal of the `env` ARGUMENT has to keep
-    // that opening, because the rule's other branch sends the agent looking for
-    // device or database changes a call that never spawned a process cannot
-    // have made — and then lets it retry a side-effecting script.
-    //
-    // The output-reference one names `env.NAME` rather than `env`, which is why
-    // the marker is the two words in front of the parameter.
     await write("scripts/noop.mjs", "output.ok = true;");
     await flowStartRecordingTool.execute({}, { name: "wording", project_root: root });
     for (const env of [
@@ -744,16 +645,6 @@ describe("serialization", () => {
   }, 30_000);
 
   it("says the script already ran when a PARSE-stage env fault refuses its append", async () => {
-    // The third recorder, and the one where the wording costs most: the script
-    // has run and nothing it did is rolled back, so "check the script's changes
-    // before you retry" sends the author over a script that did exactly what it
-    // was asked. Its append tested only the output-reference stage, while both
-    // siblings answer the two parse stages as well.
-    //
-    // The window is real and this file already accounts for it: the pre-run
-    // read catches a header that is on disk BEFORE the call, so only an edit
-    // landing WHILE the script runs reaches the append — which is the same
-    // window the `envDrifted` check below the append exists for.
     await write(
       "scripts/slow.mjs",
       "await new Promise((r) => setTimeout(r, 1200));\noutput.ok = true;"
@@ -770,7 +661,6 @@ describe("serialization", () => {
         project_root: root,
         path: "../../scripts/slow.mjs",
       } as never);
-      // The hand edit, landing while the script is still running.
       await new Promise((resolve) => setTimeout(resolve, 400));
       await write(`.argent/flows/${name}.yaml`, header);
 
@@ -781,10 +671,6 @@ describe("serialization", () => {
   }, 30_000);
 
   it("truncates a checked-in `env:` with the rest of the file", async () => {
-    // The reset replaces the file, and the header is part of the file: no
-    // recording tool writes an `env:`, so nothing here can put one back. An
-    // author who re-records a flow that declares one writes it again by hand,
-    // which is the same edit that put it there.
     await write(
       ".argent/flows/header.yaml",
       'env:\n  API_URL: https://example.com\n  BUILD: "42"\n' + "steps:\n  - echo: hello\n"
@@ -800,11 +686,6 @@ describe("serialization", () => {
   });
 
   it("keeps `env` through a flow-add-step append", async () => {
-    // §6 names THIS tool, and the case above appends with `flow-insert-echo`
-    // instead — so the one recorder with a pre-append re-parse wrapper around
-    // `appendStep` was the one never asserted to preserve `env`. Both maps are
-    // checked: the file's own and the script step's, since they are separate
-    // keys and a rebuild can lose either.
     await flowStartRecordingTool.execute({}, { name: "addstep", project_root: root });
     const filePath = path.join(root, ".argent/flows/addstep.yaml");
     await fs.writeFile(
@@ -834,8 +715,6 @@ describe("serialization", () => {
   });
 
   it("keeps `env` through a serialize round trip", async () => {
-    // `appendStep` rebuilds the whole document from `FlowFile`, so a key
-    // missing from that type is deleted by the next recorded step.
     await flow(
       "kept",
       "env: { API_URL: https://example.com }\n" +
@@ -857,11 +736,6 @@ describe("serialization", () => {
 });
 
 describe("a tool env parameter that carries __proto__", () => {
-  // `JSON.parse` puts `__proto__` on the object as an OWN property without
-  // invoking the accessor, and `z.record` then rebuilds the map without it —
-  // so the call passed with the entry silently gone, while
-  // `argent flow run --env __proto__=v` refused the same name with a
-  // paragraph. One CLI disagreeing with itself about one name.
   const withProto = (): Record<string, string> =>
     JSON.parse('{"__proto__":"x","A":"y"}') as Record<string, string>;
 
@@ -921,13 +795,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("drops an ARGENT_ name written in another case, and says so", async () => {
-    // Windows environment names are case-insensitive, so `Argent_Auth_Token` in
-    // the list IS the host's own `ARGENT_AUTH_TOKEN` — `buildChildEnv` folds
-    // both sides there for exactly that reason. The bucket that judges a
-    // configured name has to read it in the same case space, or the extension is
-    // a way back into the set the built-in allowlist exists to keep out: the
-    // bearer token, the port, every `ARGENT_SECRET_` value. Its twin in
-    // `reservedNameFor` is pinned; this one was not.
     process.env.Argent_Auth_Token = "host-token";
     try {
       await write(
@@ -949,10 +816,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("reads the list from the global scope as well, and takes the union", async () => {
-    // The key is read from BOTH scopes because it names a project input rather
-    // than a limit on the host, and the two are merged by union. `scopeTempHome`
-    // puts the global file under a home of this test's own, so neither is the
-    // developer's. Nothing pinned either half.
     process.env.FROM_GLOBAL_CFG = "global-value";
     process.env.FROM_PROJECT_CFG = "project-value";
     try {
@@ -983,10 +846,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("says which file lists a dropped name when two are configured", async () => {
-    // With a project list AND a global one, "scripts.env.allow names X, which
-    // was ignored" left the reader to guess which of the two files holds X. The
-    // "is not a list" note beside these already named its file; these four
-    // named none.
     await write(
       ".argent/config.json",
       JSON.stringify({ scripts: { env: { allow: ["PROJECT_OK"] } } })
@@ -1005,13 +864,10 @@ describe("the host allowlist extension", () => {
 
     const reason = result.steps[0].reason ?? "";
     expect(reason).toContain("NODE_OPTIONS");
-    // A step's reason is escaped onto one line, backslashes included, so a
-    // Windows path reads with each of them doubled.
     expect(reason).toContain(`Listed in ${globalFile.replace(/\\/g, "\\\\")}.`);
   });
 
   it("stays silent about which file when only one is configured", async () => {
-    // Nothing to disambiguate, and a path after every note is noise.
     await write(
       ".argent/config.json",
       JSON.stringify({ scripts: { env: { allow: ["NODE_OPTIONS"] } } })
@@ -1027,9 +883,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("says a config file that does not parse lost everything in it", async () => {
-    // `readConfigObject` answers `{}` for a document it could not parse AND for
-    // one that is absent, so a trailing comma dropped every name the file lists
-    // in exactly the silence this note was added to end.
     await write(".argent/config.json", '{ "scripts": { "env": { "allow": ["DB_URL"] } } ,,, }');
     await write("scripts/noop.mjs", "output.ok = true;");
     await flow("badjson", "steps:\n  - script: { path: ../../scripts/noop.mjs }\n");
@@ -1043,11 +896,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("answers a reserved entry and an ARGENT_ one differently", async () => {
-    // The two are dropped for different reasons and have different remedies. A
-    // name argent keeps out of its own copy can be passed under a name of the
-    // project's own; `NODE_OPTIONS` steers the RUNNER, so it never reaches a
-    // script whatever it is called and there is no such remedy. Said as one
-    // sentence, each was told the other's story.
     await write(
       ".argent/config.json",
       JSON.stringify({
@@ -1067,14 +915,11 @@ describe("the host allowlist extension", () => {
     expect(reason).toContain(
       "names NODE_OPTIONS, npm_config_userconfig, which steer the runner's own process"
     );
-    // The remedy that exists for one of the two and not the other.
     expect(reason).toMatch(/ARGENT_PORT[\s\S]*under a name of your own/);
     expect(reason).not.toMatch(/steer the runner's own process[\s\S]*under a name of your own/);
   });
 
   it("says so when scripts.env.allow is not a list", async () => {
-    // A value the key's parser cannot read comes back the way an UNSET key
-    // does, so every script ran without the names and nothing said why.
     await write(
       ".argent/config.json",
       JSON.stringify({ scripts: { env: { allow: "DATABASE_URL" } } })
@@ -1103,17 +948,10 @@ describe("the host allowlist extension", () => {
     expect(result.ok).toBe(true);
     expect(reason).toContain('"9LIVES"');
     expect(reason).toContain("is not an environment variable name");
-    // `__proto__` satisfies the name rule to the letter, so it gets its own
-    // answer rather than one stating a rule it plainly meets.
     expect(reason).toContain("__proto__, which argent cannot carry");
   });
 
   it("names an allowlist entry that is not a name at all", async () => {
-    // The key's own parser drops a non-string entry and a blank one, so the
-    // four buckets below never see them — and a nested list, the natural
-    // mis-grouping for a pair of names, took both out of every script's reach
-    // with nothing said. The run re-reads the raw file for exactly this class
-    // of note, so the entry is still in hand when it is dropped.
     await write(
       ".argent/config.json",
       JSON.stringify({
@@ -1134,10 +972,6 @@ describe("the host allowlist extension", () => {
   });
 
   it("names a reserved allowlist entry reserved, not malformed", async () => {
-    // The same ordering, on the allowlist channel: `scripts.env.allow` asked
-    // the name pattern first, so npm's own hyphenated spelling landed in the
-    // malformed bucket and the note stated a rule the reference table's own
-    // spelling of that name breaks.
     await write(
       ".argent/config.json",
       JSON.stringify({ scripts: { env: { allow: ["npm_config_node-options"] } } })
@@ -1170,10 +1004,8 @@ describe("the host allowlist extension", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps[0].reason).toContain("ARGENT_PORT");
-    // The configuration is the same for every step of the run.
     expect(result.steps[1].reason).toBeUndefined();
 
-    // A LATER run says it again: the set is run-scoped, not module-scoped.
     const second = (await runFlow("once")).result;
     expect(second.steps[0].reason).toContain("ARGENT_PORT");
   });
@@ -1210,11 +1042,6 @@ describe("a bash step's environment", () => {
 
   it("observes a fragment's layer through printenv too", async (ctx) => {
     skipWithoutBash(ctx);
-    // The case above probes three of the four scopes a `.sh` can be handed a
-    // value from and skips the FRAGMENT, which is the layer with the only
-    // non-trivial lifetime: it is pushed on the way into a `run:` and popped on
-    // the way out. A `.sh` reads its environment through the same merge a
-    // `.mjs` does, but only the `.mjs` side was ever asserted to see it.
     await write(
       "scripts/frag.sh",
       `printenv PROBE_FRAGMENT > "${shellMarkPath("sh-fragment")}"\n` +
@@ -1240,21 +1067,13 @@ describe("a bash step's environment", () => {
     const { result } = await runFlow("sh-parent", {}, { booted: true });
 
     expect(result.ok).toBe(true);
-    // Inside: the fragment's own value wins, and the parent's other key is
-    // still inherited.
     expect(readMark("sh-fragment")).toBe("from-fragment\n");
     expect(readMark("sh-inherited")).toBe("from-flow\n");
-    // After: the parent's value is restored rather than left overridden.
     expect(readMark("sh-after")).toBe("from-flow\n");
   });
 
   it("carries a run-time value holding a space, whole, to both languages", async (ctx) => {
     skipWithoutBash(ctx);
-    // The design brief's `--env "AUTH=Bearer abc"` case. The CLI's parse of the
-    // joined argument is pinned in `argent-cli`, and the runner's layering is
-    // pinned above, but nothing joined the two: a value with a space in it
-    // reaching the SCRIPT is what the case is about, and a `.sh` is where a
-    // split would show first.
     await write("scripts/space.mjs", reporter("space-mjs", ["AUTH"]));
     await write("scripts/space.sh", `printenv AUTH > "${shellMarkPath("space-sh")}"\n`);
     await flow(
@@ -1278,10 +1097,6 @@ describe("secret placeholders in an env value", () => {
   }
 
   it("resolves a project secret while the tool server's cwd points elsewhere", async () => {
-    // `secretSources` walks up from `options.cwd ?? process.cwd()`. The tool
-    // server's cwd is a snapshot from whatever spawned it — an editor sets it
-    // to `/` or `$HOME` — so the chain has to be anchored at the run's project
-    // or a project's own `.argent/secrets.env` is never found.
     expect(path.resolve(process.cwd()).startsWith(root)).toBe(false);
     await writeProjectSecret("API_KEY", "sk-live-9d3f0a1b");
     await write("scripts/probe.mjs", reporter("secret", ["API_KEY"]));
@@ -1332,8 +1147,6 @@ describe("secret placeholders in an env value", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(reason).not.toContain("sk-live-9d3f0a1b");
     expect(reason).toContain("401 from https://api.example.com for key {{secret:API_KEY}}");
-    // The stack rides into the reason as indented frames, so it is scrubbed on
-    // the same pass; the plaintext URL is not a secret and reads as written.
     expect(reason).toContain("fail.mjs");
   });
 
@@ -1349,8 +1162,6 @@ describe("secret placeholders in an env value", () => {
 
     const { result } = await runFlow("sh-throws");
 
-    // The last stderr line ends the reason, and the log holds every line: two
-    // copies of the same value, each redacted on its own.
     const reason = result.steps[0].reason ?? "";
     const log = result.steps[0].scriptLog ?? "";
     expect(result.steps[0].status).toBe("fail");
@@ -1410,7 +1221,6 @@ describe("secret placeholders in an env value", () => {
       FAILURE_CODES.TOOL_INPUT_INVALID
     );
 
-    // The other side of the same rule, so the two cannot drift together.
     await flow(
       "filesecret",
       'env: { AUTH: "{{secret:MISSING}}" }\nsteps:\n  - script: { path: ../../scripts/probe.mjs }\n'
@@ -1421,15 +1231,6 @@ describe("secret placeholders in an env value", () => {
   });
 
   it("resolves a RUN-level secret against the run's project, not the server's cwd", async () => {
-    // The run's own map is resolved once up front, to refuse an unknown name as
-    // caller input before a directory run repeats it per file. That resolve
-    // needs the SAME anchor the step's does: the tool server's cwd is a
-    // snapshot from whatever spawned it — an editor sets it to `/` or `$HOME` —
-    // so left to the default this project's `.argent/secrets.env` is never read
-    // and a name that resolves perfectly well is refused as unknown, stopping
-    // the whole run before it starts. The case above passes a name NO source
-    // defines, which is refused under either anchor, so only a resolvable one
-    // tells the two apart.
     expect(path.resolve(process.cwd()).startsWith(root)).toBe(false);
     await writeProjectSecret("RUN_TOKEN", "sk-run-4b21");
     await write("scripts/probe.mjs", reporter("runanchor", ["AUTH"]));
@@ -1442,31 +1243,18 @@ describe("secret placeholders in an env value", () => {
   });
 
   it("refuses an unpaired surrogate in an env value", async () => {
-    // `describeScriptEnvProblem` refuses a NUL because an environment cannot
-    // carry one; a lone surrogate is the same rule one character class further
-    // out, and it was accepted. The flow file round-trips it exactly and the
-    // child reads U+FFFD, so the file and the script disagreed with nothing
-    // said.
     await write("scripts/noop.mjs", "output.ok = true;");
     await flow(
       "lone",
       "steps:\n" + '  - script: { path: ../../scripts/noop.mjs, env: { LONE: "\\uD800abc" } }\n'
     );
 
-    // Refused where the map is read, like every other shape rule — the file is
-    // not a flow argent can run.
     await expect(runFlow("lone")).rejects.toThrow(
       /script `env` holds an unpaired surrogate in the value of LONE/
     );
   });
 
   it("refuses a resolved value an environment cannot carry, without quoting it", async () => {
-    // The NUL rule runs on the AUTHORED value, which is `{{secret:NULKEY}}` —
-    // nothing of the secret's own shape. A NUL inside the resolved credential
-    // reached Node, which refuses the fork and quotes the value back ESCAPED
-    // (`Received 'sec\x00ret-9d3f'`); the scrub searches for the raw bytes, so
-    // it found nothing and the credential was reported in the clear through the
-    // very message the redaction exists for.
     await write(".argent/secrets.env", 'NULKEY="sec\u0000ret-9d3f"\n');
     await write("scripts/noop.mjs", "output.ok = true;");
     await flow(
@@ -1485,8 +1273,6 @@ describe("secret placeholders in an env value", () => {
   });
 
   it("hands a near-spelling to the script as literal text, unresolved", async () => {
-    // Only `{{secret:NAME}}` is a placeholder. Argent does not detect a near
-    // spelling of it; a typo is the author's to find.
     await writeProjectSecret("X", "resolved-value");
     await write("scripts/probe.mjs", reporter("spelling", ["A", "B", "C"]));
     await flow(
@@ -1510,15 +1296,11 @@ describe("secret placeholders in an env value", () => {
 
 describe("the shell-environment note", () => {
   it("explains a command a .mjs could not find, and stays off an unrelated failure", async () => {
-    // `command not found` points nowhere on its own: the command plainly exists
-    // and works in the author's shell. What it does not say is that the tool
-    // server's `PATH` is a snapshot from its first start.
     await write(
       "scripts/missing.mjs",
       `import { execSync } from "node:child_process";\n` + `execSync("argent-no-such-command-xyz");`
     );
     await write("scripts/fixture.mjs", `throw new Error("fixture: users.json: not found");`);
-    // Two flows, because a failed step stops the run it is in.
     await flow("notes", "steps:\n  - script: { path: ../../scripts/missing.mjs }\n");
     await flow("unrelated", "steps:\n  - script: { path: ../../scripts/fixture.mjs }\n");
 
@@ -1528,22 +1310,12 @@ describe("the shell-environment note", () => {
     expect(missing.steps[0].reason).toContain("A command was not found.");
     expect(missing.steps[0].reason).toContain("snapshot");
     expect(missing.steps[0].reason).toContain("`scripts.env.allow` cannot widen it");
-    // A two-part application error has the words and is not a shell line: a step
-    // that failed on a missing fixture must not end with a confident
-    // instruction to restart the tool server.
     expect(unrelated.steps[0].reason).toContain("fixture: users.json: not found");
     expect(unrelated.steps[0].reason).not.toContain("A command was not found");
     expect(unrelated.steps[0].reason).not.toContain("snapshot");
   });
 
   it("reads dash's wording without reading a three-part application error", async () => {
-    // dash writes `<writer>: <line>: <command>: not found`, and an application
-    // that puts a PATH in front of its own line number writes the same four
-    // fields — `fixtures/orders.json: 12: customerId: not found`. Script steps
-    // exist to seed databases and read fixtures, so that is exactly where the
-    // shape lives, and such a step must not end its verdict with a confident
-    // instruction to restart the tool server. What dash writes in the first
-    // field is the shell it is or the script it runs, so the name ends in `sh`.
     await write(
       "scripts/dash.mjs",
       `throw new Error("Command failed: adb devices\\n/bin/sh: 1: adb: not found\\n");`
@@ -1556,8 +1328,6 @@ describe("the shell-environment note", () => {
       "scripts/http-part.mjs",
       `throw new Error("seed failed for api/v1/users: 404: user: not found");`
     );
-    // What comes before the `.sh` is not restricted: a script may be named with
-    // a space in it, and that is an ordinary name rather than a sentence.
     await write("scripts/named.mjs", `throw new Error("/tmp/run tests.sh: 3: adb: not found");`);
     await flow("dash-line", "steps:\n  - script: { path: ../../scripts/dash.mjs }\n");
     await flow("dash-named", "steps:\n  - script: { path: ../../scripts/named.mjs }\n");
@@ -1579,16 +1349,8 @@ describe("the shell-environment note", () => {
   });
 
   it("asks for a shell writer in the longer wording too, not only in dash's", async () => {
-    // `command not found` reads as an English sentence, which made it look like
-    // it carried its own proof. It does not: `<a>: <b>: command not found` is a
-    // two-part application error just as readily as `not found` is, and a
-    // seeder naming the tenant it could not find a seed for earned the note and
-    // a confident instruction to restart a shared tool server with it.
     await write("scripts/tenant.mjs", `throw new Error("tenant acme: seed: command not found");`);
-    // zsh's wording puts the phrase first and had no writer constraint either.
     await write("scripts/first.mjs", `throw new Error("tenant acme: command not found: seed");`);
-    // The shells themselves, with and without the line number bash omits when
-    // it is not running a file — which is what a bare `execSync` gives it.
     await write("scripts/bare.mjs", `throw new Error("sh: adb: command not found");`);
     await write(
       "scripts/lined.mjs",
@@ -1611,18 +1373,10 @@ describe("the shell-environment note", () => {
   });
 
   it("says a shell's words may be the far end's, and does not say it of Node's", async () => {
-    // `adb shell` and `ssh` hand back the far end's own line unchanged, so a
-    // seeding or deploy step reports a command missing on a DEVICE or a build
-    // host in the exact words a local shell uses. Every remedy the note carries
-    // is about this machine, and restarting a shared tool server is the most
-    // disruptive of them. Nothing in the text separates the two, so the note
-    // names the other end rather than picking.
     await write(
       "scripts/relayed.mjs",
       `throw new Error("Command failed: adb shell pm list packages\\n/system/bin/sh: pm: command not found\\n");`
     );
-    // Node's own spelling cannot have been relayed: Node raised it here, for a
-    // child it was spawning here.
     await write("scripts/local-enoent.mjs", `throw new Error("spawnSync adb ENOENT");`);
     await flow("relayed", "steps:\n  - script: { path: ../../scripts/relayed.mjs }\n");
     await flow("local-enoent", "steps:\n  - script: { path: ../../scripts/local-enoent.mjs }\n");
@@ -1637,9 +1391,6 @@ describe("the shell-environment note", () => {
   });
 
   it("reads Node's own ENOENT spelling without reading a sentence holding the word", async () => {
-    // Node writes ONE token, or a path that may hold spaces, between `spawn`
-    // and `ENOENT` — never a sentence. Excluding `:`, `;` and `,` does not say
-    // that on its own, since a sentence carries none of them either.
     await write("scripts/spawn-enoent.mjs", `throw new Error("spawnSync adb ENOENT");`);
     await write(
       "scripts/sentence-enoent.mjs",
@@ -1654,8 +1405,6 @@ describe("the shell-environment note", () => {
     const spawned = (await runFlow("spawn-enoent")).result;
     const sentence = (await runFlow("sentence-enoent")).result;
 
-    // Node raises this for a missing COMMAND and for a `cwd` that does not
-    // exist alike, so the note says both.
     expect(spawned.steps[0].reason).toContain("A command was not found — or the working directory");
     expect(sentence.steps[0].reason).toContain("fixture directory is missing");
     expect(sentence.steps[0].reason).not.toContain("A command was not found");
@@ -1663,11 +1412,6 @@ describe("the shell-environment note", () => {
   });
 
   it("names the run's own PATH when the run is what set it", async () => {
-    // This feature gives a flow four ways to set `PATH`. When a command then
-    // fails because THAT value is wrong, the snapshot note asserts the
-    // opposite: it blames the tool server's start-time environment, tells the
-    // author to restart the server — which changes nothing — and recommends
-    // passing a path through `env`, which is what broke it.
     await write(
       "scripts/own-path.mjs",
       `import { execSync } from "node:child_process";\n` + `execSync("git --version");`
@@ -1684,20 +1428,13 @@ describe("the shell-environment note", () => {
     const reason = result.steps[0].reason ?? "";
     expect(reason).toContain("A command was not found.");
     expect(reason).toContain("This run sets `PATH` itself");
-    // The NAME, never the value: this map is the resolved one, and a note is
-    // not failure text, so a `{{secret:}}` value quoted here would reach the
-    // report in the clear.
     expect(reason).not.toContain("/nonexistent/bin");
-    // The remedies that do not apply: the server's environment is not what the
-    // command was looked up in, so restarting it changes nothing.
     expect(reason).not.toContain("Restart the tool server");
     expect(reason).not.toContain("snapshot");
   });
 
   it("reads exit 127 from a .sh without repeating the runner's own hint", async (ctx) => {
     skipWithoutBash(ctx);
-    // The runner's 127 hint has already named the code, so the note adds only
-    // the remedy.
     await write("scripts/missing.sh", `argent-no-such-command-xyz\n`);
     await flow("sh-missing", "steps:\n  - script: { path: ../../scripts/missing.sh }\n");
 
@@ -1711,12 +1448,6 @@ describe("the shell-environment note", () => {
 
   it("keeps the note for a .sh whose stderr line is the shell's own wording", async (ctx) => {
     skipWithoutBash(ctx);
-    // The reason ends with the last line a `.sh` wrote to stderr, and for a
-    // missing command that line IS bash's `command not found`. It must not be
-    // read as "the script explained something else": the note is exactly what
-    // that step needs. The parent joins the line to the runner's hint with a
-    // space, so the shell's line has no line start of its own — it is judged on
-    // its own instead.
     await write("scripts/not-found.sh", `argent-no-such-command-xyz\n`);
     await flow("sh-not-found", "steps:\n  - script: { path: ../../scripts/not-found.sh }\n");
 
@@ -1726,16 +1457,11 @@ describe("the shell-environment note", () => {
     expect(reason).toContain("exited with code 127");
     expect(reason).toContain("argent-no-such-command-xyz: command not found");
     expect(reason).toContain("The tool server keeps the environment it started with");
-    // The runner's own 127 hint already named the code; the note adds the
-    // remedy and not a second diagnosis.
     expect(reason).not.toContain("A command was not found.");
   });
 
   it("keeps the note when the shell's line names the script by a Windows path", async (ctx) => {
     skipWithoutBash(ctx);
-    // Git Bash names the script by the path it was handed, and on Windows that
-    // path opens with a drive letter. The script writes that line itself, so
-    // the shape is held on every host and not only on a Windows one.
     await write(
       "scripts/win-not-found.sh",
       `echo "C:/Users/dev/project/scripts/win-not-found.sh: line 1: adb: command not found" >&2\n` +
@@ -1755,10 +1481,6 @@ describe("the shell-environment note", () => {
 
   it("leaves a .sh that chose 127 and explained itself alone", async (ctx) => {
     skipWithoutBash(ctx);
-    // 127 is bash's own name for a missing command AND an ordinary exit code a
-    // script may choose. A script that wrote its own line to stderr said what
-    // went wrong, and the note would answer it with a paragraph about the tool
-    // server's `PATH` — a confident instruction pointing somewhere else.
     await write("scripts/own-127.sh", `echo "no such tenant" >&2\nexit 127\n`);
     await flow("sh-own-127", "steps:\n  - script: { path: ../../scripts/own-127.sh }\n");
 
@@ -1786,22 +1508,11 @@ describe("what is NOT hidden", () => {
     const { result } = await runFlow("passing");
 
     expect(result.ok).toBe(true);
-    // The echo repeats an env value and is reported as written: argent does not
-    // compare an echo message, a selector or a tool argument against env values.
     expect(result.steps[1].message).toBe("Calling https://api.example.com");
     expect(JSON.stringify(result.steps[0])).not.toContain("…");
   });
 
   it("returns the output document as the script wrote it, resolved secret and all", async () => {
-    // The document is the script's ANSWER, and a later step reads it for the
-    // value it holds — `{{secret:NAME}}` in its place is a dead string. The
-    // reference and the flow-authoring skill say not to put a credential there
-    // instead.
-    //
-    // Asked through `flow-add-script`, because that is the only channel that
-    // hands a document back: a run's `StepReport` carries none for a script
-    // step, so a case that writes `output.token` inside a RUN and then reads
-    // the report asserts nothing either way.
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write("scripts/doc.mjs", `output.token = process.env.API_KEY;`);
     await flowStartRecordingTool.execute({}, { name: "document", project_root: root });
@@ -1821,8 +1532,6 @@ describe("what is NOT hidden", () => {
   });
 
   it("proceeds when a plaintext env value equals a value in the secret chain", async () => {
-    // Argent does not compare env values against secret values anywhere. A user
-    // who puts a value in the clear knows what they are doing.
     await write(".argent/secrets.env", "SHARED=https://api.example.com\n");
     await write("scripts/probe.mjs", reporter("plain", ["FROM_FILE", "FROM_RUN", "FROM_STEP"]));
     await flow(
@@ -1847,11 +1556,6 @@ describe("what is NOT hidden", () => {
 
 describe("recording a script step with env", () => {
   it("runs the live script under a header written back after the reset", async () => {
-    // The reset truncates the whole file, `env:` included, and no recording
-    // tool writes that header — so the route to a recorded step that runs under
-    // a checked-in default is to write it again after starting. What matters is
-    // that `flow-add-script` reads it from the file, so the live run takes the
-    // same map the replay will.
     await write("scripts/dump.mjs", reporter("kept", ["PLAIN"]));
     await flow(
       "qa",
@@ -1881,15 +1585,9 @@ describe("recording a script step with env", () => {
     )) as { status: string };
 
     expect(added.status).toBe("pass");
-    // The live run took the checked-in default, which is what a replay of the
-    // recorded file takes too.
     expect(seen("kept")).toEqual({ PLAIN: "checked-in-default" });
   });
 
-  // The pre-run read has three failure states and they ask for opposite things.
-  // Neither branch had a test, and one of them told the author the flow "may
-  // not parse, or it may parse and break a rule" about a file argent never got
-  // to look at.
   it("tells a gone, an unreadable and a malformed flow file apart", async () => {
     await write("scripts/dump.mjs", reporter("branches", ["A"]));
     await flowStartRecordingTool.execute({}, { name: "gone", project_root: root });
@@ -1915,8 +1613,6 @@ describe("recording a script step with env", () => {
     ).rejects.toThrow(/is not a flow argent can use as it stands/);
   });
 
-  // chmod is a POSIX rule and root ignores it, so the unreadable branch is
-  // asked for only where the host can actually refuse a read.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "reports an unreadable flow file as unreadable, not as malformed",
     async () => {
@@ -1948,8 +1644,6 @@ describe("recording a script step with env", () => {
       reporter("recorded", ["API_URL", "USER_TYPE", "API_KEY"]) + "\noutput.ok = true;"
     );
     await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
-    // The flow-level map arrives by hand edit, which is how one reaches a take
-    // before the first append catches the in-memory copy up.
     const filePath = path.join(root, ".argent/flows/rec.yaml");
     await fs.writeFile(
       filePath,
@@ -1969,8 +1663,6 @@ describe("recording a script step with env", () => {
 
     expect(added.status).toBe("pass");
     expect(added.message).toBe('Added script step to "rec" flow.');
-    // The live run took the file's map under the call's — the same layering the
-    // replay will apply, which is the whole point of recording the step live.
     expect(seen("recorded")).toEqual({
       API_URL: "https://api.example.com",
       USER_TYPE: "premium",
@@ -1982,17 +1674,11 @@ describe("recording a script step with env", () => {
       { name: "rec", project_root: root }
     )) as { flowFile: string; summary: string[] };
 
-    // The recorded step carries the PLACEHOLDER, not the resolved value: a flow
-    // file never holds a resolved secret, because resolution happens inside the
-    // step at run time.
     expect(finished.flowFile).toContain("{{secret:API_KEY}}");
     expect(finished.flowFile).not.toContain("sk-live-9d3f0a1b");
   });
 
   it("redacts a failure the recorded script raised, exactly as a replay would", async () => {
-    // `flow-add-script` runs the file through the same `runFlowScriptStep` the
-    // runner does, so the resolution and the scrub are the one path — and this
-    // call runs FIRST, before the flow a replay would protect exists.
     await write(".argent/secrets.env", "API_KEY=sk-live-9d3f0a1b\n");
     await write(
       "scripts/fail.mjs",
@@ -2018,14 +1704,10 @@ describe("recording a script step with env", () => {
     expect(failed.status).toBe("fail");
     expect(failed.reason).not.toContain("sk-live-9d3f0a1b");
     expect(failed.reason).toContain("401 from https://api.example.com for key {{secret:API_KEY}}");
-    // A failed script is not recorded.
     expect(failed.stepCount).toBe(0);
   });
 
   it("withdraws the layering promise when the file's env changed during the run", async () => {
-    // The file's `env:` is read before a run that may take minutes and re-read
-    // by the append afterwards. An edit landing in that window is recorded and
-    // replays under an environment this run never took.
     const filePath = path.join(root, ".argent/flows/drift.yaml");
     await write(
       "scripts/edit.mjs",
@@ -2049,10 +1731,6 @@ describe("recording a script step with env", () => {
   });
 
   it("shows the recorded env in the step summary", async () => {
-    // `recorded` is the only view of the appended step the recorder returns,
-    // and the summary is also what `flow-finish-recording` lists. A step
-    // carrying nineteen values summarized identically to a bare one, while a
-    // raw `tool:` step renders its whole args map.
     await write("scripts/seed.mjs", "output.ok = true;");
     await flowStartRecordingTool.execute({}, { name: "summary", project_root: root });
 
@@ -2079,12 +1757,6 @@ describe("recording a script step with env", () => {
   });
 
   it("reads a case-only rename as drift on POSIX and as no change on Windows", async () => {
-    // Windows carries one variable per name however it is spelled, and
-    // `mergeScriptEnv` folds by that rule — so `Pathy` renamed to `PATHY` is one
-    // variable with one value to the child there, and two different maps to a
-    // comparison keyed on the raw name. The author was told the file drifted and
-    // to delete a step whose script may already have had its effect. On POSIX
-    // the two ARE different variables and the warning is right.
     const filePath = path.join(root, ".argent/flows/casedrift.yaml");
     await write(
       "scripts/recase.mjs",
@@ -2115,10 +1787,6 @@ describe("recording a script step with env", () => {
   });
 
   it("says which way the drift went when the names did not change", async () => {
-    // `sameEnv` compares VALUES and `envNames` renders NAMES, so an edit that
-    // only changed a value would print the same text on both sides of the
-    // sentence — a difference the message announces and then does not show.
-    // That branch had no case.
     const filePath = path.join(root, ".argent/flows/valuedrift.yaml");
     await write(
       "scripts/edit.mjs",
@@ -2140,9 +1808,6 @@ describe("recording a script step with env", () => {
   });
 
   it("treats an empty env map and no env key as the same environment", async () => {
-    // Neither carries a value, so neither changes what the script read. A drift
-    // message here would withdraw a promise that still holds, and send the
-    // author to delete a step and run a side-effecting script again.
     const filePath = path.join(root, ".argent/flows/emptyenv.yaml");
     await write(
       "scripts/edit.mjs",
@@ -2163,10 +1828,6 @@ describe("recording a script step with env", () => {
   });
 
   it("stays quiet when a concurrent edit touched everything but env", async () => {
-    // The one false positive the drift check exists to avoid. The file is
-    // re-read after a run that may take minutes, and an edit landing in that
-    // window is ordinary — only an `env` change makes the recorded step replay
-    // under an environment this run never took.
     const filePath = path.join(root, ".argent/flows/otheredit.yaml");
     await write(
       "scripts/edit.mjs",
@@ -2187,11 +1848,6 @@ describe("recording a script step with env", () => {
   });
 
   it("stays quiet when the step's own env provably shadows the change", async () => {
-    // The drift check exists to withdraw a promise about the environment the
-    // script RAN under. A step's own map sits over the flow-level one, so an
-    // edit to a name the step already overrides changes nothing the script
-    // reads — and the warning told the author to delete the step and run a
-    // side-effecting script again for an environment that had not moved.
     const filePath = path.join(root, ".argent/flows/shadow.yaml");
     await write(
       "scripts/edit.mjs",
@@ -2217,15 +1873,8 @@ describe("recording a script step with env", () => {
   });
 
   it("replays a recorded step under a run-time env, over the file's own default", async () => {
-    // The recorder→replay round trip was only tested with no run-time layer —
-    // exactly the case that happens to match. A real replay puts `--env`
-    // BETWEEN the two layers this call took: above the file's `env:`, still
-    // under the step's own map. That is what the tool description claims and
-    // nothing read it back.
     await write("scripts/probe.mjs", reporter("replayed", ["FROM_FILE", "FROM_STEP"]));
     await flowStartRecordingTool.execute({}, { name: "roundtrip", project_root: root });
-    // The header arrives by hand edit AFTER the reset: the reset truncates the
-    // whole file, `env:` included, and no recording tool writes that header.
     await fs.writeFile(
       path.join(root, ".argent/flows/roundtrip.yaml"),
       "env: { FROM_FILE: file-default }\nsteps: []\n",
@@ -2249,13 +1898,10 @@ describe("recording a script step with env", () => {
     });
 
     expect(result.ok).toBe(true);
-    // The run replaces the file's default and loses to the step's own map.
     expect(seen("replayed")).toEqual({ FROM_FILE: "from-run", FROM_STEP: "step-value" });
   });
 
   it("proceeds when flow-add-script is given a plaintext value equal to a secret", async () => {
-    // §4.4: argent does not compare env values against secret values on ANY
-    // channel. The other three are pinned; the recorder was not.
     await write(".argent/secrets.env", "SHARED=https://api.example.com\n");
     await write("scripts/plain.mjs", reporter("recplain", ["API_URL"]));
     await flowStartRecordingTool.execute({}, { name: "recplain", project_root: root });
@@ -2282,11 +1928,6 @@ describe("recording a script step with env", () => {
   });
 
   it("caps a long env value in what the recorder echoes back", async () => {
-    // This line is returned twice — as `flow-add-script`'s `recorded` and again
-    // in the finish `summary` — and `env` is the field documented as carrying a
-    // PEM key or a service-account blob. Uncapped, a 10 KB value became 20 KB of
-    // agent context for a one-line summary, while the same tool caps what the
-    // script RETURNS and the flow parser caps a rendered entry.
     const huge = "s".repeat(10_054);
     await write("scripts/big.mjs", "output.ok = true;");
     await flowStartRecordingTool.execute({}, { name: "bigenv", project_root: root });
@@ -2308,16 +1949,10 @@ describe("recording a script step with env", () => {
     expect(added.recorded.length).toBeLessThan(400);
     expect(added.recorded).toContain("…(+9881 chars)");
     expect(finished.summary.join("\n").length).toBeLessThan(400);
-    // The FILE still carries the value whole — only the echo is capped.
     expect(finished.flowFile).toContain(huge);
   });
 
   it("proceeds when a run-time env value equals a secret's value", async () => {
-    // The fourth channel of §4.4, and the one where a comparison would be
-    // cheapest to reach for: the value arrives at run time, next to the secret
-    // chain the run has just built. It is still not compared — a plaintext
-    // value is flow data whatever a secrets file happens to hold, and the run
-    // must not start redacting a URL the author typed themselves.
     await write(".argent/secrets.env", "SHARED=https://api.example.com\n");
     await write("scripts/runplain.mjs", reporter("runplain", ["API_URL"]));
     await flow("runplain", "steps:\n  - script: { path: ../../scripts/runplain.mjs }\n");
@@ -2328,8 +1963,6 @@ describe("recording a script step with env", () => {
 
     expect(result.ok).toBe(true);
     expect(seen("runplain")).toEqual({ API_URL: "https://api.example.com" });
-    // Reported as written, not rewritten to a placeholder for a name the
-    // author never referenced.
     expect(JSON.stringify(result.steps[0])).not.toContain("{{secret:");
   });
 
@@ -2356,16 +1989,9 @@ describe("recording a script step with env", () => {
       { name: "verbatim", project_root: root }
     )) as { flowFile: string; summary: string[] };
 
-    // The plaintext value is an input the author chose to write into a file that
-    // gets committed; the placeholder is a placeholder. Neither is elided, and
-    // an echo repeating one is reported as written.
     expect(finished.flowFile).toContain("https://example.com");
     expect(finished.flowFile).toContain("{{secret:API_KEY}}");
     expect(finished.summary.join("\n")).toContain("https://example.com");
-    // The placeholder, positively. `not.toContain("…")` alone cannot fail here:
-    // nothing on this path emits an ellipsis, so it passed whether or not the
-    // summary carried the placeholder at all — including if it carried the
-    // RESOLVED value instead, which is the thing this test exists to rule out.
     expect(finished.summary.join("\n")).toContain("{{secret:API_KEY}}");
     expect(finished.summary.join("\n")).not.toContain("sk-live-9d3f0a1b");
     expect(finished.summary.join("\n")).not.toContain("…");

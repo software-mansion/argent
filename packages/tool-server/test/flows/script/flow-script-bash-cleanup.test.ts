@@ -349,18 +349,8 @@ describe("an exchange directory that could not be filled", () => {
 });
 
 describe("an exchange directory when the step is cancelled", () => {
-  // Every OTHER outcome of a bash step is covered by the two describes above,
-  // which reach the removal through a refusal. A cancellation takes a different
-  // exit out of `runChild` — the process is stopped rather than waited for —
-  // and nothing asserted that the directory the step exchanges its document and
-  // its reason through is taken with it. A leaked one accumulates under the
-  // temporary directory for every cancelled run.
   it("removes it", async () => {
     const ws = createScriptWorkspace("bash-cancel");
-    // Its OWN exchange root, not `os.tmpdir()`: every other file in this
-    // directory makes exchange directories there too, and vitest runs them
-    // together — a listing of the shared temp directory answers about their
-    // steps as much as this one's.
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-cancel-root-"));
     const listing = (): string[] =>
       fs.readdirSync(exchangeRoot).filter((entry) => entry.startsWith(exchangeDirPrefix()));
@@ -378,15 +368,11 @@ describe("an exchange directory when the step is cancelled", () => {
         projectRoot: ws.dir,
         signal: controller.signal,
       });
-      // Long enough for the fork and the exchange directory, short against the
-      // script's own 30 seconds.
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const during = listing();
       controller.abort();
       const result = await run;
 
-      // Not vacuous: the assertion below says nothing unless the running step
-      // really had a directory of its own to lose.
       expect(during).toHaveLength(1);
       expect(result.failure?.kind).toBe("cancelled");
       expect(listing()).toEqual([]);

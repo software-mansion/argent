@@ -725,17 +725,7 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
-  /**
-   * The `env` map this CALL supplied, applying to every script step in the run
-   * including those inside nested `run:` fragments. On the run rather than on a
-   * scope because it is constant for the whole root run: a flow-level map is a
-   * default at any depth, so this outranks even the innermost fragment's.
-   */
   runtimeEnv: Readonly<ScriptEnv>;
-  /**
-   * Notes any script step has already carried in this run. A note about the
-   * host's configuration is true of every step, so it is said once.
-   */
   scriptRunNotes: FlowScriptRunNotes;
   onStepReport?: (report: StepReport) => void;
 }
@@ -947,28 +937,12 @@ Returns a per-step report: the first failure stops the run and the rest report a
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
-      // The run-time map is judged here rather than by the schema, which takes
-      // it as a plain map of strings and stops there. A NAME the operating
-      // system cannot carry, or one that steers the runner's own process, is
-      // the same mistake wherever the map came from and reads best against one
-      // rule — the same one a flow file's own `env:` is held to.
       const envProblem = describeScriptEnvProblem(params.env ?? {});
       if (envProblem) {
-        // Named after the channel it came from, as the other two are — the flow
-        // file says `Invalid flow file: \`env\`` and a step says
-        // `script \`env\``. A bare \`env\` on a flow that also declares a
-        // top-level one sends the author to the YAML for a name they typed on
-        // the command line.
         throw new InvalidToolInputError(`This run's \`env\` ${envProblem}`, {
           failure_stage: "flow_run_env",
         });
       }
-      // The same refusal a flow file's own `env` earns, on the channel a CI job
-      // and an agent both use. Without it the reference reaches the script as
-      // literal text and the step reports pass — the outcome that refusal is
-      // written to prevent. Re-raised as caller input, like the check above it:
-      // the shared refusal is worded for a flow FILE and classified as one, and
-      // this is the same parameter.
       try {
         assertNoEnvOutputReferences(params.env, "This run's");
       } catch (err) {
@@ -976,18 +950,6 @@ Returns a per-step report: the first failure stops the run and the rest report a
           failure_stage: "flow_run_env",
         });
       }
-      // And the `{{secret:NAME}}` names of that same map, resolved here only to
-      // be refused here. A name no source defines is a fault in the ARGUMENT,
-      // and every flow in a directory run takes the same arguments apart from
-      // its own path — so left to the step it became one ~900-character refusal
-      // per file, and a run of N flows ended `0 passed, N failed` for one
-      // mistyped name. Raised as caller input, the run stops at the first flow,
-      // which is what the two checks above it already do for a bad NAME.
-      //
-      // The step resolves again and is still the authority: this reads the
-      // run's own map only, holds nothing it resolved, and passes the same
-      // project anchor the step will. A flow file's own `env:` is a fault in
-      // that FILE and is left to the step, where it stays one flow's problem.
       if (params.env && Object.keys(params.env).length > 0) {
         try {
           resolveScriptEnvSecrets(params.env, { cwd: params.project_root });
@@ -1359,17 +1321,6 @@ interface RunStackEntry {
 interface StepScope {
   runStack: RunStackEntry[];
   depth: number;
-  /**
-   * Flow-level `env` DEFAULTS in force here: the root flow's map with each
-   * nested flow's layered over it, outermost first.
-   *
-   * On the scope rather than on {@link ExecState} because a nested flow must
-   * inherit the active values, be able to override them inside itself, and
-   * leave the parent's intact on the way out — which is what {@link childScope}
-   * already does for `runStack`, on every return path including a throw, by
-   * never mutating the parent. Held immutable for that reason: a map shared by
-   * reference would be mutated by the fragment and never restored.
-   */
   env: Readonly<ScriptEnv>;
 }
 
@@ -1683,9 +1634,6 @@ async function execRunStep(
     target,
     ...depthOf(scope),
   });
-  // The fragment's own `env` layers over the values already in force and, being
-  // a fresh object, leaves the parent scope's map exactly as it was when this
-  // `run:` returns — including when a step inside it throws.
   await execSteps(
     state,
     fragment.steps,
@@ -1732,9 +1680,6 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
-  // The whole precedence, in one expression: the flow-level defaults this scope
-  // carries, then the run-time map (a default loses to a caller at any depth),
-  // then the step's own map, which is not a default at all.
   const { outcome } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,

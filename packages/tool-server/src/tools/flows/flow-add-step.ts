@@ -1105,9 +1105,6 @@ async function captureRunTarget(
       };
     }
 
-    // Parsing validates the sibling exists and is a well-formed flow; a failure
-    // falls through to keeping the raw step. Its own `env:` is kept for the
-    // inherited-env warning below.
     const fragmentEnv = parseFlow(await fs.readFile(fragPath, "utf8")).env;
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
@@ -1138,12 +1135,7 @@ async function captureRunTarget(
           `step would replay a different flow than the one that just ran`,
       };
     }
-    // A `run:` step carries no environment of its own, so whatever this call
-    // passed the sub-run is not part of what was recorded. The rewrite is
-    // lossy, and the warning below is what says so.
     const dropped = envNamesInArgs(args.env);
-    // It is lossy the other way too: the live call's separate run never had
-    // this recording's own `env:`, and the `run:` step inherits it at replay.
     const inherited = await inheritedEnvNames(session, fragmentEnv, dropped);
     const many = inherited.length > 1;
     const warnings = [
@@ -1180,16 +1172,6 @@ async function captureRunTarget(
   }
 }
 
-/**
- * The `run:` rewrite's own warning, as a verdict the finish can carry.
- *
- * {@link captureRunTarget} hands back a `flow` only when the rewrite succeeded,
- * and the one warning it raises beside a successful rewrite is about `env`: the
- * values the call passed that the step drops, the recording's own `env:` the
- * step inherits that the live call never had, or both in one string. Every
- * other warning it raises comes with no `flow` and keeps the raw step, which
- * the summary already renders as `N. tool: flow-execute`.
- */
 function runEnvWarning(
   step: FlowStep,
   warning: string | undefined
@@ -1197,23 +1179,6 @@ function runEnvWarning(
   return step.kind === "run" && warning !== undefined ? { warning, kind: "env" } : undefined;
 }
 
-/**
- * The names this recording's own top-level `env:` gives the fragment's scripts
- * at replay that the live call never gave them.
- *
- * The live `flow-execute` started a run of its own, rooted at the fragment, so
- * none of this recording's `env:` reached it; the recorded `run:` step composes
- * the fragment UNDER that `env:` instead. A name the fragment declares itself
- * layers over it at replay (`execRunStep` in flow-run.ts), so its scripts read
- * the value the live call gave them, and a name the call passed is the dropped
- * warning's to report. Keyed through {@link envNameKey}, as the merge that
- * decides the replay's value is.
- *
- * Read off the FILE, for the reason {@link flowEnvOnDisk} gives. A file that
- * will not read or parse yields no names rather than failing the rewrite: this
- * is only a warning, and the append after it re-reads that file and refuses it
- * in its own words.
- */
 async function inheritedEnvNames(
   session: RecordingSession,
   fragmentEnv: ScriptEnv | undefined,
@@ -1229,11 +1194,6 @@ async function inheritedEnvNames(
   return Object.keys(recordingEnv ?? {}).filter((name) => !layered.has(envNameKey(name)));
 }
 
-/**
- * The `env` names a recorded call carried. Names only: this reads out of a tool
- * call's arguments, where `{{secret:NAME}}` exists precisely so a credential is
- * not sitting in the clear, and the names alone say which values were lost.
- */
 function envNamesInArgs(env: unknown): string[] {
   if (env === null || typeof env !== "object" || Array.isArray(env)) return [];
   return Object.keys(env);
@@ -1432,9 +1392,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "launch", app: strippedArgs.bundleId as string };
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
-        // Set here too: this branch is lossy as well, and a `run:` step that
-        // silently dropped the sub-run's environment contradicts the promise a
-        // recorded script step is written around.
         warning = runTarget.warning;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
@@ -1454,30 +1411,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       try {
         ({ savedTo, stepCount } = await appendStepToFlow(session, step));
       } catch (err) {
-        // A host-mode append re-parses the file, so the scan that refuses an
-        // output reference sees what is ALREADY there as well — a step from an
-        // earlier call, or the file's own top-level `env:`, both of which a
-        // mid-recording hand edit can put there. Blaming the just-run call for
-        // that would send the author back over a call whose args were clean —
-        // and "fix the step named below" names no step when the refusal is
-        // about the file's own `env:`.
-        //
-        // The re-parse refuses on two stages, not one. `flow_output_reference`
-        // is one; every other `env:` fault — a reserved name, a non-string
-        // value, a tagged map, a name that is not one — arrives as
-        // `flow_file_parse`. Both are read off the file BEFORE this step joins
-        // it, so neither can ever be this call's fault, and both have to say so
-        // in a sentence rather than a bare "Invalid flow file": the device
-        // action has already run by this point, and an agent that cannot tell
-        // the two apart has no reason not to retry and runs it a second time.
-        //
-        // `flow_file_validate` is left out because it is the one stage that
-        // says nothing either way: the append validates once inside the
-        // pre-push parse and again with the step pushed, so the same stage
-        // covers a defect that was already on disk and one this call just
-        // added. Re-wording it would blame the file for a leading `launch`
-        // this very call recorded. It is left alone until the two are told
-        // apart.
         const stage = getFailureSignal(err)?.failure_stage;
         const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
         if (stage !== "flow_output_reference" && !fromTheFile) throw err;
@@ -1505,13 +1438,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // step's number and carrying the step itself, so a hand edit cannot pass
       // the verdict to whatever inherits that number (see
       // {@link RecordedStepWarning}).
-      //
-      // Two kinds are carried: the wait verdict above, and — on a call
-      // rewritten to a `run:` step — the `env` the recording could not keep.
-      // The finish summary already shows the other two by rendering what was
-      // written: kept coordinates read as `N. tap: (x, y)`, and a kept raw step
-      // reads as `N. tool: flow-execute`. A step that breaks on conversion
-      // renders like one that does not.
       const carried = waitWarning ?? runEnvWarning(step, warning);
       if (carried) {
         (session.stepWarnings ??= new Map()).set(stepCount, {

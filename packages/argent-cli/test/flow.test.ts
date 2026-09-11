@@ -158,15 +158,11 @@ describe("parseRunArgs", () => {
   });
 
   it("takes everything after the first = as the value, spaces included", () => {
-    // The shell delivers `--env "AUTH=Bearer abc"` and `--env AUTH="Bearer abc"`
-    // as ONE argument, so a value holding a space needs no argent-side rule.
     expect(parseRunArgs(["checkout", "--env", "AUTH=Bearer abc"]).env).toEqual({
       AUTH: "Bearer abc",
     });
     expect(parseRunArgs(["checkout", "--env", "Q=a=b=c"]).env).toEqual({ Q: "a=b=c" });
     expect(parseRunArgs(["checkout", "--env", "EMPTY="]).env).toEqual({ EMPTY: "" });
-    // Unquoted, the shell splits before argent sees it, and the leftover word is
-    // an ordinary unexpected-argument error.
     expect(() => parseRunArgs(["checkout", "--env", "AUTH=Bearer", "abc"])).toThrow(
       /unexpected argument "abc"/
     );
@@ -191,13 +187,6 @@ describe("parseRunArgs", () => {
   });
 
   it("refuses a reserved name here rather than at the server, in every spelling", () => {
-    // `--env` is one of the channels the reserved rule covers, and it is the
-    // one that answered a different question: the CLI kept its own copy of the
-    // NAME pattern and no reserved check at all. So the author who wrote
-    // `npm_config_node-options` — npm's own spelling, and the one the reference
-    // table lists as reserved — was told it is not an environment variable
-    // name, while the underscore spelling beside it passed the CLI and came
-    // back from the server naming the hyphenated one.
     for (const spelling of [
       "npm_config_node-options",
       "npm_config_node_options",
@@ -210,11 +199,9 @@ describe("parseRunArgs", () => {
     expect(() => parseRunArgs(["checkout", "--env", "NODE_OPTIONS=--inspect"])).toThrow(
       /--env cannot set NODE_OPTIONS/
     );
-    // The exchange pair earns the other reason the table gives.
     expect(() => parseRunArgs(["checkout", "--env", "ARGENT_OUTPUT=/tmp/x"])).toThrow(
       /names the file a `\.sh` step exchanges/
     );
-    // And a name no reserved entry claims still meets the name rule.
     expect(() => parseRunArgs(["checkout", "--env", "MY-VAR=x"])).toThrow(
       /"MY-VAR" is not an environment variable name/
     );
@@ -1129,15 +1116,6 @@ describe("argent flow run", () => {
   });
 
   it("stops a directory run on a refusal about the call, not about the file", async () => {
-    // `--env` is a property of the RUN. Classified as an ordinary validation
-    // rejection it was treated as this-flow-only, so one bad value printed the
-    // identical refusal once per flow and ended the batch `0 passed, N failed`
-    // — nothing to say the fault was one argument rather than N files.
-    //
-    // An unresolvable `{{secret:}}` rather than a reserved NAME: a reserved name
-    // never reaches the server now, because the CLI holds the same table and
-    // refuses it while parsing the flags. A secret the machine does not define
-    // is the refusal that still has to travel.
     const batchRoot = path.join(tempRoot, "batch-run-env");
     const flowsDir = path.join(batchRoot, ".argent", "flows");
     await fsp.mkdir(flowsDir, { recursive: true });
@@ -1160,20 +1138,11 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(errs.join("\n").match(/This run's env value S/g)).toHaveLength(1);
     expect(logs.join("\n")).toContain("0 passed, 1 failed, 2 skipped");
-    // The verdict is the single-flow runner's, because the two questions are
-    // different: whether this file is the fault decides what runs next, and
-    // whether anything RAN decides what to print. Read off one answer, this
-    // refusal printed "did not finish (run error)" here and "not run
-    // (rejected)" there - and the batch's was untrue, since `flow-execute`
-    // throws before it resolves the source. It was also the last line pinning a
-    // bad `--env` on the first file.
     expect(logs.join("\n")).toContain("not run (rejected)");
     expect(logs.join("\n")).not.toContain("did not finish (run error)");
   });
 
   it("keeps a directory run going when one FILE is refused", async () => {
-    // The other half: a refusal the server tied to this flow leaves the rest of
-    // the batch to run, which is what the classification is for.
     const batchRoot = path.join(tempRoot, "batch-bad-file");
     const flowsDir = path.join(batchRoot, ".argent", "flows");
     await fsp.mkdir(flowsDir, { recursive: true });

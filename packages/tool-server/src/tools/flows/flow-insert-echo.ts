@@ -45,26 +45,12 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);
 
-    // The append re-parses and re-validates the WHOLE file, so a fault already
-    // in it — a flow-level `env:` holding a template — refuses this call. The
-    // bare validator sentence names that value and nothing else: it does not
-    // say the echo went unrecorded, and it reads as if this call supplied the
-    // offending value. `flow-add-script` and `flow-add-step` were both given
-    // that wording when the file-level `env:` refusal was added; this recorder
-    // was the one left behind. No "check what ran" clause here, because an echo
-    // runs nothing.
     const step: FlowStep = { kind: "echo", message: params.message };
     let savedTo: FlowSavedTo;
     let stepCount: number;
     try {
       ({ savedTo, stepCount } = await appendStepToFlow(session, step));
     } catch (err) {
-      // The re-parse refuses on two stages. `flow_output_reference` can be this
-      // call's own `message`; the two parse stages read the file BEFORE this
-      // step joins it, so a fault they name was already there — a reserved
-      // name, a non-string value, a tagged map. Those arrived as a bare
-      // "Invalid flow file", which says neither that the echo went unrecorded
-      // nor that the value is not this call's.
       const stage = getFailureSignal(err)?.failure_stage;
       const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
       if (stage !== "flow_output_reference" && !fromTheFile) throw err;
@@ -76,12 +62,6 @@ Returns { message, stepCount, savedTo }. Fails if that flow has no recording in 
           failure_area: "tool_server",
           error_kind: "unknown",
         },
-        // An echo's own `message` is one of the fields that scan reads, so this
-        // call can be the one that supplied the offending value — and sending
-        // its author to a file that holds nothing but `steps: []` is the same
-        // misattribution the wrapper exists to correct, pointed the other way.
-        // {@link holdsOutputReference} is what `flow-add-step` asks to tell the
-        // two apart.
         (!fromTheFile && holdsOutputReference(step)
           ? `The echo was not recorded: its own \`message\` failed validation. `
           : `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +

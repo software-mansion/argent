@@ -18,17 +18,6 @@ import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-
 import { resolveHostBash } from "../../helpers/host-bash";
 import { scopeTempHome } from "../../helpers/temp-home";
 
-/**
- * A script step's LOG, redacted as its failure text is: each secret as written,
- * at any length, and - for a value of six characters or more - percent-encoded
- * (a space as `%20` or as `+`), JSON-escaped or base64-encoded whole, becomes
- * its `{{secret:NAME}}` placeholder - in a value split across pipe chunks, at
- * the per-step limit, and within the step's and the run's log budgets when a
- * placeholder is longer than what it replaced.
- *
- * Real child processes throughout, hence the generous timeouts.
- */
-
 const workspaces: ScriptWorkspace[] = [];
 
 function workspace(): ScriptWorkspace {
@@ -56,10 +45,6 @@ function executor() {
   return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 });
 }
 
-/**
- * One script, with each secret in its environment under its own name - the
- * shape `runFlowScriptStep` hands the executor. A `.sh` runs under bash.
- */
 async function runScript(
   file: string,
   source: string,
@@ -77,16 +62,8 @@ async function runScript(
   });
 }
 
-/** The shortest run of a spelling this file counts as disclosure. */
 const RUN = 6;
 
-/**
- * The spellings the scrub replaces: the value at any length, and for a value of
- * six characters or more - every value in this file - the bodies a JSON encoder
- * and both URL encoders write, and base64 of the whole value. Derived by the
- * real encoders rather than taken from the scrubber, so the two cannot agree by
- * construction.
- */
 function spellingsOf(value: string): string[] {
   return [
     value,
@@ -97,11 +74,6 @@ function spellingsOf(value: string): string[] {
   ];
 }
 
-/**
- * Every six-character run of any spelling the text holds. A run that long is
- * enough to find, and any longer fragment holds one, so this is also every
- * prefix a cut could have left.
- */
 function leakedRuns(text: string, value: string): string[] {
   const found = new Set<string>();
   for (const spelling of spellingsOf(value)) {
@@ -113,7 +85,6 @@ function leakedRuns(text: string, value: string): string[] {
   return [...found];
 }
 
-/** No run of any spelling of the value survives. */
 function expectNoRun(text: string, secret: FlowScriptSecret): void {
   expect(leakedRuns(text, secret.value)).toEqual([]);
 }
@@ -125,14 +96,12 @@ function expectRedacted(text: string, secret: FlowScriptSecret): void {
 
 const MARKER_OPEN = "{{secret:";
 
-/** Every marker opened is whole, and none is cut off at the end. */
 function expectWholeMarkers(text: string, name: string): void {
   expect(text.split(`${MARKER_OPEN}${name}}}`).length).toBe(text.split(MARKER_OPEN).length);
   const openings = [...MARKER_OPEN].map((_, at) => MARKER_OPEN.slice(0, at + 1));
   expect(openings.filter((opening) => text.endsWith(opening))).toEqual([]);
 }
 
-/** A password holding what each encoder rewrites: a quote, a space, `/`, `+`, `&` and a tab. */
 const PASSWORD: FlowScriptSecret = { name: "PASSWORD", value: 'pa"ss w0rd/9d3f+0a1b&7c2e\tq' };
 
 const PEM: FlowScriptSecret = {
@@ -155,8 +124,6 @@ describe("script log redaction - a value an encoder rewrote", () => {
     expectRedacted(result.log, PASSWORD);
   }, 30_000);
 
-  // A request body logged before it is sent: JSON writes the quote and the tab
-  // as escapes.
   it("replaces a value JSON.stringify escaped", async () => {
     const result = await runScript(
       "json.mjs",
@@ -179,7 +146,6 @@ describe("script log redaction - a value an encoder rewrote", () => {
     expectRedacted(result.log, PASSWORD);
   }, 30_000);
 
-  // A form body writes the space as `+`.
   it("replaces a value URLSearchParams encoded", async () => {
     const result = await runScript(
       "form.mjs",
@@ -204,9 +170,6 @@ describe("script log redaction - a value an encoder rewrote", () => {
 });
 
 describe("script log redaction - a spelling split across pipe chunks", () => {
-  // Split just past the escape, so the first half is no prefix of the value as
-  // written. The live scrub holds back a tail that could still begin a form, so
-  // what one stream wrote in two pieces is read as one text.
   it("replaces a spelling one stream wrote in two pieces", async () => {
     const result = await runScript(
       "halves.mjs",
@@ -222,8 +185,6 @@ describe("script log redaction - a spelling split across pipe chunks", () => {
     expectRedacted(result.log, PASSWORD);
   }, 30_000);
 
-  // A value can reach the log in two pieces from the two streams. The whole log
-  // is scrubbed again once the streams end, which reads it as one text.
   it("replaces a value the two streams split between them", async () => {
     const PIN: FlowScriptSecret = { name: "PIN", value: "1234" };
     const result = await runScript(
@@ -238,15 +199,8 @@ describe("script log redaction - a spelling split across pipe chunks", () => {
   }, 30_000);
 });
 
-/**
- * The per-step limit cuts wherever the budget runs out, which can be inside a
- * value or inside the placeholder the live scrub wrote for it. The log keeps
- * neither the front of the value nor a fragment of the marker.
- */
 describe("script log redaction - a value the per-step limit cut", () => {
   it("leaves no front of a value it cut", async () => {
-    // Padding the parent drains before the value is written, so the limit falls
-    // twelve characters into the line that prints it.
     const padding = `${"x".repeat(SCRIPT_STEP_LOG_LIMIT_BYTES - 13)}\n`;
     const result = await runScript(
       "cut-value.mjs",
@@ -257,25 +211,16 @@ describe("script log redaction - a value the per-step limit cut", () => {
     );
 
     expect(result.logTruncated).toBe(true);
-    // Nothing of that line is kept: its placeholder did not fit whole.
     expect(result.log).toBe(padding);
     expectNoRun(result.log, PASSWORD);
   }, 30_000);
 });
 
-/**
- * A replacement is not a shortening: `{{secret:PASS}}` is fifteen characters
- * for the eight of the base64 it replaces. The live scrub is charged for the
- * markers it writes, from what the step and the run have left, and the log is
- * cut where that runs out, with every marker whole.
- */
 describe("script log redaction - a scrub that grows the log", () => {
   const SHORT: FlowScriptSecret = { name: "PASS", value: "s3cr3t" };
   const basicThenDone = `console.log("Basic " + Buffer.from(process.env.PASS).toString("base64"));
      console.log("done");`;
 
-  // Far under the limit the growth has room: the placeholder is paid from what
-  // the step has left, and the lines after it are kept.
   it("keeps every line of a short log the scrub made longer", async () => {
     const result = await runScript("grow-short.mjs", basicThenDone, [SHORT]);
 
@@ -283,8 +228,6 @@ describe("script log redaction - a scrub that grows the log", () => {
     expect(result.logTruncated).toBe(false);
   }, 30_000);
 
-  // The run's budget pays for the placeholder too, and the log stops where it
-  // runs out: the 27 bytes the two lines grow to do not fit the 25 left.
   it("charges the growth to the run's budget, and cuts the log where that runs out", async () => {
     const logBudget = { remainingBytes: 25 };
     const result = await runScript("grow-budget.mjs", basicThenDone, [SHORT], { logBudget });
@@ -294,8 +237,6 @@ describe("script log redaction - a scrub that grows the log", () => {
     expect(logBudget.remainingBytes).toBe(0);
   }, 30_000);
 
-  // Under the per-step limit as written, over it once each line's base64 is a
-  // placeholder.
   it("keeps a log the scrub grew inside the per-step limit, with every marker whole", async () => {
     const line = "Basic {{secret:PASS}}\n";
     const result = await runScript(
@@ -306,7 +247,6 @@ describe("script log redaction - a scrub that grows the log", () => {
 
     expect(result.logTruncated).toBe(true);
     expect(result.log.startsWith(line.repeat(2000))).toBe(true);
-    // Cut where the step's limit runs out, not where the log as written ended.
     expect(Buffer.byteLength(result.log)).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
     expect(Buffer.byteLength(result.log)).toBeGreaterThan(
       SCRIPT_STEP_LOG_LIMIT_BYTES - line.length
@@ -319,9 +259,6 @@ describe("script log redaction - a scrub that grows the log", () => {
 describe("script log redaction - what must stay", () => {
   const TOKEN: FlowScriptSecret = { name: "TOKEN", value: "hunter2-9d3f0a1b7c2e" };
 
-  // The failure text reads a trailing omission marker as argent's own cut and
-  // drops the front of a value in front of it. A log carries no such marker -
-  // its cut is a flag - so text a script printed in that shape is the script's.
   it("leaves text that spells no value alone, even a line shaped like argent's cut marker", async () => {
     const printed =
       "digest deadbeefcafe0123 aGVsbG8gd29ybGQ= <Buffer 01 02 03> ordinary words\n" +
@@ -336,8 +273,6 @@ describe("script log redaction - what must stay", () => {
     expect(result.logTruncated).toBe(false);
   }, 30_000);
 
-  // The front of a value is dropped only where the LIMIT cut. A log that ended
-  // on its own ends where the script stopped writing, whatever that spells.
   it("leaves the end of a log nothing cut, where it opens a value", async () => {
     const result = await runScript(
       "open-end.mjs",
@@ -350,12 +285,6 @@ describe("script log redaction - what must stay", () => {
   }, 30_000);
 });
 
-/**
- * `set -x` is how a `.sh` step is debugged, and it writes every command to
- * stderr with its arguments expanded - so a credential in a header is in the
- * trace, and a failing command's trace is the last stderr line, which ends the
- * step's reason.
- */
 describe("script log redaction - a bash step's xtrace", () => {
   it("replaces the secret in the xtrace line, in the log and in the reason", async (ctx) => {
     skipWithoutBash(ctx);
@@ -377,21 +306,12 @@ describe("script log redaction - a bash step's xtrace", () => {
   }, 30_000);
 });
 
-/**
- * Past the cut nothing more reaches the log, so nothing is scrubbed there, and a
- * flood past the limit costs no scrub.
- */
 describe("script log redaction - past the cut", () => {
   const API_KEY: FlowScriptSecret = { name: "API_KEY", value: "sk-live-9d3f0a1b7c2e5f40" };
   const FLOOD = `head -c ${50 * 1024 * 1024} /dev/zero | tr '\\0' 'x'
      echo "upload failed for $API_KEY: HTTP 503" >&2
      exit 2`;
 
-  /**
-   * The run, and the CPU THIS process spent on it. The scrub is this process's
-   * work, and it overlaps the child's own writing, so wall time hides most of
-   * it while CPU time does not.
-   */
   async function flood(secrets: FlowScriptSecret[]) {
     const before = process.cpuUsage();
     const result = await runScript("flood.sh", FLOOD, secrets);
@@ -402,13 +322,9 @@ describe("script log redaction - past the cut", () => {
   it("drains a 50 MiB flood without scrubbing it, and still ends the reason with the last stderr line", async (ctx) => {
     skipWithoutBash(ctx);
     const unscrubbed = await flood([]);
-    // Three secrets, one of them multi-line, as a step with a few credentials
-    // carries.
     const { result, cpuMs } = await flood([API_KEY, PEM, PASSWORD]);
 
     expect(cpuMs - unscrubbed.cpuMs).toBeLessThan(1_000);
-    // A stream that stopped draining would end in the step's timeout, not in
-    // the script's own exit.
     expect(result.failure?.kind).toBe("exit");
     expect(result.failure?.message).toMatch(/upload failed for \{\{secret:API_KEY\}\}: HTTP 503$/);
     expect(result.logTruncated).toBe(true);
@@ -417,15 +333,7 @@ describe("script log redaction - past the cut", () => {
   }, 60_000);
 });
 
-/**
- * The two callers that report a log, through the one path both share:
- * `{{secret:NAME}}` resolved from the project's own `.argent/secrets.env`,
- * the step run, and the log carried out as `scriptLog` by a flow run and as
- * `log` by `flow-add-script`.
- */
 describe("script log redaction - end to end", () => {
-  // The secret chain ends at `~/.argent/secrets.env`, so a home of this test's
-  // own keeps a developer's file out of it.
   scopeTempHome("argent-log-redaction-home-");
 
   const KEY = "sk-live-9d3f0a1b7c2e5f40";
@@ -466,7 +374,6 @@ describe("script log redaction - end to end", () => {
     return result;
   }
 
-  /** The key as its own words, and as the base64 `base64` writes of it. */
   const REPORT_SH =
     `echo "calling the API with key $API_KEY"\n` + `printf '%s' "$API_KEY" | base64\n`;
   const REPORTED = "calling the API with key {{secret:API_KEY}}\n{{secret:API_KEY}}\n";
@@ -512,8 +419,6 @@ describe("script log redaction - end to end", () => {
     expectRedacted(log, SECRET);
   }, 30_000);
 
-  // Only a placeholder's value is a secret. A plaintext value sits beside it in
-  // the same environment, and replacing it would hide what the step ran with.
   it("leaves a plaintext env value as the script printed it", async () => {
     await write(
       "scripts/show.mjs",

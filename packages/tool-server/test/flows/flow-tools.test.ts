@@ -472,10 +472,6 @@ describe("a step the recorder refuses", () => {
     expect(message).not.toContain("its step failed validation");
   });
 
-  // The same wrap, over a refusal that names NO step: the file's own top-level
-  // `env:` is scanned for an output reference too, and a hand edit is how one
-  // arrives mid-recording. "Fix the step named below" named nothing at all
-  // there, which is why the wrap talks about the FILE rather than a step.
   it("does not name a step when the refusal is about the file's own env", async () => {
     const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
     const tool = createFlowAddStepTool(registry);

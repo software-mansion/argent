@@ -2067,10 +2067,6 @@ describe("recording a flow-execute step while several projects are in play", () 
   });
 
   it("warns that a rewritten run: step drops the env the recorded call passed", async () => {
-    // A `run:` step carries no environment of its own, so the sub-run's `env`
-    // is not part of what was recorded and the replay runs without it — the one
-    // lossy rewrite that used to say nothing. Names only: a value here may be a
-    // credential.
     const recordingRoot = await makeRoot("run-target-env");
     await writeSavedFlow(recordingRoot, "helper", fragment);
 
@@ -2085,17 +2081,11 @@ describe("recording a flow-execute step while several projects are in play", () 
     expect(res.message).toContain("a run: step takes no env");
     expect(res.message).toContain("BUILD, AUTH");
     expect(res.message).not.toContain("Bearer abc");
-    // The remedy that writes them into THIS recording's `env:` makes them a
-    // parent default, and `execRunStep` layers the fragment's own `env:` over
-    // the parent — so it reproduces the fragment's value, not the one the
-    // recorded call ran with, for any name the fragment declares.
     expect(res.message).toContain("only for a name that fragment does not itself declare");
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
       { kind: "run", flow: "helper.yaml" },
     ]);
 
-    // The finish counts it apart from the two other kinds: the step replays,
-    // just without values the live call had.
     const finished = (await flowFinishRecordingTool.execute(
       {},
       { name: "wrapper", project_root: recordingRoot }
@@ -2107,12 +2097,6 @@ describe("recording a flow-execute step while several projects are in play", () 
   });
 
   it("warns that a rewritten run: step hands the fragment the recording's own env", async () => {
-    // The mirror image of the case above. The live flow-execute started a run
-    // of its own, rooted at the fragment, so this recording's top-level `env:`
-    // never reached it; the recorded `run:` step composes the fragment under
-    // that `env:` at replay, so its scripts read values the live call never
-    // had. The header is written by hand after the start, the way
-    // flow-start-recording tells an author to put it back. Names only, as above.
     const recordingRoot = await makeRoot("run-target-inherits");
     await writeSavedFlow(recordingRoot, "helper", fragment);
 
@@ -2134,14 +2118,11 @@ describe("recording a flow-execute step while several projects are in play", () 
     );
     expect(res.message).toContain("declare it in helper.yaml's own env:");
     expect(res.message).not.toContain("https://staging.example");
-    // Nothing was passed, so nothing was dropped.
     expect(res.message).not.toContain("a run: step takes no env");
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
       { kind: "run", flow: "helper.yaml" },
     ]);
 
-    // The finish carries it under the step, as it does the dropped `env`: the
-    // replay's environment differs from the live call's either way.
     const finished = await finish(recordingRoot, "wrapper");
     expect(finished.message).toContain(
       "1 step replays under a different env than the recorded call ran with"
@@ -2160,7 +2141,6 @@ describe("recording a flow-execute step while several projects are in play", () 
       env: { API_URL: "https://fragment.example" },
     });
 
-    // A recording with no `env:` hands the fragment nothing.
     await start(root, "plain");
     const plain = await addRawStep(root, "plain", "flow-execute", {
       name: "helper",
@@ -2169,9 +2149,6 @@ describe("recording a flow-execute step while several projects are in play", () 
     });
     expect(plain.message).toBe('Step added to "plain" flow');
 
-    // A name the fragment declares itself reaches its scripts with the
-    // fragment's value at replay, because the fragment's `env:` layers over
-    // this recording's - the value the live call ran with too.
     await start(root, "shadowed");
     await writeSavedFlow(root, "shadowed", {
       executionPrerequisite: "",
@@ -2190,10 +2167,6 @@ describe("recording a flow-execute step while several projects are in play", () 
   });
 
   it("joins both env warnings when the call passed values and the recording has its own", async () => {
-    // One step, one string, so the finish files it once. The recording's names
-    // are narrowed twice: TENANT is the fragment's own, which layers over the
-    // recording's at replay, and BUILD is the call's, which the dropped warning
-    // already names.
     const root = await makeRoot("run-target-env-both");
     await writeSavedFlow(root, "helper", { ...fragment, env: { TENANT: "acme" } });
 

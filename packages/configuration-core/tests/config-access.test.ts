@@ -119,8 +119,6 @@ describe("scripts.env.allow — schema entry", () => {
   });
 
   it("unions both scopes — a project names what its own scripts read", () => {
-    // Additive rather than "project wins": the key names a project input on top
-    // of the machine's list, unlike the two host bounds beside it.
     setConfigValue("scripts.env.allow", ["AWS_PROFILE"], "global", opts());
     setConfigValue("scripts.env.allow", ["DATABASE_URL"], "project", opts());
     expect(getConfigValueByKey("scripts.env.allow", opts())).toEqual([

@@ -3,10 +3,6 @@ import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
-// The env-name rule and the one name it admits that nothing can carry, from
-// the package both this CLI and the tool server already read their shared
-// script bounds out of — so a `--env` argument is refused here against the
-// same rule the server holds it to, rather than against a copy of it.
 import {
   PROTO_ENV_NAME,
   SCRIPT_ENV_NAME_PATTERN,
@@ -190,14 +186,6 @@ const RUN_OPTIONS = {
   "env": { kind: "values" },
 } as const satisfies OptionSpecs;
 
-/**
- * `--env NAME=value`, collected into the map `flow-execute` takes.
- *
- * Everything after the FIRST `=` is the value, so a value holding one needs no
- * escaping — and a value holding a space is one argument to the shell as long
- * as it is quoted (`--env "AUTH=Bearer abc"` or `--env AUTH="Bearer abc"`). A
- * repeated name keeps the last value, the way a shell does.
- */
 function parseEnvAssignments(raw: string[] | undefined): Record<string, string> | undefined {
   if (!raw || raw.length === 0) return undefined;
   let env: Record<string, string> = {};
@@ -210,10 +198,6 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
       );
     }
     const name = assignment.slice(0, eq);
-    // The one name the pattern below admits and nothing downstream can carry:
-    // it reads as a name, and then `z.record` builds its own object and loses
-    // the key before any rule of argent sees it — the run would pass with the
-    // variable simply missing and not a word said.
     if (name === PROTO_ENV_NAME) {
       throw new FlagParseException(
         `--env cannot set ${PROTO_ENV_NAME}: every map on the way to the script copies it through ` +
@@ -221,13 +205,6 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
           `would be dropped and the script would run without it, silently. Use a name of your own`
       );
     }
-    // Reserved before malformed, because one reserved name is not a name this
-    // pattern accepts: `npm_config_node-options` is npm's own spelling, and the
-    // spelling the reference table and every refusal of argent's advertise.
-    // Asked the other way round, the author who wrote the documented name was
-    // told it is not an environment variable name at all, while the underscore
-    // spelling beside it passed here and was refused by the server with a
-    // message naming the hyphenated one.
     const reserved = reservedScriptEnvName(name);
     if (reserved) {
       throw new FlagParseException(
@@ -242,9 +219,6 @@ function parseEnvAssignments(raw: string[] | undefined): Record<string, string> 
           'continues with letters, digits or "_"'
       );
     }
-    // Spread rather than assignment, as a second line behind the refusal above:
-    // `env[name] = value` would reach the `__proto__` accessor instead of adding
-    // an entry. Nothing reaches it while that refusal stands.
     env = { ...env, [name]: assignment.slice(eq + 1) };
   }
   return env;
@@ -1140,15 +1114,6 @@ interface BatchFlowResult {
   error_kind?: string;
 }
 
-/**
- * Run every discovered flow in `dir` sequentially. Prints each flow's failing
- * steps and warnings, then its outcome (no live step lines), then a flow-level
- * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, a reply that is not a report, or a refusal about the CALL
- * rather than the file stops it and counts the remaining flows skipped.
- */
 async function runFlowDirectory(
   dir: string,
   args: ReturnType<typeof parseRunArgs>,
@@ -1177,11 +1142,6 @@ async function runFlowDirectory(
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
-  // A validation rejection about the FILE is scoped to one flow, so the batch keeps
-  // going. Anything else — a refusal about the call (see below), another kind,
-  // or none
-  // at all — stops it, as does a transport throw: each remaining flow would
-  // burn a run against the same wall.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
@@ -1201,13 +1161,6 @@ async function runFlowDirectory(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
-      // A refusal about the CALL is not a refusal about this file. Every flow
-      // in a batch is invoked with the same arguments apart from its own path
-      // — `--env` most of all — so a tool-input refusal repeats verbatim for
-      // each of them: `--env NODE_OPTIONS=x` over eleven flows printed one
-      // message eleven times and ended `0 passed, 11 failed`, with nothing to
-      // say the fault was one argument rather than eleven files. That stops the
-      // batch, like every other failure the server did not tie to this flow.
       const rejected = toolErr?.errorKind === "validation";
       const rejectedThisFlowOnly =
         rejected && toolErr.errorCode !== FAILURE_CODES.TOOL_INPUT_INVALID;
@@ -1217,16 +1170,6 @@ async function runFlowDirectory(
       // flow's — an entry that reads as if it never ran, while the final tally
       // still counts it failed and names nothing. Verdict before detail, as the
       // single-flow runner prints them, so a merged log reads the same way.
-      //
-      // Keyed on the rejection alone, NOT on whether the batch continues. The
-      // two questions are different: whether this file is the fault decides
-      // what runs next, and whether anything ran decides what to print. Read
-      // off one answer, a `--env NODE_OPTIONS=x` refusal printed "did not
-      // finish (run error)" here and "not run (rejected)" from the single-flow
-      // runner - two vocabularies for one refusal, and the batch's was untrue:
-      // `flow-execute` throws that before it resolves the source, so nothing
-      // ran. It was also the last line pinning a bad `--env` on the first file,
-      // which is the misattribution the exclusion above was written to remove.
       if (!args.json) {
         console.log(
           `  ${STATUS_GLYPH.error} ` +

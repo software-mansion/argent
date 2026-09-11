@@ -1663,15 +1663,6 @@ describe("environment and working directory", () => {
   }, 30_000);
 
   it("runs a step whose BASH_ENV names a preamble the version probe cannot", async () => {
-    // The reference blesses `BASH_ENV` — it steers the interpreter of the
-    // SCRIPT, and an author who sets one meant to — but the executor hands the
-    // step's environment to the bash-version probe as well, and that probe is
-    // not the script. The exchange is created AFTER the probe runs, so a
-    // preamble that needs `$ARGENT_OUTPUT` aborts there and answers with no
-    // marker; every candidate was then rejected and the step failed with "no
-    // bash this host offers could run the script", naming the host's bash
-    // installation and nothing about the value in the author's own flow file.
-    // The step it refused would have run, which is what this asserts.
     const ws = workspace();
     const preamble = ws.write(
       "preamble.sh",
@@ -1687,8 +1678,6 @@ describe("environment and working directory", () => {
 
     expect(result.failure?.message ?? "").not.toContain("No bash this host offers");
     expect(result.ok).toBe(true);
-    // And the preamble really did run for the STEP, which is what the name is
-    // documented to do.
     expect(result.output).toEqual({ greeting: "hello" });
   }, 30_000);
 
