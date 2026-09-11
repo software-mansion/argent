@@ -2405,7 +2405,8 @@ class ScriptLogCapture {
   }
 
   get stderrLineSoFar(): string {
-    return this.streams.get("stderr")?.lastLine?.peek() ?? this.stderrLastLine;
+    const lastLine = this.streams.get("stderr")?.lastLine;
+    return lastLine ? lastLine.snapshot(secretForms(this.secrets())) : this.stderrLastLine;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -2555,6 +2556,18 @@ class LastLineTracker {
   peek(): string {
     if (this.blank) return this.last;
     return this.length > this.head.length ? this.cut() : this.head.trim();
+  }
+
+  /**
+   * The line where it stands while the stream is still open. A line still being
+   * written is cut there by Argent, so the front of a value it ends on is
+   * dropped and counted, as `redactTruncated` does at the head's cut.
+   */
+  snapshot(secrets: readonly FlowScriptSecret[]): string {
+    if (this.blank || this.length > this.head.length) return this.peek();
+    const line = this.head.trim();
+    const partial = partialSecretTail(line, secrets);
+    return partial > 0 ? `${line.slice(0, line.length - partial)}${omissionMarker(partial)}` : line;
   }
 
   private extend(segment: string): void {

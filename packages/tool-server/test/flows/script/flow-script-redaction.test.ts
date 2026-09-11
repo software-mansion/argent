@@ -389,6 +389,39 @@ describe("flow script executor — redaction of a bash step", () => {
     30_000
   );
 
+  // A job still holding stderr leaves the line half written when stderr goes
+  // quiet for a settle after bash exits, and the reason takes the line where
+  // it stands - a cut of Argent's own, like the head's.
+  it("drops the front of a secret the stderr line was still being written on", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "half-line.sh",
+      `(
+         printf 'fatal: bad token %s' "\${API_KEY:0:8}" >&2
+         for i in $(seq 1 40); do echo "tick $i"; sleep 0.05; done
+         printf '%s\\n' "\${API_KEY:8}" >&2
+       ) &
+       sleep 0.1
+       exit 3`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { API_KEY: SECRET.value },
+      secrets: [SECRET],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    for (let n = SECRET.value.length; n > 3; n -= 1) {
+      expect(message).not.toContain(SECRET.value.slice(0, n));
+    }
+    expect(message).toMatch(/\. fatal: bad token … \[8 more characters omitted]$/);
+    expect(result.log).not.toContain(SECRET.value.slice(0, 8));
+    expect(result.log).toContain("{{secret:API_KEY}}");
+  }, 30_000);
+
   // The note for a directory the cleanup could not remove names the entry
   // that refused, and the script chose that name. Root ignores the mode.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
