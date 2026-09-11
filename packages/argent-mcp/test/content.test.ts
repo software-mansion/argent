@@ -316,6 +316,261 @@ describe("toMcpContent with artifact ctx", () => {
     ]);
   });
 
+  // `out` is the agent's own path for a capture that has to outlive the
+  // session — the temp cache above is deleted with it. Written client-side, so
+  // the file lands next to the agent even against a remote tool-server.
+  it("writes the PNG to `out` and reports that path in place of the temp cache", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    // Two directory levels below `root` are missing, so a non-recursive mkdir
+    // would ENOENT here — this also pins the recursive mkdir.
+    const out = join(root, "keep", "nested", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result[0]?.type).toBe("image");
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${out}` });
+  });
+
+  it("resolves a relative `out` against the working directory", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x43];
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      const result = await toMcpContent(
+        { image: artifactHandle("img2", "shot.png", "image/png") },
+        "image",
+        { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning(pngBytes) },
+        { udid: "DEV-1", out: "shots/base.png" }
+      );
+      // Not `root`: macOS resolves the chdir'd cwd through /var -> /private/var.
+      const expected = path.resolve(process.cwd(), "shots/base.png");
+      expect(await fs.readFile(expected)).toEqual(Buffer.from(pngBytes));
+      expect((result[1] as { text: string }).text).toBe(`Saved: ${expected}`);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  // No shell expands an MCP argument, so a leading `~` would otherwise become a
+  // directory of that name in the agent's project.
+  it("expands a leading ~ in `out`", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x44];
+    const home = process.env.HOME;
+    process.env.HOME = join(root, "home");
+    try {
+      await toMcpContent(
+        { image: artifactHandle("img3", "shot.png", "image/png") },
+        "image",
+        { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning(pngBytes) },
+        { udid: "DEV-1", out: "~/shots/base.png" }
+      );
+      expect(await fs.readFile(join(root, "home", "shots", "base.png"))).toEqual(
+        Buffer.from(pngBytes)
+      );
+    } finally {
+      if (home === undefined) delete process.env.HOME;
+      else process.env.HOME = home;
+    }
+  });
+
+  // The capture is the expensive part and it already succeeded; an `out` that
+  // cannot be written must cost the copy, not the image.
+  it("keeps the image and the temp path when `out` cannot be written", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x45];
+    const blocker = join(root, "blocker");
+    await fs.writeFile(blocker, "not a directory");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img4", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: join(blocker, "base.png") }
+    );
+
+    expect(result[0]).toEqual({
+      type: "image",
+      data: Buffer.from(pngBytes).toString("base64"),
+      mimeType: "image/png",
+    });
+    const text = (result[1] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\n/);
+    expect(text).toContain(`Could not save to ${join(blocker, "base.png")}`);
+  });
+
+  // The screenshot-diff recipe: a full-resolution baseline kept on disk and
+  // deliberately not spent on context.
+  it("writes `out` even when the image is suppressed from context", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x46];
+    const out = join(root, "baseline.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img5", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+  });
+
+  // Surrounding whitespace (e.g. a stray newline from loose serialization) is
+  // stripped before the path is resolved, so the file lands at the clean path
+  // rather than one whose name literally ends in spaces.
+  it("trims surrounding whitespace in `out`", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x47];
+    const clean = join(root, "trimmed", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img6", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: `${clean}   ` }
+    );
+
+    expect(await fs.readFile(clean)).toEqual(Buffer.from(pngBytes));
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${clean}` });
+  });
+
+  // `resolve` drops a trailing separator, so this used to create a regular FILE
+  // named `shots` and every later save under `shots/` then failed against it.
+  it("refuses a directory-shaped `out` instead of creating a file of that name", async () => {
+    const dirShaped = `${join(root, "shots")}/`;
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img7", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x48]),
+      },
+      { udid: "DEV-1", out: dirShaped }
+    );
+
+    await expect(fs.stat(join(root, "shots"))).rejects.toThrow();
+    expect(result[0]?.type).toBe("image");
+    const text = (result[1] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\n/);
+    expect(text).toContain("out names the file to write, not a directory");
+  });
+
+  // A tool-server too old for artifact handles still returns bytes, and the CLI's
+  // `--out` has always written them; `out` must not quietly become a no-op there.
+  it("honors `out` on the legacy { url, path } shape", async () => {
+    vi.stubGlobal("fetch", mockOk([...PNG_SIGNATURE, 0x49]));
+    const out = join(root, "legacy", "base.png");
+
+    const result = await toMcpContent({ url: "http://x/s.png", path: "/host/s.png" }, "image", {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchReturning([]),
+    });
+    expect((result[1] as { text: string }).text).toBe("Saved: /host/s.png");
+
+    const withOut = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out }
+    );
+    expect(await fs.readFile(out)).toEqual(Buffer.from([...PNG_SIGNATURE, 0x49]));
+    expect(withOut[1]).toEqual({ type: "text", text: `Saved: ${out}` });
+    vi.unstubAllGlobals();
+  });
+
+  // Suppressing the image normally spares the fetch — but `out` needs the bytes,
+  // and suppression + `out` is precisely the baseline recipe the skills prescribe.
+  it("still fetches the legacy url for `out` when the image is suppressed", async () => {
+    const fetchMock = mockOk([...PNG_SIGNATURE, 0x4a]);
+    vi.stubGlobal("fetch", fetchMock);
+    const out = join(root, "suppressed.png");
+
+    const result = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out, includeImageInContext: false }
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(await fs.readFile(out)).toEqual(Buffer.from([...PNG_SIGNATURE, 0x4a]));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+    vi.unstubAllGlobals();
+  });
+
+  // Nothing came back to write, and a baseline an earlier run left at `out` is
+  // still sitting there — unsaid, `screenshot-diff` would score it as this capture.
+  it("says `out` went unwritten, and calls the file already there stale", async () => {
+    const out = join(root, "baselines", "home.png");
+    await fs.mkdir(join(root, "baselines"), { recursive: true });
+    await fs.writeFile(out, "yesterday's baseline");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img8", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: (async () => ({ ok: false })) as unknown as typeof fetch,
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("yesterday's baseline");
+    const joined = result.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`Could not save to ${out}`);
+    expect(joined).toContain("stale");
+  });
+
+  // `resolve` collapses a trailing `/.` and `/..` as well as a bare separator, so
+  // each spelling names a directory the write would otherwise turn into a file.
+  it.each(["/.", "/..", "/"])("refuses an `out` ending in %s", async (tail) => {
+    const dirShaped = join(root, "shotsdir") + tail;
+
+    const result = await toMcpContent(
+      { image: artifactHandle("imgd", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x4b]),
+      },
+      { udid: "DEV-1", out: dirShaped }
+    );
+
+    await expect(fs.stat(join(root, "shotsdir"))).rejects.toThrow();
+    expect((result[1] as { text: string }).text).toContain(
+      "out names the file to write, not a directory"
+    );
+  });
+
+  // The legacy shape's own no-bytes exit: the url yields nothing usable, so the
+  // `out` the caller asked for is as unhonored as on the artifact path.
+  it("says `out` went unwritten when the legacy url yields no valid PNG", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    const out = join(root, "legacy-stale.png");
+    await fs.writeFile(out, "yesterday's baseline");
+
+    const result = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("yesterday's baseline");
+    const joined = result.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`Could not save to ${out}`);
+    expect(joined).toContain("stale");
+    vi.unstubAllGlobals();
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
@@ -839,6 +1094,131 @@ describe("flowRunToMcpContent", () => {
     // [3] is JSON result
     expect(texts[4]).toBe("[3] End");
     expect(texts[5]).toContain("complete");
+  });
+
+  // A step's `args` are the flow YAML echoed back by the tool-server, so under
+  // `argent link` a remote host picks them. `out` is a path on THIS machine and
+  // `savedText` truncates whatever is there, so it must not cross the wire
+  // boundary — only the render toggle does.
+  it("ignores `out` in a step's echoed args and leaves the named file alone", async () => {
+    const victim = join(root, "notes.txt");
+    await fs.writeFile(victim, "important user notes");
+
+    const input: FlowExecuteResult = {
+      flow: "poison",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: victim },
+          // The runner says so on the step itself, so every client reports it.
+          warning: `\`out\` was not written: anything already at ${victim} is from an earlier run.`,
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    expect(await fs.readFile(victim, "utf8")).toBe("important user notes");
+    const saved = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.startsWith("Saved:")
+    );
+    expect(saved?.text).not.toContain(victim);
+    // Refused out loud: silence here would leave the step reporting a pass and a
+    // `Saved:` line naming a scratch path, with a stale file still at `out`.
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`\`out\` was not written`);
+  });
+
+  // `argent link` points this client at an arbitrary tool-server with no version
+  // negotiation. One too old to raise the warning still echoes `out` back in the
+  // step's args, so the client has to say it itself or the agent gets a green
+  // step, a scratch `Saved:` path, and a stale PNG at `out`.
+  it("says `out` went unwritten when the tool-server sent no warning", async () => {
+    const victim = join(root, "victim.png");
+    await fs.writeFile(victim, "stale baseline");
+    const input: FlowExecuteResult = {
+      flow: "skew",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: victim },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain("`out` was not written");
+    expect(joined).toContain(victim);
+    expect(await fs.readFile(victim, "utf8")).toBe("stale baseline");
+  });
+
+  it("defers to the runner's own warning rather than saying it twice", async () => {
+    const input: FlowExecuteResult = {
+      flow: "skew",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: join(root, "v.png") },
+          warning: "the runner's own wording",
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain("the runner's own wording");
+    expect(joined).not.toContain("`out` was not written");
+  });
+
+  it("says nothing about `out` on a step that carried none", async () => {
+    const input: FlowExecuteResult = {
+      flow: "plain",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1" },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    expect(blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n")).not.toContain("⚠");
   });
 
   it("numbers steps sequentially", async () => {

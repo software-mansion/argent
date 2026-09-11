@@ -194,11 +194,12 @@ export interface StepReport {
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
    * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
-   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * `await: { idle: true }` whenever the screen could not be proved settled; by
+   * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited; and by a `tool:` step carrying an `out`, which names a
+   * path on the client and so goes unwritten (see {@link unwrittenOutWarning}).
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1069,6 +1070,24 @@ function toolArgProps(registry: Registry, tool: string): Record<string, unknown>
   return (
     registry.getTool(tool)?.inputSchema as { properties?: Record<string, unknown> } | undefined
   )?.properties;
+}
+
+/**
+ * `out` names a path on the CLIENT's filesystem, and only a direct call has a
+ * client to write it: a flow step's args come from the flow file, and the
+ * runner may not even share a machine with the caller. The step still passes -
+ * the capture happened - so this is the only thing standing between a green
+ * step and an agent diffing against whatever an earlier run left at that path.
+ */
+function unwrittenOutWarning(args: Record<string, unknown>): { warning?: string } {
+  const out = typeof args.out === "string" ? args.out.trim() : "";
+  if (!out) return {};
+  return {
+    warning:
+      `\`out\` was not written: a flow step's arguments come from the flow file, not from the ` +
+      `caller, so no step writes to the caller's machine. Anything already at ${out} is from an ` +
+      `earlier run - do not diff against it. Call \`screenshot\` directly to keep a capture.`,
+  };
 }
 
 /** The first retired key in one invocation's args, against the properties its tool declares. */
@@ -2503,7 +2522,15 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...unwrittenOutWarning(args),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
+  writeOutFile,
   type MaterializeContext,
 } from "@argent/tools-client";
 
@@ -54,6 +55,11 @@ export async function toMcpContent(
   result: unknown,
   outputHint?: string,
   ctx?: ContentContext,
+  /**
+   * The MCP caller's own arguments. `out` is read from here and written to THIS
+   * machine's filesystem, so a caller relaying args that arrived over the wire
+   * must launder them first - see {@link renderArgsOnly}.
+   */
   args?: unknown
 ): Promise<ContentBlock[]> {
   // `includeImageInContext: false` asks for the saved-path text only — no inline image.
@@ -67,14 +73,17 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        const saved: ContentBlock = {
+          type: "text",
+          text: await savedText(images[0]!.localPath, images[0]!.data, args),
+        };
         if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
         blocks.push(saved);
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, args);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -84,10 +93,51 @@ export async function toMcpContent(
   }
 
   if (outputHint === "image") {
-    return legacyImageContent(result, suppressImage);
+    return legacyImageContent(result, suppressImage, args);
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+/**
+ * The `Saved:` line for an image result, honoring the caller's `out` path.
+ *
+ * A materialized PNG sits on a scratch path nobody chose - the capture
+ * backend's own file when the tool-server is co-located, the session cache when
+ * it is remote. `out` asks for a copy where the agent wants it, written HERE
+ * rather than by the tool because the path names the agent's filesystem - a
+ * different host under `argent link`, and the host `screenshot-diff` reads a
+ * `baselinePath` from. A failed write is reported and the scratch path is still
+ * handed back, so a bad `out` costs the agent a copy, never the capture.
+ */
+async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
+  const out = requestedOut(args);
+  if (!out) return `Saved: ${scratchPath}`;
+  const saved = await writeOutFile(out, data);
+  return "wrote" in saved ? `Saved: ${saved.wrote}` : `Saved: ${scratchPath}\n${saved.failure}`;
+}
+
+/** The path the caller asked the PNG to be kept at, or null if it asked for none. */
+function requestedOut(args: unknown): string | null {
+  const raw = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+  return raw || null;
+}
+
+/**
+ * Said when `out` was asked for and no bytes ever arrived to honor it. Without
+ * it the agent's only signal is a `Saved:` line naming someone else's path (or,
+ * under `includeImageInContext: false`, nothing at all) - and a baseline left at
+ * `out` by an earlier run would be diffed as though it were this capture.
+ */
+function unsavedBlocks(args: unknown): ContentBlock[] {
+  const out = requestedOut(args);
+  if (!out) return [];
+  return [
+    {
+      type: "text",
+      text: `Could not save to ${out}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
+    },
+  ];
 }
 
 /**
@@ -105,25 +155,29 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  args: unknown
 ): Promise<ContentBlock[]> {
-  if (result && typeof result === "object" && "url" in result) {
-    const r = result as { url: string; path?: string };
-    if (suppressImage) {
-      return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
-    }
-    const buf = await fetchPngBytes(r.url);
-    if (buf) {
-      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
-    }
-    return [
-      {
-        type: "text" as const,
-        text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
-      },
-    ];
+  if (!(result && typeof result === "object" && "url" in result)) {
+    // Not a renderable screenshot at all — an artifact handle that failed to
+    // materialize leaves `{ image: null }` here.
+    return [{ type: "text", text: JSON.stringify(result, null, 2) }, ...unsavedBlocks(args)];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  const r = result as { url: string; path?: string };
+  // Suppressing the image normally spares the fetch, but `out` still needs the
+  // bytes — `includeImageInContext: false` plus `out` is the baseline recipe.
+  const buf = suppressImage && !requestedOut(args) ? null : await fetchPngBytes(r.url);
+  if (!buf) {
+    const head: ContentBlock = suppressImage
+      ? { type: "text", text: `Saved: ${r.path ?? ""}` }
+      : {
+          type: "text",
+          text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
+        };
+    return [head, ...unsavedBlocks(args)];
+  }
+  const saved: ContentBlock = { type: "text", text: await savedText(r.path ?? "", buf, args) };
+  return suppressImage ? [saved] : [imageBlock(buf, "image/png"), saved];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -294,10 +348,10 @@ export async function flowRunToMcpContent(
     // `error` is the legacy spelling of `reason`.
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
-    const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    const warning = step.warning ?? unwrittenOutWarning(step.args);
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning ? ` ⚠ ${warning}` : ""}`,
     });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
@@ -310,7 +364,9 @@ export async function flowRunToMcpContent(
     }
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      blocks.push(
+        ...(await toMcpContent(step.result, step.outputHint, ctx, renderArgsOnly(step.args)))
+      );
     }
 
     // Snapshot steps carry artifacts instead of a result.
@@ -333,6 +389,41 @@ export async function flowRunToMcpContent(
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
   }
   return blocks;
+}
+
+/**
+ * The runner's own warning for a step whose `out` it could not honor, restated
+ * for a tool-server too old to send one.
+ *
+ * `out` is written by the client, so a flow step never writes it — but only a
+ * tool-server carrying that runner says so, and `argent link` / ARGENT_TOOLS_URL
+ * point this client at an arbitrary one with no version negotiation. Without
+ * this the step reports a plain pass beside a `Saved:` line naming a scratch
+ * path, and a PNG an earlier run left at `out` is diffed as this capture. The
+ * CLI needs no counterpart: `argent flow run` refuses env and link routing, so
+ * its runner is always the local one.
+ */
+function unwrittenOutWarning(args: unknown): string | null {
+  const out = requestedOut(args);
+  if (!out) return null;
+  return (
+    `\`out\` was not written: a flow step's arguments come from the flow file, not from you, so ` +
+    `no step writes to this machine. Anything already at ${out} is from an earlier run - do not ` +
+    `diff against it. Call \`screenshot\` directly to keep a capture.`
+  );
+}
+
+/**
+ * The subset of a step's `args` that may steer rendering. A step's args are the
+ * flow YAML's `args:` mapping echoed back by the tool-server - wire data, and
+ * under `argent link` chosen by a different host - while `out` makes
+ * {@link toMcpContent} write to that path on this machine. So the toggle
+ * crosses and nothing else does; a new render arg has to be added here
+ * deliberately.
+ */
+function renderArgsOnly(args: unknown): unknown {
+  if (!isRecord(args)) return undefined;
+  return { includeImageInContext: args.includeImageInContext };
 }
 
 /**

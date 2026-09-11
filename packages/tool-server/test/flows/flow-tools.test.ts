@@ -562,6 +562,61 @@ describe("flow-add-step", () => {
     });
   });
 
+  // The skills tell an agent to pass `out` on every baseline capture. Recording
+  // one would bake a client-side path into the flow, where nothing writes it and
+  // every replay warns about it forever.
+  it("leaves a recorded screenshot step's `out` out of the flow, and says so", async () => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "out-rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "out-rec",
+        project_root: tmpDir,
+        command: "screenshot",
+        args: '{"scale":1,"out":"/tmp/run7-baseline.png"}',
+      }
+    );
+
+    const flow = parseFlow(await onDisk("out-rec"));
+    expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: { scale: 1 } }]);
+    expect(result.message).toContain("/tmp/run7-baseline.png");
+    expect(result.message).toContain("was not written");
+    // The live call still ran with everything the caller passed.
+    expect(registry.invokeTool).toHaveBeenCalledWith("screenshot", {
+      scale: 1,
+      out: "/tmp/run7-baseline.png",
+    });
+  });
+
+  it("records a step carrying no `out` unchanged and unremarked", async () => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "plain-rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      { name: "plain-rec", project_root: tmpDir, command: "screenshot", args: '{"scale":1}' }
+    );
+
+    expect(parseFlow(await onDisk("plain-rec")).steps).toEqual([
+      { kind: "tool", name: "screenshot", args: { scale: 1 } },
+    ]);
+    expect(result.message).not.toContain("was not written");
+  });
+
   it("returns the appended step as the `recorded` line, carrying delayMs", async () => {
     const registry = createMockRegistry({ tap: { result: { tapped: true } } });
     const tool = createFlowAddStepTool(registry);
@@ -2273,6 +2328,62 @@ describe("flow-execute", () => {
     });
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+  });
+
+  // `out` names a path on the CLIENT, and a flow step has no client to write it.
+  // Without the warning the step reports a plain pass beside a `Saved:` line
+  // naming a scratch path, and an agent diffs against whatever an earlier run
+  // left at `out`.
+  it("warns that a tool step's `out` went unwritten, naming the path", async () => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const runFlow = createRunFlowTool(registry);
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "out-run.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "screenshot", args: { out: "/tmp/baseline.png" } }],
+      })
+    );
+
+    const result = await runFlow.execute(
+      {},
+      { name: "out-run", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
+    );
+    assertFlowRunResult(result);
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({ status: "pass", tool: "screenshot" });
+    expect(result.steps[0]?.warning).toContain("/tmp/baseline.png");
+    expect(result.steps[0]?.warning).toContain("`out` was not written");
+  });
+
+  it.each([{}, { out: "   " }])("leaves a step carrying no `out` unwarned (%j)", async (args) => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const runFlow = createRunFlowTool(registry);
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plain-run.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "screenshot", args }],
+      })
+    );
+
+    const result = await runFlow.execute(
+      {},
+      { name: "plain-run", project_root: tmpDir, prerequisiteAcknowledged: true, device: DEVICE }
+    );
+    assertFlowRunResult(result);
+
+    expect(result.steps[0]).toMatchObject({ status: "pass" });
+    expect(result.steps[0]?.warning).toBeUndefined();
   });
 
   it("propagates the request's telemetry attribution to each tool step", async () => {

@@ -73,6 +73,24 @@ const gestureTapMeta = {
   },
 };
 
+// A tool (like screenshot) that declares an `out` property. `--out` is a reserved
+// global flag `splitOptions` intercepts before the schema parser, so the schema
+// `out` can't be reached through its flag here and must NOT be listed in the
+// per-tool Flags block — otherwise the Global flags `--out` is printed twice.
+const screenshotMeta = {
+  name: "screenshot",
+  description: "Capture a screenshot",
+  inputSchema: {
+    type: "object",
+    properties: {
+      udid: { type: "string" },
+      includeImageInContext: { type: "boolean" },
+      out: { type: "string", description: "Save the PNG here on YOUR machine." },
+    },
+    required: ["udid"],
+  },
+};
+
 // Unique text from the two suppressible whole-payload help lines.
 const WHOLE_PAYLOAD_LINE = "Pass the entire payload as JSON";
 const STDIN_SENTINEL_LINE = "Read the entire payload as JSON from stdin";
@@ -117,6 +135,23 @@ describe("argent run --help — whole-payload --args advertisement", () => {
     // block (rendered as `--args <value>` by formatSchemaUsage), so suppression
     // removes the whole-payload hatch without hiding the field itself.
     expect(help).toContain("--args <value>");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("does not list a reserved global flag (`out`) as a per-tool flag, so `--out` appears once", async () => {
+    toolsClientMock.fetchTool.mockResolvedValue(screenshotMeta);
+
+    await run(["screenshot", "--help"], { paths: {} as never });
+
+    const help = capturedHelp();
+    // The schema `out` would otherwise render as `--out <value>` in the Flags
+    // block, colliding with the Global flags `--out <path>` below it.
+    const outRows = help.split("\n").filter((l) => /^\s*--out(\s|=|$)/.test(l));
+    expect(outRows).toHaveLength(1);
+    expect(outRows[0]).toContain("For image results, save to");
+    // The tool's other fields still render — the filter drops only `out`.
+    expect(help).toContain("--udid <value>");
+    expect(help).toContain("--includeImageInContext");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 

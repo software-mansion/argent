@@ -251,10 +251,15 @@ Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }`
 
 Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 
-Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
+Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context, and name the file with `out` - a screenshot taken without it only exists on a scratch temp path you did not choose. Make the name unique to this run; several agents share this filesystem:
 
 ```json
-{ "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
+{
+  "udid": "<UDID>",
+  "scale": 1.0,
+  "includeImageInContext": false,
+  "out": "/tmp/<run-id>-baseline.png"
+}
 ```
 
 For visual regression checks, before/after screenshot comparisons, and detailed `screenshot-diff` parameter guidance, use the `argent-screenshot-diff` skill. Keep this skill focused on device interaction mechanics and screenshot capture.
