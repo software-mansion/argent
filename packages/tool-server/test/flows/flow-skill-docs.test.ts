@@ -15,10 +15,6 @@ import {
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 
-/**
- * Keep the core skill's scope routing concise while guarding the linked
- * reference examples against parser drift.
- */
 const SKILL = path.resolve(__dirname, "../../../skills/skills/argent-create-flow/SKILL.md");
 const FLOW_YAML = path.resolve(
   __dirname,
@@ -29,23 +25,11 @@ const LIVE_AUTHORING = path.resolve(
   "../../../skills/skills/argent-create-flow/references/live-authoring.md"
 );
 const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
-/**
- * How each insertion in {@link LIVE_AUTHORING}'s list is spelled in rule 5 of
- * the core skill, which enumerates them rather than counting them. Kept in
- * step with that list by the length assertion in the guard below, so a fourth
- * bullet cannot be added while rule 5 still says "the only" three.
- */
 const RULE_5_INSERTIONS = ["`snapshot:`", "`await: { idle: true }`", "Chromium"];
 const INSERTION_COUNT_CITATIONS = [
   path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
 ];
 
-/**
- * The three surfaces that quote the number of `idle` warnings instead of
- * listing them. They cite the reference rather than restating it, so a warning
- * added to the list leaves all three saying the wrong count — which is exactly
- * how "five different warnings" survived a sixth being added.
- */
 const WARNING_COUNT_CITATIONS = [
   LIVE_AUTHORING,
   path.resolve(
@@ -55,12 +39,6 @@ const WARNING_COUNT_CITATIONS = [
   path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
 ];
 
-/**
- * The text between two markers. BOTH are asserted: `split` on an absent
- * separator returns a single-element array, so an unchecked `end` would widen
- * the section silently to EOF — and the callers below then count snippets from
- * the rest of the file instead of failing on the renamed heading.
- */
 function between(file: string, start: string, end: string): string {
   const after = readFileSync(file, "utf8").split(start)[1];
   expect(after, `${start} is missing from ${file}`).toBeDefined();
@@ -90,10 +68,6 @@ describe("create-flow selector-scope docs", () => {
   });
 });
 
-// The exchange docstring in `flow-script-executor.ts` reasons from a practice
-// the reader has to have been taught, and it names the page that teaches it.
-// The page had no `$ARGENT_OUTPUT` in it at all when that reasoning was
-// written, so the mode the document arrives with rested on nothing.
 describe("bash script exchange docs", () => {
   const REFERENCE = path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx");
 
@@ -104,16 +78,10 @@ describe("bash script exchange docs", () => {
     expect(text).toMatch(/mv .\$ARGENT_OUTPUT\.new/);
   });
 
-  // The runner sets no reason file. A doc that names one teaches a variable
-  // that expands to the empty string, and the explanation written to it is lost.
   it.each([REFERENCE, FLOW_YAML, LIVE_AUTHORING, SKILL])("names no reason file in %s", (file) => {
     expect(readFileSync(file, "utf8")).not.toContain("ARGENT_REASON");
   });
 
-  // A bash step explains a non-zero exit through stderr alone: the reason ends
-  // with the last non-blank line the script wrote there, and stdout never
-  // reaches it. Read inside the bash section, so a mention elsewhere on the
-  // page cannot stand in for it.
   it("teaches the stderr failure reason in the Bash documentation", () => {
     const section = between(REFERENCE, "### Bash scripts", "\n## The `argent flow` command");
     expect(section).toMatch(/last non-blank[^.]*stderr/);
@@ -122,18 +90,10 @@ describe("bash script exchange docs", () => {
   });
 });
 
-// The `idle` account moved out of SKILL.md into the flow-yaml reference, so
-// these read it there. They are otherwise the guards that came with the
-// warn-instead-of-fail change: the reference has to agree with what `idle`
-// does, and the numbers the prose quotes have to be the ones the parser
-// enforces.
 describe("create-flow idle docs", () => {
   it("the reference says idle warns rather than fails", () => {
     const reference = readFileSync(FLOW_YAML, "utf8");
     expect(reference).toContain("It **never fails a run.**");
-    // The one outcome that does stop a run is the window, never the app - and
-    // it is scoped to the step that could not read, since the same outage
-    // leaves a selector-less gesture passing with a warning of its own.
     expect(reference).toMatch(/Only a tree source this step could not read stops the run/);
     expect(reference).toMatch(/stops no \[selector-less gesture\]/);
   });
@@ -144,12 +104,8 @@ describe("create-flow idle docs", () => {
     expect(reference).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
     expect(reference).toContain(`${IDLE_SETTLE_SPAN_MS}ms a settle spans`);
     expect(reference).toContain(`${IDLE_POLL_MS}ms polls`);
-    // The gloss has to describe the span it names: the polls the intervals are
-    // measured over. The round-start floor is quoted separately because it is
-    // the one term that IS added.
     expect(IDLE_SETTLE_SPAN_MS).toBe(IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS);
     expect(reference).toContain(`plus the ${IDLE_POLL_MS}ms of budget the closing round`);
-    // And the worked numbers it hands the author have to be the parser's.
     expect(reference).toContain(
       `the default ${IDLE_DEFAULT_STABLE_FOR_MS}ms hold needs ` +
         `${idleMinimumTimeoutMs(IDLE_DEFAULT_STABLE_FOR_MS)}ms and an 800ms hold needs ` +
@@ -174,10 +130,6 @@ describe("create-flow idle docs", () => {
       expect(quotes.length, `${file} no longer cites the insertion count`).toBeGreaterThan(0);
       for (const quote of quotes) expect(quote[1], file).toBe(spelled);
     }
-    // Rule 5 cites no number — it ENUMERATES the insertions inline — so the
-    // spelled count above cannot police it. Hold it to the same list instead,
-    // and read only that sentence: `await: { idle: true }` is also in rule 4,
-    // so a file-wide search would pass with rule 5's copy of it deleted.
     const rule5 = between(SKILL, "The only unrecorded insertions are", "\n");
     expect(
       RULE_5_INSERTIONS,
@@ -191,14 +143,10 @@ describe("create-flow idle docs", () => {
   it("every doc that quotes the number of idle warnings quotes the number the reference lists", () => {
     const warnings = between(FLOW_YAML, "It **never fails a run.**", "\nOnly a tree source");
     const listed = [...warnings.matchAll(/^- \*\*/gm)].length;
-    // Guard the reader itself: a section that stopped matching would count 0
-    // and then agree with nothing, which is not the failure we want reported.
     expect(listed).toBeGreaterThan(1);
     const spelled = SPELLED[listed];
     expect(spelled, `no spelling for ${listed} warnings`).toBeDefined();
     for (const file of WARNING_COUNT_CITATIONS) {
-      // Anchored on the linked citation, not on any "… warnings" phrase: these
-      // files also say things like "Read this file for selector warnings".
       const quoted = readFileSync(file, "utf8").match(
         /\[(?:which of the )?(\w+) (?:different )?warnings\]\(/
       );
@@ -208,11 +156,6 @@ describe("create-flow idle docs", () => {
   });
 
   it("the smallest timeout the reference's arithmetic allows is the one the parser accepts", () => {
-    // The reference tells an author the wait has to contain the LONGER of the
-    // hold and the settle's span, plus the closing round's budget. Take it at
-    // its word on both sides of the max — a hold under the span and one over
-    // it — and check each boundary both ways, since a parser that demanded a
-    // millisecond more would make the documented arithmetic a lie.
     for (const stableFor of [IDLE_DEFAULT_STABLE_FOR_MS, 800]) {
       const smallest = Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
       expect(idleMinimumTimeoutMs(stableFor)).toBe(smallest);
@@ -257,15 +200,8 @@ describe("create-flow directive-answer docs", () => {
   });
 });
 
-/**
- * `project_root` is the only agent-facing statement of where a `script:` path
- * resolves from, so that claim is pinned here rather than left to prose review.
- */
 describe("create-flow script docs", () => {
   it("lists a script path among what a flow_path run re-anchors", () => {
-    // `project_root` still names the script's working directory either way; it
-    // is the RESOLUTION that moves to the YAML, and a `script:` path is the
-    // third thing that moves with it.
     const schema = zodObjectToJsonSchema(
       createRunFlowTool({} as unknown as Registry).zodSchema!
     ) as { properties: Record<string, { description?: string }> };

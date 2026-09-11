@@ -38,13 +38,6 @@ const zodSchema = z.object({
     ),
 });
 
-/**
- * `project_root` is the AGENT's project; the probe says whether it also exists
- * on this host. If it does (co-located, or a synced checkout) the flow file is
- * written here; if it doesn't (remote tool-server) the recording is kept in
- * memory and every mutating flow tool returns a client-write directive, so the
- * YAML lands in the agent's project instead of recreating its layout here.
- */
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe" },
 ];
@@ -61,15 +54,9 @@ export const flowStartRecordingTool: ToolDefinition<
 > = {
   id: "flow-start-recording",
   interaction: {
-    // Name the flow: concurrent recordings interleave in one log, and "flow
-    // recording" would not say which.
     startedMsg: ({ params }) => `Starting recording of flow ${params.name}`,
     completedMsg: ({ params, result }) => {
       if (!result.restarted) return `Started recording flow ${params.name}`;
-      // A plain "started" would hide that a live take was discarded.
-      // `discardedSteps` is absent when the superseded file could not be read
-      // or parsed - 0 is the answer a genuinely empty take gives - so do not
-      // claim a count we do not have.
       const discarded = result.discardedSteps;
       return discarded === undefined
         ? `Restarted recording flow ${params.name}, discarding the previous take`
@@ -113,9 +100,6 @@ costs the finish the cross-tree verdicts anchored to them.`,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const filePath = getFlowPath(params.project_root, params.name);
-    // The type emerges from the steps: a first `restart-app` becomes a leading
-    // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
-    // documents a fragment.
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
       steps: [],
@@ -128,10 +112,6 @@ costs the finish the cross-tree verdicts anchored to them.`,
     const probe = ctx?.fileInputs?.project_root;
     const persist = probe && !probe.presentOnHost ? "client" : "host";
 
-    // Truncate-and-register is one critical section: under the flow-file lock a
-    // step from the take being discarded can neither slip in between the reset
-    // and the swap nor land after both - it finds its session superseded and
-    // fails.
     const { savedTo, replaced, discardedSteps } = await withFlowFileLock(
       params.project_root,
       params.name,
@@ -174,19 +154,12 @@ costs the finish the cross-tree verdicts anchored to them.`,
       }
     );
 
-    // Recordings are keyed per flow file, so only a same-key restart replaces
-    // anything; starting a *different* flow abandons nothing to report.
     if (replaced) {
-      // Only claim the file was reset when this process reset it: in client mode
-      // truncation waits on the client applying the directive, and a rejected
-      // path or a failed write there comes back as `savedTo: null`.
       const reset =
         persist === "host"
           ? `${filePath} reset to an empty flow.`
           : `${filePath} is reset to an empty flow once your client applies \`savedTo\` ` +
             `(a null \`savedTo\` means it did not).`;
-      // An unreadable or unparseable file leaves the loss uncounted, so report
-      // the discard without a number rather than one the file disagrees with.
       const lost =
         discardedSteps === undefined
           ? "the previous take"

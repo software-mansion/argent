@@ -96,9 +96,9 @@ A container that aggregates a child's text therefore splits them: `tap` hits the
 Flow selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
 
 ```yaml
-- tap: { text: Delete, within: { id: profile-card } } # inside a container
-- assert: { visible: { role: Button, after: { text: Danger zone } } } # any follower
-- tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
+- tap: { text: Delete, within: { id: profile-card } }
+- assert: { visible: { role: Button, after: { text: Danger zone } } }
+- tap: { role: Switch, next: { text: Wi-Fi } }
 ```
 
 `within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
@@ -180,8 +180,8 @@ A negative condition proves only that the current tree has no visible match. It 
 Every screen change needs both checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. A dropped tap can leave the source screen idle. A destination element can enter the tree before its animation finishes. Therefore neither check replaces the other.

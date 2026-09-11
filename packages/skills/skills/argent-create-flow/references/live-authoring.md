@@ -206,11 +206,9 @@ If polish reveals a missing action or structural check, restore its preceding st
 flow-start-recording { FLOW }
 flow-add-echo { FLOW, message: "Restart Acme Notes; expect Home" }
 flow-add-step { FLOW, command: "restart-app", args: "{\"udid\":\"ABC\",\"bundleId\":\"com.acme.notes\"}" }
-# captured as: - launch: com.acme.notes
 flow-add-step { FLOW, command: "await-ui-element", args: "{\"udid\":\"ABC\",\"condition\":\"visible\",\"selector\":{\"identifier\":\"home-screen\"}}" }
 flow-add-echo { FLOW, message: "On Home; open Settings" }
 flow-add-step { FLOW, command: "gesture-tap", args: "{\"udid\":\"ABC\",\"x\":0.91,\"y\":0.94}" }
-# pre-tap capture resolves to: - tap: { id: settings-tab }
 flow-add-step { FLOW, command: "await-ui-element", args: "{\"udid\":\"ABC\",\"condition\":\"visible\",\"selector\":{\"identifier\":\"settings-screen\"}}" }
 flow-finish-recording { FLOW }
 ```
@@ -234,15 +232,11 @@ steps:
 Run these checks before replay:
 
 ```text
-# Weak targets: coordinates, raw gestures, role-only selectors
 rg -n '(\{ *x:|^ +(x|centerX|fromX|toX):|gesture-(tap|swipe|scroll|drag|pinch|rotate|custom))' .argent/flows/<name>.yaml
 rg -n -B2 '^ +role:' .argent/flows/<name>.yaml
-# Stored device ids
 rg -n '(udid|device_id)' .argent/flows/<name>.yaml
-# Positional ids and loose condition selectors
 rg -n '(-selector-\d+|selector-\d+\b)' .argent/flows/<name>.yaml
 rg -n '(visible|hidden|exists) *: *["'"'"'A-Za-z0-9]' .argent/flows/<name>.yaml
-# Fixed waits and skipped navigation
 rg -n '^\s*- wait:|open-url' .argent/flows/<name>.yaml
 ```
 

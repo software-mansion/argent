@@ -1,21 +1,3 @@
-/**
- * The IPC protocol between the flow script executor and the
- * `flow-script-runner.mjs` child it forks: an `execute` request out, then
- * `started` and one terminal response back.
- *
- * Script logs never travel here — they ride stdout/stderr, so that console text
- * and any subprocess the script starts land in one stream in written order, and
- * so that a limit can apply while draining rather than after a whole message
- * has been serialized.
- *
- * The runner has two modes, and `interpreter` is what picks one. In `node` mode
- * it rides in as an `--import` preload in front of the script itself, and the
- * document crosses this channel in both directions. In `bash` mode it is the
- * entry module and spawns bash as its own child, so the document travels
- * through the file the executor names in the request instead — bash has no
- * IPC channel, and the runner closes its own to what it starts.
- */
-
 export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /**
@@ -50,17 +32,9 @@ export interface ScriptExecuteNodeRequest extends ScriptExecuteCommon {
 
 export interface ScriptExecuteBashRequest extends ScriptExecuteCommon {
   interpreter: Extract<ScriptInterpreter, "bash">;
-  /** Absolute, resolved by the parent; the runner runs what it is told. */
   interpreterPath: string;
-  /** bash's one argument, and `$0`. Forward slashes on every platform. */
   scriptPath: string;
-  /** `$ARGENT_OUTPUT`: the document, in and out. Created by the parent. */
   outputFile: string;
-  /**
-   * What the parent seeded {@link outputFile} with. The runner compares the
-   * document it reads back against this, and only then can say the script wrote
-   * nowhere the parent looked.
-   */
   outputJson: string;
   /**
    * The parent's OWN time limit - {@link ScriptExecuteCommon.deadlineMs} minus
@@ -84,11 +58,6 @@ export type ScriptFailureType =
   | "spawn"
   | "signal";
 
-/**
- * Child → parent. `started` is the only thing that lets the parent tell "the
- * runner never began the script" apart from "the script stopped its own
- * process".
- */
 export type ScriptResponse =
   | { type: "started" }
   | { type: "result"; outputJson: string }

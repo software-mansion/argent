@@ -1,32 +1,14 @@
-// Every recognized config value: its shape, where it may be set, and how the
-// two scopes merge. `argent config`, the merged reader (config-access.ts) and
-// validation all read this registry.
-
 import * as path from "node:path";
 import type { FlagScope } from "./flags.js";
 import type { MergePolicy } from "./merge.js";
 
-/** One recognized configuration value. */
 export interface ConfigDefinition<T = unknown> {
-  /** Dotted path into config.json. */
   readonly key: string;
-  /** One-line summary shown by `argent config` / `argent config list`. */
   readonly description: string;
-  /** Scopes this value may be written to. Reads only merge the listed scopes. */
   readonly scopes: readonly FlagScope[];
-  /** Validate + normalize a raw JSON value; `undefined` means absent/invalid. */
   readonly parse: (raw: unknown) => T | undefined;
-  /**
-   * The check `argent config set` applies instead of {@link parse}, for a key
-   * whose `parse` is deliberately permissive. A reader cannot tell a value
-   * `parse` threw away from an absent key, so a key whose own reader reports
-   * what it found has to KEEP a wrong value — which is no reason to accept one
-   * being typed in. Absent ⇒ `parse` is the write check too.
-   */
   readonly validateWrite?: (raw: unknown) => T | undefined;
-  /** How the project and global values combine into the effective value. */
   readonly merge: MergePolicy<T>;
-  /** Effective value when no scope contributes one. */
   readonly default?: T;
   /**
    * `argent config set/unset` refuses this key and points at this command
@@ -35,43 +17,23 @@ export interface ConfigDefinition<T = unknown> {
    * through `argent config`.
    */
   readonly manageCommand?: string;
-  /** Example value, shown by `argent config list` and when a value is rejected. */
   readonly example?: string;
-  /**
-   * What a valid value looks like, in words, for the message shown when one is
-   * rejected. Only needed for a bespoke `parse` — a shared helper describes
-   * itself, see {@link describeExpectedValue}.
-   */
   readonly expected?: string;
 }
 
-/** Accept a JSON boolean. */
 export function asBoolean(raw: unknown): boolean | undefined {
   return typeof raw === "boolean" ? raw : undefined;
 }
 
-/** Accept a non-blank string, trimmed. Blank/whitespace reads as unset. */
 export function asString(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   return trimmed === "" ? undefined : trimmed;
 }
 
-/**
- * Any value that is present, as text. Only for a key whose own reader checks
- * the value and reports what it found: a rejected value is invisible to that
- * reader, and a wrong one that is silently ignored fails somewhere else.
- *
- * `null` is absent here, as it is for every other parser in this file. A
- * generator that writes `null` for a key it has no value for means "unset",
- * and reading it as the text "null" makes it the one value nothing can use and
- * nothing falls back from.
- */
 function asPresentText(raw: unknown): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "string") return raw.trim();
-  // A config file is JSON, so everything that reaches here has a JSON text
-  // form; `??` covers a caller that passed a live value which has none.
   return JSON.stringify(raw) ?? "(a value with no JSON form)";
 }
 
@@ -85,25 +47,15 @@ function asPresentText(raw: unknown): string | undefined {
  */
 export const WINDOWS_ROOTED_PATH_RE = /^(?:[A-Za-z]:[\\/]|[\\/][\\/])/;
 
-/**
- * Accept a non-blank string that names an absolute path on THIS host. The
- * running platform's rules, because the path is for a program this host has to
- * start: `C:\\…` is not a path a POSIX tool server can spawn, and a
- * `/usr/bin/…` is not one a Windows tool server can.
- */
 function asAbsolutePath(raw: unknown): string | undefined {
   const text = asString(raw);
   if (text === undefined) return undefined;
   const win32 = process.platform === "win32";
-  // Explicit win32 semantics under win32 rather than the bare `path` object's,
-  // which is the same thing on a real Windows host and is testable from a POSIX
-  // one — the shape `flow-script-interpreter.ts` reads the value back with.
   if (!(win32 ? path.win32 : path.posix).isAbsolute(text)) return undefined;
   if (win32 && !WINDOWS_ROOTED_PATH_RE.test(text)) return undefined;
   return text;
 }
 
-/** Accept a finite JSON number. */
 export function asNumber(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
@@ -126,7 +78,6 @@ export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
  */
 export const MIN_SCRIPT_TIMEOUT_MS = 100;
 
-/** Accept an array of non-blank strings (blank entries dropped). */
 export function asStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
@@ -136,11 +87,6 @@ export function asStringArray(raw: unknown): string[] | undefined {
   return out;
 }
 
-/**
- * How each shared validator describes the value it accepts. Keyed on the
- * validator itself, so swapping a key's `parse` swaps its description with it
- * instead of letting a per-entry wording drift from what is enforced.
- */
 const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
   [asBoolean, "a boolean (true or false)"],
   [asString, "a non-empty string"],
@@ -149,10 +95,6 @@ const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
   [asStringArray, "an array of strings"],
 ]);
 
-/**
- * What a valid value for this key looks like, in words — undefined for a bespoke
- * validator that set no `expected`, so callers describe nothing rather than guess.
- */
 export function describeExpectedValue(def: ConfigDefinition): string | undefined {
   return def.expected ?? PARSER_EXPECTATIONS.get(def.parse);
 }
@@ -167,8 +109,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     scopes: ["project", "global"],
     parse: asBoolean,
     merge: "prioritize-restrictive",
-    // Opt-out: consent.ts reads an unstored value as enabled, so the config
-    // surface must show the same rather than "(unset)".
     default: true,
     // Opt-in/out goes through the dedicated command so the live client is
     // drained/reset, not just the file rewritten.
@@ -203,9 +143,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "the project root (project scope) or home (global scope).",
     scopes: ["project", "global"],
     parse: asStringArray,
-    // Additive rather than shadowing: global baseline first, project extras
-    // after, deduplicated. `getAdditionalIosDeviceSets` re-implements this union
-    // (path resolution must precede dedup) and guards on the preset staying "union".
     merge: "union",
     example: '["~/DeviceSets/ci"]',
   },
@@ -295,7 +232,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   },
 ] as const;
 
-/** Look up a schema entry by key, or `undefined` when the key is unknown. */
 export function getConfigDefinition(
   key: string,
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA

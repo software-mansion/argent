@@ -1,31 +1,10 @@
 import { rmSync } from "node:fs";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * The two ways the filesystem can refuse the exchange directory, neither of
- * which a POSIX host reaches on its own: `EBUSY` on the removal, which Windows
- * answers while a surviving descendant still holds a file in it, and a write
- * that fails after the directory has been made (`ENOSPC`, `EROFS`, `EDQUOT`).
- * Only the named call is refused here; everything else passes straight through.
- *
- * Its own file, because the mock is module-wide.
- *
- * Deliberately NOT in the Windows job's list (`.github/workflows/windows-e2e.yml`):
- * both refusals arrive from the mock above rather than from a filesystem, so
- * what is asserted here is the same on every platform and the ubuntu job proves
- * it. Windows is named only as the host that produces the real `EBUSY`.
- */
 let refuseRemoval: ((target: string) => boolean) | undefined;
 let refuseWrite: ((target: string) => boolean) | undefined;
-/** Every path the synchronous remove was called on. */
 const removedSync: string[] = [];
-/**
- * The asynchronous removes: how many were in flight at most, and each recursive
- * one that found a directory with entries in it - the call that starts one
- * operation per entry at once.
- */
 const removesAsync = { inFlight: 0, most: 0, recursiveOnFull: [] as string[] };
-/** The path each directory had when the batched remove moved it up. */
 const movedUp: string[] = [];
 
 vi.mock("node:fs", async () => {
@@ -43,9 +22,7 @@ vi.mock("node:fs", async () => {
         if (actual.readdirSync(target).length > 0) {
           removesAsync.recursiveOnFull.push(String(target));
         }
-      } catch {
-        // Not a directory, or not there.
-      }
+      } catch {}
     }
     removesAsync.inFlight++;
     removesAsync.most = Math.max(removesAsync.most, removesAsync.inFlight);
@@ -128,9 +105,6 @@ describe("an exchange directory that will not go", () => {
       const note = result.notes.join(" ");
       expect(note).toContain("could not be removed");
       expect(note).toContain("EBUSY");
-      // The note names the directory it left behind, which is how the next
-      // tool server's sweep finds it — and how this test cleans up after
-      // itself rather than leaving a document under os.tmpdir().
       const left = new RegExp(`(\\S*${exchangeDirPrefix()}\\S+?) could not be removed`).exec(
         note
       )?.[1];
@@ -145,11 +119,6 @@ describe("an exchange directory that will not go", () => {
 });
 
 describe("removing the exchange directory", () => {
-  // A script can leave many files in its private directory - a fixture it
-  // unpacked there, a clone. A synchronous recursive remove of 100 000 of them
-  // held every request, device socket and flow on the host for 3.9 s, and an
-  // awaited recursive `fs.promises.rm` of the whole tree still held it for 1.2 s,
-  // because it starts one operation per entry at once.
   it("removes it in bounded batches, never in one call, before the step returns", async () => {
     const ws = createScriptWorkspace("bash-async-rm");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-async-rm-root-"));
@@ -260,10 +229,6 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
 });
 
 describe("where the batched remove moves a directory up", () => {
-  // The point is set by APFS, where one name can add 765 bytes. No Linux file
-  // system takes such a name, so the removals CI runs pass at any point below
-  // 4 096 - which is why the move itself is pinned here: a directory whose
-  // path has passed 257 bytes is moved before it is walked.
   it("moves a directory up once its path passes 257 bytes", async () => {
     const ws = createScriptWorkspace("bash-hoist-at");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-hoist-at-root-"));
@@ -299,10 +264,6 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
 });
 
 describe("removing a read-only directory deep in the tree", () => {
-  // Moving a directory to another parent needs write permission on the
-  // directory itself, so an empty read-only one refuses the move - which the
-  // plain `rmdir` of the recursive remove never asked of it. Such a directory
-  // is removed where it is.
   it("removes an empty read-only directory whose path has grown long", async () => {
     const ws = createScriptWorkspace("bash-ro-rm");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-ro-rm-root-"));
@@ -333,9 +294,6 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
 });
 
 describe("removing a directory the step may not list", () => {
-  // Listing a directory needs read permission, and removing an empty one does
-  // not: `rmdir` asks only the parent. A script that leaves an unreadable empty
-  // directory - `mkdir -m 000`, a umask of 0777 - has it removed all the same.
   it("removes an empty directory it may not list", async () => {
     const ws = createScriptWorkspace("bash-unreadable-rm");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-unreadable-rm-root-"));
@@ -365,10 +323,6 @@ printf '{"ok":true}' > "$ARGENT_OUTPUT"`
 });
 
 describe("an exchange directory that could not be filled", () => {
-  // `mkdtemp` succeeds and then the write of the seeded document does not. The
-  // caller is handed a throw with no exchange in it, so the `finally` that owns
-  // the directory's life has nothing to remove — and the directory is left
-  // under the shared temporary root, holding whatever the write got down.
   it("is removed by the call that made it, not left behind", async () => {
     const ws = createScriptWorkspace("bash-nospace");
     const exchangeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-nospace-root-"));

@@ -27,8 +27,6 @@ import {
   type ConfigDefinition,
 } from "../src/config-schema.js";
 
-// Sandbox both scopes: `homeDir` for global (~/.argent), `cwd` for the project
-// root (a tmp dir seeded with a `.git` marker so resolveProjectRoot stops there).
 let homeDir: string;
 let projectDir: string;
 
@@ -52,7 +50,6 @@ describe("dotted-path helpers", () => {
     expect(obj).toEqual({ ios: { deviceSet: "/tmp/set" } });
     expect(getAtPath(obj, "ios.deviceSet")).toBe("/tmp/set");
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(true);
-    // The emptied parent goes with it, so unset restores the prior document.
     expect(obj).toEqual({});
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(false);
   });
@@ -78,7 +75,6 @@ describe("getConfigValue — scope merge (lens.agent = prioritize-local)", () =>
     setConfigValue("lens.agent", "claude", "global", opts());
     setConfigValue("lens.agent", "codex", "project", opts());
     expect(getConfigValueByKey("lens.agent", opts())).toBe("codex");
-    // Each scope's file holds only its own value.
     expect(readConfigObject("global", opts())).toEqual({ lens: { agent: "claude" } });
     expect(readConfigObject("project", opts())).toEqual({ lens: { agent: "codex" } });
   });
@@ -123,11 +119,6 @@ describe("setConfigValue — validation", () => {
   });
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
-    // A settable, global-only definition supplied through the registry param,
-    // so this checks the scope rule alone: a shipped global-only key — today
-    // `scripts.maxTimeoutMs` and `scripts.heapLimitMb`, covered further down —
-    // brings its own value parsing along, and would decide the case here on
-    // whichever rule refused first.
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -140,7 +131,6 @@ describe("setConfigValue — validation", () => {
     expect(() => setConfigValue("test.onlyGlobal", true, "project", opts(), registry)).toThrow(
       ConfigScopeError
     );
-    // Global scope is accepted.
     expect(() => setConfigValue("test.onlyGlobal", true, "global", opts(), registry)).not.toThrow();
   });
 
@@ -154,7 +144,6 @@ describe("setConfigValue — validation", () => {
   });
 
   it("rejects an invalid value shape", () => {
-    // lens.agent expects a non-blank string.
     expect(() => setConfigValue("lens.agent", 42, "global", opts())).toThrow(ConfigValidationError);
     expect(() => setConfigValue("lens.agent", "   ", "global", opts())).toThrow(
       ConfigValidationError
@@ -173,16 +162,13 @@ describe("unsetConfigValue", () => {
   it("a no-op unset never materializes the scope's config file", () => {
     const projectConfig = configFilePath("project", opts());
     expect(fs.existsSync(projectConfig)).toBe(false);
-    // Nothing is stored at the project scope, so this removes nothing…
     expect(unsetConfigValue("lens.agent", "project", opts())).toBe(false);
-    // …and must not create <project-root>/.argent/config.json to prove it.
     expect(fs.existsSync(projectConfig)).toBe(false);
   });
 });
 
 describe("setConfigValue — return value", () => {
   it("returns the normalized (stored) value, not the raw input", () => {
-    // asString trims, so the stored/returned value is the trimmed form.
     expect(setConfigValue("lens.agent", "  codex  ", "global", opts())).toBe("codex");
     expect(getConfigValueByKey("lens.agent", opts())).toBe("codex");
   });
@@ -233,8 +219,6 @@ describe("telemetry.enabled — opt-out default", () => {
   });
 
   it("reflects a persisted opt-out from the global config file", () => {
-    // Written by hand — `setConfigValue` refuses manageCommand-delegated keys,
-    // matching how `argent telemetry disable` owns this write in production.
     fs.mkdirSync(path.join(homeDir, ".argent"), { recursive: true });
     fs.writeFileSync(
       path.join(homeDir, ".argent", "config.json"),
@@ -268,7 +252,6 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
       "/tmp/sets/b",
       "/tmp/sets/c",
     ]);
-    // Each scope's file holds only its own entries — the union is read-time.
     expect(readConfigObject("global", opts())).toEqual({
       ios: { additionalDeviceSets: ["/tmp/sets/a", "/tmp/sets/b"] },
     });
@@ -291,9 +274,7 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
     setConfigValue("ios.additionalDeviceSets", ["device-sets/e2e", "/abs/set"], "project", opts());
     expect(getAdditionalIosDeviceSets(opts())).toEqual([
       path.join(homeDir, "DeviceSets/ci"),
-      // Relative global entries resolve against home…
       path.join(homeDir, "shared"),
-      // …while relative project entries resolve against the project root.
       path.join(projectDir, "device-sets/e2e"),
       path.resolve("/abs/set"),
     ]);
@@ -320,7 +301,6 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
     );
     expect(getAdditionalIosDeviceSets(opts())).toEqual([
       path.join(homeDir, "DeviceSets/ci"),
-      // Bare `~` resolves to home without a trailing separator either.
       homeDir,
     ]);
   });
@@ -355,8 +335,6 @@ describe("every schema entry can describe itself", () => {
   });
 
   it("offers examples that are actually accepted", () => {
-    // An example that its own validator rejects would hand the user a command
-    // reproducing the error it exists to fix.
     for (const def of CONFIG_SCHEMA) {
       if (!def.example) continue;
       expect(
@@ -458,10 +436,6 @@ describe("flow script host bounds", () => {
 describe("scripts.bash — schema entry", () => {
   const configured = path.join(path.sep, "opt", "homebrew", "bin", "bash");
 
-  // The read path deliberately keeps whatever is PRESENT: a value `parse`
-  // rejected is handed back as `undefined`, which is indistinguishable from an
-  // absent key — so a wrong value in a hand-edited file would fall through to
-  // PATH and run the step under a bash that happens to exist on this machine.
   it("keeps a wrong hand-edited value so the resolver can name it", () => {
     const file = configFilePath("global", opts());
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -470,10 +444,6 @@ describe("scripts.bash — schema entry", () => {
     expect(getConfigValueByKey("scripts.bash", opts())).toBe("bin/bash");
   });
 
-  // `null` is what a generator writes for a key it has no value for, and every
-  // other parser in the schema reads it as an absent key. Read as the text
-  // "null" it became the one value nothing can use and nothing falls back
-  // from: every `.sh` step in that scope refused, naming a relative path.
   it("reads a null as an unset key rather than as the text null", () => {
     const file = configFilePath("global", opts());
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -501,15 +471,6 @@ describe("scripts.bash — schema entry", () => {
     expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: configured } });
   });
 
-  // Global only, like its two siblings, though for a different reason: the
-  // value is an absolute path judged against `process.platform`, so no single
-  // spelling satisfies a mixed-OS team and a committed one broke every `.sh`
-  // step for whoever did not share the committer's OS. `readScopeValue` gates
-  // reads on `scopes` too, so the project file is not merely unwritable - it is
-  // unread, and the resolver falls through to its PATH search.
-  //
-  // No global value beside it, which is what makes this the scope gate: `merge`
-  // is `prioritize-global`, so one set here would win whatever `scopes` said.
   it("takes the global scope only, and does not read a committed project value", () => {
     const def = getConfigDefinition("scripts.bash")!;
     expect(def.scopes).toEqual(["global"]);
@@ -530,10 +491,6 @@ describe("scripts.bash — schema entry", () => {
     expect(readConfigObject("project", opts())).toEqual({});
   });
 
-  // Both host-specific strings are printed back as a value to type, so a path
-  // this host does not have is a value that reproduces the error it is offered
-  // to fix - and `asAbsolutePath` never checks existence, so it is written and
-  // only fails later, at every `.sh` step.
   it.runIf(process.platform !== "win32")("offers an example this host really has", () => {
     const def = getConfigDefinition("scripts.bash")!;
 
@@ -541,10 +498,6 @@ describe("scripts.bash — schema entry", () => {
     expect(describeExpectedValue(def)).toContain(def.example);
   });
 
-  // The refusal says WHICH host the shape is judged against, because the write
-  // gate and the resolver both apply the running platform's rules, and the
-  // global file the key does land in travels: a home directory restored onto a
-  // machine of another family carries a spelling that host refuses.
   it("says what it wants when it refuses one", () => {
     const expected = describeExpectedValue(getConfigDefinition("scripts.bash")!);
     expect(expected).toContain("an absolute path to Bash");
@@ -552,12 +505,6 @@ describe("scripts.bash — schema entry", () => {
     expect(expected).toContain("on Windows");
   });
 
-  // The win32 half of the write gate, on the platform the repository cannot
-  // run its unit tests on by default. It is the WRITE side of a rule the tool
-  // server reads back through the same `WINDOWS_ROOTED_PATH_RE`, and the two
-  // had already disagreed once in exactly this direction: `argent config set`
-  // stored a POSIX path that every `.sh` step then refused with "names no
-  // drive".
   describe("under Windows rules", () => {
     const realPlatform = process.platform;
 
@@ -591,8 +538,6 @@ describe("scripts.bash — schema entry", () => {
       expect(readConfigObject("global", opts())).toEqual({});
     });
 
-    // The rule both sides share, so a change to one of them is a change to the
-    // other's test too.
     it("uses the same rooted-path rule the tool server reads back", () => {
       expect(WINDOWS_ROOTED_PATH_RE.test("C:\\Git\\bin\\bash.exe")).toBe(true);
       expect(WINDOWS_ROOTED_PATH_RE.test("/usr/bin/bash")).toBe(false);

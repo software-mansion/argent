@@ -31,8 +31,6 @@ export {
   deleteAtPath,
 } from "./config.js";
 
-// Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
-// `argent secrets` resolve names through.
 export {
   secretSources,
   lookupSecret,

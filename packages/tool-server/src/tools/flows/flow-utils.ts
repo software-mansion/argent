@@ -22,8 +22,6 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 
-// Re-exported so the flow layer reads the relation list from the same place the
-// match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { withKeyedLock } from "../../utils/keyed-lock";
@@ -31,10 +29,6 @@ import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
-/**
- * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
- * a recording's files inside the project the agent named.
- */
 export function assertValidProjectRoot(root: string): void {
   if (!path.isAbsolute(root)) {
     throw new FailureError(
@@ -49,8 +43,6 @@ export function assertValidProjectRoot(root: string): void {
       }
     );
   }
-  // path.join collapses "..", so a root like "/a/../../../etc" would relocate
-  // the flows dir (and the validated flow file) outside the intended project.
   if (root.split(/[\\/]+/).includes("..")) {
     throw new FailureError(`project_root must not contain ".." segments (got "${root}").`, {
       error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
@@ -61,16 +53,10 @@ export function assertValidProjectRoot(root: string): void {
   }
 }
 
-/**
- * The flows dir under an explicit root, as pure path math. Validates nothing, so
- * a caller with its own root rejection (see flow-add-step) raises only that
- * message rather than a second, differently-worded one from here.
- */
 export function flowsDirFor(root: string): string {
   return path.join(root, FLOWS_DIR_NAME);
 }
 
-/** The flows dir under a root that has not been validated yet. */
 function getFlowsDir(projectRoot: string): string {
   assertValidProjectRoot(projectRoot);
   return flowsDirFor(projectRoot);
@@ -91,23 +77,10 @@ export function assertSafeFlowName(name: string): void {
   }
 }
 
-/**
- * The flow file `<project_root>/.argent/flows/<name>.yaml`, as the CALLER
- * spelled it — the path reported back to the agent, not the recording-session
- * key (that is {@link resolveFlowKey}, which asks the filesystem instead).
- *
- * `path.join` folds a trailing slash, `//` and `.` segments but NOT symlinks or
- * case, so two callers can spell one real file two ways here: a root spelled
- * `/tmp/p` vs `/private/tmp/p`, a flows dir or flow file symlinked into a shared
- * vault, or a name cased two ways on a case-insensitive volume. Keying sessions
- * on this string would mint two sessions — and two independent locks — over one
- * file.
- */
 export function getFlowPath(projectRoot: string, name: string): string {
   const flowsDir = getFlowsDir(projectRoot);
   assertSafeFlowName(name);
   const filePath = path.join(flowsDir, `${name}.yaml`);
-  // Defense-in-depth, in case FLOW_NAME_PATTERN is ever weakened.
   const rel = path.relative(flowsDir, filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new FailureError(`Invalid flow name "${name}": resolves outside the flows directory.`, {
@@ -120,30 +93,6 @@ export function getFlowPath(projectRoot: string, name: string): string {
   return filePath;
 }
 
-/**
- * The flow file's identity as the FILESYSTEM sees it, which is what a recording
- * session and its lock are keyed by. Two callers who spell one real file two
- * ways — a symlink into a shared vault, a root spelled `/tmp` vs
- * `/private/tmp`, a name cased two ways on APFS — resolve to one key here, so
- * the collision reads as the restart it actually is instead of minting a second
- * session that silently truncates the first.
- *
- * The same resolution {@link writeFlowFile} performs before its swap, so the key
- * and the write agree by construction — fallbacks included: where no flows dir
- * exists yet both keep the pure-path spelling (and the write does produce two
- * files), and for a dangling vault symlink both follow the link by hand
- * ({@link followDanglingLink}), collapsing the two spellings onto the one file
- * the write produces there.
- *
- * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
- * `realpath` there simply fails to find the variant spelling.
- *
- * "client" mode needs no special case: the caller's root does not exist on this
- * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged.
- */
-// `async`, so `getFlowPath`'s validation throws land as a rejection like every
-// other failure here rather than synchronously out of a promise-returning call.
 async function resolveFlowKey(projectRoot: string, name: string): Promise<string> {
   const spelled = getFlowPath(projectRoot, name);
   const inFlight = keyResolutions.get(spelled);
@@ -219,85 +168,23 @@ export async function classifyOnDiskSpelling(
   return { state: "case_folded", actual, addressable: addressable.test(actual) };
 }
 
-/**
- * Where a recording's YAML is persisted:
- * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly; the caller's project root is on this machine.
- * - `"client"` — the caller's project root is NOT on this machine (remote
- *                tool-server). The flow lives in memory here and every mutating
- *                tool returns a {@link ClientFileDirective} so the *client*
- *                writes the YAML into the agent's project.
- */
 export type FlowPersistMode = "host" | "client";
 
-/**
- * One recorded step's warning, plus the anchor saying WHICH step it judged.
- *
- * The number it is filed under is a position, and a mid-recording hand edit
- * moves positions. Comparing the finished flow against the recorder's own view
- * catches an edit made after the last append; carrying the judged step catches
- * one that moved a step out from under its number — see `anchoredWarnings` in
- * flow-finish-recording.ts. An edit the recorder then appended OVER defeats
- * both, and is settled at the append itself — see {@link dropMovedWarnings}.
- */
 export interface RecordedStepWarning {
-  /** The warning text `flow-add-step` raised on that step's `message`. */
   warning: string;
-  /**
-   * WHICH question the warning answers, because the two are not the same news.
-   *
-   * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
-   *   verdict on converting the step to `await:`/`assert:`. A polish-time
-   *   question; the raw step replays fine either way.
-   * - `wait` — the live wait itself came back `success: false`, so the probe
-   *   was skipped. Nothing here is about conversion: a genuine miss is a step
-   *   FAILURE at replay, and the other causes leave the step unjudged.
-   */
   kind: "conversion" | "wait";
-  /**
-   * The judged step as `stepAnchor` renders it: its identity, independent of
-   * where it now sits.
-   */
   step: string;
 }
 
 export interface RecordingSession {
   name: string;
   projectRoot: string;
-  /**
-   * The {@link resolveFlowKey} this session is registered under. Stored rather
-   * than re-derived, so {@link assertSessionStillLive} asks about the key the
-   * session actually holds — and needs no filesystem round trip to do it.
-   */
   key: string;
   persist: FlowPersistMode;
-  /**
-   * Absolute path of the flow file as the CALLER knows it. A real host path in
-   * "host" mode; in "client" mode it names a file on the client's machine and
-   * is only echoed back inside the directive.
-   */
   filePath: string;
-  /** In-memory flow content — authoritative in "client" mode. */
   flow: FlowFile;
-  /**
-   * Cross-tree probe verdicts, by 1-based step number.
-   *
-   * The verdict answers a POLISH-time question, and polish begins after
-   * `flow-finish-recording`. The warning is raised on one step's `message`, so
-   * without this it has scrolled out of every artifact by the time it is
-   * actionable. Accumulate it here and let the finish payload carry it.
-   */
   stepWarnings?: Map<number, RecordedStepWarning>;
-  /**
-   * How many verdicts this recording raised and then DROPPED, because a hand
-   * edit moved the step each one judged (see {@link dropMovedWarnings}).
-   *
-   * Dropping is right, but it is not the same news as never having raised one,
-   * and the finish payload is otherwise identical either way. Counted here
-   * because the verdicts themselves are gone by then.
-   */
   discardedWarnings?: number;
-  /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
 
@@ -347,12 +234,6 @@ async function withFlowLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return withKeyedLock(flowFileLocks, key, fn);
 }
 
-/**
- * Run `fn` with exclusive access to one flow file. Exported so the tools whose
- * critical section spans more than an append — `flow-start-recording`'s
- * truncate-then-register, `flow-finish-recording`'s read-then-clear — hold the
- * same lock that {@link appendStepToFlow} takes.
- */
 export async function withFlowFileLock<T>(
   projectRoot: string,
   name: string,
@@ -361,23 +242,8 @@ export async function withFlowFileLock<T>(
   return withFlowLock(await resolveFlowKey(projectRoot, name), fn);
 }
 
-/**
- * Leak backstop only. Sessions are small and auto-spawned servers idle out
- * after 30 min, but a long-lived server could accumulate recordings an agent
- * started and never finished. Well past any realistic concurrent-agent count,
- * so an eviction should never be something an agent observes — and if it is,
- * the next append fails loudly ({@link requireRecordingSession}, or
- * {@link assertSessionStillLive} for one already in flight) rather than writing
- * into a recording the server has forgotten.
- */
 export const MAX_RECORDINGS = 32;
 
-/**
- * Stamp a session as most-recently-used. A counter rather than `Date.now()`:
- * sessions touched inside one millisecond would tie, and the eviction scan's
- * tie-break is map insertion order — which can drop the session touched most
- * recently while keeping one never touched at all.
- */
 let touchSeq = 0;
 function touch(): number {
   return ++touchSeq;
@@ -406,11 +272,6 @@ interface RecordingSessionInit {
   flow: FlowFile;
 }
 
-/**
- * Begin a recording. Returns the session it replaced when one was already live
- * on the same key (a re-record of the same flow, which discards the earlier
- * take), or null.
- */
 export async function startRecordingSession(
   init: RecordingSessionInit
 ): Promise<RecordingSession | null> {
@@ -428,10 +289,6 @@ export async function getRecordingSession(
   return recordings.get(await resolveFlowKey(projectRoot, name));
 }
 
-/**
- * Every live recording. Feeds the not-found error message, which names only
- * the caller's own project; `steps` is carried for tests and diagnostics.
- */
 export function listActiveRecordings(): { name: string; projectRoot: string; steps: number }[] {
   return [...recordings.values()].map((s) => ({
     name: s.name,
@@ -453,9 +310,6 @@ export async function requireRecordingSession(
     // unrelated callers whose flow names and absolute project paths are not
     // this caller's to see.
     const active = listActiveRecordings();
-    // Normalize both roots (path.join), or a caller spelling its own root with
-    // a trailing slash is told its live recording is in "another project" —
-    // degrading the message in exactly the case it exists to diagnose.
     const hereDir = getFlowsDir(projectRoot);
     const here = active.filter((r) => getFlowsDir(r.projectRoot) === hereDir);
     const elsewhere = active.length - here.length;
@@ -484,20 +338,6 @@ export async function requireRecordingSession(
       }
     );
   }
-  // The key is the file's identity, so a session found under it may have been
-  // registered under a DIFFERENT spelling of that one file. Handing it over
-  // would risk silently enrolling this caller in someone else's take: its steps
-  // would land in a file it never addressed, under a prerequisite it never
-  // declared, and its finish would report the other agent's steps as its own.
-  // (A root spelled with a trailing slash is not one of these — `getFlowPath`
-  // normalizes both sides before they are compared.)
-  //
-  // Which of two situations this is cannot be told from here, so the message
-  // asserts neither: EITHER the same caller respelling its own root or name —
-  // nothing truncated, the take live and intact — OR another caller's restart,
-  // which did truncate. Naming the second as fact sent a caller in the first
-  // situation to abandon a healthy recording. Both recover the same way: use
-  // the spelling the session is registered under.
   const asked = getFlowPath(projectRoot, name);
   const held = getFlowPath(session.projectRoot, session.name);
   if (asked !== held) {
@@ -541,32 +381,12 @@ export function __resetRecordingsForTesting(): void {
   keyResolutions.clear();
 }
 
-/**
- * How many flow files currently have a lock entry. Test-only: the map's
- * self-cleanup has no other observable effect, so nothing else can tell a
- * released lock from a retained one.
- */
 export function __flowFileLockCountForTesting(): number {
   return flowFileLocks.size;
 }
 
-/**
- * A chromium `launch` target: a filesystem path to the Electron app (bare
- * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an
- * OS-installed app id relaunched in place), chromium is booted from this path,
- * so it must exist on the tool-server host; a relative path resolves against
- * the ROOT flow file's canonical (symlink-resolved) directory.
- */
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 
-/**
- * The app a `launch` step starts from scratch. A bare string applies to every
- * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}). `native` is a shared id for the installed-app
- * platforms (ios/android/vega), overridden by a specific `ios`/`android`/`vega`
- * key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
- * is a fragment.
- */
 export type Launch =
   | string
   | {
@@ -577,7 +397,6 @@ export type Launch =
       chromium?: ChromiumLaunch;
     };
 
-/** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
 /**
@@ -586,11 +405,6 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
  */
 export type SwipeDirection = "up" | "down" | "left" | "right";
 
-/**
- * A resolved gesture target as a step stores it: an element selector or a raw
- * normalized point. The point form is act-only, so only the gesture directives
- * carry targets; the observation directives store bare selectors.
- */
 export type GestureTarget = { selector: FlowSelector } | { x: number; y: number };
 
 /**
@@ -624,12 +438,6 @@ export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
   next?: FlowSelector;
 };
 
-/**
- * The selector itself plus every selector nested in its relation tree. Used by
- * whole-chain checks (the `when` guard's secret-placeholder scan) so a
- * constraint buried in a scope is treated exactly like one in the target's own
- * fields.
- */
 function selectorTree(sel: FlowSelector): FlowSelector[] {
   const out: FlowSelector[] = [];
   const walk = (s: FlowSelector): void => {
@@ -643,19 +451,8 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
   return out;
 }
 
-/**
- * The platforms a `when: { platform: … }` condition can name — derived from
- * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift (flow-device's `FlowPlatform` aliases it).
- */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
-/**
- * The guard of a `when:` block: either a UI condition — the await/assert
- * condition-as-key shapes, evaluated with the short assert grace so a skipped
- * block adds no await-sized dead wait to a clean run — or `platform`, a static
- * per-run test against the resolved device.
- */
 export type WhenCondition =
   | {
       kind: "ui";
@@ -670,7 +467,6 @@ export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
   | { kind: "launch"; app: Launch }
-  // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
@@ -681,8 +477,6 @@ export type FlowStep =
       direction?: SwipeDirection;
       to?: GestureTarget;
       by?: { x?: number; y?: number };
-      // Only the non-default `false` (momentum-free) is ever stored: absent is
-      // the natural flinging swipe, so parse/serialize stay exact inverses.
       momentum?: boolean;
       duration?: number;
     }
@@ -702,12 +496,6 @@ export type FlowStep =
       expectedText?: string;
       textMatch?: TextMatchMode;
     }
-  /**
-   * Screen READINESS: the UI tree has content, and neither it nor the rendered
-   * pixels are still changing. Spelled `await: { idle: true }` — the only
-   * condition that takes no selector, because stillness is a property of the
-   * whole screen. There is no `assert` form: stillness is inherently a wait.
-   */
   | { kind: "idle"; timeout?: number; stableFor?: number }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
@@ -717,42 +505,14 @@ export type FlowStep =
   | { kind: "script"; path: string; timeout?: number };
 
 export type FlowFile = {
-  /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   steps: FlowStep[];
 };
 
-/**
- * The literal child steps of a block directive, or undefined for a leaf step.
- *
- * The single predicate for "this step has authored children". Four readers
- * expand a block that will NOT execute into skip lines, so a report keeps one
- * line per authored step no matter where the run ended: `execSteps`' hard-stop,
- * device-free and cancellation gates, plus `reportBlockSkipped` recursing into a
- * nested block. The fifth is the upload preflight's walk, where a block it
- * cannot see hides a nested `run:`, `script:` or `snapshot` from validation. The last two,
- * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children to
- * resolve the flow's device decisions from a block's body — dead while `when`
- * is the only block kind, and the guard against a later one.
- *
- * Those sites used to ask `kind === "when"` directly, so a second block
- * directive would have had to remember every one of them and a forgotten site
- * would drop a whole block from the report or preflight silently. Now the kinds
- * come from {@link BLOCK_DIRECTIVE_KEYS} — the same list the PARSER exempts
- * from the single-key sibling check.
- */
 export function blockSteps(step: FlowStep): FlowStep[] | undefined {
   return isBlockStep(step) ? (step.steps satisfies FlowStep[]) : undefined;
 }
 
-/**
- * Narrow a step to the kinds {@link BLOCK_DIRECTIVE_KEYS} lists. `Extract` is
- * what makes the list load-bearing: {@link blockSteps}' `.steps` typechecks only
- * while EVERY listed kind's step type carries children, and the `satisfies`
- * there pins them to a REQUIRED `steps` — an optional one types as
- * `FlowStep[] | undefined`, which the return type alone would accept while every
- * reader sees a childless leaf.
- */
 export function isBlockStep(step: FlowStep): step is BlockStep {
   return isBlockDirectiveKey(step.kind);
 }
@@ -787,23 +547,11 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
   }
 }
 
-/**
- * A flow is end-to-end iff it BEGINS by launching an app — the first step a
- * launch cannot sit behind ({@link precedesLeadingLaunch}) is a `launch`. Such
- * a flow controls its own start state, so it must not declare an
- * `executionPrerequisite`. Everything else is a fragment.
- */
 function isE2eFlow(flow: FlowFile): boolean {
   const first = flow.steps.find((s) => !precedesLeadingLaunch(s));
   return first?.kind === "launch";
 }
 
-/**
- * Resolve the launch app id for a platform, or null when none is declared. For
- * ios/android/vega a specific key wins, else the shared `native` id. For
- * chromium this returns the app *path* (never `native`) — chromium booters want
- * {@link chromiumLaunchSpec}, which also carries the CLI args.
- */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
   if (typeof launch === "string") return launch;
@@ -816,11 +564,6 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
   return v ?? launch.native ?? null;
 }
 
-/**
- * Resolve the chromium launch spec (app path + optional CLI args) a `launch`
- * step declares, or null when it declares no chromium target. A bare-string
- * launch (applies to every platform) is treated as the app path.
- */
 export function chromiumLaunchSpec(
   launch: Launch | undefined
 ): { path: string; args?: string[] } | null {
@@ -831,34 +574,6 @@ export function chromiumLaunchSpec(
   return typeof c === "string" ? { path: c } : { path: c.path, args: c.args };
 }
 
-/**
- * A selector in YAML is sugared: a bare string is shorthand for
- * `{ text: <string> }`, and the full `{ text?, id?, role? }` map is still
- * accepted for identifier/role locators. The map form spells the internal
- * `identifier` field `id`; `identifier` is accepted on parse as an alias (so
- * existing flow files keep working) but serialization always emits `id`.
- *
- * In any selector slot, `text` may also be a regex matcher map —
- * `{ text: { matches: '<pattern>' } }` — matched against each node's own
- * label/value (internal `textMatches`): unanchored, case-sensitive, validated
- * at parse. In action ranking a pattern that consumes a node's whole
- * label/value counts as an exact match.
- *
- * A map selector may also carry relational scopes, the geometric readings of
- * the CSS combinators (flow trees are flat — see the `Selector` type), each
- * taking a full nested selector (bare-string sugar included) that may nest
- * further:
- *   - `within: <selector>` — CSS descendant: the element's frame sits inside
- *     the frame of a distinct element matching the scope,
- *     e.g. `{ text: "Delete", within: { id: "settings-card" } }`.
- *   - `after: <selector>` — CSS `~`: the element follows a distinct match in
- *     reading order, e.g. `{ role: Button, after: { text: "Danger zone" } }`.
- *   - `next: <selector>` — CSS `+`: as `after`, narrowed to the NEAREST
- *     follower, e.g. `{ role: Switch, next: { text: "Wi-Fi" } }`.
- *
- * `any: true` is the CSS `*` universal selector — no own constraint, so it is
- * accepted only alongside a relation, and never alongside `text`/`id`/`role`.
- */
 type YamlSelector =
   | string
   | (Omit<Selector, "identifier" | "text" | "textMatches" | "within" | "after" | "next"> & {
@@ -870,31 +585,10 @@ type YamlSelector =
       next?: YamlSelector;
     });
 
-/**
- * A gesture target: an element (selector, possibly a bare string) or a raw
- * normalized point `{ x, y }`. Only the point-acting directives (`tap`,
- * `long-press`, `swipe`) accept the point form — a point can be acted on but
- * not observed — so the observing directives keep taking {@link YamlSelector}.
- */
 type YamlTarget = YamlSelector | { x: number; y: number };
 
-/**
- * A tap targets an element or a raw point. The options form nests the target
- * under `on` so option keys never mix with target fields:
- * `{ on: <target>, times: 2 }` is a double-tap.
- */
 type TapBody = YamlTarget | { on: YamlTarget; times?: number };
 
-/**
- * A `swipe` body: a bare direction (`swipe: left`) or the options form. The
- * travel is exactly one of `direction` (semantic preset), `to` (endpoint
- * target), or `by` (signed relative delta); `from` anchors the start and
- * defaults to the direction's standard start point, or screen centre. An
- * unanchored `by` too large to fit from the centre slides its whole start→end
- * segment on-screen rather than truncating the delta (see runSwipe).
- * `momentum` defaults to true; `duration` is the travel time in milliseconds,
- * bounded by {@link SWIPE_MIN_DURATION_MS} and {@link SWIPE_MAX_DURATION_MS}.
- */
 type SwipeBody =
   | SwipeDirection
   | {
@@ -906,19 +600,6 @@ type SwipeBody =
       duration?: number;
     };
 
-/**
- * The condition of an `await`/`assert` step — the condition is the key, not a
- * separate `condition:` field:
- *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
- *   - `{ visible: { text: { matches: '^x: \d+$' } } }`  ← regex text selector
- *   - `{ text: { in: "Taps:", contains: "Taps: 0" } }`  ← substring check
- *   - `{ text: { in: "Taps:", equals: "Taps: 0" } }`    ← exact-text check
- *   - `{ text: { in: "total", matches: 'Total: \$\d+' } }` ← regex check
- * Only `await` takes an optional `timeout` sibling key (milliseconds):
- *   - `{ visible: "Account", timeout: 10000 }`
- * An `assert` carrying one is rejected at parse: a check that needs time to
- * become true is a wait, spelled `await`.
- */
 type YamlWaitCondition =
   | { exists: YamlSelector }
   | { visible: YamlSelector }
@@ -929,27 +610,12 @@ type YamlWaitCondition =
 
 type YamlTextWaitCondition = Extract<YamlWaitCondition, { text: unknown }>;
 
-/**
- * The one condition that takes no selector. It shares the `await:` key with
- * {@link YamlWaitCondition} but is deliberately NOT part of that union — a step
- * body carries either a selector condition or this one, never a mix — so it is
- * parsed by {@link parseIdleFields}.
- */
 type YamlIdleCondition = { idle: true; stableFor?: number; timeout?: number };
 
-/** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
   | YamlSelector
   | { target: YamlSelector; direction?: ScrollDirection; within?: YamlSelector };
 
-/**
- * A `when:` guard body: exactly one UI condition key (the await/assert shapes,
- * no `timeout` — evaluation always uses the assert grace) or `{ platform }`.
- * Deriving the UI arm from {@link YamlWaitCondition} keeps the two in lockstep,
- * since the guard is parsed by the same parseWaitFields as await/assert.
- * `timeout` stays out by construction — the await step type adds it as a
- * sibling key, not here.
- */
 type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
 
 type YamlStep =
@@ -987,8 +653,6 @@ type YamlFlowFile = {
  * on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
-  // `parseSelector` accepts a closed key set, so anything else serializes into a
-  // flow the parser refuses - or, on the bare-string path below, is lost silently.
   const unknown = Object.keys(sel).filter((key) => !WRITABLE_SELECTOR_KEYS.includes(key));
   if (unknown.length > 0) {
     throw new Error(
@@ -997,10 +661,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // YAML has a single `text` slot — a literal string or a `{ matches }` map —
-  // so emitting one would drop the other and change the selector's AND
-  // semantics. Reject this internal-only combination at the boundary instead of
-  // quietly weakening the selector.
   if (sel.text !== undefined && sel.textMatches !== undefined) {
     throw new Error(
       "Cannot serialize flow selector without losing constraints: both `text` and " +
@@ -1009,13 +669,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // Both spellings parse back through selectorSchema's visible-text
-  // constraint, so guard the serialization boundary too: an empty or
-  // invisible-only text value (icon-font Private Use Area glyphs, zero-width
-  // characters) would produce YAML that DISPLAYS as an empty selector and that
-  // this function's inverse rejects. Recorders never hit it (deriveSelector
-  // refuses invisible text and falls back to coordinates); a hand-built
-  // selector fails loudly instead of writing a flow no one can read or replay.
   if (sel.text !== undefined && (typeof sel.text !== "string" || !hasVisibleText(sel.text))) {
     throw new Error(
       "Cannot serialize flow selector: `text` must contain at least one visible character " +
@@ -1024,11 +677,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // The parser's two `any` rules are invariants of the YAML spelling, not of
-  // this type, so a hand-built selector can violate them — and would serialize
-  // to a flow file that `parseFlow` then refuses, which for a recorder means
-  // the failure lands on a LATER step (every append re-parses the whole file).
-  // Fail where the bad selector was built.
   const scopeCount = SELECTOR_RELATIONS.filter((relation) => sel[relation] !== undefined).length;
   if (sel.any !== undefined) {
     if (sel.any !== true) {
@@ -1063,9 +711,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // Bare-string YAML is the only spelling that carries `loose`. A map is
-  // necessarily strict, so a loose selector with any additional/alternative
-  // field cannot round-trip.
   if (
     sel.loose &&
     (sel.text === undefined ||
@@ -1098,9 +743,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   ) {
     return sel.text;
   }
-  // YAML spells the identifier field `id` (parseSelector maps it back), and the
-  // internal `textMatches` field spells `text: { matches }`. A relational scope
-  // recurses — each level keeps its own bare-string/map spelling.
   const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
   const scopes = { within, after, next };
   const out: Exclude<YamlSelector, string> = { ...rest };
@@ -1114,7 +756,6 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   return out;
 }
 
-// C0, DEL and C1.
 // eslint-disable-next-line no-control-regex
 const INLINE_UNSAFE = /[\u0000-\u001f\u007f-\u009f]/g;
 const INLINE_SHORT: Record<string, string> = {
@@ -1140,30 +781,17 @@ export function escapeInline(value: string): string {
   );
 }
 
-/**
- * Render a selector for a human-readable message (failure reasons, recording
- * warnings). The internal `loose` flag is dropped.
- */
 export function describeSelector(s: FlowSelector): string {
-  // Split off the non-string members before Object.entries so the remaining
-  // values are all strings; the scopes render separately below.
   const { loose: _loose, any, within, after, next, ...rest } = s;
   const scopes = { within, after, next };
   const fields = Object.entries(rest)
-    // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-    // file uses. A regex matcher prints in /slashes/ so it can't be misread as
-    // a literal.
     .map(([k, v]) =>
       k === "textMatches"
         ? `text=/${escapeInline(String(v))}/`
         : `${k === "identifier" ? "id" : k}=${JSON.stringify(String(v))}`
     )
     .join(" ");
-  // The universal selector prints as CSS spells it, so a relation-only target
-  // never renders as an empty string.
   const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
-  // Each scope renders after the fields, parenthesized so a nested scope's own
-  // fields can't be misread as the target's, and labelled with the YAML key.
   for (const relation of SELECTOR_RELATIONS) {
     const scope = scopes[relation];
     if (scope !== undefined) parts.push(`${relation} (${describeSelector(scope)})`);
@@ -1171,14 +799,6 @@ export function describeSelector(s: FlowSelector): string {
   return parts.join(" ");
 }
 
-/**
- * Render a text condition's comparator and expectation for reports. Literal
- * expectations use JSON quoting so embedded quotes, backslashes and control
- * characters stay unambiguous; regex patterns use slash delimiters so they
- * cannot be mistaken for literals. Failure prose asks for the infinitive verb
- * form (`wanted to contain/equal/match`), step targets for the YAML mode names
- * (`contains/equals/matches`).
- */
 export function describeTextExpectation(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
@@ -1196,11 +816,6 @@ export function describeTextExpectation(
   }
 }
 
-/**
- * Preserve the selected text comparator when converting to YAML. The explicit
- * switch makes a new TextMatchMode a compile error here instead of silently
- * serializing it as `contains`.
- */
 function textWaitToYaml(
   selector: YamlSelector,
   expectedText: string | undefined,
@@ -1222,8 +837,6 @@ function textWaitToYaml(
   }
 }
 
-/** Sugar a gesture target (`tap`/`long-press`/`swipe`) for YAML output, rejecting
- * internal states that would serialize to a flow the parser cannot read back. */
 function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
   const hasPointField = step.x !== undefined || step.y !== undefined;
   if (step.selector !== undefined) {
@@ -1253,8 +866,6 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
  * there. */
 function swipeTargetToYaml(target: GestureTarget, label: string): YamlTarget {
   const yaml = targetToYaml(target);
-  // Read the coordinate/selector split off targetToYaml's verdict, so the two
-  // cannot drift on which shape a target is.
   if (
     typeof yaml !== "string" &&
     "x" in yaml &&
@@ -1307,9 +918,6 @@ const SWIPE_MAX_DURATION_MS = 10_000;
  */
 const LONG_PRESS_MAX_DURATION_MS = SWIPE_MAX_DURATION_MS;
 
-/** Serialize a relative swipe delta without producing a body parseSwipeBy would
- * reject - FlowStep is also constructed programmatically, where the optional-axis
- * type is not enough. */
 function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number } {
   const keys = Object.keys(by);
   if (keys.some((key) => key !== "x" && key !== "y")) {
@@ -1331,8 +939,6 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
     }
     result[axis] = value;
   }
-  // Match parseSwipeBy and gate the COMBINED travel on its vector magnitude, so
-  // serialize accepts exactly what parse accepts.
   const magnitude = Math.hypot(result.x ?? 0, result.y ?? 0);
   if (magnitude < SWIPE_MIN_TRAVEL) {
     throw new Error(
@@ -1342,9 +948,6 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
   return result;
 }
 
-/** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`), shared by the
- * run report's stepTarget and the recording summary so the two never disagree on
- * it. The summary appends an options tail the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
@@ -1356,8 +959,6 @@ function isPositiveMs(raw: unknown): raw is number {
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0;
 }
 
-/** Serialize a positive millisecond option without producing YAML that the
- * corresponding parser rejects when a FlowStep is constructed in code. */
 function positiveMsToYaml(value: number, label: string): number {
   if (!isPositiveMs(value)) {
     throw new Error(`Cannot serialize flow ${label}: needs a positive number of milliseconds`);
@@ -1365,8 +966,6 @@ function positiveMsToYaml(value: number, label: string): number {
   return value;
 }
 
-/** Serialize a swipe's travel time against both duration bounds, so serialize
- * accepts exactly what parseSwipe accepts. */
 function swipeDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "swipe.duration");
   if (duration < SWIPE_MIN_DURATION_MS) {
@@ -1382,8 +981,6 @@ function swipeDurationToYaml(value: number): number {
   return duration;
 }
 
-/** Serialize a long-press hold time against its ceiling, so serialize accepts
- * exactly what parseLongPress accepts. */
 function longPressDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "long-press.duration");
   if (duration > LONG_PRESS_MAX_DURATION_MS) {
@@ -1394,7 +991,6 @@ function longPressDurationToYaml(value: number): number {
   return duration;
 }
 
-/** Sugar an await/assert step into the condition-as-key YAML body. */
 function waitToYaml(
   condition: WaitCondition,
   selector: FlowSelector,
@@ -1422,10 +1018,6 @@ function waitToYaml(
   return body;
 }
 
-/**
- * Sugar an `idle` step back under its `await:` key. Optional fields are emitted
- * only when set, so `await: { idle: true }` round-trips unchanged.
- */
 function idleToYaml(step: Extract<FlowStep, { kind: "idle" }>): YamlStep {
   const body: YamlIdleCondition = { idle: true };
   if (step.stableFor !== undefined) body.stableFor = step.stableFor;
@@ -1457,9 +1049,6 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
-      // The options form appears only when an option is present (`times` is
-      // never stored as 1 — see parseTapTimes), so a plain tap round-trips to
-      // the plain selector/point body.
       const target = targetToYaml(step);
       return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
     }
@@ -1473,23 +1062,15 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     }
     case "swipe": {
-      // FlowStep can be built outside the parser, so enforce the exactly-one
-      // travel invariant before the direction sugar below drops the other fields.
       const travels = (["direction", "to", "by"] as const).filter((key) => step[key] !== undefined);
       if (travels.length !== 1) {
         throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
       }
 
-      // Same reason, and before the sugar below: that sugar and the body builder
-      // both test against `false` only, so `momentum: 0` would serialize to the
-      // momentum the author asked to turn off.
       if (step.momentum !== undefined && typeof step.momentum !== "boolean") {
         throw new Error("Cannot serialize flow swipe.momentum: must be true or false");
       }
 
-      // A direction with no other field round-trips to the bare sugar
-      // (`swipe: left`). Any `momentum` but the explicit `false` counts as no
-      // field, matching parseSwipe's normalization of `momentum: true` to absent.
       if (
         step.direction !== undefined &&
         step.from === undefined &&
@@ -1514,7 +1095,6 @@ function toYamlStep(step: FlowStep): YamlStep {
         into: selectorToYaml(step.into),
         text: step.text,
       };
-      // `submit` defaults to true; only serialize the explicit opt-out.
       if (step.submit === false) body.submit = false;
       return { type: body };
     }
@@ -1542,7 +1122,6 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { wait: step.ms };
     case "scroll-to": {
       const target = selectorToYaml(step.target);
-      // Sugar the common case back to a bare target: default direction, no container.
       if (typeof target === "string" && step.direction === "down" && !step.within) {
         return { "scroll-to": target };
       }
@@ -1555,21 +1134,18 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     }
     case "pinch":
-      // Canonical spelling puts `on` before `scale` (key order is preserved).
       return {
         pinch: step.selector
           ? { on: selectorToYaml(step.selector), scale: step.scale }
           : { scale: step.scale },
       };
     case "rotate":
-      // Canonical key order puts `on` before `by` (key order is preserved).
       return {
         rotate: step.selector
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
     case "snapshot": {
-      // A name-only snapshot sugars to a bare string.
       if (step.maxMismatch === undefined && step.cropOn === undefined) {
         return { snapshot: step.name };
       }
@@ -1633,11 +1209,6 @@ function badEntry(raw: unknown, detail: string): never {
   });
 }
 
-/**
- * Parse a positive millisecond value at the YAML boundary. The finite check
- * matters: YAML `.inf` parses to a number, which would leave the gesture or
- * wait unbounded.
- */
 function parsePositiveMs(raw: unknown, entry: unknown, label: string, example: string): number {
   if (!isPositiveMs(raw)) {
     badEntry(entry, `${label} needs a positive number of milliseconds (e.g. \`${example}\`)`);
@@ -1645,7 +1216,6 @@ function parsePositiveMs(raw: unknown, entry: unknown, label: string, example: s
   return raw;
 }
 
-/** Validate a regex pattern at the YAML boundary and report its flow context. */
 function validatePattern(raw: unknown, pattern: string, where: string): void {
   try {
     new RegExp(pattern);
@@ -1657,9 +1227,6 @@ function validatePattern(raw: unknown, pattern: string, where: string): void {
   }
 }
 
-// Optimal-string-alignment distance: Levenshtein plus adjacent transposition
-// (`roel` → `role` counts 1, not 2 — the dominant typo class). Inputs are
-// option keys, so the simple row-based table is fine.
 function editDistance(a: string, b: string): number {
   let prevPrev = new Array<number>(b.length + 1);
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -1679,7 +1246,6 @@ function editDistance(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-/** The allowed key an unknown key most plausibly misspells, or null. */
 function closestKey(key: string, allowed: readonly string[]): string | null {
   let best: string | null = null;
   let bestDistance = Infinity;
@@ -1690,7 +1256,6 @@ function closestKey(key: string, allowed: readonly string[]): string | null {
       best = candidate;
     }
   }
-  // Only suggest a typo-sized distance — `z` is not a misspelling of `id`.
   return best !== null && bestDistance <= Math.max(1, Math.floor(best.length / 3)) ? best : null;
 }
 
@@ -1702,12 +1267,6 @@ function describeUnknownKeys(unknown: string[], allowed: readonly string[]): str
   return `unknown key${unknown.length > 1 ? "s" : ""} ${listed.join(", ")}`;
 }
 
-/**
- * Reject keys outside `allowed` in a directive body / selector map. Flows are
- * hand-authored YAML with no extensible bodies, so an unrecognized key is a
- * typo — dropping it silently would apply the default instead (`directon: up`
- * scrolling down) and surface later as a misleading runtime failure.
- */
 function rejectUnknownKeys(
   raw: unknown,
   body: Record<string, unknown>,
@@ -1722,9 +1281,6 @@ function rejectUnknownKeys(
   );
 }
 
-// Keys a selector map accepts: the schema fields plus the YAML `id` spelling
-// (`identifier` stays accepted as its parse-only alias), the `any` universal
-// marker, and the relational scopes.
 const SELECTOR_KEYS: readonly string[] = [
   "text",
   "id",
@@ -1734,9 +1290,6 @@ const SELECTOR_KEYS: readonly string[] = [
   ...SELECTOR_RELATIONS,
 ];
 
-// Every field of {@link FlowSelector}, kept exact by `Record`. Deliberately not
-// SELECTOR_KEYS: `id` is the YAML-only spelling of `identifier`, so an in-memory
-// selector carrying it is junk the match engine ignores.
 const WRITABLE_SELECTOR_KEYS = Object.keys({
   text: true,
   textMatches: true,
@@ -1773,23 +1326,14 @@ function parseSelector(
       `${where}: a selector carries more than ${MAX_SELECTOR_SCOPES} scopes (${SELECTOR_RELATIONS.join("/")}) in total — check for a cyclic YAML alias (\`&s { …, within: *s }\`)`
     );
   }
-  // Bare-string sugar: a string is shorthand for a text selector, marked
-  // `loose` so the runner tries the identifier locator first and falls back to
-  // text. An explicit `{ text }` / `{ id }` map is strict.
   if (typeof raw === "string") {
     const r = selectorSchema.safeParse({ text: raw });
     if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
     return { ...r.data, loose: true };
   }
-  // Reject unknown keys here so flow errors can name the YAML selector and list
-  // its accepted spellings.
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
-  // Split off the relational scopes before field validation — each is a nested
-  // selector slot, not a field the shared schema knows. A scope alone selects
-  // nothing: it only narrows WHERE to look, so the selector still needs its own
-  // fields, or the explicit `any: true` universal marker.
   const scopes: { [K in SelectorRelation]?: FlowSelector } = {};
   let universal = false;
   let fieldsRaw = raw;
@@ -1797,8 +1341,6 @@ function parseSelector(
     const restRaw = { ...(raw as Record<string, unknown>) };
     const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
     for (const relation of present) {
-      // One shared budget across the whole tree: sibling branches spend from it
-      // too, so three-way nesting cannot multiply.
       budget.scopes--;
       scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, budget);
       delete restRaw[relation];
@@ -1840,9 +1382,6 @@ function parseSelector(
   }
   const attachScopes = (sel: FlowSelector): FlowSelector => ({ ...sel, ...scopes });
   if (universal) return attachScopes({ any: true });
-  // Map form: `id` is the YAML spelling of the internal `identifier` field.
-  // `identifier` still parses as an alias (existing flow files), but a map
-  // carrying both is ambiguous and rejected.
   let normalized = fieldsRaw;
   if (fieldsRaw !== null && typeof fieldsRaw === "object" && "id" in fieldsRaw) {
     const { id, ...rest } = fieldsRaw as { id: unknown } & Record<string, unknown>;
@@ -1851,9 +1390,6 @@ function parseSelector(
     }
     normalized = { ...rest, identifier: id };
   }
-  // Regex text matcher: `text: { matches: '<pattern>' }`. Split off before
-  // schema validation (the schema's `text` is a plain string) and validated
-  // here, deviceless. The remaining fields (`id`/`role`) AND-combine as usual.
   if (normalized !== null && typeof normalized === "object") {
     const { text, ...rest } = normalized as { text?: unknown } & Record<string, unknown>;
     if (text !== null && typeof text === "object") {
@@ -1877,10 +1413,6 @@ function parseSelector(
         badEntry(raw, `${where}: text matcher needs a non-empty \`matches\` pattern`);
       }
       validatePattern(raw, pattern, `${where}: text`);
-      // A regex matcher is itself the selector's required text constraint, so
-      // validate only the remaining fields. The unrefined field schema keeps
-      // matcher-only selectors valid while giving id/role exactly the same
-      // validation as literal selectors.
       const fields = selectorFieldsSchema.safeParse(rest);
       if (!fields.success) {
         badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
@@ -1895,8 +1427,6 @@ function parseSelector(
 
 const WAIT_CONDITIONS: readonly WaitCondition[] = ["exists", "visible", "hidden", "text"];
 
-// Keep the runtime comparator list complete and exact relative to the shared
-// mode type: `Record` rejects both a missing TextMatchMode and an extra key.
 const TEXT_MATCH_MODES = Object.keys({
   contains: true,
   equals: true,
@@ -1913,23 +1443,7 @@ type WaitFields = {
   timeout?: number;
 };
 
-/**
- * Parse the body of an `await`/`assert` step (or a `when:` guard's UI
- * condition) into its condition + selector + optional expected text. The
- * condition is the key and its value is the selector (`{ visible: "Home" }`,
- * `{ text: { in, contains } }`). The `text` check takes exactly one of
- * `contains`, `equals`, or `matches` (JS regex, validated here so a bad pattern
- * fails at parse, not mid-run). `await` additionally accepts an optional
- * `timeout` sibling key (milliseconds); an `assert` carrying one is rejected
- * rather than silently ignored.
- */
 function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitFields {
-  // What the author is allowed to write, which is NOT what this function
-  // parses: a body naming `idle` is routed to parseIdleFields before we get
-  // here, so this list is only ever read by an author whose body named no legal
-  // condition, or more than one — and omitting `idle` left the one condition
-  // they may have been reaching for out of the answer. Only `await` gains it;
-  // `assert` and `when:` have no readiness form.
   const legalKeys = kind === "await" ? [...WAIT_CONDITIONS, IDLE_CONDITION] : WAIT_CONDITIONS;
   if (raw === null || typeof raw !== "object") {
     badEntry({ [kind]: raw }, `${kind} needs a condition (${legalKeys.join(", ")})`);
@@ -1953,9 +1467,6 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
     timeout = parsePositiveMs(b.timeout, { [kind]: b }, "await.timeout", "timeout: 10000");
   }
 
-  // `await` takes the condition key plus `timeout`; `assert` the condition key
-  // only (an explicit assert timeout was already rejected above with a pointed
-  // message). Anything else — `timeut`, a stray option — is a typo.
   rejectUnknownKeys(
     { [kind]: b },
     b,
@@ -1988,9 +1499,6 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
       badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
     }
     if (textMatch === "matches") {
-      // Fail a bad pattern here, deviceless, not mid-run. The pattern reaches
-      // the runtime verbatim, so RegExp construction there can never throw on a
-      // flow's behalf.
       validatePattern({ [kind]: b }, expected, `${kind} text`);
     }
     return {
@@ -2005,23 +1513,11 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
 }
 
-/**
- * The one condition key that takes no selector. Its presence in an
- * `await`/`assert` body routes parsing to {@link parseIdleFields} instead of
- * {@link parseWaitFields}.
- */
 const IDLE_CONDITION = "idle";
 
-/**
- * `idle`'s defaults and cadence, spelled here rather than beside the runner
- * because the parser needs all of them: a wait that cannot contain the settle
- * it asks for can never be satisfied, and this file rejects unsatisfiable
- * gates. The runner imports them back.
- */
 export const IDLE_DEFAULT_TIMEOUT_MS = 7500;
 export const IDLE_DEFAULT_STABLE_FOR_MS = 250;
 
-/** `idle` poll cadence, matching `await-screen-idle`'s own. */
 export const IDLE_POLL_MS = 200;
 
 /**
@@ -2036,10 +1532,6 @@ export const IDLE_POLL_MS = 200;
  */
 export const IDLE_MIN_STILL_INTERVALS = 2;
 
-/**
- * The stretch a settle is measured over: the intervals it takes, at one poll
- * each. Nothing can be concluded about motion in less.
- */
 export const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
 
 /**
@@ -2062,20 +1554,8 @@ export function idleMinimumTimeoutMs(stableFor: number): number {
   return Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
 }
 
-/**
- * Absolute ceiling on the hold, so an obviously wrong unit (seconds, a pasted
- * timestamp) is rejected as a number rather than silently becoming a gate no run
- * can pass. The relationship with `timeout` is checked separately.
- */
 const IDLE_MAX_STABLE_FOR_MS = 600_000;
 
-/**
- * The `timeout` sibling key an `await` may carry, spelled once for both the
- * selector conditions and `idle`. Non-finite values are rejected alongside
- * non-positive ones: YAML `.inf` (or an overflowing literal like 1e400) parses
- * to Infinity — typeof number and > 0 — which would make the runner's poll
- * deadline unreachable and the await unbounded.
- */
 function parseAwaitTimeout(entry: unknown, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     badEntry(
@@ -2086,7 +1566,6 @@ function parseAwaitTimeout(entry: unknown, value: unknown): number {
   return value as number;
 }
 
-/** Bounded non-negative integer option, in milliseconds. */
 function parseBoundedMs(entry: unknown, value: unknown, where: string, max: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
     badEntry(entry, `${where} needs an integer between 0 and ${max} (milliseconds)`);
@@ -2094,20 +1573,10 @@ function parseBoundedMs(entry: unknown, value: unknown, where: string, max: numb
   return value as number;
 }
 
-/**
- * Parse an `await`/`assert` body carrying the `idle` condition. Returns the
- * finished step, because unlike the selector conditions it has no selector to
- * hand back as fields. `assert` is rejected outright: waiting is the whole
- * point of the check.
- */
 function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert"): FlowStep {
   const entry = { [kind]: raw };
 
   if (kind !== "await") {
-    // Name the other condition's home too when the body carries one: reporting
-    // the mixing error first sent the author to a second round trip, since
-    // splitting `assert: { idle: true, visible: X }` as instructed yields
-    // `assert: { idle: true }`, which has no assert form either.
     const mixed = WAIT_CONDITIONS.filter((c) => c in raw);
     badEntry(
       entry,
@@ -2121,8 +1590,6 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   }
   rejectUnknownKeys(entry, raw, ["idle", "stableFor", "timeout"], kind);
 
-  // `idle: true` only. A falsey value would spell "assert the screen is NOT
-  // settled", which the runner cannot answer.
   if (raw.idle !== true) {
     badEntry(entry, "idle takes only `true` (`await: { idle: true }`)");
   }
@@ -2133,17 +1600,6 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
     step.stableFor = parseBoundedMs(entry, raw.stableFor, "idle.stableFor", IDLE_MAX_STABLE_FOR_MS);
   }
 
-  // A wait that cannot contain the settle it asks for is a gate that never
-  // passes, and it does not fail quietly: the step spends its whole timeout and
-  // then reports either that the screen never stopped moving or that it could
-  // not be screenshotted — both claims about an app that did nothing, and which
-  // one it picks depends on where the budget ran out, so the same file yields
-  // different verdicts run to run. Caught here, deviceless.
-  //
-  // Checked against the EFFECTIVE hold, not just a written-out one: leaving
-  // `stableFor` out was otherwise the way to get an unsatisfiable step past the
-  // parser (`timeout: 100` accepted while `timeout: 100, stableFor: 250` was
-  // rejected).
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
   const stableFor = step.stableFor ?? IDLE_DEFAULT_STABLE_FOR_MS;
   const needed = idleMinimumTimeoutMs(stableFor);
@@ -2163,18 +1619,10 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   return step;
 }
 
-/**
- * Whether an `await`/`assert` body names the `idle` condition rather than an
- * ordinary selector one. Rejects a body that mixes the two rather than silently
- * preferring one.
- */
 function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
   const body = raw as Record<string, unknown>;
   if (!(IDLE_CONDITION in body)) return false;
-  // An `assert` body naming idle is wrong however it is spelled, so let
-  // parseIdleFields raise the one error that ends the matter — it folds the
-  // mixing advice in.
   if (kind === "assert") return true;
   const selectorConditions = WAIT_CONDITIONS.filter((c) => c in body);
   if (selectorConditions.length > 0) {
@@ -2187,20 +1635,10 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
   return true;
 }
 
-/**
- * The platform set, spelled once: launch maps, `when: { platform }` guards
- * ({@link WhenPlatform}), flow-device's `FlowPlatform`, and flow-run's
- * `platform` param enum all derive from this tuple.
- */
 export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
-// Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
-/**
- * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
- * Returns null when the shape is invalid (caller reports the launch error).
- */
 function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
@@ -2214,13 +1652,10 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
   return null;
 }
 
-/** Parse a `launch` step body: a bare app id, or a per-platform map. */
 function parseLaunch(raw: unknown): Launch {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
-    // Name a misspelled platform key (`amdroid:`) instead of falling through
-    // to the generic shape error below.
     rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch");
     const keys = Object.keys(b);
     if (keys.length > 0) {
@@ -2258,8 +1693,6 @@ function parseLaunch(raw: unknown): Launch {
   );
 }
 
-// The directive key that names each step kind, used to reject a step carrying
-// zero, several, or misspelled ones.
 export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "echo",
   "launch",
@@ -2280,66 +1713,24 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "script",
 ];
 
-/**
- * The directive keys that carry a sibling `steps:` list — the single registry
- * of what a block directive is: {@link blockSteps} reads THIS list rather than
- * restating the kinds, so parse time and run time cannot answer differently.
- *
- * Two constraints judge the keys already listed: `satisfies` rejects a key that
- * is not a real step kind, and blockSteps' `.steps` read rejects a kind with no
- * usable `steps` (`Extract` catches a missing one, its own `satisfies` one that
- * is not a `FlowStep[]`), so a childless directive listed here is a compile
- * error rather than a silent runtime `undefined`. Neither can force a key IN,
- * which is what {@link _everyChildBearingKindIsRegistered} does.
- *
- * At parse time these keys are exempt from the single-key sibling check,
- * because their own parser validates their siblings with pointed messages.
- */
 export const BLOCK_DIRECTIVE_KEYS = ["when"] as const satisfies readonly FlowStep["kind"][];
 
-/** The step kinds {@link BLOCK_DIRECTIVE_KEYS} names. */
 type BlockDirectiveKind = (typeof BLOCK_DIRECTIVE_KEYS)[number];
 
-/** The step union those kinds select — what {@link isBlockStep} narrows to. */
 export type BlockStep = Extract<FlowStep, { kind: BlockDirectiveKind }>;
 
-/**
- * Every step kind whose type carries a `steps` property, whatever its spelling:
- * optional, `readonly`, any element type. Distributes over the union and asks
- * `keyof` rather than matching structurally, because the obvious
- * `Extract<FlowStep, { steps: FlowStep[] }>` misses a `steps?` or a
- * `readonly FlowStep[]` — anything not both required and assignable to
- * `FlowStep[]` reads as a childless leaf.
- */
 type ChildBearingKind<S extends FlowStep = FlowStep> = S extends unknown
   ? "steps" extends keyof S
     ? S["kind"]
     : never
   : never;
 
-/** The child-bearing step kinds {@link BLOCK_DIRECTIVE_KEYS} fails to list. */
 type UnregisteredBlockKind = Exclude<ChildBearingKind, BlockDirectiveKind>;
 
-/**
- * Forces a child-bearing kind INTO the registry — the direction the two
- * constraints on {@link BLOCK_DIRECTIVE_KEYS} cannot cover. An unlisted one
- * parses like any other step and then reads as `undefined` from
- * {@link blockSteps}, so every reader listed there silently misses its
- * children. {@link ChildBearingKind} is what makes this reach every spelling of
- * `steps`. Spelled as a conditional rather than a bare `never` so the compile
- * error names the missing kind.
- */
 const _everyChildBearingKindIsRegistered: [UnregisteredBlockKind] extends [never]
   ? true
   : UnregisteredBlockKind = true;
 
-/**
- * The parser and runner's only CLASSIFYING read of
- * {@link BLOCK_DIRECTIVE_KEYS} ({@link assertBlockDepth} reads it to NAME the
- * keys in its message). The widening is the lookup itself — the const tuple's
- * own `includes` accepts only keys already known to be block kinds, which is
- * the question being asked.
- */
 function isBlockDirectiveKey(key: string): key is BlockDirectiveKind {
   return (BLOCK_DIRECTIVE_KEYS as readonly string[]).includes(key);
 }
@@ -2358,12 +1749,6 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
   return raw === 1 ? undefined : raw;
 }
 
-/**
- * Does this map carry any selector key (the `any` marker and the relational
- * scopes included)? Tells a selector map apart from the point/option forms in
- * the gesture-body checks below, so a scoped selector mixed with coordinates or
- * options gets the same pointed rejection as any other selector field.
- */
 function hasSelectorField(obj: Record<string, unknown>): boolean {
   return (
     obj.text !== undefined ||
@@ -2393,9 +1778,6 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
       if (typeof obj.x !== "number" || typeof obj.y !== "number") {
         badEntry(raw, `${where}: a coordinate target needs numeric x and y`);
       }
-      // Coordinates are normalized fractions of the screen. Reject anything
-      // outside [0, 1] — a pixel value like x: 250 would dispatch a far
-      // off-screen gesture — and NaN/.inf, which pass the numeric check.
       if (!(obj.x >= 0 && obj.x <= 1) || !(obj.y >= 0 && obj.y <= 1)) {
         badEntry(
           raw,
@@ -2411,12 +1793,6 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
   return { selector: parseSelector(raw, where) };
 }
 
-/**
- * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or the
- * options form `{ on: <target>, times? }`, which nests the target under `on` so
- * an option key can never be mistaken for — or silently stripped from — a
- * target field.
- */
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
@@ -2448,11 +1824,6 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
   return { kind: "tap", ...parseTarget(body, "tap") };
 }
 
-/**
- * Parse a `long-press` body: a bare target (selector or raw point `{ x, y }`)
- * or the options form `{ on: <target>, duration?: <ms> }` — the same nested-`on`
- * convention as tap's options form.
- */
 function parseLongPress(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
@@ -2497,12 +1868,6 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
   return { kind: "long-press", ...parseTarget(body, "long-press") };
 }
 
-/**
- * Parse a `pinch` body — options-map only (`{ on?, scale }`): unlike tap, a bare
- * `pinch: "Map"` is ambiguous (in or out?), so there is no bare form. `scale` is
- * validity-checked only (finite, > 0, ≠ 1); there is deliberately no magnitude
- * cap — an extreme scale just decomposes into more chained gestures at run time.
- */
 function parsePinch(body: unknown, entry: unknown): FlowStep {
   if (body === null || typeof body !== "object") {
     badEntry(
@@ -2531,14 +1896,6 @@ function parsePinch(body: unknown, entry: unknown): FlowStep {
   return step;
 }
 
-/**
- * Parse a `rotate` body — options-map only (`{ on?, by }`): like pinch, there is
- * no bare form (`rotate: "Map"` names no angle). `by` is degrees, + clockwise /
- * − counter-clockwise, finite, ≠ 0, and within ±{@link MAX_ROTATE_BY_DEG} — the
- * largest sweep one continuous gesture delivers at the fixed run-time pace.
- * This is the two-finger gesture, not the `rotate` tool that changes device
- * orientation.
- */
 function parseRotate(body: unknown, entry: unknown): FlowStep {
   if (body === null || typeof body !== "object") {
     badEntry(
@@ -2570,21 +1927,12 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
   return step;
 }
 
-/**
- * Parse a `when:` guard — exactly one condition key: a UI condition
- * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a static
- * per-run test). No `timeout` sibling: the guard is always evaluated with the
- * short assert grace, so a skipped block stays cheap on every clean run.
- */
 function parseWhenCondition(raw: unknown): WhenCondition {
   const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform`;
   if (raw === null || typeof raw !== "object") {
     badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
   }
   const b = raw as Record<string, unknown>;
-  // A guard asks what is on the screen NOW, so "has it stopped moving yet" is
-  // not a question it can ask. Say that outright, the way the assert form does,
-  // rather than listing the keys the author could have written instead.
   if (IDLE_CONDITION in b) {
     badEntry(
       { when: raw },
@@ -2612,9 +1960,6 @@ function parseWhenCondition(raw: unknown): WhenCondition {
     }
     return { kind: "platform", platform: p as WhenPlatform };
   }
-  // A when guard is the await/assert fields minus `timeout` (rejected above,
-  // so always undefined here) — spread the rest so a future WaitFields
-  // addition reaches when guards the same way it reaches await/assert.
   const { timeout: _timeout, ...cond } = parseWaitFields(raw, "when");
   // `{{secret:NAME}}` resolves only inside the text-entry tools (a `type:`
   // step), never in condition evaluation, so a guard carrying one tests for
@@ -2623,8 +1968,6 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // assert that mistake fails loudly on the first run; here the guard silently
   // degenerates into a constant, so it fails at parse instead.
   const { selector, expectedText } = cond;
-  // Walk the whole relation tree: a placeholder in a scope degrades the guard
-  // exactly as one in the target's own fields would.
   const guardStrings: (string | undefined)[] = [expectedText];
   for (const s of selectorTree(selector)) {
     guardStrings.push(s.text, s.textMatches, s.identifier, s.role);
@@ -2652,14 +1995,6 @@ function parseWhenCondition(raw: unknown): WhenCondition {
  */
 const MAX_BLOCK_DEPTH = 20;
 
-/**
- * Guard a block directive's recursion depth. Called FIRST in a block's parse —
- * before its own key/shape checks — so an entry that has REACHED the cap reports
- * the depth rather than its second defect. That early call buys the error
- * PRECEDENCE only, not the cap itself: {@link parseBlockSteps} asserts again
- * before it recurses, so forgetting the early call costs a directive the
- * precedence and nothing more.
- */
 function assertBlockDepth(raw: unknown, depth: number): void {
   if (depth >= MAX_BLOCK_DEPTH) {
     const directives = BLOCK_DIRECTIVE_KEYS.map((key) => `\`${key}:\``).join("/");
@@ -2670,18 +2005,6 @@ function assertBlockDepth(raw: unknown, depth: number): void {
   }
 }
 
-/**
- * Parse a block directive's sibling `steps:` list: non-empty, every entry an
- * object, each parsed one level deeper so the shared depth cap sees the whole
- * chain. `emptyDetail` is the directive's own message for an absent or empty
- * list — where an author lands when they wrote the guard but not the body.
- *
- * Asserts the depth cap here too, on the one path every block directive must go
- * through to recurse, so no directive can opt out of the cap by forgetting the
- * early {@link assertBlockDepth} call. `depth` is unchanged between the two
- * calls, so for a directive that made the early one this is a no-op — and no
- * input can make THIS assert the one that fires until a directive skips it.
- */
 function parseBlockSteps(
   raw: Record<string, unknown>,
   depth: number,
@@ -2695,12 +2018,6 @@ function parseBlockSteps(
   });
 }
 
-/**
- * Parse a `when` step: `{ when: <condition>, steps: [<step>, …] }` — a guarded
- * block whose steps run only when the condition holds. Deliberately no `else`:
- * a when block exists to restore determinism (dismiss the interstitial, get back
- * on the known path), so paths may only reconverge, never diverge.
- */
 function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
   assertBlockDepth(raw, depth);
   if ("else" in raw) {
@@ -2717,14 +2034,6 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
   return { kind: "when", condition, steps };
 }
 
-/**
- * The report/display name of a `run:` target — its YAML basename stem. Parse
- * guarantees the stem is a safe flow name, so this is also the fragment's
- * attribution in step reports — except when the stem collides with the root
- * flow's name, where the runner substitutes the as-written path minus the
- * extension, or `./<stem>` for a bare spelling (see runDisplayName in
- * flow-run.ts).
- */
 export function runTargetName(target: string): string {
   return path.posix.basename(target, ".yaml");
 }
@@ -2744,14 +2053,6 @@ export function runTargetName(target: string): string {
  * it cannot.
  */
 function parseRunTarget(raw: unknown, value: unknown): string {
-  // The body arrives uncoerced because YAML renders a valueless `run:` (and
-  // `run: ~` / `run: null`) as null, and bare scalars as booleans/numbers.
-  // String()-ing those before the checks below would hand completeRunExtension
-  // the plausible names "null"/"true"/"123" — and since a bare name is
-  // ACCEPTED, a directive with no target at all would silently become a live
-  // reference to a `null.yaml`, and would run one that happened to sit beside
-  // the flow. The rejection keeps the completion below applying only to targets
-  // an author actually wrote.
   if (typeof value !== "string") {
     badEntry(
       raw,
@@ -2775,10 +2076,6 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     if (target.toLowerCase().endsWith(".yaml")) {
       badEntry(raw, "a `run` path must use the lowercase .yaml extension");
     }
-    // Reached only when completion declined the value, so the bare-name form is
-    // quoted too: "must end in .yaml" alone would contradict the documented rule
-    // for an author who deliberately left the extension off and tripped the
-    // charset (`run: my flow`) or a trailing slash (`run: shared/`).
     badEntry(raw, "a `run` path must end in .yaml, or name a sibling flow (`run: login`)");
   }
   if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) {
@@ -2848,9 +2145,6 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (value.includes("\\")) {
     badEntry(raw, "a `script` path uses forward slashes, e.g. `path: scripts/seed.mjs`");
   }
-  // posix.isAbsolute catches `/...`; the drive-letter test catches the win32
-  // forms it does not — absolute ("C:/") and drive-RELATIVE ("C:foo", which
-  // resolves against that drive's own current directory).
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `script` path must be relative to the flow file that references it");
   }
@@ -2940,25 +2234,12 @@ const OUTPUT_REFERENCE_MARKER = "{{output:";
 
 interface StepField {
   where: string;
-  /**
-   * A second spelling of the same field, when the parse cannot tell which one
-   * the author wrote. Set only by the gesture targets — see
-   * {@link gestureTargetPath}.
-   */
   altWhere?: string;
   value: string;
 }
 
-/**
- * A selector's own string leaves, addressed by their YAML spellings.
- *
- * `patterns` adds the regex spelling `text: { matches }`, which the walk
- * otherwise skips — see {@link outputReferenceFields} for the one context that
- * asks for it.
- */
 function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
   if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
-  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
   if (patterns && sel.textMatches !== undefined) {
     yield { where: `${where}.text.matches`, value: sel.textMatches };
   }
@@ -2970,16 +2251,6 @@ function* selectorFields(sel: FlowSelector, where: string, patterns = false): Ge
   }
 }
 
-/**
- * Every string leaf of a `tool` step's args, addressed by its own path.
- *
- * `args:` is the one step body the parser does not constrain, so a YAML anchor
- * can make it cyclic (`args: &a { self: *a }`) and the walk has to survive one
- * rather than blow the stack. `seen` holds the containers on the current path
- * only: a node reached twice down two different branches is two real leaves and
- * must be yielded twice, while a node that contains itself is dropped at the
- * point it closes the loop.
- */
 function* argFields(
   value: unknown,
   where: string,
@@ -3009,17 +2280,6 @@ function* argFields(
   seen.delete(value);
 }
 
-/**
- * Where a gesture step's target sits in the file: `tap.on` for the options
- * form, `tap` for the bare one.
- *
- * `pinch` and `rotate` have only the options form, so those are certain. `tap`
- * and `long-press` take both, and the parsed step keeps no record of which was
- * written — `duration` is optional in long-press's options form and `times: 1`
- * normalizes to `undefined`, so a step carrying neither could have been spelled
- * either way. Naming one spelling there would name a path that is not in the
- * author's file, so `alt` carries the other and the refusal offers both.
- */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
 ): { path: string; alt?: string } {
@@ -3084,15 +2344,10 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (!step.selector) return;
       const { path, alt } = gestureTargetPath(step);
       for (const field of selectorFields(step.selector, path)) {
-        // Every path this walk yields opens with `path`, so the alternative
-        // spelling is that prefix swapped for the other one.
         yield alt ? { ...field, altWhere: `${alt}${field.where.slice(path.length)}` } : field;
       }
       return;
     }
-    // Both ends are optional and either may be a bare point, so each is
-    // guarded on its own. Neither spelling is ambiguous the way a `tap`'s is:
-    // `from`/`to` exist only in the options form, so there is no `altWhere`.
     case "swipe":
       if (step.from && "selector" in step.from) {
         yield* selectorFields(step.from.selector, "swipe.from");
@@ -3123,14 +2378,6 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
   }
 }
 
-/**
- * Whether this step, or one nested in it, spells an output reference.
- *
- * {@link assertNoOutputReferences} judges a WHOLE flow, and a host-mode append
- * re-parses the file before it pushes — so its refusal can name a step that was
- * already there (a mid-recording hand edit) rather than the one being appended.
- * A caller that reports the refusal asks this which of the two it is holding.
- */
 export function holdsOutputReference(step: FlowStep): boolean {
   for (const field of outputReferenceFields(step)) {
     if (field.value.includes(OUTPUT_REFERENCE_MARKER)) return true;
@@ -3170,13 +2417,6 @@ const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "righ
 
 const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "momentum", "duration"] as const;
 
-/**
- * Parse a swipe's `by:` delta: signed normalized fractions of the screen. Each
- * present axis must be a non-zero number in [-1, 1]. The combined travel VECTOR
- * must then clear {@link SWIPE_MIN_TRAVEL}, or it is rejected as a tap in
- * disguise — gated on magnitude, not per axis, so a diagonal whose components
- * are each sub-floor still passes when its length does.
- */
 function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
   if (raw === null || typeof raw !== "object") {
     badEntry(entry, "swipe.by needs { x } and/or { y } — signed 0–1 fractions of the screen");
@@ -3211,14 +2451,6 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
   return by;
 }
 
-/**
- * Parse a `swipe` body: a bare direction (`swipe: left`) or the options form
- * `{ from?, direction|to|by, momentum?, duration? }`. The bare string is a
- * direction rather than a selector, since a selector alone could never express a
- * valid swipe. `direction` is the FINGER's direction — the opposite sense of
- * scroll-to's content direction — and its geometry is SWIPE_GEOMETRY in
- * flow-actions.ts.
- */
 function parseSwipe(body: unknown, entry: unknown): FlowStep {
   if (typeof body === "string") {
     if (!(SWIPE_DIRECTIONS as readonly string[]).includes(body)) {
@@ -3258,7 +2490,6 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
   }
   rejectUnknownKeys(entry, obj, SWIPE_OPTION_KEYS, "swipe");
 
-  // The travel spec: three mutually exclusive spellings.
   const travels = (["direction", "to", "by"] as const).filter((k) => obj[k] !== undefined);
   if (travels.length !== 1) {
     badEntry(entry, "swipe needs exactly one of `direction`, `to`, or `by`");
@@ -3288,8 +2519,6 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
     if (typeof obj.momentum !== "boolean") {
       badEntry(entry, "swipe.momentum must be true or false");
     }
-    // `true` is the default and normalizes to absent, keeping
-    // parse/serialize exact inverses.
     if (!obj.momentum) step.momentum = false;
   }
   if (obj.duration !== undefined) {
@@ -3313,10 +2542,6 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
 
 function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
-  // There is deliberately no per-step `optional:` — a `when:` block already
-  // expresses it once for every action directive. Rejected, not ignored:
-  // Maestro habits will produce it, and a silently-dropped `optional: true`
-  // leaves a step the author believes can't fail hard-stopping the flow.
   if ("optional" in raw) {
     badEntry(
       raw,
@@ -3325,10 +2550,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   }
   const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
   if (kinds.length === 0) {
-    // `idle` is a condition, not a step kind, and the one near-miss the docs
-    // actively produce: every other condition is written with a selector beside
-    // it, so `await:` comes along for free, while this one reads like a
-    // directive of its own.
     if (IDLE_CONDITION in entry) {
       badEntry(raw, `idle is a condition, not a step kind — write it as \`await: { idle: true }\``);
     }
@@ -3343,12 +2564,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       `a step takes exactly one directive key, found ${kinds.map((k) => `\`${k}\``).join(", ")}`
     );
   }
-  // Only a `tool` step carries sibling keys (`args`, `delayMs`); every other
-  // directive step is a single-key mapping — its options live INSIDE the value,
-  // so a sibling key is a mis-nested or misspelled option. A block directive
-  // also carries siblings, but its own parser validates them with pointed
-  // messages (a promise flow-utils.test.ts pins per registry entry), so the
-  // generic check stays out of its way.
   const kind = kinds[0]!;
   if (!isBlockDirectiveKey(kind)) {
     const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
@@ -3379,7 +2594,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   if ("type" in raw) {
     const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
     if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
-    // A misspelled `sumbit` would silently drop the submit opt-out.
     rejectUnknownKeys(raw, body as Record<string, unknown>, ["into", "text", "submit"], "type");
     if (typeof body.text !== "string" || body.text.length === 0) {
       badEntry(raw, "type needs a non-empty text");
@@ -3396,9 +2610,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     return step;
   }
 
-  // `await:` / `assert:` carry two families of condition: the selector ones
-  // (visible/hidden/exists/text, matched against the UI tree) and `idle`, which
-  // takes no selector. The body's key decides which.
   if ("await" in raw) {
     const body = (raw as { await: unknown }).await;
     if (isIdleCondition(body, "await")) {
@@ -3425,8 +2636,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("scroll-to" in raw) {
     const body = (raw as { "scroll-to": unknown })["scroll-to"];
-    // Bare-string sugar for the common case: scroll down until the target is
-    // visible (`scroll-to: "Order 1234"`).
     if (typeof body === "string") {
       return {
         kind: "scroll-to",
@@ -3438,8 +2647,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       badEntry(raw, "scroll-to needs a target selector or { target, direction?, within? }");
     }
     const b = body as Record<string, unknown>;
-    // A misspelled `directon` would silently fall back to the default and
-    // scroll the opposite way.
     if (!Array.isArray(b)) {
       rejectUnknownKeys(raw, b, ["target", "direction", "within"], "scroll-to");
     }
@@ -3450,10 +2657,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     ) {
       badEntry(raw, `scroll-to direction must be one of ${SCROLL_DIRECTIONS.join(", ")}`);
     }
-    // Name the missing `target` rather than letting the selector schema report
-    // "expected object, received undefined" about a key the author never wrote.
-    // `within` is a SELECTOR key too, so `scroll-to: { within: … }` reads like a
-    // scoped selector while being an options map with no target.
     if (b.target === undefined) {
       badEntry(
         raw,
@@ -3477,7 +2680,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;
-    // A misspelled `maxMissmatch` would silently drop the tolerance.
     if (body !== null && typeof body === "object" && !Array.isArray(body)) {
       rejectUnknownKeys(
         raw,
@@ -3486,7 +2688,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
         "snapshot"
       );
     }
-    // Bare-string sugar: `snapshot: home` ≡ `snapshot: { name: home }`.
     const b =
       typeof body === "string"
         ? { name: body }
@@ -3494,8 +2695,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
       badEntry(raw, "snapshot needs a name (bare string or { name })");
     }
-    // The name becomes a baseline filename, so it must be path-safe — the same
-    // constraint as a flow name.
     if (!FLOW_NAME_PATTERN.test(b.name)) {
       badEntry(
         raw,
@@ -3504,9 +2703,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     }
     const step: FlowStep = { kind: "snapshot", name: b.name };
     if (b.maxMismatch !== undefined) {
-      // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
-      // (e.g. from "5%") would make every comparison false, failing the snapshot
-      // even on byte-identical frames.
       const m = Number(b.maxMismatch);
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
@@ -3516,9 +2712,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       }
       step.maxMismatch = m;
     }
-    // `cropOn` narrows the comparison to one element's region. Selector-only —
-    // a point has no extent to crop to — so it takes the standard selector slot,
-    // not the tap/long-press target form.
     if (b.cropOn !== undefined) {
       step.cropOn = parseSelector(b.cropOn, "snapshot.cropOn");
     }
@@ -3537,7 +2730,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
@@ -3567,15 +2759,12 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-/** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return { executionPrerequisite: "", steps: [] };
   }
 
-  // A raw YAMLParseError carries no failure signal, so a syntax error would
-  // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
   try {
     parsed = yamlParse(trimmed) as YamlFlowFile;
@@ -3606,8 +2795,6 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
   const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
@@ -3636,24 +2823,8 @@ export function parseFlow(content: string): FlowFile {
   return flow;
 }
 
-/**
- * Suffix counter for {@link writeFlowFile}'s scratch file. Paired with the pid,
- * this keeps two concurrent writers off each other's temp file: the counter
- * separates writers inside this process, and the pid separates this process
- * from a SECOND tool-server — a different install bundle can record the same
- * `(project_root, name)` and compute the same scratch path (see the
- * cross-install note on {@link recordings}). The CLI is not one of the writers:
- * it writes the destination flow file directly and mints no scratch file.
- */
 let flowWriteSeq = 0;
 
-/**
- * What actually went wrong, per errno. The swap needs write permission on the
- * DIRECTORY, which is the surprising part and worth stating — but only when
- * that is the failure. Stating it for every code turned an over-long flow name
- * (`ENAMETOOLONG` out of `rename`) into a report of a directory-permissions
- * problem the user would then go and not find.
- */
 function writeFailureHint(
   code: string | undefined,
   filePath: string,
@@ -3695,11 +2866,6 @@ function writeFailureHint(
   }
 }
 
-/**
- * The original error with the internal scratch path rewritten to the flow file,
- * so the cause chain `formatErrorForAgent` renders never names a temp file that
- * was already deleted. Everything else about the errno is kept.
- */
 function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
   if (!(err instanceof Error)) return new Error(String(err));
   if (!err.message.includes(tmpPath)) return err;
@@ -3746,38 +2912,14 @@ async function canonicalFlowPath(filePath: string): Promise<string> {
   return (await canonicalFlowTarget(filePath)).target;
 }
 
-/**
- * How deep a chain of not-yet-existing symlinks {@link followDanglingLink}
- * walks. A backstop against a link cycle, which `readlink` alone cannot detect;
- * far past any real vault layout, which is one hop.
- */
 const MAX_DANGLING_LINK_HOPS = 32;
 
-/**
- * Where a link whose TARGET does not exist actually points.
- *
- * `realpath` fails outright on a dangling symlink, so the fallback above would
- * hand back the link's own path — and `rename(2)` replaces the path it is
- * given, so the first write of a recording would swap the symlink for a regular
- * file. That is the shared-vault setup's normal starting state: the link is
- * created before the first recording, or its target is removed by a branch
- * switch or a `git clean`. The vault copy would then never be created and the
- * project be permanently detached from it, with the tool reporting success.
- *
- * So resolve the link by hand, one hop at a time, canonicalizing each target's
- * DIRECTORY the way {@link canonicalFlowPath} does so the result agrees with
- * what a later append (by then a plain `realpath`) will compute. A path that is
- * not a link — the ordinary "flow file does not exist yet" case — comes back
- * unchanged on the first probe.
- */
 async function followDanglingLink(linkPath: string): Promise<string> {
   let current = linkPath;
   for (let hop = 0; hop < MAX_DANGLING_LINK_HOPS; hop++) {
     const target = await fs.readlink(current).catch(() => null);
     if (target === null) return current;
     const resolved = path.resolve(path.dirname(current), target);
-    // The rest of the chain may well exist — only the last hop has to dangle for
-    // `realpath` to have refused the whole path.
     const real = await fs.realpath(resolved).catch(() => null);
     if (real !== null) return real;
     const targetDir = await fs.realpath(path.dirname(resolved)).catch(() => path.dirname(resolved));
@@ -3786,7 +2928,6 @@ async function followDanglingLink(linkPath: string): Promise<string> {
   return current;
 }
 
-/** Whether this process may write `filePath` — its mode as the kernel reads it. */
 async function isWritable(filePath: string): Promise<boolean> {
   return fs.access(filePath, fsConstants.W_OK).then(
     () => true,
@@ -3832,8 +2973,6 @@ async function isWritable(filePath: string): Promise<boolean> {
  */
 async function writeFlowFile(filePath: string, content: string): Promise<void> {
   const { dir: resolvedDir, target } = await canonicalFlowTarget(filePath);
-  // Null when the flow file does not exist yet (the first write of a recording),
-  // which has no mode to preserve and nothing to refuse the write.
   const previousMode = await fs.stat(target).then(
     (s) => s.mode & 0o7777,
     () => null
@@ -3867,21 +3006,9 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     // carries ITS mode over — so without this every append would quietly
     // rewrite the flow file's permissions to 0644.
     if (previousMode !== null) await fs.chmod(tmpPath, previousMode);
-    // Atomic within a filesystem, and the temp file is a sibling of the target,
-    // so it is always the same one.
     await fs.rename(tmpPath, target);
   } catch (err) {
-    // Leave no scratch file behind, whichever half failed. The write itself can
-    // fail with the file already created (ENOSPC, EIO), so this has to cover it
-    // too — nothing else ever sweeps this directory.
     await fs.rm(tmpPath, { force: true }).catch(() => {});
-    // Rethrow against the flow file, never the scratch path. The temp name is
-    // an internal detail — already removed above — so surfacing its raw errno
-    // would name a file that no longer exists and never mention the flow. That
-    // applies to the CAUSE as much as to this message: `formatErrorForAgent`
-    // walks the cause chain and appends each new message, so attaching the raw
-    // errno would put the scratch path in front of the agent through the one
-    // string it actually reads.
     const errno = err instanceof Error ? (err as NodeJS.ErrnoException) : undefined;
     const code = typeof errno?.code === "string" ? errno.code : undefined;
     throw new FailureError(
@@ -3897,13 +3024,6 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
   }
 }
 
-/**
- * Why the flows directory could not be created, per errno. Separate from
- * {@link writeFailureHint} because the surprising cause differs: the swap's
- * hazard is needing permission on the directory, while `mkdir -p`'s is a path
- * COMPONENT that is not a directory — which for a caller-supplied
- * `project_root` almost always means it named a file.
- */
 function mkdirFailureHint(code: string | undefined, dir: string): string {
   switch (code) {
     case "ENOTDIR":
@@ -3925,18 +3045,6 @@ function mkdirFailureHint(code: string | undefined, dir: string): string {
   }
 }
 
-/**
- * Create or reset a flow file with `content`, making the parent directory if
- * needed. Atomic (see {@link writeFlowFile}).
- *
- * Both halves are classified, because flow-start-recording's description
- * promises it "fails if the .argent/flows/ directory cannot be created or the
- * file cannot be written". Leaving the mkdir outside the wrapping made only the
- * second half keep that promise: a `project_root` naming an existing or
- * unwritable file surfaced as a bare `ENOTDIR`/`EACCES` under
- * REGISTRY_TOOL_EXECUTION_FAILED — no remediation hint, and telemetry
- * attributing a flow failure to the registry.
- */
 export async function writeNewFlowFile(filePath: string, content: string): Promise<void> {
   const dir = path.dirname(filePath);
   try {
@@ -3958,29 +3066,6 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
   await writeFlowFile(filePath, content);
 }
 
-/**
- * How many steps the flow file currently holds, or undefined if it cannot be
- * read or parsed.
- *
- * For counting what a truncate is about to destroy, and therefore only ever
- * called in "host" mode: in "client" mode the file lives on the client's machine
- * and this host cannot read it at all, so the in-memory copy is both the take
- * and the only thing countable — the guarantee below does not carry across that
- * boundary. The agent-facing statement of it lives in
- * `packages/skills/skills/argent-create-flow/references/live-authoring.md`.
- *
- * The file — not the session's in-memory `flow` — is the take in "host" mode:
- * {@link appendStep} re-reads it before every append and `flow-finish-recording`
- * reads it back for its summary, so a hand-edit made mid-recording is part of
- * the take even though the in-memory copy only catches up on the next append.
- * Both recording tools tell the agent to edit only AFTER the finish, because
- * that catching-up renumbers the steps the finish anchors its verdicts to.
- *
- * Undefined rather than 0 on a failure, because the two are not the same answer:
- * a hand-edit can leave YAML that `parseFlow` rejects, and "0 steps discarded"
- * would understate the loss in exactly the case that caused it. The caller
- * reports no count instead.
- */
 export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
   try {
     return parseFlow(await fs.readFile(filePath, "utf8")).steps.length;
@@ -3989,14 +3074,10 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
   }
 }
 
-/** Read and parse the flow file, append a step, write it back. */
 async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
   flow.steps.push(step);
-  // Re-validate with the new step: a leading `launch` recorded into a
-  // prerequisite-bearing recording must error here (nothing written), not
-  // produce a file that fails to validate at replay.
   validateFlow(flow);
   const updated = serializeFlow(flow);
   await writeFlowFile(filePath, updated);
@@ -4007,12 +3088,6 @@ export function clientFileDirective(filePath: string, content: string): ClientFi
   return { [CLIENT_FILE_MARKER]: true, path: filePath, content };
 }
 
-/**
- * How a mutating flow tool reports persistence: a plain host path in "host" mode
- * (nothing for the client to do), or a {@link ClientFileDirective} the client
- * resolves by writing the YAML into the agent's project. Either way the field
- * reads as the flow file's path once the client has processed the result.
- */
 export type FlowSavedTo = string | ClientFileDirective;
 
 /**
@@ -4053,23 +3128,10 @@ export function recordingSessionState(session: RecordingSession): "live" | "rest
 function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
   const state = recordingSessionState(session);
   if (state === "live") return;
-  // A key that is occupied by a DIFFERENT session was restarted; an empty key
-  // was either finished or evicted by the MAX_RECORDINGS backstop, which the
-  // server cannot tell apart after the fact — so name both rather than guess.
   const why =
     state === "restarted"
       ? "it was restarted while this step was running, so the step belongs to the discarded take"
       : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
-  // Do NOT send the agent to flow-start-recording here. It truncates
-  // unconditionally, and on every branch there is something to lose: the live
-  // take that just claimed this key, or the finished flow sitting on disk.
-  // Recording under a fresh name is the only recovery that destroys nothing.
-  //
-  // Branch the same way `why` does. "This key now belongs to another take" is
-  // false by construction on the `!current` branch — it is selected precisely
-  // because the key is empty, and `startRecordingSession` registers under this
-  // key's lock — so naming a competing agent that does not exist would send the
-  // reader after the wrong cause.
   const whatIsAtStake =
     state === "restarted"
       ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
@@ -4095,14 +3157,6 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
   );
 }
 
-/**
- * One step rendered for comparison, or `null` where it has no rendering.
- *
- * A cyclic YAML alias inside a step's `args` materializes as a cyclic object,
- * and `JSON.stringify` throws on it. A throw here would fail an append that has
- * already written the step and already run it on the device, so the retry it
- * invites would repeat both. The same guard as `renderToolArgs`.
- */
 function renderStepForCompare(step: FlowStep): string | null {
   try {
     return JSON.stringify(step);
@@ -4111,22 +3165,6 @@ function renderStepForCompare(step: FlowStep): string | null {
   }
 }
 
-/**
- * Do `n` steps of `now` starting at `nowFrom` match `n` steps of `before`
- * starting at `beforeFrom`?
- *
- * Both sides are {@link parseFlow} output, so absent an edit they parse
- * byte-identical prefixes and `JSON.stringify` compares them exactly. No
- * key-order difference can exist between two parses of the same bytes.
- *
- * A step with no rendering is NOT the same step: {@link anchorHolds} drops the
- * verdict rather than report it against a step whose identity is unknown.
- *
- * Both offsets are 0 for an unedited file; {@link anchorHolds} moves them to
- * ask about the alignments an edit inside the prefix would produce. Both sides
- * arrive pre-rendered, because each alignment would otherwise repeat the same
- * work.
- */
 function sameStepRun(
   now: (string | null)[],
   before: (string | null)[],
@@ -4162,13 +3200,9 @@ function sameStepRun(
  */
 function anchorHolds(now: (string | null)[], before: (string | null)[], n: number): boolean {
   if (!sameStepRun(now, before, n, 0, 0)) return false;
-  // A deletion slides `before` forward from the splice on; an insertion slides
-  // `now` forward. Ask only about the direction the length change allows.
   const deleted = before.length - now.length;
   const inserted = now.length - before.length;
   for (let at = 0; at < n; at += 1) {
-    // The base check above already compared everything before `at`, so each
-    // hypothesis only accounts for the `n - at` steps the splice moved.
     for (let size = 1; size <= deleted; size += 1) {
       if (sameStepRun(now, before, n - at, at, at + size)) return false;
     }
@@ -4179,29 +3213,12 @@ function anchorHolds(now: (string | null)[], before: (string | null)[], n: numbe
   return true;
 }
 
-/**
- * Drop the verdicts a mid-recording hand edit moved, at the one moment the move
- * is visible.
- *
- * Host mode re-reads the file before every append, so an edit becomes part of
- * the take and `session.flow` catches up to it. After that the finish has
- * nothing left to compare, and a verdict can land on a step it never judged
- * while the step it did judge reads clean.
- *
- * The append that ABSORBS the edit still holds both views, so ask here. A
- * verdict at number `n` survives only where {@link anchorHolds} shows the first
- * `n` steps are still those steps. Verdicts behind the edit keep theirs.
- *
- * Returns how many were dropped, so the finish can report a shortfall rather
- * than a clean bill of health.
- */
 function dropMovedWarnings(
   warnings: Map<number, RecordedStepWarning> | undefined,
   now: FlowStep[],
   before: FlowStep[]
 ): number {
   if (!warnings) return 0;
-  // Render both views once. Every verdict asks about the same two lists.
   const nowRendered = now.map(renderStepForCompare);
   const beforeRendered = before.map(renderStepForCompare);
   let dropped = 0;
@@ -4213,16 +3230,6 @@ function dropMovedWarnings(
   return dropped;
 }
 
-/**
- * Append a step to a recording and persist it. In "host" mode the file on disk
- * is re-read first, so a manual edit made mid-recording is honored; in "client"
- * mode this process never sees the client's disk, so the in-memory copy is
- * authoritative and the updated YAML travels back in the directive.
- *
- * That re-read is also the only chance anyone gets to NOTICE a hand edit, so
- * it is checked against the view it replaces — see {@link dropMovedWarnings}.
- * Client mode needs no such check: this host never sees the client's file.
- */
 export async function appendStepToFlow(
   session: RecordingSession,
   step: FlowStep
@@ -4239,9 +3246,6 @@ export async function appendStepToFlow(
       const before = session.flow.steps;
       const flowFile = await appendStep(session.filePath, step);
       session.flow = parseFlow(flowFile);
-      // `appendStep` adds exactly one step, so everything before the last one
-      // is what the file already held — the recorder's previous view, unless a
-      // hand edit landed in between.
       session.discardedWarnings =
         (session.discardedWarnings ?? 0) +
         dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
@@ -4253,11 +3257,6 @@ export async function appendStepToFlow(
     }
     session.flow.steps.push(step);
     try {
-      // Both can reject on a bad step — validateFlow on a cross-field
-      // violation, serializeFlow on an unrepresentable one (e.g. a tap with
-      // un-normalized coordinates). Roll back on either: in client mode this
-      // in-memory copy is the ONLY copy, so leaving the rejected step in it
-      // would poison every later append and the finish itself.
       validateFlow(session.flow);
       const flowFile = serializeFlow(session.flow);
       return {
@@ -4265,7 +3264,7 @@ export async function appendStepToFlow(
         stepCount: session.flow.steps.length,
       };
     } catch (err) {
-      session.flow.steps.pop(); // nothing was recorded
+      session.flow.steps.pop();
       throw err;
     }
   });

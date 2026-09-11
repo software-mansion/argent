@@ -10,8 +10,6 @@ import {
   clearRememberedAgent,
 } from "../src/config-access.js";
 
-// Redirect the `~/.argent` home into a tmp dir by mutating process.env.HOME
-// (consumed by os.homedir() via argentHomeDir).
 let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
@@ -106,7 +104,6 @@ describe("remembered agent (lens config)", () => {
     setRememberedAgent("claude");
     clearRememberedAgent();
     expect(getRememberedAgent()).toBeNull();
-    // Siblings survive; the emptied `lens` container does not.
     expect(readConfigFile()).toEqual({ telemetry: { enabled: true } });
   });
 
@@ -116,11 +113,6 @@ describe("remembered agent (lens config)", () => {
   });
 });
 
-// `readConfigObject` answers an empty document for a file that is absent, one
-// that cannot be read, and one that does not parse — which is right for a key
-// with a default and silent for one without. `scripts.bash` names the program a
-// `.sh` step runs, and the step went to the PATH bash with nothing saying the
-// configuration had been lost.
 describe("configDocumentProblem", () => {
   it("says nothing for a host that has no document", () => {
     expect(configDocumentProblem()).toBeUndefined();
@@ -140,7 +132,6 @@ describe("configDocumentProblem", () => {
 
     expect(problem).toContain(configFilePath());
     expect(problem).toContain("is not valid JSON");
-    // The read itself is unchanged: still an empty document, still no throw.
     expect(readConfigObject()).toEqual({});
   });
 

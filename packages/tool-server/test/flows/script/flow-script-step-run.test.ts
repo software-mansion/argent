@@ -8,12 +8,6 @@ import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
 import { resolveHostBash } from "../../helpers/host-bash";
 
-/**
- * The `script:` step in a run; the executor's own behaviour is covered beside
- * it, in flow-script-run.test.ts. Real child processes, hence the generous
- * timeout.
- */
-
 vi.setConfig({ testTimeout: 30_000 });
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
@@ -283,10 +277,6 @@ describe("a bash step in a run", () => {
     expect(readMark("mixed-sh")).toBe("ran");
   });
 
-  // The extension picks the interpreter and the executor runs the RESOLVED
-  // path, so the two have to be read off the same file: a `.sh` spelling over a
-  // `.mjs` target used to hand JavaScript to bash and report exit code 127 with
-  // a hint about a tool missing from the PATH snapshot.
   it("picks the interpreter from the file a symlink resolves to", async () => {
     await markingScript("scripts/real.mjs", "aliased");
     fsSync.symlinkSync("real.mjs", path.join(root, "scripts", "aliased.sh"));
@@ -331,13 +321,10 @@ describe("a script step that fails", () => {
       ["wait", "skip"],
     ]);
     expect(result.failed).toBe(1);
-    expect(result.skipped).toBe(1); // echo is narration and is not counted
+    expect(result.skipped).toBe(1);
   });
 
   it("names the file, the line and the frames a bare node run would print", async () => {
-    // Without them the step's whole diagnostic is one sentence: a throw writes
-    // nothing to stderr, so there is no log either, and CI has nothing to
-    // re-run against.
     await write(
       "scripts/deep.mjs",
       "function inner(o) { return o.id; }\nfunction outer() { return inner(undefined); }\nouter();\n"
@@ -349,17 +336,12 @@ describe("a script step that fails", () => {
     const reason = result.steps[0]!.reason!;
     expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
     expect(reason).toContain("Cannot read properties of undefined");
-    // Project-relative, so the frames fit the step line the reason rides on.
     expect(reason).toContain("at inner (scripts/deep.mjs:1:30)");
     expect(reason).toContain("at outer (scripts/deep.mjs:2:27)");
-    // Still one line: the frames are escaped like any other break in a reason.
     expect(reason).not.toMatch(/[\n\r]/);
   });
 
   it("leaves the host's own frames out of the reason", async () => {
-    // A stack ends in the ESM loader and the runner that preloaded the script.
-    // Those name no line the author can open, and they would crowd out the
-    // frames that do.
     await write("scripts/boom2.mjs", `throw new Error("seed API returned 500");`);
     await flow("boom2", "steps:\n  - script: { path: ../../scripts/boom2.mjs }\n");
 
@@ -387,9 +369,6 @@ describe("a script step that fails", () => {
   });
 
   it("keeps a multi-line throw message on the step's own line", async () => {
-    // The ordinary shape of a rethrown API error. Raw, the JSON body lands at
-    // column 0 under the `✗` line, outside the step framing every renderer is
-    // built on — one line per step, reason interpolated straight in.
     await write(
       "scripts/rethrow.mjs",
       "throw new Error(`POST /orders returned 409\n" +
@@ -402,16 +381,11 @@ describe("a script step that fails", () => {
     const reason = result.steps[0]!.reason!;
     expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
     expect(reason).not.toMatch(/[\n\r\t]/);
-    // Escaped, not stripped: the message is still readable and the breaks are
-    // still recoverable.
     expect(reason).toContain("POST /orders returned 409\\n");
     expect(reason).toContain("duplicate_order");
   });
 
   it("denies a script the framing needed to forge a run verdict", async () => {
-    // The step's reason is the only text on a report line that the script
-    // itself writes. Given a raw newline it can put a whole summary line of its
-    // own below a failed step and above the real one.
     await write(
       "scripts/forge.mjs",
       "throw new Error(`seed failed\\n\\nPASS — 3 passed, 0 failed, 0 errored, 0 skipped`);"
@@ -472,8 +446,6 @@ describe("a script path is checked at its own step", () => {
   });
 
   it("reports a path that walks THROUGH a file as an ordinary missing file", async () => {
-    // The kernel answers ENOTDIR, not ENOENT, when a directory component of the
-    // path is a regular file. Nothing is there either way, so both read alike.
     await write("scripts/seed.mjs", `console.log("ok");`);
     await flow("through", "steps:\n  - script: { path: ../../scripts/seed.mjs/inner.mjs }\n");
 
@@ -521,13 +493,6 @@ describe("a script path is checked at its own step", () => {
   });
 
   it("refuses a mis-cased path, quoting the spelling on disk", async () => {
-    // The one authoring error a local run cannot find: APFS and NTFS open
-    // `CreateUser.mjs` for a file really named `createUser.mjs`, and the same
-    // tree then fails with ENOENT on Linux CI.
-    //
-    // Ungated, because the VERDICT is not the filesystem's: classifyOnDiskSpelling
-    // compares the supplied basename against readdir's own entries, lowercased,
-    // so the refusal reproduces on a case-sensitive host too.
     await write("scripts/createUser.mjs", `console.log("ok");`);
     await flow("cased", "steps:\n  - script: { path: ../../scripts/CreateUser.mjs }\n");
 
@@ -553,10 +518,6 @@ describe("a script path is checked at its own step", () => {
     expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.sh"');
   });
 
-  // `ALT.SH` is not a name the widened pattern accepts, so the spelling on disk
-  // is unaddressable and the step asks for a rename rather than for the flow to
-  // be rewritten. `SCRIPT_FILE_NAME_PATTERN` itself is pinned against both
-  // extensions in flow-script-step-parse.test.ts.
   it("asks for a rename when the spelling on disk is one no `script` path may name", async () => {
     await write("scripts/ALT.SH", `exit 0\n`);
     await flow("noncase-sh", "steps:\n  - script: { path: ../../scripts/alt.sh }\n");
@@ -716,13 +677,6 @@ describe("where a script path resolves", () => {
 });
 
 describe("which project root a script runs from", () => {
-  /**
-   * `flow-add-script` runs the script with the RECORDING's `project_root`; the
-   * runner uses the ROOT run's. A fragment recorded in one project and composed
-   * by a flow in another therefore runs its script somewhere else than where it
-   * was recorded — which is what the tool's "it ran here as a replay of this
-   * flow will" is qualified against.
-   */
   it("gives a composed fragment's script the ROOT run's project root", async () => {
     const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));
     try {
@@ -734,7 +688,6 @@ describe("which project root a script runs from", () => {
       await flow("frag", "steps:\n  - script: { path: ../../scripts/where.mjs }\n");
       const composed = path.join(composer, ".argent", "flows", "main.yaml");
       await fs.mkdir(path.dirname(composed), { recursive: true });
-      // `run:` is always relative to the flow file that names it.
       const target = path
         .relative(path.dirname(composed), path.join(root, ".argent", "flows", "frag.yaml"))
         .split(path.sep)
@@ -746,8 +699,6 @@ describe("which project root a script runs from", () => {
       expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(true);
       await fs.rm(path.join(root, "where.txt"));
 
-      // A flow that uses `run:` resolves a device even when every leaf is a
-      // script — see "still resolves a device when the same flow uses run:".
       const { registry } = mockRegistry({ booted: [DEVICE] });
       const composedRun = await run(registry, {
         project_root: composer,
@@ -923,10 +874,6 @@ describe("cancelling a run that contains a script step", () => {
   });
 
   it("says the run was cancelled on the steps after the script, not just under it", async () => {
-    // The script's `error` stops the run, so the steps below it take the
-    // hard-stop path rather than the abort guard every other cancelled step
-    // uses. They still have to say why they did not run: a cancellation is not
-    // collateral of a step that failed.
     const marker = path.join(root, "started-2.txt");
     await write(
       "scripts/slow.mjs",

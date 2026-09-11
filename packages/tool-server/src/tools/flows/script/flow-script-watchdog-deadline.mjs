@@ -20,8 +20,6 @@ if (Number.isFinite(deadlineMs) && deadlineMs > 0) {
   // the stop does to bash as the script's own answer: `taskkill /t` below takes
   // the tree one process at a time.
   if (workerData.fired instanceof Int32Array) Atomics.store(workerData.fired, 0, 1);
-  // The group, so a descendant the script started goes with it: reaching here
-  // means the parent that would have reaped them could not.
   try {
     process.kill(-process.pid, "SIGKILL");
   } catch {

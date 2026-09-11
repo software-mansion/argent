@@ -205,8 +205,8 @@ A negative condition passes before the element appears, for a typo, and on the w
 Each screen change needs two checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. `idle` waits until the screen has content and stops changing in the UI tree and in the pixels.

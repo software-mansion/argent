@@ -43,29 +43,17 @@ beforeAll(() => {
 afterAll(() => fs.rmSync(exchangeRoot, { recursive: true, force: true }));
 
 describe("a bash step's sweep of the exchange root", () => {
-  // One test for the judging, because the first bash step of the process is
-  // where every directory planted before it is judged.
   it("judges each exchange directory by the bound its own step wrote", async () => {
     const ws = createScriptWorkspace("bash-sweep");
     const longAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-    // A name this executor never wrote, carrying no bound of its own. Its age
-    // is all there is to read, and an age cannot say what time limit the step
-    // that made it was given — so it is left alone rather than judged by this
-    // install's own bound.
     const unstamped = fs.mkdtempSync(path.join(exchangeRoot, exchangeDirPrefix()));
     fs.utimesSync(unstamped, longAgo, longAgo);
 
-    // A step of another install, still running, whose own time limit is longer
-    // than anything this install would allow. A directory's mtime does advance
-    // when a file is created inside it, but it can never carry the OWNER's
-    // bound, which is the whole reason the name does.
     const stamped = (owned: number): string =>
       fs.mkdtempSync(path.join(exchangeRoot, `${exchangeDirPrefix()}${Date.now() + owned}-`));
     const liveElsewhere = stamped(60 * 60 * 1000);
     fs.utimesSync(liveElsewhere, longAgo, longAgo);
-    // And one whose own bound has passed, which is abandoned however new the
-    // directory is.
     const finishedElsewhere = stamped(-1_000);
     fs.writeFileSync(
       path.join(finishedElsewhere, "output.json"),
@@ -125,7 +113,6 @@ describe("a bash step's sweep of the exchange root", () => {
         }).execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir });
 
         expect(result.ok).toBe(true);
-        // 21-22 ms on this machine before, 0 after; the margin is for a loaded one.
         expect(worstBlockMs).toBeLessThan(12);
       } finally {
         clearInterval(heartbeat);
@@ -136,19 +123,9 @@ describe("a bash step's sweep of the exchange root", () => {
     120_000
   );
 
-  // The bound a directory carries has to be a whole number of milliseconds,
-  // because the sweep reads it back with `/^(\d+)-/` and a `.` matches nothing
-  // there. `flow-script-step-parse.test.ts` pins `timeout: 1500.5` as a legal
-  // step and `clampTimeout` returns a wanted value un-rounded, so the
-  // fractional value really reaches the name - and a directory named
-  // `argent-flow-script-<n>.5-XXXXXX` would be passed over forever, keeping an
-  // `output.json` that may hold values derived from a secret under the shared
-  // `os.tmpdir()`.
   it("stamps a fractional time limit as a whole millisecond", async () => {
     const ws = createScriptWorkspace("bash-fractional");
     try {
-      // The step reports its own exchange directory, which is otherwise removed
-      // before anything outside the executor could look at it.
       const script = ws.write(
         "fractional.sh",
         `printf '{"dir":"%s"}' "$(dirname "$ARGENT_OUTPUT")" > "$ARGENT_OUTPUT.t"
@@ -174,11 +151,6 @@ describe("a bash step's sweep of the exchange root", () => {
     }
   }, 30_000);
 
-  // The orphan a crashed tool server leaves is stamped with a moment in the
-  // FUTURE — its dead owner's whole time limit still ahead of it — so the next
-  // server's first bash step reads it as live and passes over it. A process
-  // that swept exactly once then left it for good, which is neither what the
-  // reference promises nor what the document in it deserves.
   it("comes back for a directory whose owner died with its bound still ahead", async () => {
     const ws = createScriptWorkspace("bash-resweep");
     const orphan = fs.mkdtempSync(
@@ -210,11 +182,6 @@ describe("a bash step's sweep of the exchange root", () => {
     }
   }, 30_000);
 
-  // The throttle is the whole of the "a single read a minute rather than one
-  // per step" bound the sweep's docstring claims, and in production the root is
-  // `os.tmpdir()` - shared with every process on the host and bounded by
-  // nothing, where one read cost 48 ms of blocked event loop on a machine
-  // holding 88 000 entries. Counted at `opendir`, which is the read.
   it("reads the root once however many steps run inside the interval", async () => {
     const ws = createScriptWorkspace("bash-throttle");
     const opendir = vi.spyOn(fs.promises, "opendir");
@@ -257,7 +224,6 @@ describe("a bash step's sweep of the exchange root", () => {
       const link = path.join(exchangeRoot, `${exchangeDirPrefix()}${Date.now() - 1_000}-planted`);
       fs.symlinkSync(victim, link);
       try {
-        // Past the interval, so this step's own sweep is not the throttled one.
         await new Promise((resolve) => setTimeout(resolve, 5));
         const script = ws.write("link.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
         const result = await new FlowScriptExecutor({
@@ -279,11 +245,6 @@ describe("a bash step's sweep of the exchange root", () => {
     30_000
   );
 
-  // A step never outlives its own sweep: `runOne` waits on it, so the root is
-  // readable the moment `execute` resolves and a document a dead owner left is
-  // gone by then rather than shortly after. Without the wait a small root still
-  // passed, because `rm` won the race - so the sweep's own removal is slowed
-  // here, which is the only thing that tells the two apart.
   it("has finished its sweep by the time the step resolves", async () => {
     const ws = createScriptWorkspace("bash-await-sweep");
     const abandoned = fs.mkdtempSync(
@@ -303,7 +264,6 @@ describe("a bash step's sweep of the exchange root", () => {
         return realRm(target, options);
       });
     try {
-      // Past the interval, so this step's own sweep is not the throttled one.
       await new Promise((resolve) => setTimeout(resolve, 5));
       const script = ws.write("await-sweep.sh", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`);
       const result = await new FlowScriptExecutor({
