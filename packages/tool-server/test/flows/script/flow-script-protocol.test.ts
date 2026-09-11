@@ -104,10 +104,6 @@ describe("script response parsing", () => {
     });
   });
 
-  // In node mode the script runs inside the runner with the protocol descriptor
-  // open, and a `spawn` failure is the one the step reports as "nothing ran, so
-  // there is nothing to clean up". A script that has already done its work must
-  // not be able to write that answer for itself.
   it.each(["spawn", "signal"] as const)(
     "refuses the bash-mode failure type %s in node mode",
     (failureType) => {
@@ -237,10 +233,6 @@ describe("flow script executor — a runner that misbehaves", () => {
   });
 
   it("adds the secret fragment it drops to the count the omission reports", async () => {
-    // The child clamps the message and has no secret list, so a value straddling
-    // its cut leaves behind a prefix no whole-value replacement matches. Dropping
-    // those eight characters without counting them would leave the marker saying
-    // seven where fifteen are gone.
     const clamped = "head sk-live-… [7 more characters omitted]";
     const result = await withFakeRunner(
       `process.on("message", () => {
@@ -312,12 +304,6 @@ describe("flow script executor — the protocol channel is the runner's alone", 
     expect(result.output).toEqual({ real: true });
   });
 
-  // Descriptor 3 is the first free number, so a feature-detecting shim or a
-  // daemonizing helper finds it without looking for it. While the channel was
-  // there, a line that is not JSON threw inside Node's own read callback in the
-  // parent, which reaches the tool server as an uncaughtException and ends the
-  // process — and half a line ahead of the runner's real frame made a finished
-  // script report as one that stopped its own process with nothing captured.
   it.each([
     ["text that is not a message", "garbage not json\n"],
     ["an unterminated fragment", "X"],
@@ -485,9 +471,6 @@ describe("flow script executor — a document from a runner", () => {
     expect(node).toBe("token sk-live-9d3f0a1b2c3d4e5f");
   }, 30_000);
 
-  // Past the bound the parent applies. A verdict, because that is what `execute`
-  // owes its caller: nothing on this path may throw, however deep the document a
-  // mismatched or hostile runner sends.
   it("answers a document past the depth bound with a verdict, not a throw", async () => {
     const result = await withFakeRunner(
       `process.on("message", () => {
@@ -532,7 +515,6 @@ describe("flow script executor — the published layout", () => {
 
     expect(result.ok).toBe(true);
     expect(result.log).toContain("bundled");
-    // Headroom for a loaded CI box rather than a real expectation.
     expect(roundTripMs, `process start cost: ${roundTripMs}ms`).toBeLessThan(3_000);
   }, 30_000);
 });
@@ -551,8 +533,6 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         "--import",
         pathToFileURL(path.join(SOURCE_RUNNER_DIR, "flow-script-runner.mjs")).href,
       ],
-      // The executor's own layout: a sink where a script would find the
-      // first free descriptor, the lifeline at 4 and the protocol channel above.
       stdio: ["ignore", "pipe", "pipe", "ignore", "pipe", "ipc"],
       detached: process.platform !== "win32",
     });
@@ -596,8 +576,6 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         maxOutputBytes: 1,
       },
     ],
-    // The protocol carries no version field, so an interpreter the runner does
-    // not know is malformed rather than a default.
     [
       "a request naming an interpreter the runner does not know",
       {
@@ -654,10 +632,6 @@ describe("flow script runner — the watchdogs, driven directly", () => {
     30_000
   );
 
-  // The loader resolves whichever runner sits beside the compiled executor, so
-  // a pre-2.7 parent — one that names no interpreter at all — really can reach
-  // this file. Its request means node, which is the shape every case above
-  // sends.
   it("reads a request that names no interpreter as a node one", async () => {
     const ws = workspace();
     const script = ws.write("legacy.mjs", `output.ran = true;`);
@@ -673,9 +647,6 @@ describe("flow script runner — the watchdogs, driven directly", () => {
     expect(result?.outputJson).toBe('{"ran":true}');
   }, 30_000);
 
-  // A bash request carries the interpreter, the script and the one exchange
-  // file, and nothing names a reason file any more: a runner that still asked
-  // for one would refuse every bash step the parent sends.
   it("runs a bash request that names no reason file", async (ctx) => {
     const found = await resolveHostBash();
     if (!("path" in found)) {
@@ -683,12 +654,10 @@ describe("flow script runner — the watchdogs, driven directly", () => {
       return;
     }
     const ws = workspace();
-    // Forward slashes, as the executor sends them.
     const slashed = (file: string) => file.split(path.sep).join("/");
     const outputFile = ws.resolve("output.json");
     fs.writeFileSync(outputFile, "{}");
     const script = ws.write("ran.sh", `printf '{"ran":true}' > "$ARGENT_OUTPUT"`);
-    // Any entry will do: in bash mode the runner parks before one can load.
     const child = forkRunner(ws.write("entry.mjs", ""), 20_000, {
       type: "execute",
       interpreter: "bash",
@@ -803,8 +772,6 @@ describe("flow script executor — the lifeline end in the parent", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect(result.ok).toBe(true);
-    // Node exposes stdio index 4 as a duplex Socket that holds a reference on
-    // the tool server's event loop until it is unref'd.
     expect(unreffed.length).toBeGreaterThanOrEqual(1);
   });
 });

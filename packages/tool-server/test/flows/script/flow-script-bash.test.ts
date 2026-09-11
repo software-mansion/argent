@@ -29,12 +29,6 @@ let noBash: string | undefined;
 
 let hostBash: string;
 
-/**
- * Where this file's steps make their exchange directories. `os.tmpdir()` holds
- * every other argent install's too — a second checkout on the machine creates
- * and removes them while these tests run — so what is counted there is not a
- * fact about this file.
- */
 let exchangeRoot: string;
 
 beforeAll(async () => {
@@ -58,12 +52,6 @@ function workspace(): ScriptWorkspace {
   return ws;
 }
 
-/**
- * A home directory of this case's own, holding `scripts.bash`. The key takes
- * the GLOBAL scope alone — a project `.argent/config.json` naming it is not
- * read — and the global document hangs off the home directory, which is the one
- * place a test can move it without writing the developer's real config file.
- */
 async function withGlobalBash<T>(value: string, body: () => Promise<T>): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-bash-home-"));
   const real = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -121,9 +109,7 @@ afterEach(() => {
   while (strays.length) {
     try {
       process.kill(strays.pop()!, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
+    } catch {}
   }
   while (workspaces.length) workspaces.pop()!.cleanup();
 });
@@ -137,11 +123,6 @@ function executor(options: FlowScriptExecutorOptions = {}): FlowScriptExecutor {
   });
 }
 
-/**
- * The extension never reaches the executor — `flow-script-step.ts` reads it and
- * passes `interpreter` — so these fixtures carry `.sh` because an author would,
- * not because anything here looks at it.
- */
 function runBash(
   ws: ScriptWorkspace,
   name: string,
@@ -158,14 +139,6 @@ function runBash(
   });
 }
 
-/**
- * Windows has no signals and no process group: `kill -TERM` inside Git Bash
- * does not reach the runner as a signal, a `TERM` trap has nothing to catch,
- * and the lifeline reads a descriptor the parent cannot hand it. The cases
- * whose SEMANTICS are POSIX skip there; everything else — the document, the
- * exchange file, the exit codes, the null devices, the tree stop and the
- * deadline watchdog — is what the Windows job runs.
- */
 const onPosix = it.skipIf(process.platform === "win32");
 
 function delay(ms: number): Promise<void> {
@@ -213,13 +186,9 @@ async function readPidFile(
     try {
       const raw = fs.readFileSync(file, "utf8").trim();
       if (raw) return Number(raw);
-    } catch {
-      // Not written yet.
-    }
+    } catch {}
     await delay(50);
   }
-  // What the driver said, where there is a driver: a crash of it reads as
-  // "no pid appeared" otherwise, which names the symptom and not the cause.
   const said = driverStderr?.() ?? "";
   throw new Error(`No pid appeared in ${file}${said ? `; the driver said: ${said}` : ""}`);
 }
@@ -228,7 +197,6 @@ function exchangeDirs(): string[] {
   return fs.readdirSync(exchangeRoot).filter((entry) => entry.startsWith(exchangeDirPrefix()));
 }
 
-/** `${BASH_SOURCE[0]}` written so the TypeScript template does not eat it. */
 const BASH_SOURCE = "${BASH_SOURCE[0]}";
 
 describe("a bash step that passes", () => {
@@ -275,10 +243,6 @@ describe("a bash step that passes", () => {
     expect(result.output).toEqual({ given: 41 });
   }, 30_000);
 
-  // The claim is that the ONE slot is shared across the two languages, so each
-  // script has to say when it ran: two trivially fast scripts read after both
-  // resolved say nothing an executor ignoring `concurrency` would not also say.
-  // Each records its own window, and the windows must not overlap.
   it("takes one queue slot per step, whichever language runs", async () => {
     const ws = workspace();
     const shared = executor({ concurrency: 1 });
@@ -322,8 +286,6 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("$ARGENT_OUTPUT is gone");
   }, 30_000);
 
-  // `jq … "$ARGENT_OUTPUT" > "$ARGENT_OUTPUT"` truncates the file before jq
-  // reads it, and this refusal is what the author then sees.
   it("refuses an empty document, naming the idiom that avoids one", async () => {
     const ws = workspace();
     const result = await runBash(ws, "emptied", `> "$ARGENT_OUTPUT"`);
@@ -349,13 +311,6 @@ describe("the document a bash step returns", () => {
     }
   }, 60_000);
 
-  // V8's `SyntaxError` quotes about ten characters of the offending document
-  // verbatim, mid-sentence. A `.sh` step is the first thing that can put
-  // arbitrary bytes on this path - the `.mjs` runner's `encodeOutput` always
-  // emits valid JSON - and the excerpt defeats the redaction the parent applies
-  // afterwards: a whole-value scrub cannot match the half of a secret the
-  // excerpt cut, and `redactTruncated` repairs a cut at the END of a message,
-  // not one V8 made in the middle of it.
   it("says a document did not parse without quoting the document", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -396,11 +351,6 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("__proto__");
   }, 30_000);
 
-  // JSON spells a number JavaScript cannot hold, and `1e999` parses to
-  // `Infinity`. A `.sh` document never meets the runner's `walk`, which is what
-  // refuses this from a `.mjs`, so the step passed carrying a value that every
-  // later encode turns into `null`: `JSON.stringify(output)` was
-  // `{"n":null,"neg":null}`.
   it("refuses a number JSON can spell and JavaScript cannot hold", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -414,12 +364,6 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("must be finite");
   }, 30_000);
 
-  // The size cap does not bound depth - nested arrays cost two bytes a level -
-  // and the consumer is unguarded: `renderOutput` in `flow-add-script.ts` is a
-  // bare `JSON.stringify` reached AFTER the step has been written to the flow
-  // file, and V8's encoder is recursive up to Node 24. So the recorder wrote
-  // the step and then died with an uncaught `RangeError` for a script that
-  // succeeded.
   it("refuses a document nested past the depth a later step can encode", async () => {
     const ws = workspace();
     const deep = ws.write("deep.json", `${'{"a":'.repeat(5_000)}1${"}".repeat(5_000)}`);
@@ -431,13 +375,9 @@ describe("the document a bash step returns", () => {
     );
     expect(result.failure?.kind).toBe("output");
     expect(result.failure?.message).toContain("nests deeper than");
-    // The path is 5000 identical segments, and the message is not that.
     expect(result.failure!.message.length).toBeLessThan(200);
   }, 30_000);
 
-  // The bound sits above the ceiling the runner's own recursive `walk` has
-  // (~3450-3925 across Node 20 to 26), so it refuses nothing a `.mjs` step
-  // returns and nothing an author writes.
   it("takes a document nested deeply enough for any author", async () => {
     const ws = workspace();
     const deep = ws.write("ok.json", `${'{"a":'.repeat(3_000)}1${"}".repeat(3_000)}`);
@@ -451,11 +391,6 @@ describe("the document a bash step returns", () => {
     expect(result.ok).toBe(true);
   }, 30_000);
 
-  // `toString("utf8")` substitutes U+FFFD for an invalid byte sequence, and
-  // nothing downstream re-validates: the size, `JSON.parse`, object-ness and an
-  // own `__proto__` all pass a substituted character, so the bytes the script
-  // wrote were rewritten and the step was a pass, with the corrupted value
-  // going into flow state for later steps to compare against.
   it("refuses a document that is not valid UTF-8 rather than rewriting it", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -470,17 +405,8 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).toContain("not valid UTF-8");
   }, 30_000);
 
-  // The same decode is what makes the two sides of the size bound agree: the
-  // runner bounds what it reads in FILE bytes and the parent bounds the
-  // document it accepts in post-decode UTF-8 bytes. Those are equal only for
-  // text that decodes unchanged - a replacement character is three bytes where
-  // the input was one - so a file the runner accepted at exactly the limit was
-  // over it by the time the parent measured, and the step was refused for a
-  // size the script did not write.
   it("refuses a document over the limit only by its own replacement characters", async () => {
     const ws = workspace();
-    // Exactly the limit in FILE bytes, every padding byte invalid on its own:
-    // decoding with replacement doubles the document past the parent's bound.
     const padding = SCRIPT_MAX_OUTPUT_BYTES - 10;
     const result = await runBash(
       ws,
@@ -497,11 +423,6 @@ describe("the document a bash step returns", () => {
     expect(result.failure?.message).not.toContain("limit");
   }, 60_000);
 
-  // The read is bounded rather than `stat`-ed first: a `stat` would describe a
-  // file a descendant is still growing, and leave the read itself unbounded.
-  // Both sides of the boundary, at the exact byte: the runner reads
-  // `maxOutputBytes + 1` and the parent measures the text it was sent, so a
-  // document 200 KB over proves neither of them agrees on where the edge is.
   it("takes a document of exactly the limit and refuses one byte more", async () => {
     const ws = workspace();
     const padding = (bytes: number) =>
@@ -510,7 +431,6 @@ describe("the document a bash step returns", () => {
        head -c ${bytes} /dev/zero | tr '\\0' 'z' >> "$ARGENT_OUTPUT.t"
        printf '"}' >> "$ARGENT_OUTPUT.t"
        mv "$ARGENT_OUTPUT.t" "$ARGENT_OUTPUT"`;
-    // `{"big":"` and `"}` are the 10 bytes around the padding.
     const exact = await runBash(ws, "at-limit", padding(SCRIPT_MAX_OUTPUT_BYTES - 10));
     const over = await runBash(ws, "over-limit", padding(SCRIPT_MAX_OUTPUT_BYTES - 9));
 
@@ -579,12 +499,293 @@ describe("what a failing bash step says", () => {
        exit 1`
     );
     expect(result.failure?.kind).toBe("exit");
-    // One space after the exit line, and the line ends the message.
     expect(result.failure?.message).toMatch(
       /^The script exited with code 1 \(bash: .+\)\. the orders API answered 503$/
     );
     expect(result.log).toContain("the orders API answered 503\n");
   }, 30_000);
+
+  onPosix(
+    "keeps a job's answer to the stop out of the reason",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "job-left-running",
+        `( trap 'echo "helper: stopping" >&2; exit 0' TERM
+           while true; do sleep 0.05; done ) &
+         echo "the orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+      expect(result.log).toContain("helper: stopping\n");
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps a stderr consumer's last line when a quiet job holds the streams",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "consumer-and-job",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps what a stderr consumer writes after bash exits",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "slow-consumer",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         for i in $(seq 1 40); do echo "progress line $i" >&2; done
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.log).toContain("progress line 40\n");
+      expect(result.logTruncated).toBe(false);
+    },
+    30_000
+  );
+
+  onPosix(
+    "marks the log cut when a job is still writing at the limit",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "chatty-job",
+        `( sleep 0.3; while true; do echo "[logcat] heartbeat" >&2; sleep 0.05; done ) &
+         echo "the orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
+      expect(result.log).toContain("[logcat] heartbeat\n");
+      expect(result.logTruncated).toBe(true);
+      expect(result.notes.join(" ")).toContain("was still writing to the log");
+      expect(result.durationMs).toBeLessThan(15_000);
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps a stderr consumer's last line when a job keeps writing to stdout",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "consumer-and-chatty-stdout",
+        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
+         ( while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
+         echo "FATAL: the real error" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.logTruncated).toBe(true);
+    },
+    30_000
+  );
+
+  onPosix(
+    "leaves out a stderr line a job writes after stderr went quiet",
+    async () => {
+      const ws = workspace();
+      const result = await runBash(
+        ws,
+        "late-job-line",
+        `( for i in $(seq 1 10); do echo "[mock] GET /health 200"; sleep 0.1; done
+           echo "mock-server: listening on :8080" >&2
+           while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
+         echo "seed failed: orders API answered 503" >&2
+         exit 1`
+      );
+      expect(result.failure?.message).toMatch(/\)\. seed failed: orders API answered 503$/);
+      expect(result.log).toContain("mock-server: listening on :8080");
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps the late line when the loop stalls across the quiet mark",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "stall.sh",
+        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         touch ${JSON.stringify(exited)}
+         exit 1`
+      );
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
+      await delay(150);
+      // Blocked from before the error arrives until past the quiet mark, and
+      // from an I/O callback, where a synchronous request handler runs: a block
+      // inside a timer callback leaves the loop's clock where it was, and the
+      // quiet timer waits for the next turn, after the poll.
+      await new Promise<void>((resolve) =>
+        fs.stat(exited, () => {
+          const until = Date.now() + 700;
+          while (Date.now() < until) {}
+          resolve();
+        })
+      );
+      const result = await pending;
+
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps a consumer's late line when a cancel ends the wait",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "cancel-late.sh",
+        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         touch ${JSON.stringify(exited)}
+         exit 1`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
+      await delay(500);
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
+  onPosix(
+    "keeps a consumer's late line when a cancel lands before it is written",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "cancel-early.sh",
+        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
+         sleep 30 &
+         echo "step 1: seeding" >&2
+         echo "FATAL: the real error" >&2
+         touch ${JSON.stringify(exited)}
+         exit 1`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
+      await delay(150);
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.failure?.kind).toBe("exit");
+      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+    },
+    30_000
+  );
+
+  onPosix(
+    "ends the wait for a job still writing when the run is cancelled",
+    async () => {
+      const ws = workspace();
+      const exited = ws.resolve("exited");
+      const script = ws.write(
+        "cancel-settle.sh",
+        `( while true; do echo tick >&2; sleep 0.05; done ) &
+         printf '{"ok":true}' > "$ARGENT_OUTPUT"
+         echo done > ${JSON.stringify(exited)}`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(20);
+      await delay(300);
+      const cancelledAt = Date.now();
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.ok).toBe(true);
+      expect(Date.now() - cancelledAt).toBeLessThan(1_500);
+      expect(result.logTruncated).toBe(true);
+    },
+    30_000
+  );
+
+  onPosix(
+    "still marks the log cut when a run cancelled mid-script leaves a writer",
+    async () => {
+      const ws = workspace();
+      const pidFile = ws.resolve("writer.pid");
+      const script = ws.write(
+        "cancel-midscript.sh",
+        `set -m
+         ( while true; do echo tick >&2; sleep 0.05; done ) &
+         echo $! > ${JSON.stringify(pidFile)}
+         sleep 30`
+      );
+      const cancel = new AbortController();
+      const pending = executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        signal: cancel.signal,
+      });
+      strays.push(await readPidFile(pidFile));
+      await delay(300);
+      cancel.abort();
+      const result = await pending;
+
+      expect(result.failure?.kind).toBe("cancelled");
+      expect(result.logTruncated).toBe(true);
+    },
+    30_000
+  );
 
   it("says only the code when the script wrote nothing to stderr", async () => {
     const ws = workspace();
@@ -592,10 +793,6 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toMatch(/^The script exited with code 7 \(bash: .+\)\.$/);
   }, 30_000);
 
-  // Whitespace is not a reason, and a carriage return is whitespace: stderr of
-  // nothing else must not leave a trailing space, or a stray `\r` from a CRLF
-  // editor, on the end of the exit line. The last line has no newline after
-  // it, so it is read at the end of the stream rather than at a line break.
   it("says only the code when stderr held nothing but whitespace", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -607,9 +804,6 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toMatch(/^The script exited with code 7 \(bash: .+\)\.$/);
   }, 30_000);
 
-  // Blank at any length: a whitespace-only line longer than the head the reason
-  // keeps is skipped like a short one, rather than ending the reason with a
-  // marker that counts spaces.
   it("skips a whitespace-only stderr line longer than the head it would keep", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -656,8 +850,6 @@ describe("what a failing bash step says", () => {
     expect(result.log).toContain("cleaning up\n");
   }, 30_000);
 
-  // The case the line is for: a script that writes no reason of its own still
-  // gets one, because the command `set -e` stopped on said why on stderr.
   it("takes the error of the command set -e stopped on as the reason", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -676,10 +868,6 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).not.toContain("never reached");
   }, 30_000);
 
-  // A pipe hands over what it holds when it is read, not a line at a time, so
-  // one line can arrive in two chunks - here for certain, with a pause between
-  // the writes. The line runs from one newline to the next, not to the end of
-  // the last chunk.
   it("joins a stderr line that arrived in two pieces", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -712,7 +900,6 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).toMatch(/\)\. the orders API answered 503$/);
     expect(result.logTruncated).toBe(true);
     expect(Buffer.byteLength(result.log)).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
-    // Past the cut, so the reason came from what the log itself dropped.
     expect(result.log).not.toContain("503");
   }, 30_000);
 
@@ -730,10 +917,6 @@ describe("what a failing bash step says", () => {
     expect(result.log).toContain("not a failure\n");
   }, 30_000);
 
-  // The line is only for a script that chose to exit non-zero. Everywhere else
-  // the runner's own account is the reason, and the line would read as the
-  // cause: what a script last said before its time ran out is what it was
-  // doing, not why it stopped. The log still has it.
   it("adds no stderr line to a time limit", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -778,9 +961,6 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).not.toContain("wrote the document");
   }, 30_000);
 
-  // The head of the line and a count of the rest, measured on the whole line
-  // however many chunks it came in. The line here has no newline after it,
-  // which still makes it a line.
   it("keeps the head of a long stderr line and counts the rest", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -790,13 +970,9 @@ describe("what a failing bash step says", () => {
        exit 1`
     );
     expect(result.failure?.kind).toBe("exit");
-    // Between the exit line and the marker, so exactly 1000 of them.
     expect(result.failure?.message).toMatch(/\)\. x{1000}… \[39000 more characters omitted]$/);
   }, 30_000);
 
-  // The count is taken on the head BEFORE its leading whitespace is trimmed:
-  // 400 spaces leave 600 of the 1000 for the letters behind them, and the
-  // other 4400 of the 5400 are what the marker counts.
   it("counts what it omitted from a long line behind leading whitespace", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -845,11 +1021,6 @@ describe("what a failing bash step says", () => {
     expect(message.slice(-expected.length)).toBe(expected);
   }, 30_000);
 
-  // The cut counts UTF-16 units, and one landing between the halves of an
-  // astral character would leave a lone surrogate at the end of the report -
-  // carried through `JSON.stringify` as `\ud83d`, and turned into U+FFFD by any
-  // UTF-8 write of it. One unit ahead of the emoji puts the limit exactly
-  // between the halves of the 500th.
   it("keeps the head of a long stderr line without splitting an astral character", async () => {
     const ws = workspace();
     ws.write("emoji-line.txt", `a${"\u{1F600}".repeat(9_000)}`);
@@ -861,7 +1032,6 @@ describe("what a failing bash step says", () => {
     );
 
     const message = result.failure?.message ?? "";
-    // 999 units kept - the `a` and 499 whole emoji - of the line's 18 001.
     const expected = `). a${"\u{1F600}".repeat(499)}… [17002 more characters omitted]`;
     expect(result.failure?.kind).toBe("exit");
     expect(message.isWellFormed()).toBe(true);
@@ -884,8 +1054,6 @@ describe("what a failing bash step says", () => {
        exit $?`
     );
     expect(notExecutable.failure?.message).toContain("code 126");
-    // Both causes: an unreadable script file exits 126 too, and `chmod +x` is
-    // the wrong remedy for that one.
     expect(notExecutable.failure?.message).toContain("could not be run");
     expect(notExecutable.failure?.message).toContain("may not READ");
     expect(notExecutable.failure?.message).toContain("not executable");
@@ -918,9 +1086,6 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // A fully CRLF script reaches the same place, not only a mixed-ending one: it
-  // dies early only when it HAS a `set -euo pipefail` line, and this one does
-  // not. It runs to completion, leaves the stray sibling and exits 0.
   onPosix(
     "refuses a wholly CRLF script that ran to the end and exited 0",
     async () => {
@@ -961,11 +1126,6 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // Windows is the one platform a CRLF checkout happens on, and there bash is
-  // msys2 — a Cygwin fork, which cannot put an ASCII control character in a
-  // file name and transposes it into the private-use block. So the stray file
-  // is named with U+F00D there and U+000D everywhere else, and a check for one
-  // of them alone misses on the very platform it exists for.
   it("refuses the same redirection under the name msys2 gives it", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -998,10 +1158,6 @@ describe("what a failing bash step says", () => {
     expect(result.output).toEqual({ real: true });
   }, 30_000);
 
-  // 128+N is bash reporting a FOREGROUND command killed by signal N. The script
-  // chose to run that command and could have handled its status, so the step
-  // reads it as an exit code — a `fail`, not the `signal` error that a death of
-  // bash itself is.
   onPosix(
     "reads a 128+N exit as the script's own status, not as a signal",
     async () => {
@@ -1067,14 +1223,6 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // The runner holds a signalled bash's answer briefly, in case the same signal
-  // is still on its way to the group. Bounded by nothing, that wait outlived
-  // the parent's timer on any step whose limit was under about a second - the
-  // whole legal range from `MIN_SCRIPT_TIMEOUT_MS` up - and the parent sealed
-  // the interruption and discarded a terminal message that was already correct.
-  // The step was then reported as a time limit that was never exceeded, about
-  // the one fact that explains the failure. POSIX only: the step dies by a
-  // signal, and Windows has none to send.
   onPosix.each([100, 500, 900])(
     "reports a signalled bash as a signal under a %sms time limit",
     async (timeoutMs) => {
@@ -1152,9 +1300,6 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // The guidance names one spelling because only one of them does anything
-  // here. The runner leads the process group, so `-$$` — bash's own pid — names
-  // a group that does not exist: the kill fails and the script runs on.
   onPosix(
     "does not offer `kill -- -$$`, which reaches nothing and lets the step pass",
     async () => {
@@ -1220,11 +1365,6 @@ describe("what a failing bash step says", () => {
     180_000
   );
 
-  // `started` used to be sent from the child's `spawn` EVENT, a turn of the
-  // loop after libuv had already forked and exec'd bash — so a script whose
-  // first line ends the runner could beat it, and the parent then reported a
-  // script that had already run as one that never started. About one run in a
-  // hundred, and the body ran on every one of them.
   onPosix(
     "never says a script did not start when the script ended the runner",
     async () => {
@@ -1255,12 +1395,6 @@ describe("what a failing bash step says", () => {
     180_000
   );
 
-  // The other side of the same decision, and the one that is deterministic:
-  // `kill -TERM $$` names bash alone, so this signal never reaches the runner
-  // and never can. The runner may only call it a signal from outside the group
-  // once it has WAITED for its own copy — which is what the elapsed time here
-  // pins. Deciding in one turn of the loop, as this once did, costs no time and
-  // is what makes the case above flaky.
   onPosix(
     "waits for its own copy of the signal before blaming something outside the group",
     async () => {
@@ -1275,11 +1409,6 @@ describe("what a failing bash step says", () => {
     30_000
   );
 
-  // The resolver checks its candidate by running it, so what it accepted can
-  // still be gone by the time the runner spawns it. That lands on the runner's
-  // own `error` handler, and `spawn` is the one kind that tells the author
-  // nothing ran. The interpreter here answers the resolver's version question
-  // and then removes itself, which is that race made deterministic.
   onPosix(
     "reports an interpreter that disappeared after the check as a spawn error",
     async () => {
@@ -1314,14 +1443,6 @@ describe("what a failing bash step says", () => {
 });
 
 describe("the runner's own channels in bash mode", () => {
-  // Descriptor 5 is the protocol channel. A `result` line reaching it would be
-  // parsed by Node inside its own read callback in the parent, and a forged
-  // verdict is exactly what the three null devices exist to prevent. 3 is the
-  // parent's sink and 4 is the lifeline.
-  // Each write has to SUCCEED and reach nothing. A closed descriptor gives the
-  // same `ok` and the same document under `set +e`, so asserting only those
-  // does not tell three null devices apart from Node's close-on-exec having
-  // closed them — which is the very distinction the runner refuses to rest on.
   onPosix(
     "gives bash writable null devices where its own channels are, so no write can forge a verdict",
     async () => {
@@ -1358,9 +1479,6 @@ describe("the runner's own channels in bash mode", () => {
     expect(result.output).toEqual({ stdin: "eof" });
   }, 30_000);
 
-  // Past the log's limit the pipe is still drained, not paused: a paused pipe
-  // fills and blocks the script on its next write, so a step that prints a lot
-  // would end at its time limit instead of passing.
   it("survives a flood on stdout, keeping only the head of it in the log", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -1378,9 +1496,6 @@ describe("the runner's own channels in bash mode", () => {
     expect(result.log).toMatch(/^z+$/);
   }, 60_000);
 
-  // The terminal message a runner in bash mode always sends is classified ahead
-  // of the stderr scan, which is what keeps a banner printed by something the
-  // script ran from becoming the step's verdict.
   it("reads a child's V8 heap banner as the script's exit code, not as a heap limit", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -1396,12 +1511,6 @@ describe("the runner's own channels in bash mode", () => {
 });
 
 describe("finding the interpreter", () => {
-  // The lookup sits between the step's `startedAt` and the timer `runChild`
-  // arms, so its time is inside `durationMs` and outside `timeoutMs`, and
-  // `queuedMs` does not carry it either: a step declared at 500 ms took 3.3
-  // seconds behind a candidate slow only for the version probe, with `notes`
-  // empty. The reference names the queue as the one source of an over-run and
-  // requires the step to report it; this is the second source.
   onPosix(
     "says how long finding bash took when it outlasts the step's own limit",
     async () => {
@@ -1463,17 +1572,11 @@ describe("finding the interpreter", () => {
       );
 
       expect(result.failure?.kind).toBe("cancelled");
-      // The probe's own timeout plus its force grace is six seconds; without
-      // the signal the step waits all of it and then runs.
       expect(Date.now() - startedAt).toBeLessThan(4_000);
     },
     30_000
   );
 
-  // A global document that cannot be parsed reads as an empty one, so
-  // `scripts.bash` looks unset and the step takes the PATH bash - which is the
-  // fallback the resolver's first rule says it will not paper a wrong value
-  // over with. It runs, and it says so.
   onPosix(
     "says the global configuration was not read when it could not be parsed",
     async () => {
@@ -1498,8 +1601,36 @@ describe("finding the interpreter", () => {
     30_000
   );
 
-  // And nothing to say on a host where the first candidate answers at once,
-  // which is every ordinary one.
+  onPosix(
+    "probes a PATH bash in the directory the step runs in",
+    async () => {
+      const ws = workspace();
+      ws.write(".tool-versions", "bash host\n");
+      const bin = ws.resolve("shimbin");
+      fs.mkdirSync(bin, { recursive: true });
+      const shim = path.join(bin, "bash");
+      fs.writeFileSync(
+        shim,
+        `#!/bin/sh\nif [ -f .tool-versions ]; then export ARGENT_TEST_SHIM=1; exec ${hostBash} "$@"; fi\n` +
+          `echo "No version is set for command bash" >&2\nexit 126\n`
+      );
+      fs.chmodSync(shim, 0o755);
+      const script = ws.write(
+        "pinned.sh",
+        `printf '{"shim":"%s"}' "\${ARGENT_TEST_SHIM:-}" > "$ARGENT_OUTPUT"`
+      );
+
+      const result = await withSearchPath(bin, () =>
+        executor().execute({ scriptPath: script, interpreter: "bash", projectRoot: ws.dir })
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.output).toEqual({ shim: "1" });
+      expect(result.notes.join(" ")).not.toContain("refused");
+    },
+    30_000
+  );
+
   it("says nothing about the lookup when bash answers at once", async () => {
     const ws = workspace();
     const result = await runBash(ws, "quiet", `printf '{"ok":true}' > "$ARGENT_OUTPUT"`, {
@@ -1526,8 +1657,6 @@ describe("environment and working directory", () => {
     expect(names).not.toContain("ARGENT_REASON");
     expect(names).not.toContain("ARGENT_FLOW_SCRIPT_RUNNER");
     expect(names).not.toContain("NODE_CHANNEL_FD");
-    // Nothing bash-specific is admitted: each of these steers bash rather than
-    // the runner, and none is in the allowlist.
     for (const name of ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH", "GLOBIGNORE"]) {
       expect(names, name).not.toContain(name);
     }
@@ -1572,8 +1701,6 @@ describe("environment and working directory", () => {
     expect(result.failure?.message).toContain("ARGENT_OUTPUT");
   }, 30_000);
 
-  // `ARGENT_REASON` is an ordinary name: the runner sets nothing under it, so a
-  // caller's value reaches the script as given.
   it("hands ARGENT_REASON to the script like any other name", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -1634,15 +1761,9 @@ describe("limits and stopping", () => {
     const result = await pending;
 
     expect(result.failure?.kind).toBe("timeout");
-    // The runner leads the group, bash joined it and the `sleep` joined bash:
-    // the parent's group stop reaches all three with no bash-specific code.
     expect(await waitForExit(grandchild, 10_000)).toBe(true);
   }, 60_000);
 
-  // The group SIGTERM reaches bash and the runner at once, and Node's default
-  // handling exits the runner without running its `exit` listener — so a script
-  // that traps TERM is left the last member of a leaderless group. The
-  // escalation to SIGKILL is what still empties it.
   onPosix(
     "still empties the group when the script traps SIGTERM and keeps running",
     async () => {
@@ -1693,14 +1814,10 @@ describe("limits and stopping", () => {
     const result = await pending;
 
     expect(result.failure?.kind).toBe("cancelled");
-    // It reached the system it talks to, so there IS state to clean up.
     expect(result.failure?.beforeFork).toBeUndefined();
     expect(await waitForExit(grandchild, 10_000)).toBe(true);
   }, 60_000);
 
-  // The parent's own timer and stop cannot run while its loop is blocked, so
-  // what reaches this descendant reaches it from inside the child — through the
-  // group the deadline watchdog kills. Bash mode installs the same watchdog.
   it("has the deadline watchdog take the whole group when the tool server stalls", async () => {
     const ws = workspace();
     const pidFile = ws.resolve("stalled.pid");
@@ -1721,9 +1838,7 @@ describe("limits and stopping", () => {
     strays.push(descendant);
 
     const probe = (afterDeadlineMs: number) => {
-      while (Date.now() - startedAt < timeoutMs + afterDeadlineMs) {
-        /* block */
-      }
+      while (Date.now() - startedAt < timeoutMs + afterDeadlineMs) {}
       return isAlive(descendant);
     };
     const withinMargin = probe(1_200);
@@ -1732,16 +1847,9 @@ describe("limits and stopping", () => {
 
     expect(withinMargin).toBe(true);
     expect(pastMargin).toBe(false);
-    // The whole failure, so a wrong verdict names which side produced it: the
-    // runner's own report of bash's exit, or the parent's reading of a runner
-    // that ended with none.
     expect(result.failure).toMatchObject({ kind: "timeout" });
   }, 60_000);
 
-  // The `.mjs` side has this at flow-script-lifecycle.test.ts; every bash
-  // background fixture loops forever, so only the timeout and cancel paths were
-  // covered. A job still running when the script exits 0 must not hold the
-  // document back, and must not outlive the step.
   onPosix(
     "returns the document of a script that exits 0 with a job still running",
     async () => {
@@ -1803,9 +1911,6 @@ describe("the private exchange directory", () => {
     expect(exchangeDirs()).toEqual([]);
   }, 60_000);
 
-  // Windows hands every step a `%TEMP%` under `C:\\Users\\First Last\\…`, so a
-  // quoting mistake anywhere in the exchange path is a Windows-only failure
-  // that POSIX CI would never see. The whole contract holds here instead.
   it("works from an exchange root whose path holds a space", async () => {
     const ws = workspace();
     const spaced = path.join(ws.dir, "dir with space");
@@ -1826,10 +1931,6 @@ describe("the private exchange directory", () => {
     expect(fs.readdirSync(spaced)).toEqual([]);
   }, 30_000);
 
-  // The document is the one thing a step and Argent exchange through the
-  // directory: nothing is made beside it for a script to write into. Listed
-  // from inside the step, because the directory is gone by the time it
-  // returns.
   it("holds the document and nothing else", async () => {
     const ws = workspace();
     const result = await runBash(
@@ -1844,11 +1945,6 @@ describe("the private exchange directory", () => {
     expect(result.output).toEqual({ held: "output.json " });
   }, 30_000);
 
-  // The file carries the document, and the document may hold values derived
-  // from a secret. The 0700 directory `mkdtemp` makes already holds on its own;
-  // the file's mode is the second barrier, and a bare write leaves it to the
-  // umask, which on an ordinary host is 0644. Read from inside the step,
-  // because the directory is gone by the time it returns.
   onPosix(
     "gives the exchange file the owner's account and nothing else",
     async () => {
@@ -1873,10 +1969,6 @@ describe("the private exchange directory", () => {
 });
 
 describe("what a step reports before anything is forked", () => {
-  // A `.sh` step suspends where a `.mjs` step does not: resolving bash is two
-  // spawns of its own, and a cancellation raised across them used to find the
-  // next check only AFTER the fork — so the script's first lines had already
-  // run, for a run the caller had already given up on.
   it("runs nothing when the cancellation lands while bash is being resolved", async () => {
     const ws = workspace();
     const markers = path.join(ws.dir, "markers");
@@ -1892,8 +1984,6 @@ describe("what a step reports before anything is forked", () => {
         timeoutMs: 20_000,
         signal: controller.signal,
       });
-      // After `execute` has started, so the abort lands inside the lookup
-      // rather than at the gate in front of it.
       setTimeout(() => controller.abort(), 0);
       const result = await pending;
 
@@ -2022,8 +2112,6 @@ describe("a tool server that dies mid-step", () => {
         strays.push(bashPid, grandchild);
         expect(isAlive(bashPid)).toBe(true);
 
-        // The channel alone: the lifeline the parent holds stays open, so what
-        // reaps the tree here is the runner's own `disconnect` handler.
         runner.disconnect();
 
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
@@ -2037,14 +2125,6 @@ describe("a tool server that dies mid-step", () => {
     90_000
   );
 
-  // The lifeline itself, on every platform. The two cases either side of this
-  // one are `onPosix`: a signal the runner holds, and a driver that reads pids
-  // bash reports. This one closes the parent's end of the lifeline descriptor
-  // and reads the descendant's pid from NODE rather than from bash — `$!` in
-  // Git Bash is an MSYS number and not a Windows one — so what it asserts is
-  // the same fact on both, and the arm the watchdog takes on Windows
-  // (`taskkill /t`, because there is no process group to name) is finally run
-  // by a job that runs there.
   it("reaps bash and its descendants when only the lifeline descriptor closes", async () => {
     const ws = workspace();
     const exchange = fs.mkdtempSync(path.join(exchangeRoot, "lifeline-"));
@@ -2086,8 +2166,6 @@ describe("a tool server that dies mid-step", () => {
       strays.push(descendant);
       expect(isAlive(descendant)).toBe(true);
 
-      // The IPC channel stays open, so the runner's own `disconnect` handler
-      // is not what answers: only the lifeline is.
       const lifeline = runner.stdio[4] as NodeJS.WritableStream & { destroy?: () => void };
       lifeline.destroy?.();
 
@@ -2130,9 +2208,6 @@ describe("a tool server that dies mid-step", () => {
         ],
         { cwd: path.resolve(__dirname, "../../.."), stdio: ["ignore", "ignore", "pipe"] }
       );
-      // Drained, so a driver that writes past the pipe buffer cannot block on
-      // it — and so a crash of the driver reads as itself rather than as "no
-      // pid appeared".
       let driverStderr = "";
       parent.stderr?.setEncoding("utf8");
       parent.stderr?.on("data", (chunk: string) => {
@@ -2149,8 +2224,6 @@ describe("a tool server that dies mid-step", () => {
         parent.kill("SIGKILL");
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
         expect(await waitForExit(grandchild, 20_000)).toBe(true);
-        // The runner itself, which the `.mjs` analog also asserts: a fix that
-        // reaped the subtree and left the runner behind would pass without it.
         expect(await waitForExit(runnerPid, 20_000)).toBe(true);
       } finally {
         parent.kill("SIGKILL");
@@ -2158,9 +2231,7 @@ describe("a tool server that dies mid-step", () => {
           try {
             const written = Number(fs.readFileSync(file, "utf8").trim());
             if (Number.isInteger(written)) strays.push(written);
-          } catch {
-            // Never written, so there is nothing to reap.
-          }
+          } catch {}
         }
       }
     },

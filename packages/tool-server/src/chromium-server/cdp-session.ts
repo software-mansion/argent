@@ -63,7 +63,8 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
       );
     }
     throw new FailureError(
-      `Chromium CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`,
+      `Chromium CDP on port ${port} answered but exposes no page target ` +
+        `(the app is running with no window). Open an app window and retry.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET,
         failure_stage: "chromium_cdp_discover_page_none",

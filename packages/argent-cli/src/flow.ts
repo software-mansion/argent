@@ -141,7 +141,8 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega — narrow auto-detection
+  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+                         auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          under <dir>/<flow>/ — a stable path for CI artifact

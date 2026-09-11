@@ -27,11 +27,6 @@ let idleResources = [];
 
 let runnerIsSending = false;
 
-/**
- * Set before anything can act on it, and read only by `exitOnParentDisconnect`.
- * In bash mode the process this file runs in has a child that nothing else will
- * reap once it is gone, so its exits are not interchangeable with node mode's.
- */
 let bashMode = false;
 
 /**
@@ -71,12 +66,6 @@ const STRAY_SUFFIXES = ["\r", "\uF00D"];
  */
 const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 
-/**
- * How the exchange file is decoded. `fatal` because the alternative is
- * `toString("utf8")`, which substitutes U+FFFD for every invalid sequence:
- * silent, unequal to what the script wrote, and three bytes wide where the
- * input was one. See `readOutputFile`.
- */
 const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
 
 /**
@@ -176,7 +165,6 @@ const deadlineFired = new Int32Array(new SharedArrayBuffer(4));
  */
 const POSIX_ERRNO_RE = /^E[A-Z]+$/;
 
-/** Node's module loader, ESM and CommonJS alike. */
 const LOADER_FRAME_RE = /node:internal\/modules\//;
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -218,9 +206,6 @@ async function prepare() {
     return never();
   }
 
-  // Claim the crash: Node's default is to print and exit 1, which reaches the
-  // executor as "the script stopped its own process" and loses the error. An
-  // unhandled rejection arrives here too, unless the script claims it.
   keepListener("uncaughtException", (err) => {
     // Unless the script has a handler of its own, which plain `node` would let
     // recover. This one is registered before the script loads, so any second
@@ -242,8 +227,6 @@ async function prepare() {
     if (finished || probing) return;
     setImmediate(() => {
       if (finished || probing) return;
-      // Read after the yield, not during the emission: by now the handlers and
-      // the microtasks an `async` one queued have all run.
       if (scriptScheduledWork()) return;
       probing = true;
       reportWhenEntrySettled(request.scriptUrl);
@@ -260,35 +243,19 @@ async function prepare() {
   guardRunnerListeners();
   reportOnScriptExit();
 
-  // The only thing that lets the executor tell "the runner never began the
-  // script" apart from "the script stopped its own process".
   sendToParent({ type: "started" });
 
-  // A live handle keeps the loop non-empty, so `beforeExit` would never fire.
-  // Unreferencing only drops it from the liveness count; the channel stays open.
   if (process.channel && typeof process.channel.unref === "function") {
     process.channel.unref();
   }
 
-  // Read last, so it is the loop as the script inherits it. Node awaits this
-  // module before it loads the entry, so there is no later point that holds.
   idleResources = process.getActiveResourcesInfo();
 }
 
-/**
- * Bash mode: bash is an ordinary child of this process, and this process leads
- * the group both watchdogs kill — so the parent's group stop, the deadline
- * watchdog's kill and the lifeline watchdog's kill all reach a bash descendant
- * with no new code, and the parent classifies a bash step through exactly the
- * `classifyOutcome` a `.mjs` step goes through.
- */
 function runBash(request) {
   bashMode = true;
-  // As close to the moment the parent armed its own timer as this side can see.
   const startedAt = Date.now();
   holdGroupSignals();
-  // Registered here for the reason node mode registers it here: Node references
-  // the IPC channel while a `disconnect` listener exists.
   keepListener("disconnect", exitOnParentDisconnect);
 
   let child;
@@ -318,29 +285,12 @@ function runBash(request) {
     // conservative one.
     announceStarted();
     child = spawn(request.interpreterPath, [request.scriptPath], {
-      // The parent chose it, and it built this process's environment: the
-      // allowlist and whatever `scripts.env.allow` adds to it, then the flow's
-      // merged `env` layered on top, minus the activation flag this file
-      // deleted before anything else ran, minus the `NODE_CHANNEL_FD` Node
-      // removes at its own startup. The exchange name is all this side adds.
       cwd: process.cwd(),
       env: {
         ...process.env,
         ARGENT_OUTPUT: request.outputFile,
       },
-      // `bash <file>`, never `shell: true` and never the shebang: a path with a
-      // space or a `$` must reach bash as one argument, the file needs no
-      // execute bit, and honouring a `#!` would run an interpreter other than
-      // the one the step resolved, reports and lets an operator pin. No `-e` or
-      // `-u` either — strictness is the script's own `set -euo pipefail`.
-      //
-      // stdin is the null device, so a `read` gets end of file; there is no
-      // caller to answer it. stdout and stderr are this process's pipes, which
-      // the parent captures as the step's log - and whose last stderr line it
-      // adds to the reason of a non-zero exit.
       stdio: ["ignore", "inherit", "inherit", ...nulls],
-      // bash joins this process's group on POSIX; on Windows the parent's
-      // `taskkill /t` on this process walks to it.
       windowsHide: true,
     });
   } catch (err) {
@@ -365,9 +315,6 @@ function runBash(request) {
     // reports it, and the deadline watchdog bounds a spawn that reported
     // neither.
     if (code === null && signal === null) return;
-    // A signal that reached bash reached this process in the same instant when
-    // it was aimed at the group, and `heldSignals` is what the report names it
-    // by — so the answer waits for it to arrive.
     if (signal) {
       whenGroupSignalHeld(
         signal,
@@ -412,17 +359,6 @@ function holdGroupSignals() {
   }
 }
 
-/**
- * What is left of the settle above once the step's own time limit is taken into
- * account. The wait is worth having only while the answer can still reach the
- * parent: past its timer the parent seals the interruption and reports a
- * timeout instead, so a wait that outlives the timer trades a right answer for
- * a wrong one. A limit too short to spare any of it reports at once, which is
- * the classification the signal alone would have given.
- *
- * `timeoutMs` is absent from a request an older parent sent; the whole settle
- * stands for it, as it did before this was sent.
- */
 function groupSignalBudget(request, startedAt) {
   if (!Number.isFinite(request.timeoutMs)) return GROUP_SIGNAL_SETTLE_MS;
   const left = request.timeoutMs - (Date.now() - startedAt) - GROUP_SIGNAL_SETTLE_GUARD_MS;
@@ -465,11 +401,6 @@ function whenGroupSignalHeld(signal, report, budgetMs = GROUP_SIGNAL_SETTLE_MS) 
   }
 }
 
-/**
- * `started`, on the channel before this call returns. `process.send` only
- * queues, and the window between the queueing and the write is exactly what a
- * script's first line can end this process inside of.
- */
 function announceStarted() {
   if (sendSynchronously({ type: "started" })) return;
   try {
@@ -487,24 +418,8 @@ function spawnFailure(request, err) {
   };
 }
 
-/**
- * The exit status is the whole verdict. A `128+N` status is bash reporting a
- * foreground command killed by signal N, and it is read as the script's own
- * exit code — the script chose to run that command and could have handled its
- * status — so it stays a `fail` and the message does not try to decode it. A
- * signal on THIS child is a different thing: nothing the script did.
- */
 function bashOutcome(request, code, signal) {
   if (signal) {
-    // A signal this process received too went to the group rather than to bash,
-    // and the group is the step's own: nothing outside it knows the number.
-    // That is the script's answer, not something the host did to it, so it is
-    // an `exit` — the kind that reads "it stopped its own process".
-    //
-    // The document is not read on this path, so the message says what the STEP
-    // does rather than what the file holds: a script that finished its write
-    // before the signal arrived left a complete document, and telling its
-    // author it was never written sends them to the wrong line.
     if (heldSignals.has(signal)) {
       return {
         type: "failure",
@@ -523,10 +438,6 @@ function bashOutcome(request, code, signal) {
       message:
         `The script was killed by ${signal} before it exited ` +
         `(bash: ${request.interpreterPath}).` +
-        // The other spelling of the mistake above. A `kill 0` in the body of
-        // the script kills bash and reaches nothing else — not this process,
-        // which is what the branch above reads a group signal by — so the two
-        // causes arrive here identically and the message names both.
         (GROUP_SIGNALS.includes(signal)
           ? " A `kill 0` in the body of the script ends bash the same way and is not " +
             "distinguishable from this: signal each job's own pid instead."
@@ -535,9 +446,6 @@ function bashOutcome(request, code, signal) {
   }
   const status = code ?? 0;
   if (status !== 0) {
-    // Why it exited is on stderr, which this process never reads: bash writes
-    // straight into the pipe the parent captures, so the parent is the side
-    // that adds the last line there to this one.
     return {
       type: "failure",
       failureType: "exit",
@@ -547,10 +455,6 @@ function bashOutcome(request, code, signal) {
     };
   }
   const read = readOutputFile(request.outputFile, request.maxOutputBytes);
-  // Only where there is something to explain: the document Argent read is the
-  // one it seeded, or there is no document at all. A script that writes
-  // `$ARGENT_OUTPUT` correctly and also happens to leave a `\r` sibling behind
-  // is not a CRLF script, and its document is not the parent's to throw away.
   if (read.error || read.json === request.outputJson) {
     const strayed = carriageReturnProblem(request);
     if (strayed) return { type: "failure", failureType: "output", message: strayed };
@@ -584,12 +488,10 @@ function carriageReturnProblem(request) {
   return carriageReturnHint("$ARGENT_OUTPUT", "so the document Argent read is the one it seeded");
 }
 
-/** Whether the script wrote one carriage return past the name it was given. */
 function strayedByCarriageReturn(file) {
   return STRAY_SUFFIXES.some((suffix) => fs.existsSync(`${file}${suffix}`));
 }
 
-/** The one CRLF sentence, with the consequence its caller can see. */
 function carriageReturnHint(name, consequence) {
   return (
     `the script wrote to a file one carriage return past the one ${name} names, ${consequence}: ` +
@@ -777,8 +679,6 @@ function reportWhenEntrySettled(scriptUrl) {
       });
       return;
     }
-    // Read the global back rather than a reference captured earlier: a script
-    // may mutate the object or replace the binding outright, and both are legal.
     const encoded = encodeOutput(globalThis.output, maxOutputBytes);
     finish(
       encoded.error
@@ -816,8 +716,6 @@ function guardRunnerListeners() {
  * output. A non-zero exit is left to the parent's `exit` verdict.
  */
 function reportOnScriptExit() {
-  // Cast because `process.exit` is typed as returning `never` and an arrow that
-  // ends in a call to it is inferred as returning that call's type.
   process.exit = /** @type {typeof process.exit} */ (
     (...args) => {
       const code = args.length > 0 ? args[0] : process.exitCode;
@@ -867,8 +765,6 @@ function closeChannelToScript() {
     };
   }
   process.disconnect = () => {
-    // Nothing is actually closed, so the runner's own handler is skipped, but
-    // the script's listeners still expect the event Node would have emitted.
     for (const listener of process.listeners("disconnect")) {
       if (listener === exitOnParentDisconnect) continue;
       setImmediate(() => listener.call(process));
@@ -876,24 +772,11 @@ function closeChannelToScript() {
   };
 }
 
-/**
- * Call a `process.send` callback the way Node would: asynchronously, with no
- * error. It is the last argument of both `send` and the `_send` behind it.
- */
 function acknowledge(args) {
   const callback = args[args.length - 1];
   if (typeof callback === "function") setImmediate(() => callback(null));
 }
 
-/**
- * Only reached while the event loop is still turning; a synchronous infinite
- * loop never gets here, which is what the lifeline watchdog thread is for.
- *
- * In bash mode a bare exit would leave bash — and everything bash started —
- * running under a runner that is gone, so this takes the group first. The four
- * lines are in step with the lifeline watchdog's `stop`, which is a module
- * constant on the worker's own thread and so cannot be called from here.
- */
 function exitOnParentDisconnect() {
   if (!bashMode) {
     realExit(0);
@@ -903,12 +786,6 @@ function exitOnParentDisconnect() {
   process.kill(process.pid, "SIGKILL");
 }
 
-/**
- * In step with both watchdogs' `stop`. On Windows there is no group to name, so
- * `taskkill /t` walks the live tree from this process down — which reaches
- * bash and a `.mjs` script's own subprocesses alike, neither of which the
- * self-kill below reaches on its own.
- */
 function stopOwnGroup() {
   try {
     process.kill(-process.pid, "SIGKILL");
@@ -984,8 +861,6 @@ function startWatchdogs(deadlineMs) {
 
   function start(url, workerData) {
     try {
-      // `execArgv: []` keeps this preload out of the worker, which would
-      // otherwise inherit it and re-run this file for nothing.
       const worker = new Worker(url, { execArgv: [], ...(workerData ? { workerData } : {}) });
       worker.on("error", (err) => reportWatchdogProblem(url, err));
       worker.unref();
@@ -1004,14 +879,6 @@ function reportWatchdogProblem(url, err) {
   }
 }
 
-/**
- * Which side of the load boundary failed. The module codes below are
- * unambiguous; the two rows after them are not, since the same error class
- * arrives from both sides — a `SyntaxError` is a module that would not parse
- * *or* `JSON.parse` of an HTML error page, and a POSIX errno is the loader
- * failing to open the script *or* the script's own I/O. Loader frames separate
- * them.
- */
 function classifyScriptError(err) {
   const code = err && typeof err === "object" ? err.code : undefined;
   if (
@@ -1033,13 +900,6 @@ function classifyScriptError(err) {
   return "runtime";
 }
 
-/**
- * True only for a loader frame with no frame naming a file above it. A file
- * frame settles it the other way whatever else is on the stack — a top-level
- * throw carries `ModuleJob.run` under the script's own frame — and no loader
- * frame at all is not evidence either way, which is the answer for an error
- * raised asynchronously or with no frames.
- */
 function isLoaderFailure(err) {
   const stack = errorStack(err);
   if (typeof stack !== "string") return false;
@@ -1091,8 +951,6 @@ function encodeOutput(value, maxOutputBytes) {
 }
 
 function validate(root) {
-  // The root is what later steps read paths out of: a replaced `output = "done"`
-  // has nothing to merge and no path to address.
   if (root === null || typeof root !== "object" || Array.isArray(root) || !isPlainObject(root)) {
     return { problem: `output is ${describeValue(root)}; output must be a plain object` };
   }
@@ -1111,8 +969,6 @@ function walk(value, path, ancestors) {
   if (type !== "object") {
     return { problem: `${path} is ${describeValue(value)}; output must be JSON-compatible data` };
   }
-  // Ancestors only, not every value seen: a value referenced twice in different
-  // branches encodes fine; only a reference back *up* the tree cannot.
   if (ancestors.has(value)) {
     return { problem: `${path} is a cyclic reference; output must be a tree` };
   }
@@ -1121,8 +977,6 @@ function walk(value, path, ancestors) {
     ancestors.add(value);
     const copy = [];
     for (let i = 0; i < value.length; i++) {
-      // A hole is not `undefined` written by the author: `JSON.stringify`
-      // encodes it as null, and rejecting it would name an index nobody wrote.
       const walked = walk(i in value ? value[i] : null, `${path}[${i}]`, ancestors);
       if (walked.problem) return walked;
       copy.push(walked.value);
@@ -1131,17 +985,11 @@ function walk(value, path, ancestors) {
     return { value: copy };
   }
   if (value instanceof Date) {
-    // Before the `toJSON` branch, which a Date would otherwise take: it encodes
-    // to a string a later step cannot read back as a date.
     return {
       problem: `${path} is a Date; output must be JSON-compatible data (use an ISO string)`,
     };
   }
   if (typeof value.toJSON === "function") {
-    // Recorded first, because the transform is a route back up the tree the
-    // author cannot see: `{ toJSON() { return this; } }` would otherwise
-    // recurse until V8 gave up, and report a stack overflow in place of the
-    // path the cycle is on.
     ancestors.add(value);
     const walked = walk(value.toJSON(), path, ancestors);
     ancestors.delete(value);
@@ -1202,10 +1050,6 @@ function describeBytes(bytes) {
   return `${bytes} bytes`;
 }
 
-/**
- * Follows the parent's `formatErrorForAgent`, which this file cannot import.
- * The depth bound also guards a `.cause` that points back up its own chain.
- */
 function errorMessage(err) {
   if (!(err instanceof Error)) return describeThrown(err);
   const parts = [];
@@ -1262,9 +1106,6 @@ function safeStringify(value) {
 function finish(response) {
   if (finished) return;
   finished = true;
-  // The deadline watchdog is stopping this tree: whatever bash's exit said, the
-  // step overran its limit, and the parent's own timer, due before this one,
-  // answers for it.
   if (Atomics.load(deadlineFired, 0) === 1) return;
   const bounded = boundFailureText(response);
   const exit = () => realExit(0);
@@ -1369,8 +1210,6 @@ function clampText(text, max) {
   if (typeof text !== "string" || text.length <= max) return text;
   let cut = max;
   let marked = `${text.slice(0, cut)}${omissionMarker(text.length - cut)}`;
-  // Two passes at most — the marker only grows by the digits the larger count
-  // adds — and the `cut > 0` guard ends it for a ceiling narrower than a marker.
   while (marked.length > max && cut > 0) {
     cut = Math.max(0, cut - (marked.length - max));
     marked = `${text.slice(0, cut)}${omissionMarker(text.length - cut)}`;
@@ -1378,7 +1217,6 @@ function clampText(text, max) {
   return marked;
 }
 
-/** The tail {@link clampText} leaves behind; the parent reads it back. */
 function omissionMarker(omitted) {
   return `… [${omitted} more characters omitted]`;
 }
@@ -1401,11 +1239,6 @@ function flushStream(stream, done) {
   }
 }
 
-/**
- * The only path onto the protocol channel; see `closeChannelToScript`. Goes
- * through the `send` captured at load rather than whatever `process.send` names
- * by now, which is the script's to replace or delete.
- */
 function sendToParent(message, callback) {
   const send = realSend ?? process.send;
   runnerIsSending = true;

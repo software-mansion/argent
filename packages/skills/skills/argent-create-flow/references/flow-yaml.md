@@ -15,7 +15,6 @@ Read this reference when polishing, composing, or manually reviewing a flow.
   - [Optional divergences](#optional-divergences)
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
-    - [Bash scripts](#bash-scripts)
   - [Environment values](#environment-values)
   - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
   - [YAML safety](#yaml-safety)
@@ -98,9 +97,9 @@ A container that aggregates a child's text therefore splits them: `tap` hits the
 Flow selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
 
 ```yaml
-- tap: { text: Delete, within: { id: profile-card } } # inside a container
-- assert: { visible: { role: Button, after: { text: Danger zone } } } # any follower
-- tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
+- tap: { text: Delete, within: { id: profile-card } }
+- assert: { visible: { role: Button, after: { text: Danger zone } } }
+- tap: { role: Switch, next: { text: Wi-Fi } }
 ```
 
 `within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
@@ -182,8 +181,8 @@ A negative condition proves only that the current tree has no visible match. It 
 Every screen change needs both checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. A dropped tap can leave the source screen idle. A destination element can enter the tree before its animation finishes. Therefore neither check replaces the other.
@@ -233,7 +232,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Local scripts
 
-Use a local `.mjs` or `.sh` script only when the user requests one. A flow of script steps alone needs no device. A `run:` or a `when:` step beside the script makes the flow resolve one again, so a script inside `when: { platform: ios }` needs a booted iOS device. Record it with `flow-add-script` at the point where it must run.
+Use a local `.mjs` or `.sh` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
@@ -244,35 +243,21 @@ Use a local `.mjs` or `.sh` script only when the user requests one. A flow of sc
     env: { API_KEY: "{{secret:API_KEY}}", USER_TYPE: premium }
 ```
 
-The extension selects the interpreter: `.mjs` runs under Node, and `.sh` runs under bash. There is no `language` key. Argent refuses `.bash` and `.js` in the step's own `path`. For a symlink, the target decides only when the target ends in `.mjs` or `.sh`. A target named `tool.bash`, `tool.py`, or one with no extension, keeps the extension the step wrote: a `.sh` step runs it under bash, and a `.mjs` step hands it to Node, which refuses it with a loader error that names the target.
+An `.mjs` file runs under Node.js. A `.sh` file runs under Bash.
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the flow file that contains the step. Include `.mjs` or `.sh` in lowercase, and match the file name's letter case.
+- **`path`** is relative to the flow file that contains the step. Use the lowercase extension `.mjs` or `.sh`. Match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 - **`env`** is a map of environment values for this script only. It goes INSIDE the `script:` value, never beside it. See [Environment values](#environment-values).
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
-Argent runs the script from the project root, not from the directory of the script file. Thus `fs.readFileSync("./fixtures/order.json")` reads `<project_root>/fixtures/order.json`.
+Argent uses `project_root` as the working directory of the script.
 
 If a script fails, check its changes before you retry. An **errored** step can also mean the environment could not be built and nothing ran: an unresolvable `{{secret:…}}`, or a name the runner refuses.
 
-### Bash scripts
-
-- The exit code is the verdict. A non-zero code fails the step. Exit 0 passes the step, unless the output document is unusable.
-- `$ARGENT_OUTPUT` names the output document of the step, as a file. Argent seeds the file with `{}` before the step, and reads the file again after exit 0. The content must be a JSON object, in UTF-8, of 1 MiB or less. A script that writes nothing leaves the seed, and the step passes with an empty document.
-- Write a sibling file and `mv` it into place: `id="$(date +%s)"; printf '{"id":"%s"}' "$id" > "$ARGENT_OUTPUT.new" && mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"`. A redirection into `$ARGENT_OUTPUT` makes the file empty before the command that fills it runs. An empty document fails the step, and so does a file that is gone, a file that is not a regular file, and a document that is not valid UTF-8. A script that left the file as Argent seeded it fails too when a sibling one carriage return past the name exists, which is the silent symptom of CRLF line endings.
-- Start each file with `set -euo pipefail`. Argent runs `bash <file>` with no `-e`, so only the last line's exit code reaches the step, and the allowlist removes each name the script did not define - an undefined name expands to the empty string.
-- The log (`scriptLog` in a run report, `log` from `flow-add-script`) holds the script's stdout and stderr. A non-zero exit's reason ends with the last non-blank stderr line. With `set -euo pipefail`, that is the failed command's error. To explain a failure, write `echo "the orders API answered 503" >&2; exit 1`. Do not write the reason to stdout.
-- Argent runs the file as `bash <file>`. The file needs no execute bit, and the `#!` line is a comment. The script gets no arguments, and its standard input is empty. Exit 126 means that bash cannot read the file, or that a command in the file is not executable.
-- Argent finds bash from `scripts.bash`, then from PATH, then from `/bin/bash` and `/usr/bin/bash`. On Windows, the fallback is the bash of Git for Windows, never the WSL launcher. A `scripts.bash` that is not a bash errors the step. macOS ships bash 3.2 at `/bin/bash`, so set `scripts.bash` to use bash 4 features.
-- `"$(dirname "${BASH_SOURCE[0]}")"` is the directory of the REAL script file, which is not the working directory. Argent resolves the path before it runs the file, so for a symlinked script this names the directory of the target, not the directory the link sits in.
-- Commands resolve against the PATH of the tool-server, which it inherits from the program that started Argent, usually your editor. A command that is absent from that PATH exits 127 — see [Environment values](#environment-values) for the snapshot that PATH comes out of and what to do about it. On Windows, the bash of Git for Windows puts its own directories first.
-- Check the file out with LF line endings, and add `*.sh text eol=lf` to `.gitattributes`. A `$'\r': command not found` line in the log, or the stray-carriage-return failure above, means CRLF line endings.
-- On macOS and Linux, Argent stops the process group of the step when bash exits, so a background job dies with the step. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job: it runs on after the flow ends, and you must stop it yourself. `setsid` is absent on macOS.
-- On Windows there is no process group. A background job outlives a step that passed, so stop each job in the script.
-- Do not stop jobs with `trap 'kill 0' EXIT`: `kill 0` signals the whole process group, which holds bash itself. Under bash 5 that ends bash and the step fails; under the bash 3.2 of `/bin/bash` it does not, and the step passes - so the same flow passes on one host and fails on another. Signal the pid of the job.
+For Bash scripts, a nonzero exit code fails the step. Write failure explanations to stderr.
 
 ## Environment values
 

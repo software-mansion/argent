@@ -42,7 +42,7 @@ const zodSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to the .mjs or .sh file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs". A .mjs runs under Node, a .sh under bash.'
+      'Path to the .mjs (Node.js) or .sh (Bash) file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
     ),
   timeout: z
     .number()
@@ -79,18 +79,6 @@ interface FlowAddScriptResult {
   savedTo?: FlowSavedTo;
 }
 
-/**
- * Steps in the recording, counted off the file — as {@link appendStepToFlow}
- * counts them on the success path. The session's in-memory copy only catches up
- * on each append, so a hand-edit made mid-recording would otherwise make the two
- * paths report counts of two different things.
- *
- * A file that will not read or parse leaves only that in-memory copy, which is a
- * count of a third thing again: the steps as of the last append. The number
- * still comes back, since nothing else in the answer depends on it, but it says
- * where it came from — the sibling recorder qualifies the same state the same
- * way, and a bare number here would be the one writer that does not.
- */
 async function recordedStepCount(
   session: RecordingSession
 ): Promise<{ stepCount: number; note?: string }> {
@@ -102,13 +90,6 @@ async function recordedStepCount(
   };
 }
 
-/**
- * How a failed call opens, and what it asks the author to do next. The two are
- * written as one entry because the lead may claim no more than the move below
- * it: an agent reads the first clause and stops, so a headline saying the
- * script could not be run answers "is there state to check?" with a no that the
- * rest of the same message then takes back.
- */
 const FAILED_CALL: Record<ScriptRan, { lead: string; nextMove: string; leftBehind: string }> = {
   yes: {
     lead: "failed",
@@ -238,9 +219,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       });
     }
 
-    // Validated by the flow parser's own helpers, against the entry they would
-    // read out of YAML: a path this tool accepts is a path parseFlow accepts,
-    // and a rejection reads the same as in a hand-written flow.
     const entry = {
       script: {
         path: params.path,
@@ -356,17 +334,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
 
     if (outcome.status !== "pass") {
       const { lead, nextMove, leftBehind } = FAILED_CALL[ran];
-      // The script ran outside the flow-file lock, so the recording this call
-      // resolved up front may have been finished or restarted in that window —
-      // the same race `appendStepToFlow` catches for a script that PASSED. This
-      // exit writes nothing and so never reaches that guard, and both claims it
-      // would otherwise make are then about a file another take owns: that the
-      // flow is as it was, and the count read back off it. Say what is true
-      // instead, and do not send the author back to a key that is no longer
-      // theirs — the retry `nextMove` invites appends into the take that
-      // replaced it. Split the two losses the way the guard does: a restart put
-      // a live take on the key, a finish left it free with a finished flow on
-      // disk, and only the first makes the file another take's.
       const state = recordingSessionState(session);
       if (state !== "live") {
         const lost =
@@ -398,24 +365,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     try {
       ({ savedTo, stepCount, flowEnv: appendedEnv } = await appendStepToFlow(session, step));
     } catch (err) {
-      // A host-mode append re-parses the WHOLE file before it pushes, so the
-      // scan that refuses an output reference judges what is already in the file
-      // as well — a step from an earlier call, or the file's own top-level
-      // `env:`, both of which a mid-recording hand edit can put there. The step
-      // just run is not among them: its own `env` is refused before the script
-      // starts, and a `script` step spells no other field that scan reads.
-      // Saying "recording it failed" would send the author back over the one
-      // call that did nothing wrong, and never name the edit to undo.
-      //
-      // Three stages, not one, and each is read off the file BEFORE this step
-      // joins it. The output reference is one; every other `env:` fault a hand
-      // edit can leave — a reserved name, a non-string value, a tagged map, a
-      // name that is not one — arrives as `flow_file_parse` or
-      // `flow_file_parse_step`. The two sibling recorders answer all three; this
-      // is the recorder where the wording costs most, because the script has
-      // already run and nothing it did is rolled back, so "check the script's
-      // changes before you retry" sends the author over a script that did
-      // exactly what it was asked.
       const stage = getFailureSignal(err)?.failure_stage;
       const refusedTheFile =
         stage === "flow_output_reference" ||

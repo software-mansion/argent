@@ -1,8 +1,3 @@
-// The `argent config` CLI over the schema-driven config system in
-// `@argent/configuration-core`. Registering a key in CONFIG_SCHEMA is enough to
-// surface it here. Keys with a `manageCommand` (e.g. telemetry) stay read-only
-// and point the user at that command.
-
 import * as path from "node:path";
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
@@ -80,7 +75,6 @@ the raw value stored at each scope.`);
 
 function scopeDetail(e: ConfigEntryView): string {
   const parts: string[] = [`scopes: ${e.scopes.join(", ")}`];
-  // The description alone can't say it: a list-valued key reads like a string one.
   if (e.expected) parts.push(`value: ${e.expected}${e.example ? `, e.g. ${e.example}` : ""}`);
   if (e.project !== undefined) parts.push(`project=${formatValuePlain(e.project)}`);
   if (e.global !== undefined) parts.push(`global=${formatValuePlain(e.global)}`);
@@ -146,12 +140,10 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   const targetScope: FlagScope = scope ?? "global";
   const warning = degenerateProjectScopeWarning(targetScope);
   try {
-    // Report the value as normalized on write (trimmed, blanks dropped), not the input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
   } catch (err) {
-    // Built here, not in reportError: only this frame knows the value and scope typed.
     reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
   }
 }
@@ -220,7 +212,6 @@ function wantsHelp(argv: string[]): boolean {
   return argv.includes("--help") || argv.includes("-h");
 }
 
-/** Names the resolved root for `project`, so a write shows which directory it meant. */
 function scopeLabel(scope: FlagScope): string {
   if (scope === "global") return "global";
   return `project: ${path.dirname(configDir("project"))}`;
@@ -258,7 +249,6 @@ function formatValuePlain(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Colorized variant for the human list view. */
 function formatValue(value: unknown): string {
   if (value === undefined) return pc.dim("(unset)");
   if (typeof value === "boolean" && process.stdout.isTTY) {
@@ -267,17 +257,11 @@ function formatValue(value: unknown): string {
   return formatValuePlain(value);
 }
 
-/** Quote so a pasted suggestion stores what it shows: bare `~`/brackets are eaten by the shell. */
 function quoteForShell(value: string): string {
   if (/^[A-Za-z0-9._/@:+-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/**
- * The command the user probably meant, or null. Only offered for the one
- * mechanical case: a single item given where a list-valued key was expected.
- * Nothing is written on their behalf — the command is printed for them to run.
- */
 function suggestCorrectedSet(
   err: unknown,
   key: string,
@@ -287,9 +271,6 @@ function suggestCorrectedSet(
   if (!(err instanceof ConfigValidationError)) return null;
   const def = getConfigDefinition(key);
   if (!def) return null;
-  // A successful check of the wrapped value is the confidence test, through the
-  // same validator the write itself used — a key whose `parse` deliberately
-  // keeps whatever it is given would otherwise "confirm" every wrapping.
   const wrapped = (def.validateWrite ?? def.parse)([rawValue]);
   if (wrapped === undefined) return null;
   const scopeFlag = scope ? ` --scope ${scope}` : "";

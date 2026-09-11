@@ -60,13 +60,17 @@ import {
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 export const SCRIPT_STEP_LOG_LIMIT_BYTES = 64 * 1024;
 const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
-/**
- * How much of a bash step's last stderr line its reason carries. The log under
- * the reason has the whole line and the rest of stderr beside it; the reason is
- * what a reader sees first, on the step's own line, so it stays short.
- */
 const STDERR_REASON_LINE_CHARS = 1_000;
 const SETTLE_TIMEOUT_MS = 500;
+/**
+ * How long after the child exits the settle keeps waiting for a process that
+ * still holds the output streams and is still writing to them. A stderr
+ * consumer - `exec 2> >(…)`, the timestamp idiom - is still working through
+ * its backlog when bash exits, and the stop would cut its last lines, the
+ * script's own error among them. A job that never stops writing holds the step
+ * this long, and then the log is marked cut.
+ */
+const SETTLE_WRITING_LIMIT_MS = 3_000;
 const STOP_GRACE_MS = 1_500;
 /**
  * How far behind the parent's timer the child's own deadline watchdog sits.
@@ -93,11 +97,6 @@ const HEAP_FATAL_WINDOW_CHARS = 256;
 
 const RUNNER_FILE = "flow-script-runner.mjs";
 
-/**
- * One private directory per bash step, under `os.tmpdir()` — 0700 on POSIX
- * through `mkdtemp`, the per-user `%TEMP%` on Windows. The prefix is what the
- * first-use sweep below recognises as the executor's own.
- */
 const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
 
 /**
@@ -108,7 +107,7 @@ const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
  * Nothing waits on it but the collection of a directory whose server died.
  */
 const EXCHANGE_LIFE_MARGIN_MS =
-  SETTLE_TIMEOUT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
+  SETTLE_WRITING_LIMIT_MS + CHILD_DEADLINE_MARGIN_MS + STOP_GRACE_MS + FORCE_GRACE_MS + 60_000;
 const EXCHANGE_OUTPUT_FILE = "output.json";
 
 /**
@@ -125,7 +124,8 @@ const EXCHANGE_SWEEP_INTERVAL_MS = 60_000;
  * How many names the sweep's directory handle reads at a time. Small, because
  * what it bounds is the work one turn of the event loop does: the read is
  * scheduled off-thread either way, and it is building the JavaScript names that
- * blocks.
+ * blocks. {@link removeTree} reads a directory the same way, and keeps no more
+ * removals than this in flight.
  */
 const EXCHANGE_SWEEP_BATCH = 64;
 
@@ -177,8 +177,6 @@ const ALLOWED_ENV_NAMES: readonly string[] = [
   "NODE_EXTRA_CA_CERTS",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
-  // Without these, a host using fnm, asdf, mise or volta runs against a
-  // different Node than the developer's shell, or against none at all.
   "NODE_PATH",
   "NVM_DIR",
   "NVM_BIN",
@@ -274,14 +272,6 @@ export interface FlowScriptFailure {
   kind: FlowScriptFailureKind;
   message: string;
   stack?: string;
-  /**
-   * Set when this failure was raised with no child process in existence, so no
-   * line of the author's script can have run. Most kinds answer that on their
-   * own — a `queue` never left the queue, a `spawn` never started — but
-   * `cancelled` reaches a caller from both sides of the fork, and a caller
-   * telling its author there is nothing to clean up needs the answer proved
-   * rather than guessed.
-   */
   beforeFork?: true;
 }
 
@@ -310,12 +300,6 @@ export interface FlowScriptExecutorOptions {
    * steps and not the machine's.
    */
   exchangeRoot?: string;
-  /**
-   * How long a process waits before it re-reads {@link exchangeRoot} for
-   * directories nobody owns any more. Defaults to
-   * {@link EXCHANGE_SWEEP_INTERVAL_MS}; a test shortens it so a second step can
-   * collect what the first one still had to leave alone.
-   */
   exchangeSweepIntervalMs?: number;
 }
 
@@ -578,18 +562,8 @@ export class FlowScriptExecutor {
     let interpreterPath: string | undefined;
     let exchange: ExchangeFiles | undefined;
     if (interpreter === "bash") {
-      // The step's own environment, so the check and the step ask the same
-      // question of the same candidate: `BASH_ENV` is outside the allowlist, so
-      // a probe that inherited it refused a bash the step would have run under,
-      // and an arbitrary executable named `bash` was handed the tool server's
-      // token, port and secrets on the way.
-      // The request's abort too, because this lookup is the one place a `.sh`
-      // step waits before it has a process to time out: each candidate costs up
-      // to the probe's own timeout plus its force grace, the step's declared
-      // limit bounds none of it, and a flow of N bash steps was un-cancellable
-      // for about six seconds each.
       const lookupStartedAt = Date.now();
-      const found = await resolveBashInterpreter(env, request.signal);
+      const found = await resolveBashInterpreter(env, request.signal, cwd);
       noteInterpreterLookup(Date.now() - lookupStartedAt, timeoutMs, notes);
       if ("cancelled" in found) {
         return emptyResult(
@@ -655,11 +629,6 @@ export class FlowScriptExecutor {
       capture,
     };
     try {
-      // The signal again, because the bash block above is the only place this
-      // path suspends: the interpreter lookup is two spawns of its own, and a
-      // cancellation raised across them found the next check only AFTER the
-      // fork — so the script's first lines had already run. A `.mjs` step has
-      // no such gap, and this closes the one bash mode opened.
       if (request.signal?.aborted) {
         return emptyResult(
           { kind: "cancelled", message: "The run was cancelled before the script started." },
@@ -672,15 +641,7 @@ export class FlowScriptExecutor {
           : { ...common, interpreter: "node" }
       );
     } finally {
-      // Every path — pass, fail, timeout, cancellation, a `fork` that threw —
-      // after the process tree is stopped and the pipes are destroyed. A
-      // removal that fails (Windows answers EBUSY while a surviving descendant
-      // holds a file) is a note, never a throw: `execute` owes its caller a
-      // verdict.
-      if (exchange) removeExchange(exchange, notes);
-      // The sweep this step started, which ran beside it rather than in front
-      // of it. Waiting for it here costs nothing a step of ordinary length can
-      // measure, and it keeps the root readable the moment `execute` resolves.
+      if (exchange) await removeExchange(exchange, notes);
       if (pendingSweep) await pendingSweep;
     }
   }
@@ -728,10 +689,6 @@ export class FlowScriptExecutor {
         // Index 4 is the lifeline: a pipe the parent holds open and never uses.
         // Its closing is how a runner learns its parent is gone.
         stdio: ["ignore", "pipe", "pipe", "ignore", "pipe", "ipc"],
-        // On POSIX the runner leads its own process group so a group stop
-        // aimed at the tool server does not also stop it, and so a group stop
-        // aimed at the runner reaches its descendants. Windows has no such
-        // group; `taskkill /T` covers the tree there instead.
         detached: process.platform !== "win32",
         windowsHide: process.platform === "win32",
       };
@@ -765,6 +722,7 @@ export class FlowScriptExecutor {
 
     let startedSeen = false;
     let terminal: ScriptTerminalResponse | null = null;
+    let stderrLineAtVerdict: string | undefined;
     let protocolProblem: string | null = null;
     let spawnProblem: string | null = null;
     let interrupted: "timeout" | "cancelled" | null = null;
@@ -803,8 +761,16 @@ export class FlowScriptExecutor {
       });
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => capture.push("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer) => capture.push("stderr", chunk));
+    let lastOutputAt = 0;
+    let lastStderrAt = 0;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      lastOutputAt = Date.now();
+      capture.push("stdout", chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      lastOutputAt = lastStderrAt = Date.now();
+      capture.push("stderr", chunk);
+    });
 
     child.on("message", (raw) => {
       if (terminal) return;
@@ -820,6 +786,12 @@ export class FlowScriptExecutor {
       }
       if (interruptionSealed) return;
       terminal = message;
+      // Where stderr stood when the runner answered, which in bash mode is when
+      // bash exited: the reason falls back to it when a job the script left
+      // running is still writing when the settle below gives up. Read on the
+      // next turn, so that what bash wrote before it exited, already in the
+      // pipe, is read first.
+      setImmediate(() => (stderrLineAtVerdict = capture.stderrLineSoFar));
     });
 
     const deadlineAt = Date.now() + timeoutMs;
@@ -881,10 +853,53 @@ export class FlowScriptExecutor {
     // The protocol runs on IPC and the logs on the standard streams, with no
     // shared order between them: a terminal message routinely arrives *before*
     // the log text of the same script. The bound covers a descendant that
-    // inherited the streams and is holding them open.
-    await Promise.race([closed, sleep(SETTLE_TIMEOUT_MS)]);
+    // inherited the streams and is holding them open, and it stretches while
+    // that descendant is still writing. A run cancelled after the script's
+    // process exited ends it once the first settle has passed. One cancelled
+    // before that was stopped already, and what it left holding the streams is
+    // waited for as any other is.
+    //
+    // Beside it, the line stderr stood on when it first went quiet for a settle
+    // after the script's process exited, which the reason takes: see below.
+    const exitedAt = Date.now();
+    const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
+    let stderrLineAtQuiet: string | undefined;
+    let stderrQuietTimer: NodeJS.Timeout | undefined;
+    let watchingStderr = true;
+    const watchStderr = () => {
+      if (!watchingStderr) return;
+      const quietFor = stderrQuietFor();
+      if (quietFor >= SETTLE_TIMEOUT_MS) stderrLineAtQuiet = capture.stderrLineSoFar;
+      else {
+        stderrQuietTimer = setTimeout(
+          () => setImmediate(watchStderr),
+          SETTLE_TIMEOUT_MS - quietFor
+        );
+      }
+    };
+    watchStderr();
+    const settleSignal = request.signal?.aborted ? undefined : request.signal;
+    const settled = await settleStreams(closed, () => lastOutputAt, settleSignal);
+    watchingStderr = false;
+    clearTimeout(stderrQuietTimer);
+    if (
+      stderrLineAtQuiet === undefined &&
+      (settleSignal?.aborted === true || stderrQuietFor() >= SETTLE_TIMEOUT_MS)
+    ) {
+      stderrLineAtQuiet = capture.stderrLineSoFar;
+    }
     await stop();
     capture.end();
+    if (settled === "cut") {
+      // Not "stopped": on Windows the tree stop reaches nothing once the runner
+      // has exited, and on POSIX it cannot reach a job in a group of its own.
+      // What holds everywhere is that Argent stops reading.
+      notes.push(
+        `A process the script left running was still writing to the log when Argent stopped ` +
+          `reading it, so the log misses what it wrote after that. Stop or wait for each ` +
+          `background job before the script exits.`
+      );
+    }
     child.stdout?.destroy();
     child.stderr?.destroy();
     lifeline?.destroy?.();
@@ -903,8 +918,24 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
+    // After bash exits, stderr carries two kinds of line: the script's own,
+    // late - a consumer in front of stderr still working through its backlog -
+    // and those of a job the script left running. The first come as one run
+    // from the moment bash exits; a job writes whenever it writes. So the line
+    // is the one stderr stood on when it first went quiet for a settle after
+    // bash exited: that run counts, a later line does not, and neither does a
+    // job's answer to the stop. Streams that closed while stderr was still
+    // running on count in full. Stderr that never went quiet is a job still
+    // writing, and then the line is the one bash exited on.
+    let stderrLine = stderrLineAtQuiet;
+    if (stderrLine === undefined) {
+      stderrLine =
+        settled === "closed"
+          ? capture.lastStderrLine
+          : (stderrLineAtVerdict ?? capture.lastStderrLine);
+    }
     const verdict = redactSecrets(
-      run.interpreter === "bash" ? withStderrLine(outcome, capture.lastStderrLine) : outcome,
+      run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
     );
 
@@ -939,11 +970,47 @@ export class FlowScriptExecutor {
     return {
       ...verdict,
       log,
-      logTruncated: capture.truncated,
+      logTruncated: capture.truncated || settled === "cut",
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
     };
+  }
+}
+
+async function settleStreams(
+  closed: Promise<void>,
+  lastOutputAt: () => number,
+  signal?: AbortSignal
+): Promise<"closed" | "quiet" | "cut"> {
+  const startedAt = Date.now();
+  const limitAt = startedAt + SETTLE_WRITING_LIMIT_MS;
+  const isClosed = closed.then(() => true);
+  const abortFrom = startedAt + SETTLE_TIMEOUT_MS;
+  let onAbort = (): void => {};
+  const aborted = new Promise<false>((resolve) => {
+    onAbort = () => resolve(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    for (;;) {
+      const quietAt = Math.max(startedAt, lastOutputAt()) + SETTLE_TIMEOUT_MS;
+      const cancelled = signal?.aborted === true;
+      if (cancelled && Date.now() >= abortFrom) {
+        return lastOutputAt() > startedAt && quietAt > Date.now() ? "cut" : "quiet";
+      }
+      const wait = Math.min(quietAt, limitAt, cancelled ? abortFrom : Infinity) - Date.now();
+      if (wait <= 0) return quietAt <= limitAt ? "quiet" : "cut";
+      const racers: Promise<boolean>[] = [isClosed, sleep(wait).then(() => false)];
+      if (!cancelled) racers.push(aborted);
+      if (await Promise.race(racers)) return "closed";
+      // A timer that fires after the loop was blocked runs before the poll
+      // that reads what arrived meanwhile, so one turn goes by before the next
+      // look at when output last came.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -1060,12 +1127,6 @@ function redactSecrets(
   };
 }
 
-/**
- * A bash step that exited non-zero says why on stderr, as every command it runs
- * does, so the last line it wrote there ends the reason. Only on `exit`: a
- * signal, a time limit or a document the runner could not read already carries
- * the runner's own account, and the log has every line either way.
- */
 function withStderrLine(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
   line: string
@@ -1147,7 +1208,6 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
  */
 const MAX_OUTPUT_DEPTH = 4096;
 
-/** Enough of a path to place a value. A 4096-deep one is its own repetition. */
 const MAX_PROBLEM_PATH_CHARS = 80;
 
 function clampPath(at: string): string {
@@ -1235,11 +1295,6 @@ function documentProblem(root: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-/**
- * One value under a node: refused here, queued for the walk, or neither. The
- * wording for a number follows the runner's own, so the two interpreters answer
- * the same document with the same sentence.
- */
 function childProblem(
   value: unknown,
   at: string,
@@ -1247,8 +1302,6 @@ function childProblem(
   pending: Array<{ node: unknown; at: string; depth: number }>
 ): string | undefined {
   if (typeof value === "number" && !Number.isFinite(value)) {
-    // The runner's own `describeValue` spelling. JSON has no `NaN` literal, so
-    // only the two infinities reach here through `JSON.parse`.
     const spelled = Number.isNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity";
     return `${clampPath(at)} is ${spelled}; output numbers must be finite.`;
   }
@@ -1285,7 +1338,6 @@ function withoutDocumentExcerpt(err: unknown): string {
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-/** Follows the runner's own `memberPath`, which this file cannot import. */
 function memberPath(key: string): string {
   return IDENTIFIER_RE.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
 }
@@ -1419,14 +1471,6 @@ function describeExit(exit: { code: number | null; signal: NodeJS.Signals | null
   return `exit code ${exit.code ?? 0}`;
 }
 
-/**
- * Always set explicitly, never inherited: the tool server's own cwd is whatever
- * the editor that spawned it chose.
- *
- * The existence check is load-bearing: `project_root` names the *calling
- * agent's* working directory and can be mistyped or since moved, and without it
- * the child fails with a bare `ENOENT` naming a path the author never wrote.
- */
 function resolveWorkingDirectory(request: FlowScriptRequest, notes: string[]): string {
   const candidates: Array<{ label: string; value: string | undefined }> = [
     { label: "project_root", value: request.projectRoot },
@@ -1491,11 +1535,8 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
  * The file carries the document, and the document may hold values derived from
  * a secret, so it is written 0600 rather than left to the umask. The barrier
  * that holds is the 0700 `mkdtemp` directory around it, not the mode on the
- * file: `docs/reference/flow-yaml.mdx` teaches writing a sibling and `mv`-ing
- * it into place - which is the way past the empty-file failure a redirection
- * straight into `$ARGENT_OUTPUT` gives - and a `mv` replaces the inode, so the
- * document Argent reads back carries the script's own umask, 0644 on an
- * ordinary host.
+ * file. A script can replace the file with a sibling via `mv`. The replacement
+ * then has permissions from the script's own umask, typically 0644.
  *
  * The directory carries the moment it stops being this step's own, in its own
  * name: `$TMPDIR` is shared by every argent install on the host, and the sweep
@@ -1532,17 +1573,10 @@ function createExchange(
   }
 }
 
-function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
+async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise<void> {
   try {
-    fs.rmSync(exchange.dir, { recursive: true, force: true });
+    await removeTree(exchange.dir);
   } catch (err) {
-    // What the sweep can and cannot do, because it is the SAME call: both are a
-    // recursive `rm` with `force`, one sync and one async. So a cause that
-    // clears on its own - a Windows EBUSY from a descendant that has since
-    // exited - is swept, and a cause that does not, such as a mode the script
-    // put on the directory itself, is still there after every later step. The
-    // note said "a later bash step sweeps it" for both, and the directory
-    // holding the document sat in $TMPDIR for good.
     notes.push(
       `The script's private directory ${exchange.dir} could not be removed ` +
         `(${errorMessage(err)}); it still holds the document the script wrote. A later bash ` +
@@ -1553,26 +1587,117 @@ function removeExchange(exchange: ExchangeFiles, notes: string[]): void {
   }
 }
 
+/**
+ * A recursive remove that leaves the event loop free. What an exchange
+ * directory holds is the script's business - a fixture it unpacked, a clone -
+ * and 100 000 files there held the tool server's main thread, and with it every
+ * request, device socket and flow on the host, for 3.9 s under `rmSync`. An
+ * awaited `fs.promises.rm` of the whole tree is no cure: it starts one
+ * operation per entry at once, and their completions come back in bursts that
+ * the loop runs in one turn - 1.2 s for the same tree. So the tree is walked
+ * here a batch of names at a time, with at most {@link EXCHANGE_SWEEP_BATCH}
+ * removals in flight: 22 ms at worst. Each entry still goes through
+ * `fs.promises.rm`, for its `force` and its Windows handling of a read-only
+ * file.
+ *
+ * A tree can also run deeper than the longest path the system takes - 1 024
+ * bytes on macOS - and no call by full path gets past that, `fs.promises.rm`
+ * included. So a directory whose path has grown long is moved up under `top`
+ * before it is walked, which shortens every path below it.
+ */
+async function removeTree(target: string, top = target): Promise<void> {
+  // Never through a link at the top: `opendir` follows one, and the directory
+  // it names is not this tree's - a name the sweep took for an abandoned
+  // exchange, or a link a script left where its own directory was. The link
+  // itself is removed, as a recursive `rm` removes it. Below the top a
+  // directory entry already says whether it is a link.
+  if (target === top) {
+    let stats: fs.Stats;
+    try {
+      stats = await fs.promises.lstat(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    if (!stats.isDirectory()) {
+      await fs.promises.rm(target, { force: true });
+      return;
+    }
+  }
+  const subdirectories: string[] = [];
+  let removals: Promise<void>[] = [];
+  // Caught where each removal starts rather than where its batch is awaited:
+  // one that fails while the next names are still being read is otherwise an
+  // unhandled rejection, which Node answers by ending the process.
+  let failure: Error | undefined;
+  const settle = async () => {
+    await Promise.all(removals);
+    removals = [];
+    if (failure) throw failure;
+  };
+  let listed = false;
+  try {
+    const dir = await fs.promises.opendir(target, { bufferSize: EXCHANGE_SWEEP_BATCH });
+    listed = true;
+    for await (const entry of dir) {
+      const child = path.join(target, entry.name);
+      if (entry.isDirectory()) {
+        subdirectories.push(child);
+      } else {
+        removals.push(
+          fs.promises.rm(child, { force: true }).catch((err: unknown) => {
+            failure ??= err as Error;
+          })
+        );
+      }
+      if (removals.length >= EXCHANGE_SWEEP_BATCH) await settle();
+    }
+  } catch (err) {
+    // Gone already, which `force` asks to be quiet about; not a directory; or
+    // one this process may not list - which, when empty, `rmdir` removes all
+    // the same, since it asks only the parent. The remove below takes each as
+    // it is.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR" && !(code === "EACCES" && !listed)) throw err;
+  }
+  await settle();
+  for (const child of subdirectories) await removeTree(await hoistIfDeep(child, top), top);
+  await fs.promises.rm(target, { recursive: true, force: true });
+}
+
+/**
+ * How long a path {@link removeTree} descends into before it moves the
+ * directory up. A name can add 765 bytes - APFS takes 255 characters, of up to
+ * three bytes each in UTF-8 - and a path macOS takes is at most 1 023 bytes,
+ * so a directory is moved while its own path is short enough for any name
+ * below it to fit.
+ */
+const REMOVE_TREE_HOIST_AT_BYTES = 257;
+
+let hoistedDirectories = 0;
+
+/**
+ * `dir`, moved to sit directly under `top` first when its path has grown long.
+ * Where the move is refused - moving a directory to another parent needs write
+ * permission on the directory itself, which an empty read-only one lacks -
+ * `dir` is walked where it is: its own path still fits, and an empty directory
+ * needs nothing below it named.
+ */
+async function hoistIfDeep(dir: string, top: string): Promise<string> {
+  if (Buffer.byteLength(dir) <= REMOVE_TREE_HOIST_AT_BYTES) return dir;
+  const moved = path.join(top, `.argent-hoisted-${process.pid}-${hoistedDirectories++}`);
+  try {
+    await fs.promises.rename(dir, moved);
+    return moved;
+  } catch {
+    return dir;
+  }
+}
+
 let sweptStaleExchangesAt = 0;
 
-/**
- * The sweep this process last started, until it finishes. `runOne` waits on it
- * before it returns, so a step never outlives its own sweep and a test can read
- * the root the moment `execute` resolves - the sweep itself runs beside the
- * step it was started for, not in front of it.
- */
 let pendingSweep: Promise<void> | undefined;
 
-/**
- * Start the sweep, at most once per interval, and never wait for it here. The
- * throttle bounds how OFTEN the root is read; it does not bound what one read
- * costs, and in production that root is `os.tmpdir()` - shared with every other
- * process on the host and bounded by nothing. A `readdirSync` there took 48 ms
- * on a machine holding 88 000 entries, on the tool server's main thread: no MCP
- * request, device socket or timer ran during it, and the bash step's own wall
- * time roughly doubled. The stall grows over a machine's life, since the
- * directory it reads is one the tool server never prunes.
- */
 function startStaleExchangeSweep(root: string, sweepIntervalMs: number): void {
   const now = Date.now();
   if (now - sweptStaleExchangesAt < sweepIntervalMs) return;
@@ -1631,7 +1756,7 @@ async function sweepStaleExchanges(root: string): Promise<void> {
       const ownUntil = exchangeOwnedUntil(entry.name);
       if (ownUntil === undefined || ownUntil > now) continue;
       try {
-        await fs.promises.rm(path.join(root, entry.name), { recursive: true, force: true });
+        await removeTree(path.join(root, entry.name));
       } catch {
         // Raced with the step that owns it, or with another server's own sweep.
       }
@@ -1641,19 +1766,11 @@ async function sweepStaleExchanges(root: string): Promise<void> {
   }
 }
 
-/**
- * The moment the name is stamped with, or `undefined` for a name that carries
- * no stamp. Digits only, so the value is a non-negative integer and no range
- * check is owed: a digit string too long to be exact is at least 2^53, which
- * the caller reads as a directory still owned and leaves alone — the same
- * branch an unstamped name takes.
- */
 function exchangeOwnedUntil(entry: string): number | undefined {
   const stamped = /^(\d+)-/.exec(entry.slice(EXCHANGE_DIR_PREFIX.length));
   return stamped ? Number(stamped[1]) : undefined;
 }
 
-/** Exported for the test that pins the sweep against a directory it planted. */
 export function exchangeDirPrefix(): string {
   return EXCHANGE_DIR_PREFIX;
 }
@@ -1670,12 +1787,6 @@ function realPathOrSelf(candidate: string): string {
   }
 }
 
-/**
- * The three layouts the runner can be in — the published bundle (beside
- * `tool-server.cjs` in `dist`), the compiled package and the workspace source
- * — are all `path.join(__dirname, name)`. The tool-server package is CommonJS,
- * so `__dirname` is available here and under vitest.
- */
 function resolveRunnerPath(runnerDir: string | undefined): string {
   const dir = runnerDir ?? __dirname;
   const runner = path.join(dir, RUNNER_FILE);
@@ -1692,8 +1803,6 @@ export function buildChildEnv(
   overrides: Record<string, string> | undefined,
   extraAllowed: readonly string[] = []
 ): NodeJS.ProcessEnv {
-  // Windows environment names are case-insensitive, so a host may surface any
-  // of these under non-canonical casing; POSIX names are exact.
   const caseInsensitive = process.platform === "win32";
   const allowed = new Set(
     [...ALLOWED_ENV_NAMES, ...extraAllowed].map((name) =>
@@ -1704,7 +1813,6 @@ export function buildChildEnv(
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    // Ahead of the allowlist, because a prefix admits names nobody listed.
     if (reservedName(name)) continue;
     const key = caseInsensitive ? name.toLowerCase() : name;
     if (allowed.has(key) || ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
@@ -1798,16 +1906,6 @@ function environmentBytes(env: NodeJS.ProcessEnv): number {
   return total;
 }
 
-/**
- * Why this name cannot be an environment variable name, or null when it can.
- *
- * Refused up front rather than handed to the operating system, which carries an
- * environment as `NAME=value` strings and has no way to say a name was
- * malformed: `=` in a name moves the split, so the script is given a variable
- * the flow never asked for and the step passes anyway, and a name that is empty
- * or holds a NUL leaves the child with an entry no reader can name. The map
- * comes from the step's `env:`, so the author is the one who can fix it.
- */
 function describeEnvNameProblem(name: string): string | null {
   if (name === "") return "is empty";
   if (name.includes("=")) return 'contains "=", which is what separates a name from its value';
@@ -1833,23 +1931,6 @@ function describeEnvNameProblem(name: string): string | null {
   return null;
 }
 
-/**
- * What the bash lookup cost, when it cost enough to explain a step that ran
- * longer than its own `timeout`.
- *
- * The lookup sits between `startedAt` and the timer `runChild` arms, so its
- * time is inside `durationMs` and outside `timeoutMs`, and the queue's
- * `queuedMs` does not carry it either — a step declared at 500 ms took 3.3
- * seconds behind a slow candidate, and 6.1 behind one that ignores SIGTERM,
- * with nothing anywhere saying why. `flow-yaml.mdx` names the queue as the one
- * source of an over-run and requires the step to report it; this is the second
- * source, and a `.mjs` step has no equivalent — everything between those two
- * points there is a `statSync` and a `JSON.stringify`.
- *
- * Reported against the step's own limit rather than at a fixed number of
- * milliseconds, so an ordinary lookup on an ordinary host stays silent and one
- * that is worth a sentence beside a short `timeout` gets one.
- */
 function noteInterpreterLookup(lookupMs: number, timeoutMs: number, notes: string[]): void {
   if (lookupMs < Math.max(INTERPRETER_LOOKUP_NOTE_FLOOR_MS, timeoutMs / 2)) return;
   notes.push(
@@ -1859,7 +1940,6 @@ function noteInterpreterLookup(lookupMs: number, timeoutMs: number, notes: strin
   );
 }
 
-/** Below this the lookup is not worth a sentence, however short the `timeout`. */
 const INTERPRETER_LOOKUP_NOTE_FLOOR_MS = 250;
 
 function clampTimeout(
@@ -2166,9 +2246,6 @@ async function stopProcessTree(child: ChildProcess, graceMs: number): Promise<vo
         windowsHide: true,
         stdio: "ignore",
       });
-      // A `spawn` that cannot launch reports it through an asynchronous
-      // `error` event, not a throw the `tryKill` above could catch, and an
-      // unhandled `error` would end the tool server.
       killer.on("error", () => {});
       killer.unref();
     });
@@ -2200,11 +2277,6 @@ async function waitForGroupToEmpty(
   }
 }
 
-/**
- * Signal 0 checks reachability without delivering anything, and `ESRCH` is the
- * only answer that means "nothing there": `EPERM` means the group exists and
- * this process may not signal it, which still counts as alive.
- */
 function groupHasMembers(pid: number): boolean {
   try {
     process.kill(-pid, 0);
@@ -2313,7 +2385,6 @@ class ScriptLogCapture {
     return this.heapFatalFlag;
   }
 
-  /** The last line stderr carried that was not blank; see {@link LastLineTracker}. */
   get lastStderrLine(): string {
     return this.stderrLastLine;
   }
@@ -2323,6 +2394,10 @@ class ScriptLogCapture {
     if (this.cut) return true;
     const runRemaining = this.runBudget ? this.runBudget.remainingBytes : Number.POSITIVE_INFINITY;
     return Math.min(this.stepRemaining, runRemaining) <= 0;
+  }
+
+  get stderrLineSoFar(): string {
+    return this.streams.get("stderr")?.lastLine?.peek() ?? this.stderrLastLine;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -2358,8 +2433,6 @@ class ScriptLogCapture {
   private consume(state: StreamState, text: string, final: boolean): void {
     if (!text && !final) return;
     if (state.watchForHeapFatal) this.watchForHeapFatal(text);
-    // Ahead of the scrub and the limits, which shape the log and not this: a
-    // script that floods stderr and then says why it failed still says it.
     state.lastLine?.write(text);
     // Past the cut nothing more reaches the log, so there is nothing left to
     // scrub, and a flood past the limit costs no scrub at all.
@@ -2428,12 +2501,6 @@ class ScriptLogCapture {
   }
 }
 
-/**
- * How much of `buffer` is left once a trailing fragment of a
- * `{{secret:NAME}}` marker is dropped: an opening the cut never closed, or the
- * beginning of one. Marker text is ASCII, so byte offsets are character
- * offsets here.
- */
 function withoutPartialMarker(buffer: Buffer, taken: number): number {
   const text = buffer.subarray(0, taken).toString("utf8");
   const open = text.lastIndexOf(SECRET_PLACEHOLDER_MARKER);
@@ -2477,27 +2544,25 @@ class LastLineTracker {
     return this.last;
   }
 
+  peek(): string {
+    if (this.blank) return this.last;
+    return this.length > this.head.length ? this.cut() : this.head.trim();
+  }
+
   private extend(segment: string): void {
     const room = STDERR_REASON_LINE_CHARS - this.head.length;
     if (room > 0) this.head += segment.slice(0, room);
     this.length += segment.length;
-    // Over the WHOLE line, not the head: a line of nothing but whitespace is
-    // blank at any length, and one whose first character comes after the head
-    // is not.
     if (this.blank && /\S/.test(segment)) this.blank = false;
   }
 
   private close(): void {
-    if (!this.blank) this.last = this.length > this.head.length ? this.cut() : this.head.trim();
+    this.last = this.peek();
     this.head = "";
     this.length = 0;
     this.blank = true;
   }
 
-  /**
-   * The head, moved back off the first half of a surrogate pair the limit
-   * split, then marked the way `clampText` marks a cut.
-   */
   private cut(): string {
     const final = this.head.charCodeAt(this.head.length - 1);
     const kept = final >= 0xd800 && final <= 0xdbff ? this.head.slice(0, -1) : this.head;
@@ -2526,11 +2591,6 @@ export function utf8SafeCut(buffer: Buffer, max: number): number {
 }
 
 const V8_FRAME_RE = /^\s*\d+:\s+0x[0-9a-f]+/i;
-/**
- * What a V8 frame dump follows; until one of these prints, nothing is
- * collapsed. Coarse on purpose: a false arm costs a marker line in place of
- * frame-shaped output, while a missed dump costs sixty lines of log budget.
- */
 const ARM_FRAME_COLLAPSE_RE = /FATAL ERROR|Fatal error in|Fatal JavaScript|# Fatal/i;
 const COLLAPSE_THRESHOLD = 3;
 
@@ -2596,13 +2656,6 @@ class V8FrameCollapser {
   }
 }
 
-/**
- * The result for a failure raised before anything was forked. Every caller is
- * on that side of the fork — a queue the step never left, a cancellation that
- * beat the fork, a request that could not be prepared, and a `fork` that threw
- * — which is what {@link FlowScriptFailure.beforeFork} reports to a caller
- * that has to say whether there is state to clean up.
- */
 function emptyResult(
   failure: FlowScriptFailure,
   extras: { notes?: string[]; queuedMs?: number; durationMs?: number } = {}
@@ -2640,8 +2693,6 @@ function describeBytes(bytes: number): string {
 }
 
 function describeDuration(ms: number): string {
-  // A step may ask for `Infinity`, which the clamp handles but no unit does:
-  // rendering it as a number would append the minutes suffix to a word.
   if (!Number.isFinite(ms)) return "unbounded";
   if (ms >= 60_000) {
     const minutes = ms / 60_000;

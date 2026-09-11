@@ -32,7 +32,7 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`. A `run:` step carries no environment of its own, so an `env` you passed the recorded call is **not** part of the recorded step and the replay runs without it. The call says so, and so does `flow-finish-recording` — in `summary` under the step, and counted in `message`. Write the values into the sibling flow's own `env:`. Write them into this recording's only for a name that flow does not itself declare, because a fragment's `env:` layers OVER the flow that runs it. Or keep the raw `flow-execute` step by recording the call with a `delayMs`. The call and `flow-finish-recording` also warn about a second difference. At replay, the sibling's scripts get the values of this recording's own `env:`. The live call ran those scripts without these values. To make the two runs match, declare the name in the sibling flow's own `env:`, or keep the raw step.
 
-When the user requests a local `.mjs` or `.sh` script, call `flow-add-script` at the point where it must run. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, its own message says whether the script ran. Nothing started when the message opens with `This call's` - an argument was refused before the process. Nothing ran when it says `was NOT run and nothing was recorded` (the pre-run read of the flow file) or `did not run`. Every other wording (`failed`, `may have run`, `passed, but the step was not recorded`) leaves changes to check before you retry.
+When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, its own message says whether the script ran. Nothing started when the message opens with `This call's` - an argument was refused before the process. Nothing ran when it says `was NOT run and nothing was recorded` (the pre-run read of the flow file) or `did not run`. Every other wording (`failed`, `may have run`, `passed, but the step was not recorded`) leaves changes to check before you retry.
 
 Its `env` map is recorded verbatim as the step's `env`, and the flow file's own top-level `env:` is layered under it. That is the whole environment the recorder can take: a replay merges two more layers under the step — the run's own `--env`/`flow-execute` values, and each parent flow's `env:` when a `run:` step composes this fragment — so the tool's "It runs the file the way a replay OF THIS FILE will" says all it can. Write a credential as `{{secret:NAME}}`; never in the clear, because this map is written into a file that gets committed. An answer that adds `but the flow file's own env changed while the script was running` still recorded the step, so do not call again: a second call appends a SECOND step and runs the script's side effect twice. Remove the step first if you want it recorded under the environment now on disk. Read [Flow YAML: Environment values](flow-yaml.md#environment-values).
 
@@ -208,11 +208,9 @@ If polish reveals a missing action or structural check, restore its preceding st
 flow-start-recording { FLOW }
 flow-add-echo { FLOW, message: "Restart Acme Notes; expect Home" }
 flow-add-step { FLOW, command: "restart-app", args: "{\"udid\":\"ABC\",\"bundleId\":\"com.acme.notes\"}" }
-# captured as: - launch: com.acme.notes
 flow-add-step { FLOW, command: "await-ui-element", args: "{\"udid\":\"ABC\",\"condition\":\"visible\",\"selector\":{\"identifier\":\"home-screen\"}}" }
 flow-add-echo { FLOW, message: "On Home; open Settings" }
 flow-add-step { FLOW, command: "gesture-tap", args: "{\"udid\":\"ABC\",\"x\":0.91,\"y\":0.94}" }
-# pre-tap capture resolves to: - tap: { id: settings-tab }
 flow-add-step { FLOW, command: "await-ui-element", args: "{\"udid\":\"ABC\",\"condition\":\"visible\",\"selector\":{\"identifier\":\"settings-screen\"}}" }
 flow-finish-recording { FLOW }
 ```
@@ -236,15 +234,11 @@ steps:
 Run these checks before replay:
 
 ```text
-# Weak targets: coordinates, raw gestures, role-only selectors
 rg -n '(\{ *x:|^ +(x|centerX|fromX|toX):|gesture-(tap|swipe|scroll|drag|pinch|rotate|custom))' .argent/flows/<name>.yaml
 rg -n -B2 '^ +role:' .argent/flows/<name>.yaml
-# Stored device ids
 rg -n '(udid|device_id)' .argent/flows/<name>.yaml
-# Positional ids and loose condition selectors
 rg -n '(-selector-\d+|selector-\d+\b)' .argent/flows/<name>.yaml
 rg -n '(visible|hidden|exists) *: *["'"'"'A-Za-z0-9]' .argent/flows/<name>.yaml
-# Fixed waits and skipped navigation
 rg -n '^\s*- wait:|open-url' .argent/flows/<name>.yaml
 ```
 

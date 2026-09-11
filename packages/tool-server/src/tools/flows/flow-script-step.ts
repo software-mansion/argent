@@ -15,15 +15,6 @@ import {
 } from "./script/flow-script-executor";
 import { resolveScriptEnvSecrets } from "./script/flow-script-env";
 
-/**
- * One `script` step, from a path to a verdict.
- *
- * The flow runner and `flow-add-script` both come through here: a recorded step
- * that ran differently from the way it will replay would make the recording
- * prove nothing, so there is one path and each caller supplies only its own
- * anchor and its own run-scoped extras.
- */
-
 interface FlowScriptStepOutcome {
   status: "pass" | "fail" | "error";
   reason?: string;
@@ -123,18 +114,6 @@ export async function runFlowScriptStep(
 
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
-    // Decided here from the CANONICAL path — the file the executor really runs —
-    // and passed explicitly: the executor runs what it is told and never
-    // inspects an extension. The spelling is not the same fact: a step written
-    // as `aliased.sh` can be a symlink to a `.mjs`, and reading the extension
-    // off the link would run JavaScript under bash and report exit code 127
-    // with a hint about a missing tool.
-    //
-    // A canonical path that carries NO extension is the one case the target
-    // cannot answer — `seed.sh -> ../tools/seed` is an ordinary way to name a
-    // script — and `scriptInterpreter` would fall through to its `node` default
-    // there. The step's own spelling is what stands in: the parser holds it to
-    // `SCRIPT_FILE_NAME_PATTERN`, so it always carries one of the two.
     interpreter: scriptInterpreter(hasScriptExtension(canonical) ? canonical : target),
     output: {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
@@ -178,17 +157,8 @@ export async function runFlowScriptStep(
   };
 }
 
-/**
- * How many of the script's own frames ride into the reason. A thrown message
- * alone names no file and no line, and a throw writes nothing to stderr, so
- * without these the step's whole diagnostic is one sentence and there is
- * nothing in CI to re-run against. Six is what a rethrow needs to show where it
- * came from without turning the step line into the whole stack; the executor's
- * `SCRIPT_MAX_FAILURE_STACK_CHARS` still holds what it captured.
- */
 const SCRIPT_REASON_MAX_FRAMES = 6;
 
-/** A frame in the host's own machinery, not in anything the author wrote. */
 function isHostFrame(frame: string): boolean {
   return (
     frame.includes("node:internal") ||
@@ -245,20 +215,6 @@ function readableFrame(frame: string, roots: readonly string[]): string {
   });
 }
 
-/**
- * The frames of a failed script, as a block appended to its message. Newline
- * separated on purpose: `oneLineReason` escapes them, so the block reads as
- * `\n    at …` on the step's own line and a reader can still tell one frame
- * from the next. The stack's first line is dropped — it only repeats the
- * message the reason already opens with.
- *
- * Scrubbed AGAIN at the end, because this function decodes. The stack arrives
- * already scrubbed, but V8 writes a frame's file as a `file://` URL, whose
- * escaping need not be a form the scrub looks for, and `readableFrame` turns
- * each one back into a path — so a resolved value that stood in a path would
- * reach the reader raw. A script that writes and imports a file named after
- * the value is one line. Whatever decodes after a scrub has to scrub again.
- */
 function scriptFrames(
   stack: string | undefined,
   roots: readonly string[],
@@ -585,35 +541,6 @@ async function scriptFileProblem(canonical: string): Promise<string | null> {
   }
 }
 
-/**
- * The line between `fail` and `error` is who is at fault. A `fail` is the
- * SCRIPT's answer: it threw, it never loaded, it returned something that cannot
- * cross into flow state, or it stopped its own process. An `error` is
- * everything the runner did to it — a process it could not start, a limit it
- * hit, a signal it did not choose, a queue it never left. That split is what
- * lets CI read a red script step: a `fail` is a regression in the flow or the
- * system it talks to, an `error` is the machine it ran on.
- *
- * `cancelled` is an `error`, not a `skip`: every reader of a report takes
- * `skip` to mean the step did not run (the CLI's not-executed line,
- * `FlowRunResult.skipped`), and a script killed after reaching the system it
- * talks to left that state behind. A cancellation also lands on the near side
- * of the fork — a signal already aborted when the call arrived, or one raised
- * while the step waited for a concurrency slot — and the status does not try to
- * separate the two: `beforeFork` does, and {@link scriptRan} is what reads it.
- * What a runner marks `skip` is the step it never dispatched, at its own
- * pre-step abort gate; `flow-add-script` has no such gate and hands its
- * request's signal straight in, so an abort that arrived before the call does
- * reach here.
- *
- * Notes ride into the reason on every outcome, pass included. They are how the
- * executor says a time limit was clamped to the host's maximum, or that the
- * working directory it was given did not exist — and dropping them on a pass is
- * how a script that silently ran somewhere else stays silent.
- *
- * Exported for the test that pins the recorder's verdict and the runner's
- * against it, kind for kind.
- */
 export function scriptVerdict(
   result: FlowScriptResult
 ): Pick<FlowScriptStepOutcome, "status" | "reason"> {

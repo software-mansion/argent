@@ -125,11 +125,6 @@ describe("flow script executor — the environment allowlist", () => {
     );
   });
 
-  // npm defines `node-options` as a real config key and hands it back as
-  // NODE_OPTIONS to what it starts, so the `npm_config_` prefix would carry
-  // through exactly what the exact name is reserved to keep out. `userconfig`
-  // and `globalconfig` reach the same key through an `.npmrc` they name, and
-  // npm takes `_` and `-` in a key as the same character.
   it.each([
     "npm_config_node_options",
     "npm_config_node-options",
@@ -156,26 +151,17 @@ describe("flow script executor — the environment allowlist", () => {
     expect(result.output?.env).toEqual({ API_URL: "https://api.example.com", API_KEY: "abc" });
   });
 
-  // Spelled out rather than imported: the constant is private, and a literal
-  // catches a rename of the name the runner preload actually reads.
   it.each([
     "NODE_OPTIONS",
     "NODE_CHANNEL_FD",
     "NODE_UNIQUE_ID",
     "npm_config_node_options",
-    // npm reads its config names without regard to case wherever it runs, and
-    // takes `_` and `-` in a key as the same character, so these spellings are
-    // refused on POSIX too, where the others are exact.
     "NPM_CONFIG_NODE_OPTIONS",
     "npm_config_node-options",
-    // Both name an `.npmrc` npm would read `node-options` from.
     "npm_config_userconfig",
     "npm_config_globalconfig",
     "ELECTRON_RUN_AS_NODE",
     "ARGENT_FLOW_SCRIPT_RUNNER",
-    // The bash exchange. Refused whichever language the step runs, because a
-    // flow-level map applies to every step and the name would steer the
-    // runner's own protocol.
     "ARGENT_OUTPUT",
   ])("refuses %s in a caller-supplied environment", async (name) => {
     const ws = workspace();
@@ -190,10 +176,6 @@ describe("flow script executor — the environment allowlist", () => {
     expect(result.failure?.message).toContain(name);
   });
 
-  // The operating system carries an environment as `NAME=value` strings, so
-  // neither of these can survive the trip: the first moves the split and hands
-  // the script `WEIRD="A=yes"`, an environment the flow never asked for, while
-  // the step passes; the second leaves an entry with no name in front of it.
   it.each([
     ["a name holding =", "WEIRD=A", 'contains "="'],
     ["an empty name", "", "is empty"],
@@ -215,10 +197,6 @@ describe("flow script executor — the environment allowlist", () => {
   it.each(["ELECTRON_RUN_AS_NODE", "Electron_Run_As_Node"])(
     "boots the child as Node when the server's environment carries %s",
     async (name) => {
-      // An Electron-hosted tool server makes `process.execPath` the Electron
-      // binary, and only this flag keeps a forked child in Node mode. The read
-      // is case-insensitive because a Windows host may surface non-canonical
-      // casing.
       withEnv(name, "1");
       const ws = workspace();
       const script = ws.write("env.mjs", reporter(["ELECTRON_RUN_AS_NODE"]));
@@ -229,9 +207,6 @@ describe("flow script executor — the environment allowlist", () => {
   );
 
   it("copies an allowlisted name in non-canonical casing on Windows", async () => {
-    // Windows environment names are case-insensitive, so a host may surface
-    // any of them under a casing the list does not spell. `SystemRoot` is the
-    // one a script that makes any network call fails without.
     withEnv("systemroot", "C:\\Windows");
     const ws = workspace();
     const script = ws.write("env.mjs", reporter(["systemroot"]));
@@ -288,8 +263,6 @@ describe("flow script executor — the environment allowlist", () => {
   }, 30_000);
 
   it("does not set the Electron flag when the server's environment lacks it", async () => {
-    // A developer running the suite from an Electron-hosted shell has the flag
-    // exported already.
     withoutEnv("ELECTRON_RUN_AS_NODE");
     const ws = workspace();
     const script = ws.write("env.mjs", reporter(["ELECTRON_RUN_AS_NODE"]));
@@ -390,9 +363,6 @@ describe("flow script executor — the heap limit", () => {
   it("floors a heap limit too small for a Node process to start", async () => {
     const ws = workspace();
     const script = ws.write("argv.mjs", `output.execArgv = process.execArgv;`);
-    // Below about 5 MiB the child dies inside V8's own startup, before the
-    // runner can send anything, with a failure naming neither the bound nor the
-    // value behind it.
     const result = await executor({ heapLimitMb: 2 }).execute({
       scriptPath: script,
       projectRoot: ws.dir,
@@ -436,9 +406,6 @@ describe("flow script executor — the host's configured bounds", () => {
 
   it("ignores a scripts.maxTimeoutMs a step would spend on starting its process", async () => {
     const ws = workspace();
-    // Refused by the schema, so the key reads as unset and the default stands.
-    // Honoured, this would cap every step at 30ms — including one that asks
-    // for nothing — and error a script by how busy the machine was.
     configuredHome(ws, { scripts: { maxTimeoutMs: 30 } });
     const script = ws.write("slow.mjs", `await new Promise((r) => setTimeout(r, 400));`);
     const result = await new FlowScriptExecutor({ concurrency: 4 }).execute({
@@ -466,9 +433,6 @@ describe("flow script executor — the host's configured bounds", () => {
     const ws = workspace();
     configuredHome(ws, { scripts: { maxTimeoutMs: 20_000, heapLimitMb: 96 } });
     const script = ws.write("argv.mjs", `output.execArgv = process.execArgv;`);
-    // One executor across both steps: the tool server shares a single instance
-    // for the life of the process, so a value held from the first step would
-    // outlive every later edit of the file.
     const shared = new FlowScriptExecutor({ concurrency: 4 });
     const before = await shared.execute({
       scriptPath: script,
@@ -532,7 +496,6 @@ describe("flow script executor — the working directory", () => {
     const script = ws.write("cwd.mjs", `output.cwd = process.cwd();`);
     const result = await executor().execute({
       scriptPath: script,
-      // Joined by hand: `path.join` would normalise the segment away.
       projectRoot: [ws.dir, "..", path.basename(ws.dir)].join(path.sep),
       flowDir: ws.dir,
     });
@@ -574,10 +537,6 @@ describe("flow script executor — the working directory", () => {
     "reports a working directory the child cannot enter as a verdict, not a hang",
     async () => {
       const ws = workspace();
-      // The directory passes every check the executor can make, so the failure
-      // lands in the fork itself, which reports it asynchronously through an
-      // `error` event rather than a throw — a step missing that listener would
-      // wait out its whole time limit instead of answering.
       const locked = ws.resolve("locked");
       fs.mkdirSync(locked, { recursive: true });
       const script = ws.write("cwd.mjs", `output.cwd = process.cwd();`);

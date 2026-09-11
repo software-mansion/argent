@@ -208,8 +208,8 @@ A negative condition passes before the element appears, for a typo, and on the w
 Each screen change needs two checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. `idle` waits until the screen has content and stops changing in the UI tree and in the pixels.
@@ -278,17 +278,17 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script is a local `.mjs` or `.sh` file.
 
-The extension selects the interpreter. An `.mjs` file runs under Node.js, and a `.sh` file runs under bash. There is no `language` key. For a symlink, the target decides only when the target itself ends in `.mjs` or `.sh`. A target with any other extension, or with none, keeps the extension you wrote in the step: a `.sh` step whose target is `tool.py` still runs under bash, and a `.mjs` step whose target is `tool.bash` still goes to Node, which then refuses the file. See [Bash scripts](#bash-scripts).
+An `.mjs` file runs under Node.js. A `.sh` file runs under Bash. See [Bash scripts](#bash-scripts).
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
 The value is always a map. Parsing rejects a bare path, such as `script: scripts/seed-order.sh`.
 
-| Key       | Required | Description                                                                                                                                 |
-| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | yes      | An `.mjs` or `.sh` file, relative to the flow file that holds the step. Write the extension in lowercase, and match the letter case on disk |
-| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                    |
-| `env`     | no       | Environment values for this script alone. It goes inside the `script:` map, never beside it. See [Environment values](#environment-values)  |
+| Key       | Required | Description                                                                                                                                |
+| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `path`    | yes      | An `.mjs` or `.sh` file, relative to the flow file that holds the step. Use a lowercase extension. Match the letter case on disk           |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                   |
+| `env`     | no       | Environment values for this script alone. It goes inside the `script:` map, never beside it. See [Environment values](#environment-values) |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -303,13 +303,15 @@ Argent removes each other name. Argent removes its own token, its own port and e
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
-`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. An `.mjs` script runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell. A `.sh` script that runs `node` itself gets the `node` on that same tool-server `PATH`.
+`PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. An `.mjs` script runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell. In a `.sh` script, a `node` command uses this `PATH`.
 
-Argent reports what the script writes to stdout and stderr as the log of the step. The log also holds the output of each command that the script starts. Argent keeps at most 64 KiB of log for each step and 256 KiB for each flow run. The log appears in these places:
+The script log contains stdout and stderr from the script and its commands. Argent keeps at most 64 KiB per step and 256 KiB per flow. The log appears in these places:
 
-- `scriptLog` in the step report of a flow run. `scriptLogTruncated` is `true` when Argent cut the log
-- `log` in the result of `flow-add-script`. `logTruncated` is `true` when Argent cut the log
-- The output of `argent flow run`, under the line of the step
+- `scriptLog` in the step report. `scriptLogTruncated` is `true` if the log is incomplete.
+- `log` in the result of `flow-add-script`. `logTruncated` is `true` if the log is incomplete.
+- The output of `argent flow run`, below the step.
+
+If log collection stops before the commands finish, the step report includes a note.
 
 Argent replaces each value that a `{{secret:NAME}}` resolved to in the log with its placeholder. See [Secrets in an `env` value](#secrets-in-an-env-value).
 
@@ -326,11 +328,11 @@ The split holds only when the `timeout` is generous. Argent needs about a second
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`timeout` bounds the run of the script, not the duration of the step. Two waits sit outside it, and the step reports each one. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts, and that wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
 
-A `.sh` step also finds bash before its limit starts. Argent runs each candidate once and asks it for its version, so a slow or hanging candidate costs seconds per candidate. Set `scripts.bash` and the search stops at it.
+Bash selection and log collection also occur outside `timeout`.
 
-`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the Node process. The heap limit does not apply to a bash script. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
+`scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the Node process. The heap limit does not apply to Bash. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
 On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
 
@@ -338,52 +340,48 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 ### Bash scripts
 
-Argent runs the file as `bash <file>`. The file needs no execute bit, and Argent ignores the `#!` line. The script gets no arguments, and its standard input is empty.
+Argent runs `.sh` files with Bash. The file needs no execute permission. Argent ignores the `#!` line and supplies no arguments or standard input.
 
-The exit code is the verdict. A non-zero code fails the step. Exit code 0 passes the step, unless the output document is unusable. Exit code 126 means that bash cannot read the file, or that a command in the file is not executable. Exit code 127 means that bash did not find a command.
+#### Select Bash
 
-The reason of a step that failed on a non-zero code has two parts:
+Argent searches for Bash in this order:
 
-1. `The script exited with code N (bash: <path>).` Exit codes 126 and 127 add a hint about the cause
-2. The last non-blank line that the script wrote to stderr. Argent trims the line and cuts it at 1,000 characters
+1. The absolute path in the global `scripts.bash` key.
+2. `bash` on the `PATH` of the tool-server.
+3. `/bin/bash`, then `/usr/bin/bash`. On Windows, Argent searches the Git for Windows installation.
 
-Argent never puts stdout in the reason. A script that writes nothing to stderr gets only the first part.
+An invalid `scripts.bash` value stops the step with an error. Argent does not support the Windows WSL launcher.
 
-With `set -euo pipefail`, the second part is the error message of the failed command. The script needs no extra code for it. For example, a `curl -fsS` call that gets a 503 answer ends the reason with `curl: (22) The requested URL returned error: 503`. To explain a failure yourself, write the explanation to stderr and exit with a non-zero code:
+To use a specific Bash version, set `scripts.bash` to its absolute path. See [Available keys](/docs/reference/configuration#available-keys).
+
+#### Write a script
+
+Start the script with `set -euo pipefail` to stop on command failures and undefined variables. Use LF line endings. To preserve LF in Git, add this rule to `.gitattributes`:
+
+```gitattributes
+*.sh text eol=lf
+```
+
+Stop each background job by its process ID before the script exits. Do not use `trap 'kill 0' EXIT`; it can stop Bash itself.
+
+#### Check failures
+
+A nonzero exit code fails the step. The failure reason includes the exit code and the last non-blank line from stderr. Argent includes stdout only in the log, not in the reason.
+
+To report a failure, write the explanation to stderr. Then exit with a nonzero code:
 
 ```bash
-echo "the orders API answered 503" >&2
+echo "The orders API returned 503" >&2
 exit 1
 ```
 
-`$ARGENT_OUTPUT` names the output document of the step, as a file. Argent seeds the file with `{}` before the step, and reads the file back after exit code 0. The content must be a JSON object, in UTF-8, of at most 1 MiB. A script that writes nothing leaves the seed, and the step passes with an empty document. Write a sibling file and `mv` it into place:
+| Symptom                    | Action                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Exit code `126`            | Check that Bash can read the script and execute its commands.                                              |
+| Exit code `127`            | Check that the command is on the `PATH` of the tool-server. Restart the tool-server after a `PATH` change. |
+| `$'\r': command not found` | Convert the script from CRLF to LF line endings.                                                           |
 
-```bash
-set -euo pipefail
-id="$(date +%s)"
-printf '{"order":{"id":"%s"}}\n' "$id" > "$ARGENT_OUTPUT.new"
-mv "$ARGENT_OUTPUT.new" "$ARGENT_OUTPUT"
-```
-
-Every value the script uses has to come from the script itself, from a file, or from the allowlist above. The allowlist removes each other name, so an undefined name expands to the empty string and the step still passes: without `set -u`, the example above writes `{"order":{"id":""}}`.
-
-A redirection into `$ARGENT_OUTPUT` empties the file before the command that fills it runs, and Argent fails a step whose document is empty. These four cases fail a script that exited 0: an empty file, a file that is gone, a file that is not a regular file, and a document that is not valid UTF-8. A script that leaves the file as Argent seeded it also fails when a sibling one carriage return past the name exists, which is the silent symptom of CRLF line endings.
-
-Argent looks for bash in this order, and takes the first result:
-
-1. The `scripts.bash` key. A value that is set but wrong errors the step. See [Available keys](/docs/reference/configuration#available-keys)
-2. `bash` on the PATH of the tool-server
-3. `/bin/bash`, then `/usr/bin/bash`. On Windows, the `bash.exe` of Git for Windows, never the WSL launcher
-
-macOS ships bash 3.2 at `/bin/bash`. Set `scripts.bash` to use bash 4 features.
-
-Rules for the script file:
-
-- **Use LF line endings.** In a file with CRLF line endings, bash writes errors such as `$'\r': command not found` to stderr. The log shows these lines, and the last of them ends the reason when no other line follows it on stderr. The step fails on an exit code that the script did not choose. It can also fail because a redirection landed one carriage return past the name `$ARGENT_OUTPUT` holds. Add `*.sh text eol=lf` to `.gitattributes`
-- **Commands resolve against the PATH of the tool-server**, not against the PATH of your shell. A command that is absent from that PATH exits 127. Argent runs the file as `bash <file>` with no `-e`, so only the exit code of the last line reaches the step: a missing command earlier in the file leaves the step passing on a seed it never filled. Start each file with `set -euo pipefail`. Restart the tool-server after you change the PATH. On Windows, the bash of Git for Windows puts its own directories first, so `curl` and `sed` resolve to its copies
-- **A background job ends with the step on macOS and Linux.** Argent stops the process group of the step, which holds bash and every job bash started. A job that leaves that group survives: `set -m` gives each job a group of its own, and `setsid` does the same. Argent never stops such a job, so stop it yourself. `setsid` is absent on macOS
-- **On Windows a background job outlives a step that passed.** Windows has no process group. Argent walks the process tree there instead, and it can only walk it while the step is still running - which is the case when Argent stops a step, and not the case when the script exits on its own. Stop each job in the script
-- **Do not reap jobs with `trap 'kill 0' EXIT`.** `kill 0` signals the whole process group, which holds bash itself. Under bash 5 that ends bash and the step fails; under the bash 3.2 of `/bin/bash` it does not, and the step passes. The same flow then passes on one host and fails on another. Signal the pid of each job instead
+On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 
 ## Environment values
 
@@ -495,17 +493,17 @@ Unlike the environment, the secret sources are read on **each** resolution. A se
 | `argent flow run <dir>`       | Run every flow in the directory, one after the other |
 | `argent flow list`            | List the flow files in `.argent/flows`               |
 
-| Option               | Description                                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here |
-| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection. `ios` still never picks a physical iPhone                    |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                      |
-| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                             |
-| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                      |
-| `--env <NAME=value>` | An environment value for every `script` step in the run. Repeatable. See [Environment values](#environment-values)          |
-| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                   |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                 |
-| `--`                 | End of options, for a flow name that starts with `-`                                                                        |
+| Option               | Description                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                       |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                                                            |
+| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                   |
+| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                            |
+| `--env <NAME=value>` | An environment value for every `script` step in the run. Repeatable. See [Environment values](#environment-values)                                                |
+| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                         |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                       |
+| `--`                 | End of options, for a flow name that starts with `-`                                                                                                              |
 
 ```bash
 argent flow run checkout --platform ios

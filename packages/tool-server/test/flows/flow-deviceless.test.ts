@@ -651,3 +651,86 @@ describe("a connected physical iPhone never competes with simulators", () => {
     expect(result.device).toBe(PHONE);
   });
 });
+
+describe("a booted remote simulator", () => {
+  const REMOTE = "remote:73A22194-1D9E-4C0E-9D75-6C2A1F0B4E51";
+  const remoteSim = {
+    platform: "ios-remote",
+    udid: REMOTE,
+    state: "Booted",
+    name: "iPhone 17 Pro",
+    runtime: "iOS 26.5",
+  };
+
+  beforeEach(async () => {
+    await writeFlow("tapping", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+  });
+
+  it("is auto-detected when it is the only booted device", async () => {
+    // A remote row carries `udid`, not `serial`, and reports simctl's own
+    // "Booted" — before this it was neither counted as booted nor identifiable,
+    // so a lone remote simulator resolved to "No booted device found".
+    const { registry } = mockRegistry({ devices: [remoteSim] });
+
+    const result = asRun(await runAuto(registry, "tapping"));
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe(REMOTE);
+  });
+
+  it("is selected by platform ios-remote when local simulators are also booted", async () => {
+    const { registry } = mockRegistry({ booted: [DEVICE], devices: [remoteSim] });
+    const runFlow = createRunFlowTool(registry);
+
+    const result = asRun(
+      await runFlow.execute({}, { name: "tapping", project_root: tmpDir, platform: "ios-remote" })
+    );
+
+    expect(result.device).toBe(REMOTE);
+  });
+
+  it("is NOT matched by platform ios, which stays local-only", async () => {
+    // The two do not overlap on purpose: the flow file is identical either
+    // way, so which host runs it must be an explicit choice rather than
+    // whatever happens to be booted.
+    const { registry } = mockRegistry({ booted: [DEVICE], devices: [remoteSim] });
+    const runFlow = createRunFlowTool(registry);
+
+    const result = asRun(
+      await runFlow.execute({}, { name: "tapping", project_root: tmpDir, platform: "ios" })
+    );
+
+    expect(result.device).toBe(DEVICE);
+  });
+
+  it("leaves platform ios with nothing to bind when only a remote sim is up", async () => {
+    const { registry } = mockRegistry({ devices: [remoteSim] });
+    const runFlow = createRunFlowTool(registry);
+
+    await expect(
+      runFlow.execute({}, { name: "tapping", project_root: tmpDir, platform: "ios" })
+    ).rejects.toThrow(/No booted ios device found/);
+  });
+
+  it("is named by its id in a resolution error, never as `?`", async () => {
+    // `deviceEntryId` fell through to `serial`, which a remote row does not
+    // carry, so an ambiguity listed the one device the caller most needed the
+    // id of as "? (ios-remote, Booted)".
+    const other = "11111111-1111-1111-1111-111111111111";
+    const { registry } = mockRegistry({ booted: [DEVICE, other], devices: [remoteSim] });
+
+    await expect(runAuto(registry, "tapping")).rejects.toThrow(
+      new RegExp(`3 booted devices matched.*${REMOTE} \\(ios-remote, Booted\\)`)
+    );
+  });
+
+  it("is not treated as booted while it is shut down", async () => {
+    const { registry } = mockRegistry({
+      devices: [{ ...remoteSim, state: "Shutdown" }],
+    });
+
+    await expect(runAuto(registry, "tapping")).rejects.toThrow(
+      /No booted device found.*\(ios-remote, Shutdown\)/
+    );
+  });
+});

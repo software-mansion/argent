@@ -24,20 +24,15 @@ export async function commandOnPath(
   name: string,
   accept?: (candidate: string) => boolean
 ): Promise<string | null> {
-  // Bare binary names only: keeps the POSIX `/bin/sh -c` interpolation safe and
-  // stops `where`'s glob matching (`adb*`) resolving something else.
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   try {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync("where", [name], { timeout: 2_000 });
-      // Explicit win32 semantics: correct on a real Windows host, and
-      // unit-testable on POSIX CI.
       const cwd = pathWin32.resolve(process.cwd()).toLowerCase();
       const match = stdout
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)
-        // Windows paths are case-insensitive, so compare normalized + lowercased.
         .find(
           (candidate) =>
             pathWin32.resolve(pathWin32.dirname(candidate)).toLowerCase() !== cwd &&
