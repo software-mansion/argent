@@ -18,4 +18,9 @@ export interface KeyboardResult {
    * a side effect. Set only when true.
    */
   reactivated?: true;
+  /**
+   * iOS simulator only: the external keyboard is not reaching this simulator,
+   * so nothing above was typed. Said once per boot.
+   */
+  hint?: string;
 }

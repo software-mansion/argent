@@ -132,15 +132,23 @@ describe("boot-device — iOS path", () => {
         transport: "unix",
       }
     );
+    // Indexed by urn, not by call order: SimulatorServer is now resolved first
+    // and deliberately earlier than this (see the #932 assertion below), so the
+    // first resolveService call is no longer NativeDevtools.
+    const orderOf = (prefix: string): number => {
+      const i = resolveService.mock.calls.findIndex(([urn]) => String(urn).startsWith(prefix));
+      expect(i, `no resolveService call for ${prefix}`).toBeGreaterThanOrEqual(0);
+      return resolveService.mock.invocationCallOrder[i]!;
+    };
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
     // only reachable once the simulator is fully up) and BEFORE `open`, so
     // the UI reflects the injected state on first paint.
-    expect(resolveService.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mockExecFile.mock.invocationCallOrder[1]
-    );
-    expect(resolveService.mock.invocationCallOrder[0]).toBeLessThan(
-      mockExecFile.mock.invocationCallOrder[2]
-    );
+    expect(orderOf("NativeDevtools:")).toBeGreaterThan(mockExecFile.mock.invocationCallOrder[1]);
+    expect(orderOf("NativeDevtools:")).toBeLessThan(mockExecFile.mock.invocationCallOrder[2]);
+    // SimulatorServer is the opposite: it has to be starting BEFORE bootstatus
+    // returns, because its HID warm-up only protects the simulator's input
+    // services if it reaches them inside the first ~1.3s of boot (#932).
+    expect(orderOf("SimulatorServer:")).toBeLessThan(mockExecFile.mock.invocationCallOrder[1]);
     // The (re)boot wipes launchd's DYLD_INSERT_LIBRARIES; boot-device must
     // force a re-apply so a cached/latched native-devtools service can't leave
     // the env unset (which would make the next launch uninjected).

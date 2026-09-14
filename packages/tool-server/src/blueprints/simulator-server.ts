@@ -24,7 +24,7 @@ import {
   externalClaimForAnyId,
   type ExternalDevice,
 } from "../utils/external-devices";
-import { sendHidWarmUp } from "../utils/hid-suppression";
+import { sendHidWarmUp, scheduleHidProbe } from "../utils/hid-suppression";
 import { simctlPbcopy } from "../utils/sim-remote";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
@@ -499,7 +499,16 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     // demand-start, i.e. someone opening DeviceHub while argent is attached.
     // Invisible (releases with no press) and idempotent, so it is safe to send
     // unconditionally on every attach.
-    sendHidWarmUp(instance.api);
+    // #932 is a CoreDevice/`backboardd` problem, so this is iOS-simulator only.
+    // The same spawned server drives Android emulators and tvOS, where these
+    // events mean nothing and the suppression does not exist.
+    if (device.platform === "ios" && device.kind === "simulator") {
+      sendHidWarmUp(instance.api);
+      // Find out whether that was too late, so the interaction tools can say so
+      // instead of reporting success for events nothing receives. Background and
+      // best-effort; see `scheduleHidProbe` for why it must not run from a tool.
+      scheduleHidProbe(device.id, instance.api);
+    }
 
     return instance;
   },

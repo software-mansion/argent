@@ -35,9 +35,20 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
 
 ### DeviceHub and simulator input
 
-Xcode 27 replaces Simulator.app with DeviceHub. DeviceHub connects to every simulator that starts. That connection moves the simulator input devices to CoreDevice. Taps, hardware buttons and typed text from Argent then stop reaching the simulator. Argent reports no error.
+Xcode 27 replaces Simulator.app with DeviceHub. DeviceHub connects to every simulator that starts. That connection moves the simulator input devices to CoreDevice. Taps, hardware buttons and typed text from Argent then stop reaching the simulator.
 
-Quit DeviceHub and start the simulator again to restore input.
+Argent protects a simulator that Argent starts. Start the simulator with the `boot-device` tool, or let the agent start it. Argent then holds the input devices open during startup.
+
+Argent cannot protect a simulator that was already running before Argent connected to it. Argent tests the input devices after it connects. If the events do not arrive, Argent adds a message to the result of the next tap, button press or typed text. The message tells the agent to start the simulator again through Argent.
+
+Two limits apply:
+
+| Limit                           | Effect                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Taps and gestures               | Argent protects these on every simulator it starts.                                                                             |
+| Hardware buttons and typed text | Argent protects these on most simulators it starts. A fast Mac can still lose them. Start the simulator again to try once more. |
+
+You can also quit DeviceHub and start the simulator again. This restores input without Argent.
 
 ### Physical iPhones
 
