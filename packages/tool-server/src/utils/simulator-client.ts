@@ -134,8 +134,9 @@ function remoteTransportError(cmd: string, cause: unknown): FailureError {
     cause,
     COMMAND_TRANSPORT_FAILURE,
     `The remote simulator did not accept the '${cmd}' command: ${detail}. ` +
-      `The command was NOT delivered to the device. The cloud session is no longer ` +
-      `usable. Acquire a machine again and reconnect to the device.`
+      `The command was NOT delivered to the device. Call stop-simulator-server for this ` +
+      `device and retry - the next call opens a new cloud session. If the machine itself ` +
+      `was released, acquire one again before retrying.`
   );
 }
 

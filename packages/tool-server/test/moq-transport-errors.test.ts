@@ -128,6 +128,9 @@ describe("sendCommand over a MoQ transport", () => {
     expect(String(err)).toContain("NOT delivered to the device");
     // The underlying cause survives, so the log still names the real fault.
     expect(String(err)).toContain("track is closed");
+    // A dead session recovers on the same machine, so the first remedy is a
+    // new session, not a new machine.
+    expect(String(err)).toContain("Call stop-simulator-server for this device and retry");
   });
 
   it("resolves when the send goes out", async () => {
