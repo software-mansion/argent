@@ -32,8 +32,7 @@ vi.mock("../../src/tools/flows/flow-actions", async () => {
   };
 });
 
-// Spread the original: only the fetch is stubbed. `supportsFlowTree` reads the
-// real source table, and the advice under test turns on it.
+// Spread the original: only the fetch is stubbed.
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => {
@@ -54,7 +53,6 @@ import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
 import { adaptVegaTreeForFlows } from "../../src/tools/flows/flow-vega-tree";
-import { supportsFlowTree } from "../../src/tools/flows/flow-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import {
   createFlowAddStepTool,
@@ -1317,10 +1315,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   it("offers the iOS repair on a remote simulator, whose source is real", async () => {
     // `ios-remote` folds to iOS for the PROSE above, and the repair is a machine
-    // question — but the machine now has the iOS source, reached over the
-    // sim-remote tunnel (`supportsFlowTree`). So a silent read there is an
-    // outage like any other, and the iOS remedy is the one that repairs it.
-    expect(supportsFlowTree("ios-remote")).toBe(true);
+    // question — but the machine reads the iOS full hierarchy too, over the
+    // sim-remote tunnel. So a silent read there is an outage like any other, and
+    // the iOS remedy is the one that repairs it.
     const failure = await realIosTargetingFailure(IOS_REMOTE);
     fetchRunnerTree = async () => {
       throw failure;
@@ -1337,9 +1334,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice,
     // which the iOS source writes into the reason it throws.
     expect(warning).toContain("is UNKNOWN, not known-bad");
-    // An outage, so the author waits for the source rather than hearing there is none.
+    // An outage, so the author is told to wait for the source to come back.
     expect(warning).toContain("re-probe once that tree source is back");
-    expect(warning).not.toContain("has no tree to probe");
     expect(warning).toContain(failure.message);
     expect(warning).toContain("Relaunch with restart-app");
     expect(warning).toContain("no directive takes a bundleId");
@@ -1514,7 +1510,6 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("UNKNOWN, not known-bad");
     // A throw is an outage, not slowness: the two get different next moves.
     expect(warning).toContain("re-probe once that tree source is back");
-    expect(warning).not.toContain("has no tree to probe");
     expect(warning).not.toContain("the source is slow, not down");
     expect(warning).not.toContain("does NOT hold");
     expect(await recordedSteps("threw")).toHaveLength(1);

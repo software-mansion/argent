@@ -39,7 +39,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { fetchFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -116,18 +116,6 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
 // both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
-}
-
-/**
- * Whether the runner has a tree to read on this device at all — the real
- * platform, not the authoring one, because this asks about a machine.
- *
- * An indeterminate verdict means the source did not answer, and the repair
- * turns on which kind of silence it was: a source that is DOWN can be brought
- * back, one that does not exist cannot.
- */
-function hasRunnerTree(udid: unknown): boolean {
-  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
 }
 
 /**
@@ -409,11 +397,10 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 // would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
-  // This caveat rides on a reason whose remedy repairs a source that is down.
-  // A platform with no flow tree source at all is not down: no relaunch can
-  // produce a tree there, and "once that tree source is back" is nonsense for
-  // one that never left.
-  if (!hasRunnerTree(udid)) return "";
+  // Every remedy below repairs a source that is DOWN, which is the only kind of
+  // silence there is: both machines this clause covers - a local simulator and a
+  // remote one - read the iOS full hierarchy, so a relaunch can always bring the
+  // tree back.
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
     "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
@@ -569,15 +556,12 @@ async function probeAgainstRunnerTree(
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — ` +
         // A timeout and an outage need different next moves: "once that tree
-        // source is back" is nonsense for a source that never left, and for one
-        // that never existed.
+        // source is back" is nonsense for a source that never left.
         (timedOut
           ? `re-record this step when the device is quieter, or settle the conversion directly by ` +
             `putting the directive in a flow and running \`flow-execute\`, which has no such ` +
             `ceiling`
-          : (hasRunnerTree(args.udid)
-              ? `re-probe once that tree source is back before trusting the conversion`
-              : `this platform's runner has no tree to probe, so the conversion stays unverified`) +
+          : `re-probe once that tree source is back before trusting the conversion` +
             indeterminateReasonCaveat(args.udid)),
     };
   }
