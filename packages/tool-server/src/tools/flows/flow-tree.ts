@@ -31,8 +31,8 @@ export async function fetchFlowTree(
   target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
   const source = FLOW_TREE_SOURCES[device.platform];
-  // Only `ios-remote` is left, and `fetchTree` throws its not-supported error
-  // naming the platform.
+  // Every platform a flow can run on has a source, so nothing reaches this;
+  // `fetchTree` throws its not-supported error naming the platform.
   if (!source) return fetchTree(registry, device);
   return source(registry, device, target);
 }
@@ -46,13 +46,19 @@ const FLOW_TREE_SOURCES: Partial<
 > = {
   // Simulator iOS uses the injected hierarchy and an optional target.
   // Physical devices use the XCUITest runner tree.
-  ios: (registry, device, target) =>
+  "ios": (registry, device, target) =>
     device.kind === "device"
       ? queryIosDeviceFlowTree(registry, device)
       : queryFullHierarchyTree(registry, device, target),
-  android: (registry, device) => queryAndroidFullHierarchy(registry, device),
-  chromium: (registry, device) => queryChromiumTree(registry, device),
-  vega: (_registry, device) => queryVegaTree(device),
+  // A remote sim is an iOS simulator reached over the sim-remote tunnel, and
+  // the native-devtools blueprint routes `getFullHierarchy` over TCP for one.
+  // So it is the local simulator source with no `kind === "device"` arm:
+  // `ios-remote` is always kind "simulator" (utils/device-info.ts) and has no
+  // physical-device variant.
+  "ios-remote": (registry, device, target) => queryFullHierarchyTree(registry, device, target),
+  "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
+  "chromium": (registry, device) => queryChromiumTree(registry, device),
+  "vega": (_registry, device) => queryVegaTree(device),
 };
 
 /**
@@ -60,10 +66,12 @@ const FLOW_TREE_SOURCES: Partial<
  * {@link fetchFlowTree} dispatches through, so it cannot drift from what a read
  * would do.
  *
- * The distinction a caller needs is "structurally absent" versus "down": on
- * `ios-remote` every read fails by construction, so a best-effort caller would
- * otherwise report a degradation on every gesture of every run there — see
- * `settleForGesture`.
+ * The distinction a caller needs is "structurally absent" versus "down": a
+ * platform with no source at all would fail every read by construction, so a
+ * best-effort caller would otherwise report a degradation on every gesture of
+ * every run there — see `settleForGesture`. No platform is in that position
+ * today; the callers are kept honest by reading the table rather than
+ * assuming it.
  */
 export function supportsFlowTree(platform: Platform): boolean {
   // Lookup, not `in`: `fetchFlowTree` also treats an explicit undefined entry

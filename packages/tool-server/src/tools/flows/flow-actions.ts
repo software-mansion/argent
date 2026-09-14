@@ -915,10 +915,11 @@ type GestureSettle = { aborted?: true; warning?: string };
  * coordinates for exactly that reason), so every step of such a flow arrives
  * here and would otherwise be charged a window for the same verdict.
  *
- * A platform with no tree source at all is the one case that settles nothing and
- * reports nothing. `ios-remote` is coordinate-driven by necessity —
- * `fetchFlowTree` serves it no tree — so there is no source to be down and no
- * degradation to warn about, and neither remedy a warning could name exists.
+ * A platform with no tree source at all would be the one case that settles
+ * nothing and reports nothing: there would be no source to be down and no
+ * degradation to warn about, and no remedy a warning could name. Every
+ * platform a flow runs on has one today, remote iOS simulators included, so
+ * the guard is a table read rather than a live case.
  *
  * The other cost is a screen that never holds still: nothing converges, so every
  * selector-less gesture pays the whole window, and the memo buys no relief

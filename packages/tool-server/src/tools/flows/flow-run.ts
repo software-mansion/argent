@@ -544,7 +544,10 @@ async function treeSourceGate(
       );
     }
   }
-  if (device.platform === "ios" && !signal?.aborted) {
+  // Both iOS simulator platforms gate the same way: `waitForNativeDevtools`
+  // resolves the service through `nativeDevtoolsRef(device)`, which the
+  // blueprint serves over TCP for a remote sim.
+  if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {
       // Every reason names the bundle id, so the prefix must not: doubled, it
