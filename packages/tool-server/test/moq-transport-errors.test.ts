@@ -164,11 +164,21 @@ describe("sendCommand over a MoQ transport", () => {
     expect(calls).toEqual(["touch", "pressKey"]);
   });
 
-  it("still refuses a command the transport does not implement", async () => {
+  /**
+   * Called bare, not through an async arrow: a wrapper turns a synchronous
+   * throw into a rejection and would pass either way. An unknown command is a
+   * caller bug, so it must not be reported as a send that failed.
+   */
+  it("rejects a command the transport does not implement, unclassified", async () => {
     const transport = createMoqTransport(closedMoqClient(), { pasteText: () => Promise.resolve() });
-    await expect(async () => sendCommand(apiWith(transport), { cmd: "wiggle" })).rejects.toThrow(
-      /does not implement sendCommand cmd 'wiggle'/
-    );
+    let sent: Promise<void> | undefined;
+    expect(() => {
+      sent = sendCommand(apiWith(transport), { cmd: "wiggle" });
+    }).not.toThrow();
+
+    const err = await sent!.catch((e: unknown) => e);
+    expect(String(err)).toMatch(/does not implement sendCommand cmd 'wiggle'/);
+    expect(getFailureSignal(err)).toBeNull();
   });
 });
 

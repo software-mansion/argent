@@ -241,11 +241,7 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  */
 export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
-  if (api.transport) {
-    return Promise.resolve(routeViaTransport(api.transport, cmd)).catch((cause: unknown) => {
-      throw remoteTransportError(cmdName, cause);
-    });
-  }
+  if (api.transport) return sendViaTransport(api.transport, cmd, cmdName);
   const conn = getOrCreateConnection(api);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...cmd });
@@ -575,6 +571,24 @@ export async function httpScreenshot(
         network_failure: "invalid_response",
       }
     );
+  }
+}
+
+/**
+ * `sendCommand` over `api.transport`. Async, so an unknown command rejects
+ * instead of throwing out of a function that returns a promise, and routed
+ * outside the `try`, so that caller bug is not reported as a refused send.
+ */
+async function sendViaTransport(
+  transport: SimulatorServerTransport,
+  cmd: Record<string, unknown>,
+  cmdName: string
+): Promise<void> {
+  const sent = routeViaTransport(transport, cmd);
+  try {
+    await sent;
+  } catch (cause) {
+    throw remoteTransportError(cmdName, cause);
   }
 }
 
