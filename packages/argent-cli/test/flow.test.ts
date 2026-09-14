@@ -2094,6 +2094,47 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 
+  it("prints the reason of an echo whose output reference did not resolve under its flow", async () => {
+    const echoLine =
+      "  ✗ › Promo {{output:user.promo}} — `echo`: {{output:user.promo}} did not resolve: " +
+      "`output.user` has no `promo` (its keys: id, name)";
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 1,
+          errored: 1,
+          skipped: 1,
+          steps: [
+            { index: 0, kind: "echo", status: "pass", message: "Seeding user" },
+            { index: 1, kind: "script", status: "pass", target: "scripts/user.mjs" },
+            {
+              index: 2,
+              kind: "echo",
+              status: "error",
+              message: "Promo {{output:user.promo}}",
+              reason:
+                "`echo`: {{output:user.promo}} did not resolve: `output.user` has no `promo` " +
+                "(its keys: id, name)",
+            },
+            { index: 3, kind: "tap", status: "skip", target: '"Apply"' },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines.filter((line) => line === echoLine)).toHaveLength(1);
+    const at = lines.indexOf(echoLine);
+    expect(at).toBeGreaterThan(lines.indexOf("[1/2] a-login.yaml"));
+    expect(at).toBeLessThan(lines.indexOf("[2/2] b-checkout.yaml"));
+    expect(lines.some((line) => line.includes("Seeding user"))).toBe(false);
+    expect(lines).toContain("  FAIL (started on SIM-1) — 1 passed, 0 failed, 1 errored, 1 skipped");
+  });
+
   it("stops the batch on a tool-call throw and counts the remaining flows skipped", async () => {
     toolsClientMock.callTool
       .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })

@@ -9,7 +9,7 @@ import {
 } from "@argent/registry";
 import {
   appendStepToFlow,
-  assertNoEnvOutputReferences,
+  assertStepOutputReferences,
   countStepsOnDisk,
   flowEnvOnDisk,
   parseScriptEnv,
@@ -17,13 +17,15 @@ import {
   parseScriptTimeout,
   recordingSessionState,
   requireRecordingSession,
+  resolveStepReferences,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
   type ScriptEnv,
 } from "./flow-utils";
 import { canonicalFlowPath } from "./flow-file-refs";
-import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
+import { sameJsonValue } from "./flow-output";
+import { mergeScriptOutput, runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
 import {
@@ -54,7 +56,8 @@ const zodSchema = z.object({
       "Environment variables for this script. Use string values and names that match [A-Za-z_][A-Za-z0-9_]*. " +
         "Argent saves this map as the step's `env`. These values replace flow defaults and take priority over `--env` at replay. " +
         "For values that change per run, use the flow's top-level `env` instead. " +
-        "Use `{{secret:NAME}}` for credentials; plaintext values remain visible in the flow file and tool logs."
+        "Use `{{secret:NAME}}` for credentials; plaintext values remain visible in the flow file and tool logs. " +
+        "Use `{{output:path}}` to read an earlier recorded script's output. Argent saves the reference for replay."
     ),
 });
 
@@ -134,6 +137,22 @@ function describeEnvDrift(before: ScriptEnv | undefined, after: ScriptEnv | unde
     : `it ran with ${envNames(before)} and the recorded step will replay with ${envNames(after)}`;
 }
 
+function changedTopLevelKeys(
+  given: Readonly<Record<string, unknown>>,
+  returned: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(returned)) {
+    // Compared as data, key order aside: `jq -S` or a script that rebuilds an
+    // object reorders keys, and counting that as a change would put the older
+    // copy back over the other call's merge.
+    if (!Object.hasOwn(given, key) || !sameJsonValue(given[key], value)) {
+      changed[key] = value;
+    }
+  }
+  return changed;
+}
+
 function renderOutput(output: Record<string, unknown>): {
   outputJson: string;
   outputTruncated?: true;
@@ -207,13 +226,28 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       ...(params.env !== undefined ? { env: parseScriptEnv(entry, params.env) } : {}),
     };
 
+    // Resolved against the recording's document before the script runs, in the
+    // order the replay takes: the step's `env` references first, its
+    // `{{secret:NAME}}` placeholders after. The file gets the references and
+    // never what they resolved to, so it keeps no value from this one session.
+    const given = session.output;
+    const revision = session.outputRevision;
+    const resolution = resolveStepReferences(step, given);
+    if (!resolution.ok) {
+      throw new InvalidToolInputError(
+        `This call's \`env\` cannot be used, so the script did not run and nothing was ` +
+          `recorded: ${resolution.reason}`,
+        { failure_stage: "flow_add_script_env" }
+      );
+    }
     try {
-      assertNoEnvOutputReferences(step.env, "This call's");
+      assertStepOutputReferences(step, "This call's `script` step");
     } catch (err) {
       throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
-        failure_stage: "flow_add_script_env",
+        failure_stage: "flow_add_script_path",
       });
     }
+    const resolvedStep = resolution.step;
 
     let flowEnv: ScriptEnv | undefined;
     try {
@@ -263,9 +297,10 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // script's logs during authoring. The per-step limit still applies.
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
-      step,
+      step: resolvedStep,
       projectRoot: params.project_root,
-      env: mergeScriptEnv(flowEnv, step.env),
+      env: mergeScriptEnv(flowEnv, resolvedStep.env),
+      output: given,
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
@@ -307,8 +342,40 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     let savedTo: FlowSavedTo;
     let stepCount: number;
     let appendedEnv: ScriptEnv | undefined;
+    const drift = { output: false };
     try {
-      ({ savedTo, stepCount, flowEnv: appendedEnv } = await appendStepToFlow(session, step));
+      ({
+        savedTo,
+        stepCount,
+        flowEnv: appendedEnv,
+      } = await appendStepToFlow(session, step, () => {
+        drift.output = session.outputRevision !== revision;
+        const returned = result?.output;
+        if (!returned) return;
+        // Into what the recording holds NOW, not what this script was handed:
+        // when another call merged first, its step is above this one in the
+        // file, and the document follows the file's order. A script hands back
+        // the whole document it was given, so after such a merge only the keys
+        // it changed are its own: the rest of its copy is older than what the
+        // recording holds, and merging it would undo the other call's keys,
+        // which the replay, running both in file order, never does.
+        const merged = mergeScriptOutput(
+          session.output,
+          drift.output ? changedTopLevelKeys(given, returned) : returned
+        );
+        if ("problem" in merged) {
+          throw new FailureError(merged.problem, {
+            error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
+            failure_stage: "flow_add_script_output",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
+        }
+        return () => {
+          session.output = merged.output;
+          session.outputRevision += 1;
+        };
+      }));
     } catch (err) {
       const stage = getFailureSignal(err)?.failure_stage;
       const refusedTheFile =
@@ -333,19 +400,35 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     }
 
     const envDrifted = !sameEnv(
-      mergeScriptEnv(flowEnv, step.env),
-      mergeScriptEnv(appendedEnv, step.env)
+      mergeScriptEnv(flowEnv, resolvedStep.env),
+      mergeScriptEnv(appendedEnv, resolvedStep.env)
     );
+    const drifts = [
+      ...(envDrifted
+        ? [
+            `the flow file's own \`env\` changed while the script was running: ` +
+              describeEnvDrift(flowEnv, appendedEnv),
+          ]
+        : []),
+      ...(drift.output
+        ? [
+            "another call merged its script's output into this recording while the script was " +
+              "running, so the script ran with an older output document than the one its step " +
+              "receives at replay",
+          ]
+        : []),
+    ];
+    const added =
+      drifts.length === 0
+        ? `Added script step to "${params.name}" flow.`
+        : `Added script step to "${params.name}" flow, but ${drifts.join(", and ")}. The step IS ` +
+          `in the file — calling this again would append a SECOND one and run the script's ` +
+          `side effect twice. Remove it first if you want it recorded under the ` +
+          (envDrifted ? "environment now on disk." : "newer output document.");
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message: envDrifted
-        ? `Added script step to "${params.name}" flow, but the flow file's own \`env\` changed ` +
-          `while the script was running: ${describeEnvDrift(flowEnv, appendedEnv)}. The step IS ` +
-          `in the file — calling this again would append a SECOND one and run the script's ` +
-          `side effect twice. Remove it first if you want it recorded under the environment ` +
-          `now on disk.`
-        : `Added script step to "${params.name}" flow.`,
+      message: outcome.warning ? `${added} Warning: ${outcome.warning}` : added,
       ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),

@@ -16,6 +16,10 @@ Read this reference when polishing, composing, or manually reviewing a flow.
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
   - [Environment values](#environment-values)
+  - [Script output](#script-output)
+    - [The output document](#the-output-document)
+    - [References](#references)
+    - [Recording script output](#recording-script-output)
   - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
   - [YAML safety](#yaml-safety)
 
@@ -256,6 +260,8 @@ If a script fails, check its changes before you retry.
 
 For Bash scripts, a nonzero exit code fails the step. Write failure explanations to stderr.
 
+A script can return data for later steps. See [Script output](#script-output).
+
 ## Environment values
 
 Use top-level `env` for script defaults and `script.env` for one step:
@@ -275,11 +281,49 @@ Read values with `process.env.NAME` in `.mjs` or `$NAME` in `.sh`. Override defa
 
 A `run:` inherits values; its defaults apply only inside that flow. A raw `tool: flow-execute` starts a separate run: pass values in `args.env`.
 
-Use string values; quote numbers and booleans. Script output references are unsupported in `env`.
+Use string values; quote numbers and booleans. Use [output references](#references) in `script.env`. Output references are not supported in top-level `env`, `--env`, or the `flow-execute` parameter `env`.
+
+To pass parent output to a `tool: flow-execute` step, use references in `args.env`.
 
 Use `{{secret:NAME}}` for credentials. Ask the user to configure missing secrets by name, never to provide their values. Plaintext `env` values and returned output documents are not redacted. Do not put credentials in logs or output documents.
 
 `scripts.env.allow` adds names inherited from the tool-server. A later shell `export` does not update it: pass fresh values (including `PATH`) through `env` or restart the tool-server.
+
+## Script output
+
+A script can return data for later steps. Use `{{output:path}}` to read it:
+
+```yaml
+- script: { path: ../../scripts/create-user.mjs }
+- type: { into: { id: user-name }, text: "{{output:user.displayName}}" }
+- echo: "Promo {{output:user.promo.code ?? 'NONE'}}"
+```
+
+### The output document
+
+- In `.mjs`, read or change the `output` object, for example `output.user = { displayName: "Test user" };`.
+- In `.sh`, write a JSON object to the file at `$ARGENT_OUTPUT`. The file initially contains the current document. If a command also reads this file, write to a second file first. Then move the second file to `$ARGENT_OUTPUT`.
+- Each run starts with an empty document. Nested `run:` flows and `when` blocks share it. A `tool: flow-execute` step has a separate document.
+- After a successful script, each returned top-level key replaces its previous value, including nested values. Other keys keep their values. To clear a key, set it to `null`. Failed scripts do not update the document.
+- Use JSON values. Keep the combined document and each script's output at or below 1 MiB. Use strings for identifiers, prices and codes.
+
+### References
+
+- Use paths such as `user.name`, `codes[0]` or `order['order-id']`. Quote YAML values that contain references.
+- Use `??` for a missing or `null` value, for example `{{output:user.region ?? defaults.region ?? 'unknown'}}`. If no alternative supplies a value, the run stops, including in a `when` condition. Calculate other values in the script.
+- References work in `echo`, selector `text`/`id`/`role`, `type.text`, `contains`/`equals`, `tool.args` values and `script.env`. Selector scopes and `when` conditions also accept them.
+- Keep paths, launch values, snapshot names, prerequisites, tool names and `matches` patterns literal. This includes flow identity arguments in `tool: flow-execute` and tool names inside `tool: run-sequence`.
+- In `tool.args`, a field that contains only one reference keeps the referenced value's JSON type. Match the tool parameter's type. For example, `keyboard.text` needs a string. A `type` step converts a referenced number to text.
+- Other fields accept strings, numbers and booleans as text. Only `echo` can also print objects, arrays and `null`. Selectors, text checks and `type` need nonempty values; avoid `?? ''` as their complete value.
+- Write secret placeholders directly in the flow file. Do not build them from output values. Output values can appear in logs and failure reports.
+
+### Recording script output
+
+1. Record the script with `flow-add-script`. Its `outputJson` result shows the returned data.
+2. Use references in later `flow-add-script.env` or `flow-add-step.args` values. Argent resolves them for the call and saves them for replay. An unresolved reference prevents execution and recording.
+3. Make recording calls one at a time. If a call warns that output changed, check the saved step before you retry.
+4. Check warnings from `flow-add-echo`: it can record an unresolved reference.
+5. Replay the final flow. A fragment recorded through `flow-execute` starts with its own output document during recording. Its saved `run:` step shares the parent document at replay.
 
 ## Snapshots and standalone runs
 
@@ -295,4 +339,4 @@ Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the devi
 
 ## YAML safety
 
-Quote strings containing `#`, `:`, or quotes. Quote numbers and `true` or `false` in text slots. Use single quotes for regexes with backslashes. Parsing rejects invalid directives, selectors, regexes, `else`, unsupported options, and e2e flows that also declare `executionPrerequisite`.
+Quote strings containing `#`, `:`, quotes, or `{{output:…}}`. Quote numbers and `true` or `false` in text slots. Use single quotes for regexes with backslashes. Parsing rejects invalid directives, selectors, regexes, `else`, unsupported options, and e2e flows that also declare `executionPrerequisite`.

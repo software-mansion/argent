@@ -82,7 +82,7 @@ describe("the Windows job's path filter", () => {
     const seeds = [...workflow.matchAll(/^ {10}(test\/flows\/script\/[^\s]+\.test\.ts)$/gm)].map(
       (match) => `packages/tool-server/${match[1]!}`
     );
-    expect(seeds).toHaveLength(6);
+    expect(seeds).toHaveLength(7);
     for (const seed of seeds) {
       expect(fs.existsSync(path.join(WORKSPACE_ROOT, seed))).toBe(true);
     }

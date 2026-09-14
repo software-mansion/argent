@@ -277,17 +277,18 @@ export function parseRunArgs(argv: string[]): {
 }
 
 /**
- * Render an echo step. Echo is narration, not a pass/fail step: one that RAN
- * prints as a plain `› message` with no index or glyph, while a SKIPPED one
- * carries the skip glyph and its reason so it cannot read as having run.
- * Returns undefined when there is no message.
+ * Render an echo step. Echo is narration: one that printed shows as a plain
+ * `› message` with no index or glyph. One that did not — skipped, or errored
+ * because its `{{output:…}}` reference did not resolve — carries its status
+ * glyph and reason, so it cannot read as having printed. Returns undefined when
+ * there is no message.
  */
 export function renderEchoLine(s: StepReport): string | undefined {
   if (!s.message) return undefined;
   const indent = stepIndent(s.depth);
-  if (s.status === "skip") {
+  if (s.status !== "pass") {
     const reason = s.reason ? ` — ${s.reason}` : "";
-    return `  ${STATUS_GLYPH.skip} ${indent}› ${s.message}${reason}`;
+    return `  ${STATUS_GLYPH[s.status]} ${indent}› ${s.message}${reason}`;
   }
   return `  ${indent}› ${s.message}`;
 }
@@ -332,8 +333,9 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
   // step's reason), so "on <id>" would blame the wrong instance for steps after
   // a move. Empty when the flow needed no device.
   const where = opts.withDevice && report.device ? ` (started on ${report.device})` : "";
-  // Four zeros on a passing run read as though nothing happened: narration is
-  // not counted, so a flow of only narration counts nothing. Only on a pass.
+  // Four zeros on a passing run read as though nothing happened: narration that
+  // printed is not counted, so a flow of only narration counts nothing. Only on
+  // a pass.
   const nothingCounted =
     report.ok && report.passed + report.failed + report.errored + report.skipped === 0;
   const note = nothingCounted ? " (no test steps)" : "";
@@ -385,7 +387,13 @@ export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
-    if (s.kind === "echo") continue;
+    if (s.kind === "echo") {
+      // Narration has no place in a list of failures, except an echo that
+      // errored: its reference did not resolve, and it is what stopped the run.
+      const line = s.status === "error" ? renderEchoLine(s) : undefined;
+      if (line) lines.push(line);
+      continue;
+    }
     n++;
     const scriptLog = renderScriptLogLines(s, n);
     const scriptNote = s.kind === "script" && Boolean(s.reason);

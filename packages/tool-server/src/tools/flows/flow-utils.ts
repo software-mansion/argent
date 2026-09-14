@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { stringify as yamlStringify, parse as yamlParse, YAMLParseError } from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
@@ -27,6 +27,18 @@ import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 import { describeScriptEnvProblem } from "./script/flow-script-env";
+import {
+  describeOutputReferenceSyntaxError,
+  OUTPUT_REFERENCE_MARKER,
+  parseOutputReferences,
+  renderedValue,
+  resolveOutputField,
+  type OutputDocument,
+  type OutputFieldKind,
+  type ResolvedOutputReference,
+} from "./flow-output";
+
+export { renderedValue };
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -186,6 +198,20 @@ export interface RecordingSession {
   flow: FlowFile;
   stepWarnings?: Map<number, RecordedStepWarning>;
   discardedWarnings?: number;
+  /**
+   * The recording's output document: what every `flow-add-script` call is handed,
+   * and what a passing one merges into, so a second recorded script reads the
+   * first's keys the way it will at replay. Kept here and never on `flow`,
+   * because a host-mode append replaces `flow` with the file read back from disk.
+   */
+  output: Record<string, unknown>;
+  /**
+   * Bumped by every merge into {@link output}. A call reads it before its script
+   * runs, or before its references resolve, and compares it inside the append's
+   * lock: a different number means another call merged first, so this one ran
+   * against an older document than the step will replay against.
+   */
+  outputRevision: number;
   lastTouchedSeq: number;
 }
 
@@ -278,7 +304,7 @@ export async function startRecordingSession(
 ): Promise<RecordingSession | null> {
   const key = await resolveFlowKey(init.projectRoot, init.name);
   const previous = recordings.get(key) ?? null;
-  recordings.set(key, { ...init, key, lastTouchedSeq: touch() });
+  recordings.set(key, { ...init, key, output: {}, outputRevision: 0, lastTouchedSeq: touch() });
   evictIfOverCapacity();
   return previous;
 }
@@ -1185,15 +1211,6 @@ function toYamlStep(step: FlowStep): YamlStep {
   }
 }
 
-// Ceiling on how much of the offending entry a diagnostic echoes. The entry is
-// not always a hand-authored flow step: a mistyped `run:` path can select any
-// in-project YAML file, and this message travels verbatim into
-// StepReport.reason — which `argent flow run` prints to stdout and
-// flowRunToMcpContent emits into the agent's context — so an unbounded render
-// would ship that file's values (multi-KB payloads, secrets) to both surfaces.
-// 200 chars still shows a genuine flow entry in full.
-const MAX_ENTRY_RENDER_CHARS = 200;
-
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message.
@@ -1203,11 +1220,11 @@ function badEntry(raw: unknown, detail: string): never {
   } catch {
     rendered = "[cyclic entry]";
   }
-  if (rendered.length > MAX_ENTRY_RENDER_CHARS) {
-    const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
-    rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
-  }
-  throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
+  // Cut, because the entry is not always a hand-authored flow step: a mistyped
+  // `run:` path can select any in-project YAML file, and this message travels
+  // verbatim into StepReport.reason, which `argent flow run` prints and
+  // flowRunToMcpContent emits into the agent's context.
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${renderedValue(rendered)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -2249,54 +2266,173 @@ export function parseScriptTimeout(raw: unknown, value: unknown): number {
   return value as number;
 }
 
-const OUTPUT_REFERENCE_MARKER = "{{output:";
+const FLOW_EXECUTE_TOOL = "flow-execute";
+const RUN_SEQUENCE_TOOL = "run-sequence";
 
+/**
+ * The arguments of a nested `flow-execute` that pick WHICH flow runs, and from
+ * where. Everything else in its args — `env` above all — is data for that run,
+ * and resolves like any other tool argument; these four decide what code runs.
+ */
+const FLOW_EXECUTE_STATIC_ARGS = ["flow_path", "project_root", "name", "flow_file"] as const;
+
+/**
+ * One text field of a step, as `{{output:…}}` sees it: where it sits, what it
+ * holds, how it treats a resolved value ({@link OutputFieldKind}), and how to
+ * write that value back into a copy of the step.
+ *
+ * ONE list serves the parser, the resolver and {@link holdsOutputReference}, so
+ * the three cannot disagree about which fields resolve: a field the parser
+ * accepted a reference in and the resolver skipped would reach a device as the
+ * literal reference text.
+ */
 interface StepField {
   where: string;
   altWhere?: string;
   value: string;
+  kind: OutputFieldKind;
+  assign: (value: unknown) => void;
 }
 
-function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
-  if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
-  if (patterns && sel.textMatches !== undefined) {
-    yield { where: `${where}.text.matches`, value: sel.textMatches };
+const NO_ASSIGN = (): void => {};
+
+function* selectorFields(sel: FlowSelector, where: string): Generator<StepField> {
+  if (sel.text !== undefined) {
+    yield {
+      where: `${where}.text`,
+      value: sel.text,
+      kind: "text",
+      assign: (value) => {
+        sel.text = value as string;
+      },
+    };
   }
-  if (sel.identifier !== undefined) yield { where: `${where}.id`, value: sel.identifier };
-  if (sel.role !== undefined) yield { where: `${where}.role`, value: sel.role };
+  // Static in every step kind. A resolved value could change what the pattern
+  // means or leave it invalid, and `textMatches` compiles a pattern without a
+  // `try` because the parser vouched for it.
+  if (sel.textMatches !== undefined) {
+    yield {
+      where: `${where}.text.matches`,
+      value: sel.textMatches,
+      kind: "static",
+      assign: NO_ASSIGN,
+    };
+  }
+  if (sel.identifier !== undefined) {
+    yield {
+      where: `${where}.id`,
+      value: sel.identifier,
+      kind: "identifier",
+      assign: (value) => {
+        sel.identifier = value as string;
+      },
+    };
+  }
+  if (sel.role !== undefined) {
+    yield {
+      where: `${where}.role`,
+      value: sel.role,
+      kind: "role",
+      assign: (value) => {
+        sel.role = value as string;
+      },
+    };
+  }
   for (const relation of SELECTOR_RELATIONS) {
     const nested = sel[relation];
-    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`, patterns);
+    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`);
   }
 }
 
 function* argFields(
   value: unknown,
   where: string,
+  assign: (value: unknown) => void,
+  isStatic: (where: string) => boolean,
   seen: Set<object> = new Set()
 ): Generator<StepField> {
   if (typeof value === "string") {
-    yield { where, value };
+    yield { where, value, kind: isStatic(where) ? "static" : "arg", assign };
     return;
   }
   if (value === null || typeof value !== "object") return;
   if (seen.has(value)) return;
   seen.add(value);
   if (Array.isArray(value)) {
-    for (const [i, item] of value.entries()) yield* argFields(item, `${where}[${i}]`, seen);
+    for (const [i, item] of value.entries()) {
+      yield* argFields(
+        item,
+        `${where}[${i}]`,
+        (next) => {
+          value[i] = next;
+        },
+        isStatic,
+        seen
+      );
+    }
   } else if (value instanceof Map) {
     // `%YAML 1.1` + `!!omap` materializes a real Map, whose entries
     // Object.entries reports as none.
-    for (const [key, item] of value) yield* argFields(item, `${where}.${String(key)}`, seen);
+    for (const [key, item] of value) {
+      yield* argFields(
+        item,
+        `${where}.${String(key)}`,
+        (next) => {
+          value.set(key, next);
+        },
+        isStatic,
+        seen
+      );
+    }
   } else if (value instanceof Set) {
     // `!!set` members ARE the values, so they carry no key of their own and the
     // path stays the container's.
-    for (const item of value) yield* argFields(item, where, seen);
+    for (const item of value) {
+      yield* argFields(
+        item,
+        where,
+        (next) => {
+          value.delete(item);
+          value.add(next);
+        },
+        isStatic,
+        seen
+      );
+    }
   } else {
-    for (const [key, item] of Object.entries(value))
-      yield* argFields(item, `${where}.${key}`, seen);
+    const record = value as Record<string, unknown>;
+    for (const [key, item] of Object.entries(record)) {
+      yield* argFields(
+        item,
+        `${where}.${key}`,
+        (next) => {
+          record[key] = next;
+        },
+        isStatic,
+        seen
+      );
+    }
   }
   seen.delete(value);
+}
+
+function staticToolArg(tool: string): (where: string) => boolean {
+  const under = staticToolArgUnder(tool);
+  // `args` itself is a map wherever the file is right. A string in its place
+  // has nowhere to receive a resolved value, so it is read as written.
+  return (where) => where === "args" || under(where);
+}
+
+function staticToolArgUnder(tool: string): (where: string) => boolean {
+  if (tool === FLOW_EXECUTE_TOOL) {
+    return (where) =>
+      FLOW_EXECUTE_STATIC_ARGS.some((key) => {
+        const root = `args.${key}`;
+        return where === root || where.startsWith(`${root}.`) || where.startsWith(`${root}[`);
+      });
+  }
+  if (tool === RUN_SEQUENCE_TOOL) return (where) => /^args\.steps\[\d+\]\.tool$/.test(where);
+  return () => false;
 }
 
 function gestureTargetPath(
@@ -2315,46 +2451,83 @@ function* conditionFields(
     selector: FlowSelector;
     expectedText?: string;
     textMatch?: TextMatchMode;
-  },
-  patterns = false
+  }
 ): Generator<StepField> {
   yield* selectorFields(
     cond.selector,
-    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`,
-    patterns
+    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`
   );
-  if (cond.expectedText !== undefined && (patterns || cond.textMatch !== "matches")) {
-    yield {
-      where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
-      value: cond.expectedText,
-    };
+  if (cond.expectedText === undefined) return;
+  const where = cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`;
+  if (cond.textMatch === "matches") {
+    yield { where, value: cond.expectedText, kind: "static", assign: NO_ASSIGN };
+    return;
+  }
+  yield {
+    where,
+    value: cond.expectedText,
+    kind: "expected",
+    assign: (value) => {
+      cond.expectedText = value as string;
+    },
+  };
+}
+
+function* launchFields(app: Launch): Generator<StepField> {
+  if (typeof app === "string") {
+    yield { where: "launch", value: app, kind: "static", assign: NO_ASSIGN };
+    return;
+  }
+  for (const [platform, entry] of Object.entries(app)) {
+    yield* argFields(entry, `launch.${platform}`, NO_ASSIGN, () => true);
   }
 }
 
-function* outputReferenceFields(step: FlowStep): Generator<StepField> {
+/**
+ * Every text field of one step, block children excluded — a block's own steps
+ * are asked one at a time, when each is reached.
+ */
+function* stepFields(step: FlowStep): Generator<StepField> {
   switch (step.kind) {
     case "echo":
-      yield { where: "echo", value: step.message };
+      yield {
+        where: "echo",
+        value: step.message,
+        kind: "echo",
+        assign: (value) => {
+          step.message = value as string;
+        },
+      };
       return;
     case "tool":
-      yield* argFields(step.args, "args");
+      yield { where: "tool", value: step.name, kind: "static", assign: NO_ASSIGN };
+      {
+        // A time limit, read as written. Only a string can hold a reference, and
+        // the parser keeps whatever `delayMs` the file gave it.
+        const delay: unknown = step.delayMs;
+        if (typeof delay === "string") {
+          yield { where: "delayMs", value: delay, kind: "static", assign: NO_ASSIGN };
+        }
+      }
+      yield* argFields(step.args, "args", NO_ASSIGN, staticToolArg(step.name));
       return;
     case "type":
       yield* selectorFields(step.into, "type.into");
-      yield { where: "type.text", value: step.text };
+      yield {
+        where: "type.text",
+        value: step.text,
+        kind: "typed",
+        assign: (value) => {
+          step.text = value as string;
+        },
+      };
       return;
     case "await":
     case "assert":
       yield* conditionFields(step.kind, step);
       return;
     case "when":
-      // Patterns included HERE and nowhere else. `{{output:…}}` is on no
-      // resolver list, so a regex carrying one matches nothing — which a `tap`,
-      // an `await` or an `assert` reports on its first run. A `when` does not:
-      // an unmatchable guard is simply not met, the block is skipped, and the
-      // run is green. Same reasoning, and same field set, as the `{{secret:`
-      // scan in parseWhenCondition.
-      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition, true);
+      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition);
       return;
     case "tap":
     case "long-press":
@@ -2380,15 +2553,30 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (step.within) yield* selectorFields(step.within, "scroll-to.within");
       return;
     case "snapshot":
+      yield { where: "snapshot.name", value: step.name, kind: "static", assign: NO_ASSIGN };
       if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
       return;
-    case "script":
-      for (const [name, value] of Object.entries(step.env ?? {})) {
-        yield { where: `script.env.${name}`, value };
+    case "script": {
+      yield { where: "script.path", value: step.path, kind: "static", assign: NO_ASSIGN };
+      const env = step.env;
+      for (const [name, value] of Object.entries(env ?? {})) {
+        yield {
+          where: `script.env.${name}`,
+          value,
+          kind: "env",
+          assign: (resolved) => {
+            env![name] = resolved as string;
+          },
+        };
       }
       return;
+    }
     case "launch":
+      yield* launchFields(step.app);
+      return;
     case "run":
+      yield { where: "run", value: step.flow, kind: "static", assign: NO_ASSIGN };
+      return;
     case "idle":
     case "wait":
       return;
@@ -2401,41 +2589,161 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
 }
 
 export function holdsOutputReference(step: FlowStep): boolean {
-  for (const field of outputReferenceFields(step)) {
+  for (const field of stepFields(step)) {
     if (field.value.includes(OUTPUT_REFERENCE_MARKER)) return true;
   }
   return blockSteps(step)?.some(holdsOutputReference) ?? false;
 }
 
-export function renderedValue(value: string): string {
-  if (value.length <= MAX_ENTRY_RENDER_CHARS) return value;
-  const elided = value.length - MAX_ENTRY_RENDER_CHARS;
-  return `${value.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
+const REFERENCE_FIELDS =
+  "An output reference resolves only in an `echo` message, a selector's `text`, `id` and " +
+  "`role`, a `when` guard, `type` text, `contains` and `equals` text, a `tool` step's " +
+  "`args`, and a `script` step's `env` values";
+
+function fieldLocator(field: StepField): string {
+  return field.altWhere
+    ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+    : `\`${field.where}\``;
 }
 
-function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {
-  steps.forEach((step, i) => {
-    const at = [...trail, i + 1];
-    for (const field of outputReferenceFields(step)) {
-      if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
-      const rendered = renderedValue(field.value);
-      const locator = field.altWhere
-        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
-        : `\`${field.where}\``;
-      throw new FailureError(
-        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
-          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
-        {
-          error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
-          failure_stage: "flow_output_reference",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
+function outputReferenceFailure(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+    failure_stage: "flow_output_reference",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/**
+ * The parse-time half of `{{output:…}}`: every reference is well formed, and
+ * none sits in a field that is read as written. Only what cannot resolve —
+ * a path the document does not hold — is left for the run.
+ *
+ * A static field is refused rather than left literal because the literal is
+ * what would reach the device: a `launch` would start an app named
+ * `com.acme.{{output:app}}`.
+ */
+export function assertStepOutputReferences(step: FlowStep, heading: string): void {
+  for (const field of stepFields(step)) {
+    if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
+    const where = `${heading}: ${fieldLocator(field)}`;
+    if (field.kind === "static") {
+      const pattern = field.where.endsWith(".matches")
+        ? " A `matches` pattern is always read as written, because a resolved value could change the expression."
+        : "";
+      throw outputReferenceFailure(
+        `${where} cannot hold an output reference: Argent reads this field as written, so the ` +
+          `step would use the literal text ${JSON.stringify(renderedValue(field.value))}.` +
+          `${pattern} ${REFERENCE_FIELDS}.`
       );
     }
+    const parsed = parseOutputReferences(field.value);
+    if ("error" in parsed) {
+      throw outputReferenceFailure(
+        `${where} holds a malformed output reference: ` +
+          describeOutputReferenceSyntaxError(parsed.error)
+      );
+    }
+  }
+}
+
+/**
+ * Whether the step's OWN fields are what an append's validation refuses. A
+ * well-formed reference is accepted, so holding one no longer says the step is
+ * at fault: the refusal can come from a hand edit elsewhere in the file, and a
+ * recorder must then point at the file rather than at the call.
+ */
+export function refusesOutputReferences(step: FlowStep): boolean {
+  try {
+    assertOutputReferences([step]);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function assertOutputReferences(steps: FlowStep[], trail: number[] = []): void {
+  steps.forEach((step, i) => {
+    const at = [...trail, i + 1];
+    assertStepOutputReferences(step, `Step ${at.join(".")} (\`${step.kind}\`)`);
     const inner = blockSteps(step);
-    if (inner) assertNoOutputReferences(inner, at);
+    if (inner) assertOutputReferences(inner, at);
   });
+}
+
+export interface WholeFieldReference {
+  where: string;
+  reference: string;
+  type: string;
+}
+
+export type StepReferenceResolution<S extends FlowStep> =
+  | {
+      ok: true;
+      step: S;
+      references: ResolvedOutputReference[];
+      /** Whole-field `tool.args` references that gave something other than a string. */
+      wholeFields: WholeFieldReference[];
+    }
+  | { ok: false; reason: string };
+
+/**
+ * A copy of `step` with every reference in its own fields resolved against
+ * `document`, or the reason one could not be. The step itself is never written:
+ * reports name the step as the author wrote it, and a `run:` fragment or a
+ * `when` block may run the same step object again against a different
+ * document.
+ *
+ * All or nothing — a field that fails leaves no half-resolved copy behind.
+ */
+export function resolveStepReferences<S extends FlowStep>(
+  step: S,
+  document: OutputDocument
+): StepReferenceResolution<S> {
+  // Never a throw: the runner resolves outside any `try`, and an exception there
+  // would leave `execSteps` and end the run with no summary. The copy of the step
+  // is the part that can fail, on args the YAML parser nested deeper than
+  // `structuredClone` can follow.
+  try {
+    return resolveStepFields(step, document);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `its output references could not be resolved: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+function resolveStepFields<S extends FlowStep>(
+  step: S,
+  document: OutputDocument
+): StepReferenceResolution<S> {
+  const holds = (candidate: FlowStep): StepField[] =>
+    [...stepFields(candidate)].filter(
+      (field) => field.kind !== "static" && field.value.includes(OUTPUT_REFERENCE_MARKER)
+    );
+  if (holds(step).length === 0) return { ok: true, step, references: [], wholeFields: [] };
+  const copy = structuredClone(step);
+  const references: ResolvedOutputReference[] = [];
+  const wholeFields: WholeFieldReference[] = [];
+  const assignments: Array<[StepField, unknown]> = [];
+  for (const field of holds(copy)) {
+    if (field.kind === "static") continue;
+    const resolved = resolveOutputField(field.value, field.kind, document);
+    if (!resolved.ok) return { ok: false, reason: `${fieldLocator(field)}: ${resolved.reason}` };
+    references.push(...resolved.references);
+    if (resolved.wholeFieldType !== undefined) {
+      wholeFields.push({
+        where: field.where,
+        reference: field.value,
+        type: resolved.wholeFieldType,
+      });
+    }
+    assignments.push([field, resolved.value]);
+  }
+  for (const [field, value] of assignments) field.assign(value);
+  return { ok: true, step: copy, references, wholeFields };
 }
 
 const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
@@ -2802,7 +3110,9 @@ export function assertNoEnvOutputReferences(env: ScriptEnv | undefined, whose: s
   for (const [name, value] of Object.entries(env ?? {})) {
     if (!value.includes(OUTPUT_REFERENCE_MARKER)) continue;
     throw new FailureError(
-      `${whose} \`env.${name}\` uses unsupported template syntax. ` +
+      `${whose} \`env.${name}\` uses unsupported template syntax: this map holds defaults ` +
+        "for every script in the run, and Argent resolves it before the first script has " +
+        "written any output. A `script` step's own `env` can read output. " +
         `Replace it with the literal value the script needs: ${JSON.stringify(renderedValue(value))}`,
       {
         error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
@@ -2816,7 +3126,16 @@ export function assertNoEnvOutputReferences(env: ScriptEnv | undefined, whose: s
 
 export function validateFlow(flow: FlowFile): void {
   assertNoEnvOutputReferences(flow.env, "The flow's");
-  assertNoOutputReferences(flow.steps);
+  if (
+    typeof flow.executionPrerequisite === "string" &&
+    flow.executionPrerequisite.includes(OUTPUT_REFERENCE_MARKER)
+  ) {
+    throw outputReferenceFailure(
+      "`executionPrerequisite` cannot hold an output reference: Argent shows it before any " +
+        `step runs, when no script has written output yet. ${REFERENCE_FIELDS}.`
+    );
+  }
+  assertOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
@@ -2884,7 +3203,8 @@ function readFlowHead(content: string): YamlFlowFile | undefined {
     parsed = yamlParse(body, { stringKeys: true }) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
-      `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
+      unquotedOutputReference(body, err) ??
+        `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_parse",
@@ -2937,6 +3257,23 @@ function readFlowHead(content: string): YamlFlowFile | undefined {
   }
 
   return parsed;
+}
+
+/**
+ * YAML reads an unquoted `{{output:user.id}}` as a flow map whose key is itself a
+ * map, and `stringKeys` refuses the file for that key: "all keys must be
+ * strings" is true, and no help to an author who wrote a reference. Told apart by
+ * the error's code and what sits where the parser stopped, never by its wording.
+ */
+function unquotedOutputReference(body: string, err: unknown): string | undefined {
+  if (!(err instanceof YAMLParseError) || err.code !== "NON_STRING_KEY") return undefined;
+  if (!body.startsWith(OUTPUT_REFERENCE_MARKER, err.pos[0] - 1)) return undefined;
+  const at = err.linePos?.[0];
+  const where = at ? ` at line ${at.line}, column ${at.col - 1}` : "";
+  return (
+    `Invalid flow file: an unquoted output reference${where}, which YAML reads as a map — put ` +
+    'quotation marks around the whole value, e.g. `echo: "Created {{output:user.id}}"`'
+  );
 }
 
 export function parseFlow(content: string): FlowFile {
@@ -3370,9 +3707,17 @@ function dropMovedWarnings(
   return dropped;
 }
 
+/**
+ * `withinLock` runs inside the flow-file lock, after the session is known to be
+ * live and before the file is written. It may throw to refuse the append, and
+ * the function it returns runs only once the step is written: the recorders
+ * merge a script's output there, so a document never holds the output of a
+ * step the file does not.
+ */
 export async function appendStepToFlow(
   session: RecordingSession,
-  step: FlowStep
+  step: FlowStep,
+  withinLock?: () => (() => void) | void
 ): Promise<{ savedTo: FlowSavedTo; stepCount: number; flowEnv?: ScriptEnv }> {
   // The session's OWN key, not a fresh resolution of it: the lock this append
   // takes and the identity {@link assertSessionStillLive} checks must be the
@@ -3381,11 +3726,13 @@ export async function appendStepToFlow(
   // another.
   return withFlowLock(session.key, async () => {
     assertSessionStillLive(session, step);
+    const commit = withinLock?.();
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
       const before = session.flow.steps;
       const flowFile = await appendStep(session.filePath, step);
       session.flow = parseFlow(flowFile);
+      commit?.();
       session.discardedWarnings =
         (session.discardedWarnings ?? 0) +
         dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
@@ -3403,6 +3750,7 @@ export async function appendStepToFlow(
     try {
       validateFlow(session.flow);
       const flowFile = serializeFlow(session.flow);
+      commit?.();
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),
         stepCount: session.flow.steps.length,

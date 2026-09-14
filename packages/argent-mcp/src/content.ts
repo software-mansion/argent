@@ -320,8 +320,8 @@ export async function flowRunToMcpContent(
   }
 
   if (result.ok !== undefined) {
-    // Echo steps are narration and go uncounted, so an all-echo flow counts
-    // nothing — say so rather than reporting four zeros on a passing run.
+    // An echo that printed is narration and goes uncounted, so an all-echo flow
+    // counts nothing — say so rather than reporting four zeros on a passing run.
     const counted =
       (result.passed ?? 0) + (result.failed ?? 0) + (result.errored ?? 0) + (result.skipped ?? 0);
     const note = result.ok && counted === 0 ? " (no test steps)" : "";

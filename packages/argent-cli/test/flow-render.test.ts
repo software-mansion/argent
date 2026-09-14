@@ -116,6 +116,62 @@ describe("flow report rendering", () => {
     expect(renderEchoLine(ran)).not.toBe(renderEchoLine(skipped));
   });
 
+  it("renders an errored echo (an output reference that did not resolve) with the error glyph and reason", () => {
+    const errored: StepReport = {
+      index: 1,
+      kind: "echo",
+      status: "error",
+      message: "Promo {{output:user.promo}}",
+      reason:
+        "`echo`: {{output:user.promo}} did not resolve: `output.user` has no `promo` (its keys: id, name)",
+    };
+    expect(renderEchoLine(errored)).toBe(
+      "  ✗ › Promo {{output:user.promo}} — `echo`: {{output:user.promo}} did not resolve: " +
+        "`output.user` has no `promo` (its keys: id, name)"
+    );
+    // The glyph column stays put; only the label shifts with depth.
+    expect(renderEchoLine({ ...errored, depth: 1, reason: "r" })).toBe(
+      "  ✗   › Promo {{output:user.promo}} — r"
+    );
+    expect(renderEchoLine({ ...errored, depth: 2, reason: "r" })).toBe(
+      "  ✗     › Promo {{output:user.promo}} — r"
+    );
+    expect(renderEchoLine({ ...errored, reason: undefined })).toBe(
+      "  ✗ › Promo {{output:user.promo}}"
+    );
+    expect(renderEchoLine(errored)).not.toBe(renderEchoLine({ ...errored, status: "pass" }));
+  });
+
+  it("a buffered report prints an errored echo as a marked line, not as narration", () => {
+    const out = renderReport(
+      mkReport(
+        [
+          { index: 0, kind: "script", status: "pass" },
+          {
+            index: 1,
+            kind: "echo",
+            status: "error",
+            message: "Promo {{output:user.promo}}",
+            reason: "`echo`: {{output:user.promo}} did not resolve",
+          },
+          { index: 2, kind: "tap", status: "skip", target: '"Apply"' },
+        ],
+        // The runner counts an errored echo, which mkReport's echo filter does not.
+        { ok: false, errored: 1 }
+      )
+    );
+    expect(out).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓  1 script",
+        "  ✗ › Promo {{output:user.promo}} — `echo`: {{output:user.promo}} did not resolve",
+        '  ·  2 tap "Apply"',
+        "",
+        "FAIL — 1 passed, 0 failed, 1 errored, 1 skipped",
+      ].join("\n")
+    );
+  });
+
   it("a hard-stopped echo (skip, no reason) still renders instead of vanishing", () => {
     const stopped: StepReport = { index: 5, kind: "echo", status: "skip", message: "cleanup note" };
     expect(renderEchoLine(stopped)).toBe("  · › cleanup note");
@@ -309,6 +365,51 @@ describe("flow report rendering", () => {
       "       ⚠ the screen never held still",
     ]);
     expect(renderSummary(report)).toContain("1 warning");
+  });
+
+  it("renderFailedSteps prints an errored echo once, leaves passing and skipped echoes out, and numbers only the other steps", () => {
+    // The errored echo is what stopped the run, so a directory run that left it
+    // out printed "1 errored" with nothing on screen naming it.
+    const echoReason =
+      "`echo`: {{output:user.promo}} did not resolve: `output.user` has no `promo` (its keys: id, name)";
+    const report = mkReport(
+      [
+        { index: 0, kind: "echo", status: "pass", message: "Seeding user" },
+        { index: 1, kind: "idle", status: "pass", warning: "the screen never held still" },
+        {
+          index: 2,
+          kind: "script",
+          status: "pass",
+          target: "scripts/user.mjs",
+          scriptLog: "created user u_1\n",
+        },
+        {
+          index: 3,
+          kind: "echo",
+          status: "error",
+          message: "Promo {{output:user.promo}}",
+          reason: echoReason,
+        },
+        { index: 4, kind: "tap", status: "skip", target: '"Apply"' },
+        { index: 5, kind: "echo", status: "skip", message: "Applied" },
+      ],
+      // The runner counts an errored echo, which mkReport's echo filter does not.
+      { ok: false, errored: 1 }
+    );
+
+    const lines = renderFailedSteps(report);
+
+    expect(lines).toEqual([
+      "  ⚠  1 idle",
+      "       ⚠ the screen never held still",
+      "  ✓  2 script scripts/user.mjs",
+      "       │ created user u_1",
+      `  ✗ › Promo {{output:user.promo}} — ${echoReason}`,
+    ]);
+    // Same numbers as a single-flow run of the same report.
+    const full = renderReport(report).split("\n");
+    for (const line of lines) expect(full).toContain(line);
+    expect(full).toContain('  ·  3 tap "Apply"');
   });
 
   it("renderBatchSummary mirrors the step summary's verdict shape", () => {
