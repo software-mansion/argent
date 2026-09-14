@@ -515,6 +515,23 @@ async function bootIos(
       throw err;
     }
   });
+  // Start simulator-server the moment the device is up, deliberately BEFORE
+  // `bootstatus` and without awaiting it. Its HID warm-up has to reach a window
+  // that opens ~1.0s after boot and can close ~1.1s in (#932), while `bootstatus`
+  // does not return for ~15s — so resolving after it would miss by an order of
+  // magnitude and protect nothing. The two run concurrently; this promise is
+  // awaited further down, once the boot itself has settled.
+  const ssRef = simulatorServerRef({ id: udid, platform: "ios", kind: "simulator" });
+  const simulatorServerReady = registry
+    .resolveService<SimulatorServerApi>(ssRef.urn, ssRef.options)
+    .catch((err: unknown) => {
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] simulator-server did not start during boot (${
+          err instanceof Error ? err.message : String(err)
+        }); HID suppression protection will apply from the first gesture instead.\n`
+      );
+    });
+
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
 
   // tvOS only: a boot transition (Shutdown→Booted, or a force reboot) orphans
@@ -570,23 +587,10 @@ async function bootIos(
   // but describe surfaces a hint about it.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
-  // Bring up simulator-server now rather than lazily on the first gesture. Its
-  // factory warms up the legacy HID services, and everything between here and
-  // that first gesture is otherwise an unprotected window in which opening
-  // DeviceHub would silently kill input for the rest of the boot (#932). The
-  // process would be spawned by the first interactive tool call anyway; this
-  // only moves it earlier. Never fatal — a boot that works without input is
-  // still better than no boot.
-  const ssRef = simulatorServerRef({ id: udid, platform: "ios", kind: "simulator" });
-  await registry
-    .resolveService<SimulatorServerApi>(ssRef.urn, ssRef.options)
-    .catch((err: unknown) => {
-      process.stderr.write(
-        `[boot-device ${udid.slice(0, 8)}] simulator-server warm-up skipped (${
-          err instanceof Error ? err.message : String(err)
-        }); HID suppression protection will apply from the first gesture instead.\n`
-      );
-    });
+  // Settle the simulator-server started above. It has been running alongside
+  // `bootstatus` this whole time; awaiting here keeps the rest of boot-device
+  // sequential without having delayed the warm-up.
+  await simulatorServerReady;
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
