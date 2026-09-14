@@ -20,6 +20,7 @@ interface FakeSessionShape {
   disposed: boolean;
   subscribed: number;
   killTransport(): void;
+  failTransport(): void;
   close(): void;
   screenshot(): Promise<Uint8Array>;
   sendControl(): Promise<void>;
@@ -33,14 +34,23 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
     /** How many times a track was subscribed on the server's broadcast. */
     subscribed = 0;
     private killed!: () => void;
+    private failed!: (reason: Error) => void;
 
     constructor() {
-      this.closed = new Promise<void>((resolve) => (this.killed = resolve));
+      this.closed = new Promise<void>((resolve, reject) => {
+        this.killed = resolve;
+        this.failed = reject;
+      });
       sdk.sessions.push(this);
     }
 
     killTransport(): void {
       this.killed();
+    }
+
+    /** A transport that failed rather than ended rejects `closed` instead. */
+    failTransport(): void {
+      this.failed(new Error("WebTransportError: Session closed"));
     }
 
     close(): void {
@@ -105,6 +115,23 @@ describe("a MoQ session whose transport died", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(session().disposed).toBe(true);
+  });
+
+  /**
+   * The WebTransport contract rejects `closed` for a session that failed. The
+   * Node polyfill resolves it once connected, but a handler with no reject arm
+   * would leave a spec transport's session open and leak the rejection.
+   */
+  it("is closed when its transport fails, and handles the rejection", async () => {
+    await openMoqClient("remote:AAAA");
+
+    const unhandled = await unhandledDuring(async () => {
+      session().failTransport();
+      await session().closed.catch(() => {});
+    });
+
+    expect(session().disposed).toBe(true);
+    expect(unhandled).toEqual([]);
   });
 
   it("fails a screenshot without killing the process", async () => {
