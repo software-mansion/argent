@@ -804,6 +804,9 @@ function isE2eFlow(flow: FlowFile): boolean {
  * ios/android/vega a specific key wins, else the shared `native` id. For
  * chromium this returns the app *path* (never `native`) — chromium booters want
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
+ *
+ * The platform is read as an authoring key ({@link authoringPlatform}), so a
+ * remote simulator uses the flow's `ios` entry.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
@@ -813,7 +816,7 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     if (c === undefined) return null;
     return typeof c === "string" ? c : c.path;
   }
-  const v = (launch as Record<string, string | undefined>)[platform];
+  const v = (launch as Record<string, string | undefined>)[authoringPlatform(platform)];
   return v ?? launch.native ?? null;
 }
 
@@ -2202,6 +2205,29 @@ const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
  */
 export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
 export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
+
+/**
+ * The platform a flow AUTHOR names, for a device the runner resolved.
+ *
+ * `ios-remote` is an iOS simulator reached over the sim-remote tunnel: same OS,
+ * same app, same UI. Only the host differs, and a flow file names neither host
+ * nor device — so every surface that reads what the author wrote folds it to
+ * `ios`, which is why `ios-remote` stays out of {@link LAUNCH_PLATFORMS}.
+ *
+ * Deliberately NOT applied where the question is "which machine am I driving?":
+ * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
+ * `platform` run param) and service refs / transports all keep the real
+ * platform.
+ *
+ * Nor to the recorder's post-step advice in flow-add-step, which reads the
+ * platform to name a repair: `ios-remote` has no flow tree source at all
+ * (`supportsFlowTree`), so folding it there would quote iOS advice — "relaunch
+ * the app" — for a source that is structurally absent rather than down. Fold it
+ * there once that source exists.
+ */
+export function authoringPlatform(platform: string): string {
+  return platform === "ios-remote" ? "ios" : platform;
+}
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;

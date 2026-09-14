@@ -21,6 +21,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
   blockSteps,
@@ -596,9 +597,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
+    // Name the platform the AUTHOR can write: "ios-remote" is not a launch-map
+    // key, so quoting it would send the reader to a key the parser rejects.
     return {
       ok: false,
-      reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+      reason: `no app id declared for platform "${authoringPlatform(device.platform)}" — add a launch entry for it`,
     };
   }
   // The previous app is terminating and the new one has not started, so a
@@ -2050,11 +2053,11 @@ async function execWhenStep(
 
   let met: boolean;
   if (step.condition.kind === "platform") {
-    // "ios-remote" is an iOS simulator driven through sim-remote — for a
-    // platform guard it IS ios. The parser rejects "ios-remote" as a guard
-    // spelling, so without this fold iOS-only blocks would silently skip there.
+    // A guard names an authoring platform ({@link authoringPlatform}): the
+    // parser rejects "ios-remote" as a guard spelling, so without the fold
+    // every iOS-only block would silently skip on a remote simulator.
     const guardEnv = deviceEnv(state);
-    const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
+    const platform = authoringPlatform(guardEnv.device.platform);
     met = platform === step.condition.platform;
   } else {
     const probe = await probeWhenCondition(deviceEnv(state), step.condition);

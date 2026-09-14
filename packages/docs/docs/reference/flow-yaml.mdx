@@ -147,6 +147,8 @@ Use the map form for a flow that runs on more than one platform:
 
 `native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
 
+A run on a remote simulator uses the `ios` entry. A flow file names no host, so no flow needs a key for a remote run.
+
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
 
 ### Swipe
@@ -234,7 +236,7 @@ One outcome stops the run: the runner cannot read the UI tree at all. Argent mar
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega }`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
 
 ## Composition
 
