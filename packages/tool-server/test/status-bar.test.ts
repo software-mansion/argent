@@ -136,11 +136,12 @@ describe("pinStatusBar (ios-remote)", () => {
   });
 
   it("overrides a remote simulator to the same values as a local one", async () => {
-    // A remote run compares against the baseline a local run of the same model
-    // committed, so the two must pin the bar to identical pixels — a clock that
-    // drifted between the arms would fail every shared snapshot on the bar
-    // alone. Compared against the local argv rather than a restated literal, so
-    // moving either arm's values without the other fails here.
+    // A remote run compares against the baseline a local run of the same
+    // capture geometry committed, so the two must pin the bar to identical
+    // pixels. A clock that drifted between the arms would fail a `cropOn`
+    // snapshot that includes the bar; the differ masks the band only for a
+    // full-screen one. Compared against the local argv rather than a restated
+    // literal, so moving either arm's values without the other fails here.
     execFileMock.mockReturnValue({ stdout: "", stderr: "" });
 
     await pinStatusBar(IOS_SIMULATOR);

@@ -14,9 +14,11 @@ const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
 
 /**
  * The overridden values, shared by the local and remote iOS arms. A remote
- * simulator shares its baselines with a local one of the same model, so the two
- * must pin the bar to the same pixels — a second literal here would let them
- * drift and fail every shared snapshot on the clock alone.
+ * simulator shares its baselines with a local one of the same capture geometry,
+ * so the two must pin the bar to the same pixels. A second literal here would
+ * let them drift. A full-screen snapshot would still pass, since the differ
+ * masks the status-bar band there, but a `cropOn` region that includes the bar
+ * has no mask and would fail on the clock alone.
  */
 const IOS_STATUS_BAR_OVERRIDE = [
   "override",
