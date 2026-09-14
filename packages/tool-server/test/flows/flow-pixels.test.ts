@@ -881,4 +881,21 @@ describe("capturePixelsWithin", () => {
     expect(pixelCaptureTimeoutMs(physical, true)).toBe(4_000);
     expect(pixelCaptureTimeoutMs(physical, false)).toBe(4_000);
   });
+
+  it("widens only the warm bound on a remote simulator", () => {
+    // Every capture on a cloud device is a round trip to another machine, which
+    // the localhost warm bound does not allow for; a timed-out read costs a
+    // whole settle round, since waitForIdle needs two comparable captures.
+    const remote = { platform: "ios-remote", kind: "simulator", id: "remote:SIM" } as DeviceInfo;
+    expect(pixelCaptureTimeoutMs(remote, false)).toBe(4_000);
+    expect(pixelCaptureTimeoutMs(remote, false)).toBeGreaterThan(PIXEL_CAPTURE_TIMEOUT_MS);
+    // Its stream still warms up like a local one, so the first capture keeps
+    // the cold-stream wait rather than being narrowed to the remote ceiling.
+    expect(pixelCaptureTimeoutMs(remote, true)).toBe(FIRST_PIXEL_CAPTURE_TIMEOUT_MS);
+    // No other platform moved.
+    expect(pixelCaptureTimeoutMs(iosDevice, false)).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+    expect(
+      pixelCaptureTimeoutMs({ platform: "android", kind: "emulator", id: "emulator-5554" }, false)
+    ).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+  });
 });

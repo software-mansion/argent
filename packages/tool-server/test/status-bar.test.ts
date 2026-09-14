@@ -66,6 +66,15 @@ const IOS_PHYSICAL_DEVICE: DeviceInfo = {
   kind: "device",
 };
 
+const IOS_REMOTE_SIMULATOR: DeviceInfo = {
+  id: "remote:1B48C3B4-8E17-4E92-A4A4-4B1AC3F0BD7B",
+  platform: "ios-remote",
+  kind: "simulator",
+};
+
+/** The udid the `sim-remote` CLI sees: the `remote:` prefix is stripped first. */
+const REMOTE_UDID = "1B48C3B4-8E17-4E92-A4A4-4B1AC3F0BD7B";
+
 /** Shell payloads of every `adb -s <serial> shell <cmd>` call, in order. */
 function shellCalls(): string[] {
   return execFileMock.mock.calls
@@ -103,6 +112,50 @@ describe("pinStatusBar (ios)", () => {
       ],
       undefined
     );
+  });
+
+  it("pins a remote simulator through the sim-remote CLI and returns true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await pinStatusBar(IOS_REMOTE_SIMULATOR)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const [cmd, args] = execFileMock.mock.calls[0]!;
+    expect(cmd).toBe("sim-remote");
+    // The `remote:` prefix is the tool-server's, not the orchestrator's.
+    expect(args.slice(0, 3)).toEqual(["simctl", "status_bar", REMOTE_UDID]);
+  });
+
+  it("overrides a remote simulator to the same values as a local one", async () => {
+    // A remote run compares against the baseline a local run of the same model
+    // committed, so the two must pin the bar to identical pixels — a clock that
+    // drifted between the arms would fail every shared snapshot on the bar
+    // alone. Compared against the local argv rather than a restated literal, so
+    // moving either arm's values without the other fails here.
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await pinStatusBar(IOS_SIMULATOR);
+    const local = (execFileMock.mock.calls[0]![1] as string[]).slice(3);
+    execFileMock.mockClear();
+
+    await pinStatusBar(IOS_REMOTE_SIMULATOR);
+    const remote = (execFileMock.mock.calls[0]![1] as string[]).slice(3);
+
+    expect(remote).toEqual(local);
+    // Both really carry the override, so an empty-vs-empty comparison cannot pass.
+    expect(local).toContain("--time");
+  });
+
+  it("undoes a partially applied remote pin and reports unpinned", async () => {
+    // A cloud hiccup must not fail the run, and the caller schedules no
+    // run-end restore after a `false` — so the undo has to happen here or the
+    // bar stays overridden.
+    execFileMock.mockImplementation((_cmd: string, args: string[]) =>
+      args.includes("override") ? new Error("sim-remote: request timed out") : { stdout: "" }
+    );
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+    const argvs = execFileMock.mock.calls.map(([, args]) => args as string[]);
+    expect(argvs.some((a) => a.includes("clear"))).toBe(true);
   });
 
   it("skips a physical device without spawning anything and returns false", async () => {
@@ -150,6 +203,26 @@ describe("pinStatusBar (android)", () => {
     });
 
     await expect(pinStatusBar(ANDROID_DEVICE)).resolves.toBe(true);
+  });
+});
+
+describe("restoreStatusBar (ios-remote)", () => {
+  it("clears the override through the sim-remote CLI", async () => {
+    // Without this arm the pin above is never undone: the caller only calls
+    // restore, and a run would leave the cloud simulator frozen at 9:37.
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await restoreStatusBar(IOS_REMOTE_SIMULATOR)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const [cmd, args] = execFileMock.mock.calls[0]!;
+    expect(cmd).toBe("sim-remote");
+    expect(args).toEqual(["simctl", "status_bar", REMOTE_UDID, "clear"]);
+  });
+
+  it("reports failure instead of throwing when the CLI fails", async () => {
+    execFileMock.mockReturnValue(new Error("sim-remote: not logged in"));
+
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
   });
 });
 
