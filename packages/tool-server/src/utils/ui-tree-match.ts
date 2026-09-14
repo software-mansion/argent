@@ -1,11 +1,5 @@
 import { z } from "zod";
-import type { DeviceInfo, Registry } from "@argent/registry";
-import type { DescribeFrame, DescribeNode, DescribeTreeData } from "../tools/describe/contract";
-import { describeIos } from "../tools/describe/platforms/ios";
-import { describeAndroid } from "../tools/describe/platforms/android";
-import { describeChromium } from "../tools/describe/platforms/chromium";
-import { describeVega } from "../tools/describe/platforms/vega";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp";
+import type { DescribeFrame, DescribeNode } from "../tools/describe/contract";
 
 /**
  * Shared tree matching: `await-ui-element`, the flow directives (`tap`, `type`,
@@ -711,34 +705,4 @@ export function deriveSelector(node: DescribeNode): Selector | null {
   if (text) return { text };
   if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
   return null;
-}
-
-/**
- * Fetch the describe tree for a device. The chromium CDP session is the only
- * service resolved here — iOS / Android describe resolve their own internally,
- * and Vega reads the on-device automation toolkit's page source.
- */
-export async function fetchTree(
-  registry: Registry,
-  device: DeviceInfo,
-  opts: { bundleId?: string } = {}
-): Promise<DescribeTreeData> {
-  // `ios-remote` is an iOS simulator reached over the sim-remote tunnel and
-  // reads the same AX tree: the ax-service blueprint routes describeIos there,
-  // exactly as the `describe` tool already relies on.
-  if (device.platform === "ios" || device.platform === "ios-remote") {
-    return describeIos(registry, device, { bundleId: opts.bundleId });
-  }
-  if (device.platform === "android") {
-    return describeAndroid(registry, device.id);
-  }
-  if (device.platform === "chromium") {
-    const ref = chromiumCdpRef(device);
-    const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-    return describeChromium(api);
-  }
-  if (device.platform === "vega") {
-    return describeVega(device.id);
-  }
-  throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
 }
