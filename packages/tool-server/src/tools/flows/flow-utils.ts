@@ -297,12 +297,6 @@ export interface RecordingSession {
    * because the verdicts themselves are gone by then.
    */
   discardedWarnings?: number;
-  /**
-   * Whether this recording already explained what an unreadable flow tree costs
-   * it. The explanation is the same for every later step and long enough to
-   * bury the step's own result, so it is raised once and then shortened.
-   */
-  treeSourceWarned?: boolean;
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }

@@ -306,22 +306,14 @@ function isUnreachableDevice(cause: Error): boolean {
   );
 }
 
-const INSTALL_REJECTION = /INSTALL_FAILED|adb: failed to install/;
-
 async function installHelper(serial: string, options: { force?: boolean }): Promise<void> {
   try {
     await ensureAndroidDevtoolsInstalled(serial, options);
   } catch (err) {
     const cause = err instanceof Error ? err : new Error(String(err));
-    // adb keeps its refusal on one line; the cap is for anything that does not,
-    // and the strip keeps this sentence from ending in "..".
-    const reason = cause.message.replace(/\s+/g, " ").trim().slice(0, 200).replace(/\.+$/, "");
-    // Only an install the device rejected earns install advice. A missing
-    // bundled APK is a build problem, and its own message already says so.
-    const advice = INSTALL_REJECTION.test(cause.message)
-      ? " Unlock the device, free some space and allow installs, then retry."
-      : "";
-    const message = `the argent android helper is not installed on ${serial} and could not be installed: ${reason}.${advice}`;
+    // adb keeps its refusal on one line; the cap is for anything that does not.
+    const reason = cause.message.replace(/\s+/g, " ").trim().slice(0, 200);
+    const message = `the argent android helper is not installed on ${serial} and could not be installed: ${reason}`;
     const signal: FailureSignal = {
       error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED,
       failure_stage: "android_devtools_helper_install",
@@ -358,8 +350,7 @@ async function spawnHelperWithRepair(serial: string): Promise<SpawnedHelper> {
   const recent = recentHelperFailure(serial);
   if (recent) {
     throw new FailureError(
-      `${recent.error.message} (the last attempt ${Math.round(recent.ageMs / 1_000)}s ago failed the same way; ` +
-        `argent retries after the cooldown)`,
+      `${recent.error.message} (retrying after the cooldown; last attempt ${Math.round(recent.ageMs / 1_000)}s ago)`,
       recent.signal,
       { cause: recent.error }
     );
@@ -383,8 +374,7 @@ async function spawnHelperWithRepair(serial: string): Promise<SpawnedHelper> {
       throw recordTerminalHelperFailure(
         serial,
         `the argent android helper could not start on ${serial} even after reinstalling it: ${repairErr.message}. ` +
-          `Run \`adb -s ${serial} shell am instrument -w ${helperManifest().instrumentationRunner}\` to see the device's own error; ` +
-          `\`adb -s ${serial} shell pm list instrumentation | grep argent\` shows whether it is registered.`,
+          `Run \`adb -s ${serial} shell am instrument -w ${helperManifest().instrumentationRunner}\` for the device's own error.`,
         {
           error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_REPAIR_FAILED,
           failure_stage: "android_devtools_helper_repair",

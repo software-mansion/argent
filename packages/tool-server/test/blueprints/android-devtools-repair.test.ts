@@ -143,11 +143,10 @@ describe("android-devtools helper repair", () => {
       FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED
     );
     expect((err as Error).message).toContain("INSTALL_FAILED_INSUFFICIENT_STORAGE");
-    expect((err as Error).message).toContain("free some space");
     expect(am.spawned).toHaveLength(1);
   });
 
-  it("passes a non-install failure through without install advice or a double period", async () => {
+  it("passes a non-install failure through as the device reported it", async () => {
     am.queue(MISSING);
     installFails =
       "Bundled Android devtools helper APK not found at /tmp/x.apk. Run `bash packages/native-devtools-android/scripts/build.sh` to build it.";
@@ -155,8 +154,7 @@ describe("android-devtools helper repair", () => {
     const err = await start().catch((e: unknown) => e);
 
     expect((err as Error).message).toContain("to build it.");
-    expect((err as Error).message).not.toContain("free some space");
-    expect((err as Error).message).not.toContain("..");
+    expect((err as Error).message).not.toContain("Unlock the device");
   });
 
   // A device that was asleep, busy or briefly unauthorized fixes itself, and a
@@ -171,7 +169,7 @@ describe("android-devtools helper repair", () => {
     expect(getFailureSignal(first)?.error_code).toBe(
       FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED
     );
-    expect((second as Error).message).not.toContain("failed the same way");
+    expect((second as Error).message).not.toContain("retrying after the cooldown");
     expect(installs()).toHaveLength(2);
   });
 
@@ -188,13 +186,13 @@ describe("android-devtools helper repair", () => {
 
     await start().catch(() => undefined);
     const held = await start().catch((e: unknown) => e);
-    expect((held as Error).message).toContain("failed the same way");
+    expect((held as Error).message).toContain("retrying after the cooldown");
     expect(installs()).toHaveLength(1);
 
     // Past the short window, while the standard one would still be holding.
     __setHelperAttemptCooldownForTesting(5 * 60_000, 0);
     const retried = await start().catch((e: unknown) => e);
-    expect((retried as Error).message).not.toContain("failed the same way");
+    expect((retried as Error).message).not.toContain("retrying after the cooldown");
     expect(installs()).toHaveLength(2);
   });
 
@@ -204,7 +202,7 @@ describe("android-devtools helper repair", () => {
     await start().catch(() => undefined);
     const repeat = await start().catch((e: unknown) => e);
 
-    expect((repeat as Error).message).toContain("failed the same way");
+    expect((repeat as Error).message).toContain("retrying after the cooldown");
     expect(getFailureSignal(repeat)?.error_code).toBe(
       FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_REPAIR_FAILED
     );
@@ -226,6 +224,6 @@ describe("android-devtools helper repair", () => {
     am.queue(MISSING);
     const err = await start().catch((e: unknown) => e);
 
-    expect((err as Error).message).not.toContain("failed the same way");
+    expect((err as Error).message).not.toContain("retrying after the cooldown");
   });
 });

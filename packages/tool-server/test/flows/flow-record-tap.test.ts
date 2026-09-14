@@ -22,14 +22,13 @@ import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/fl
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
 const ANDROID = "emulator-5554";
 // What the Android tree source raises once the helper is beyond repair: the
-// registry's service tag inside its own wrapper sentence.
+// registry's service tag inside the tree source's own prefix.
 const HELPER_UNAVAILABLE =
-  "the argent android helper is unavailable ([AndroidDevtools:emulator-5554] the argent android " +
+  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] the argent android " +
   "helper could not start on emulator-5554 even after reinstalling it: am instrument exited before " +
   "becoming ready (code=1 signal=null): INSTRUMENTATION_STATUS: Error=Unable to find instrumentation " +
   "info. Run `adb -s emulator-5554 shell am instrument -w com.argent.androiddevtools/.SnapshotInstrumentation` " +
-  "to see the device's own error) — flows resolve testID selectors against the full hierarchy it serves; " +
-  "argent reinstalls the helper once by itself, so if this persists run the adb command the error names from the host";
+  "for the device's own error.";
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
@@ -367,12 +366,10 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 
-  // An Android tree failure is the helper being unreachable, which holds for the
-  // whole recording rather than for this one screen — and costs the artifact,
-  // since every tap then keeps coordinates and flow-execute refuses the trimmed
-  // fallback tree. Say that while restarting the recording is still cheap, then
-  // stop repeating it.
-  it("explains what an unreachable android helper costs once, then keeps it short", async () => {
+  // The reason, and nothing wrapped around it: the registry's service tag and
+  // the tree source's prefix say nothing the reason does not, and every tap of
+  // a recording taken without a tree repeats whatever is said here.
+  it("warns with the bare helper reason on every android tap", async () => {
     currentTreeData = () => {
       throw new Error(HELPER_UNAVAILABLE);
     };
@@ -380,56 +377,18 @@ describe("flow-add-step tap selector capture", () => {
     const first = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
     const second = await recordTapOn(ANDROID, { x: 0.4, y: 0.42 });
 
-    expect(first.message).toContain("Every tap in this recording will keep raw coordinates");
-    expect(first.message).toContain("then restart the recording");
-    // One level, not three: no registry service tag and no tree-source wrapper.
-    expect(first.message).toContain(
-      "selector capture failed on emulator-5554 (the argent android helper could not start"
-    );
-    expect(first.message).not.toContain("[AndroidDevtools:");
-    expect(first.message).not.toContain("flows resolve testID selectors");
-    // Same reason, same depth as the first — only the remedy paragraph is gone.
-    expect(second.message).toContain(
-      "selector capture failed (the argent android helper could not start"
-    );
-    expect(second.message).not.toContain("[AndroidDevtools:");
-    expect(second.message).not.toContain("Every tap in this recording");
-    expect(second.message).not.toContain("flows resolve testID selectors");
+    for (const result of [first, second]) {
+      expect(result.message).toContain(
+        "selector capture failed (the argent android helper could not start"
+      );
+      expect(result.message).toContain("kept coordinates");
+      expect(result.message).not.toContain("[AndroidDevtools:");
+      expect(result.message).not.toContain("helper is unavailable");
+    }
     expect(await recordedSteps()).toEqual([
       { kind: "tap", x: 0.5, y: 0.52 },
       { kind: "tap", x: 0.4, y: 0.42 },
     ]);
-  });
-
-  // The paragraph is raised once per recording, so it must not be spent on a
-  // step the author never receives.
-  it("keeps the one-shot paragraph when the tap itself fails", async () => {
-    currentTreeData = () => {
-      throw new Error(HELPER_UNAVAILABLE);
-    };
-    const failing = {
-      invokeTool: vi.fn(async () => {
-        throw new Error("gesture-tap: device is not responding");
-      }),
-      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    } as unknown as Registry;
-
-    await expect(
-      createFlowAddStepTool(failing).execute(
-        {},
-        {
-          name: FLOW,
-          project_root: tmpDir,
-          command: "gesture-tap",
-          args: JSON.stringify({ udid: ANDROID, x: 0.5, y: 0.52 }),
-        }
-      )
-    ).rejects.toThrow(/not responding/);
-
-    const retry = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
-
-    expect(retry.message).toContain("Every tap in this recording will keep raw coordinates");
-    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 
   it("does not persist a raw point that replay would reject", async () => {
