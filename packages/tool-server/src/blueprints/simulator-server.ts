@@ -26,6 +26,11 @@ import {
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { encodeKey } from "../utils/datachannel-proto";
+import {
+  detectAgentSocket,
+  listAgentReverseSockets,
+  reapAndroidScreenSharingAgent,
+} from "../utils/android-agent-reap";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -55,6 +60,38 @@ const getPaths = () => {
 };
 
 const READY_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a dispose gives the simulator-server binary to exit on its own after
+ * SIGTERM, before Argent reaps what it may have left on the device.
+ *
+ * Roughly twice the ~1.3 s a healthy device-side teardown takes, so an ordinary
+ * shutdown always wins the race, and short enough that a wedged binary cannot
+ * hold up the registry's sequential teardown for long.
+ */
+const EXIT_GRACE_MS = 2_500;
+
+/**
+ * Resolve when `proc` has exited, or when `timeoutMs` elapses — never rejects,
+ * and reports nothing about which of the two happened, because the caller
+ * proceeds either way.
+ *
+ * `!= null` rather than `!== null` on purpose: a live `ChildProcess` has null
+ * for both codes, and treating any other falsy-ish value as "already gone"
+ * would skip the wait for a process that is still running.
+ */
+function waitForExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
+  if (proc.exitCode != null || proc.signalCode != null) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      proc.off("exit", done);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    proc.once("exit", done);
+  });
+}
 
 export interface SimulatorServerApi {
   apiUrl: string;
@@ -438,10 +475,61 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      device.id,
-      subcommandForDevice(device)
-    );
+    const subcommand = subcommandForDevice(device);
+
+    /**
+     * The same guard `spawnSimulatorServerProcess` applies, hoisted: the
+     * snapshot below puts `device.id` on an `adb` argv one step before the
+     * spawn sink would have rejected it.
+     */
+    if (!SAFE_SIMULATOR_DEVICE_ID.test(device.id)) {
+      throw new Error(`Refusing to start simulator-server for unsafe device id "${device.id}".`);
+    }
+
+    /**
+     * Only the physical-Android controller runs anything ON the device that can
+     * outlive this process — the screen-sharing agent. Emulators (gRPC bridge)
+     * and iOS simulators leave nothing behind, so they take the snapshot-free
+     * path and pay no `adb` round trip.
+     *
+     * The snapshot is what makes the later diff attributable: any
+     * `screen-sharing-agent-*` socket already registered here belongs to
+     * someone else (an Android Studio mirror, a previous orphan) and must be
+     * excluded from what this session is allowed to kill. A FAILED snapshot
+     * (null) is not an empty one: it disables the reap for this session
+     * entirely, because without a baseline every socket the later probe finds
+     * would look like ours.
+     */
+    const socketsBeforeSpawn =
+      subcommand === "android_device" ? await listAgentReverseSockets(device.id) : null;
+
+    let spawned: Awaited<ReturnType<typeof spawnSimulatorServerProcess>>;
+    try {
+      spawned = await spawnSimulatorServerProcess(device.id, subcommand);
+    } catch (err) {
+      /**
+       * A ready-timeout kills the binary mid-startup, after it may already have
+       * started the agent and registered the reverse socket. No instance exists
+       * for the registry to dispose, so this is the only chance to reap.
+       */
+      if (socketsBeforeSpawn) {
+        await reapAndroidScreenSharingAgent(
+          device.id,
+          await detectAgentSocket(device.id, socketsBeforeSpawn)
+        );
+      }
+      throw err;
+    }
+    const { proc, apiUrl, streamUrl } = spawned;
+
+    /**
+     * Read once, here: from this point to the `return` nothing throws, so the
+     * value is always available to `dispose`. Resolving it lazily at dispose
+     * time would be worse — by then the agent may be gone and the diff empty.
+     */
+    const agentSocket = socketsBeforeSpawn
+      ? await detectAgentSocket(device.id, socketsBeforeSpawn)
+      : null;
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -460,6 +548,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       events.emit("terminated", err);
     });
 
+    let disposed = false;
     const instance: ServiceInstance<SimulatorServerApi> = {
       api: {
         apiUrl,
@@ -474,7 +563,35 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         },
       },
       dispose: async () => {
+        /**
+         * `terminated` (the process exiting on its own) reaches the registry's
+         * `_teardown`, which calls this same `dispose`, and an explicit
+         * `stop-simulator-server` reaches it directly — so one flag keeps the
+         * reap to a single pass whichever way the session ends.
+         */
+        if (disposed) return;
+        disposed = true;
         proc.kill();
+        if (subcommand === "android_device") {
+          /**
+           * Let the binary finish its own shutdown first. A simulator-server
+           * that has the device-side teardown stops the agent itself after
+           * SIGTERM, and a `pkill` fired 100 ms later still matches the agent
+           * it is in the middle of killing — so the reap "succeeds", logs that
+           * it stopped a leftover, and the log lies about who cleaned up.
+           * Waiting first makes the line mean what it says: the TS reap only
+           * ever reports what the binary actually left behind.
+           */
+          await waitForExit(proc, EXIT_GRACE_MS);
+          /**
+           * Unconditional after the wait, never gated on a clean exit. A
+           * binary without the device-side teardown, one wedged past the
+           * grace, and a SIGKILL that leaves no shutdown path at all each
+           * reach here with the agent still running, and the two adb calls are
+           * idempotent for the ones that did clean up.
+           */
+          await reapAndroidScreenSharingAgent(device.id, agentSocket);
+        }
       },
       events,
     };
