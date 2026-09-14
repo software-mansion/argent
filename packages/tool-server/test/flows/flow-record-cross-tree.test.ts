@@ -1337,6 +1337,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice,
     // which the iOS source writes into the reason it throws.
     expect(warning).toContain("is UNKNOWN, not known-bad");
+    // An outage, so the author waits for the source rather than hearing there is none.
+    expect(warning).toContain("re-probe once that tree source is back");
+    expect(warning).not.toContain("has no tree to probe");
     expect(warning).toContain(failure.message);
     expect(warning).toContain("Relaunch with restart-app");
     expect(warning).toContain("no directive takes a bundleId");
