@@ -193,11 +193,12 @@ export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture:
   if (isIosPhysicalDevice(device)) {
     return IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS;
   }
-  // A remote simulator warms its stream like a local one, so its first capture
-  // keeps the cold-stream wait; every later capture still crosses the network,
-  // which the localhost warm bound does not allow for. `waitForIdle` needs two
+  // Every remote capture is a MoQ round trip to another machine, which the
+  // localhost warm bound does not allow for. `waitForIdle` needs two
   // comparable captures per interval, so one timed-out read costs a whole
-  // settle round.
+  // settle round. The first capture keeps the wider first-capture ceiling as
+  // unused headroom, like a tvOS simulator: the MoQ request never enters the
+  // first-frame poll that ceiling is sized for.
   if (device.platform === "ios-remote" && !firstCapture) {
     return REMOTE_PIXEL_CAPTURE_TIMEOUT_MS;
   }

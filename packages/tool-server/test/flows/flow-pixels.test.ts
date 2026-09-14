@@ -890,8 +890,9 @@ describe("capturePixelsWithin", () => {
     const remote = { platform: "ios-remote", kind: "simulator", id: "remote:SIM" } as DeviceInfo;
     expect(pixelCaptureTimeoutMs(remote, false)).toBe(4_000);
     expect(pixelCaptureTimeoutMs(remote, false)).toBeGreaterThan(PIXEL_CAPTURE_TIMEOUT_MS);
-    // Its stream still warms up like a local one, so the first capture keeps
-    // the cold-stream wait rather than being narrowed to the remote ceiling.
+    // The first capture is not narrowed to the remote ceiling. It keeps the
+    // wider one as unused headroom: the MoQ request never enters the
+    // first-frame poll that ceiling is sized for.
     expect(pixelCaptureTimeoutMs(remote, true)).toBe(FIRST_PIXEL_CAPTURE_TIMEOUT_MS);
     // No other platform moved.
     expect(pixelCaptureTimeoutMs(iosDevice, false)).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
