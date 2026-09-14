@@ -21,14 +21,11 @@ import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/fl
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
 const ANDROID = "emulator-5554";
-// What the Android tree source raises once the helper is beyond repair: the
-// registry's service tag inside the tree source's own prefix.
+// What the Android tree source raises: the registry's service tag inside the
+// tree source's own prefix, around the reason the author needs.
 const HELPER_UNAVAILABLE =
-  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] the argent android " +
-  "helper could not start on emulator-5554 even after reinstalling it: am instrument exited before " +
-  "becoming ready (code=1 signal=null): INSTRUMENTATION_STATUS: Error=Unable to find instrumentation " +
-  "info. Run `adb -s emulator-5554 shell am instrument -w com.argent.androiddevtools/.SnapshotInstrumentation` " +
-  "for the device's own error.";
+  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] " +
+  "the argent android helper could not start on emulator-5554 even after reinstalling it";
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
@@ -366,29 +363,21 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 
-  // The reason, and nothing wrapped around it: the registry's service tag and
-  // the tree source's prefix say nothing the reason does not, and every tap of
-  // a recording taken without a tree repeats whatever is said here.
-  it("warns with the bare helper reason on every android tap", async () => {
+  // The reason, and nothing wrapped around it: neither the service tag nor the
+  // tree source's prefix tells the author anything the reason does not, and
+  // every tap of a tree-less recording repeats whatever is said here.
+  it("warns with the bare helper reason on an android tap", async () => {
     currentTreeData = () => {
       throw new Error(HELPER_UNAVAILABLE);
     };
 
-    const first = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
-    const second = await recordTapOn(ANDROID, { x: 0.4, y: 0.42 });
+    const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
 
-    for (const result of [first, second]) {
-      expect(result.message).toContain(
-        "selector capture failed (the argent android helper could not start"
-      );
-      expect(result.message).toContain("kept coordinates");
-      expect(result.message).not.toContain("[AndroidDevtools:");
-      expect(result.message).not.toContain("helper is unavailable");
-    }
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", x: 0.5, y: 0.52 },
-      { kind: "tap", x: 0.4, y: 0.42 },
-    ]);
+    expect(result.message).toContain(
+      "selector capture failed (the argent android helper could not start on emulator-5554 " +
+        "even after reinstalling it); kept coordinates"
+    );
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 
   it("does not persist a raw point that replay would reject", async () => {

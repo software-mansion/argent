@@ -4,7 +4,6 @@ import {
   TypedEventEmitter,
   FAILURE_CODES,
   FailureError,
-  getFailureSignal,
   subprocessFailureMetadata,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -15,12 +14,7 @@ import {
 import { helperManifest } from "@argent/native-devtools-android";
 import { runAdb } from "../utils/adb";
 import { resolveAndroidBinary } from "../utils/android-binary";
-import {
-  clearHelperFailure,
-  ensureAndroidDevtoolsInstalled,
-  recentHelperFailure,
-  recordHelperFailure,
-} from "../utils/android-helper-install";
+import { ensureAndroidDevtoolsInstalled } from "../utils/android-helper-install";
 import {
   connectAndroidDevtoolsClient,
   type AndroidDevtoolsClient,
@@ -278,34 +272,6 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
   });
 }
 
-function makeHelperFailure(message: string, signal: FailureSignal, cause?: Error): FailureError {
-  return new FailureError(message, signal, cause ? { cause } : undefined);
-}
-
-function recordTerminalHelperFailure(
-  serial: string,
-  message: string,
-  signal: FailureSignal,
-  cause?: Error,
-  options: { short?: boolean } = {}
-): FailureError {
-  const error = makeHelperFailure(message, signal, cause);
-  recordHelperFailure(serial, error, signal, options);
-  return error;
-}
-
-/**
- * A device that was asleep on the cable, unplugged or momentarily unauthorized
- * comes back on its own; holding its verdict for five minutes would outlast the
- * fault and refuse the very retry that would work.
- */
-function isUnreachableDevice(cause: Error): boolean {
-  // adb names the serial between the noun and the state: `device 'emulator-5554' not found`.
-  return /device(?:\s+'[^']*')?\s+(?:offline|unauthorized|not found)|no devices|\berror: closed\b/i.test(
-    cause.message
-  );
-}
-
 async function installHelper(serial: string, options: { force?: boolean }): Promise<void> {
   try {
     await ensureAndroidDevtoolsInstalled(serial, options);
@@ -313,22 +279,17 @@ async function installHelper(serial: string, options: { force?: boolean }): Prom
     const cause = err instanceof Error ? err : new Error(String(err));
     // adb keeps its refusal on one line; the cap is for anything that does not.
     const reason = cause.message.replace(/\s+/g, " ").trim().slice(0, 200);
-    const message = `the argent android helper is not installed on ${serial} and could not be installed: ${reason}`;
-    const signal: FailureSignal = {
-      error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED,
-      failure_stage: "android_devtools_helper_install",
-      failure_area: "tool_server",
-      error_kind: "subprocess",
-      failure_command: "adb",
-    };
-    // An install that ran into its own cap is cached under the short window:
-    // uncached, every auto-describe on a wedged device pays that minute again.
-    if (getFailureSignal(cause)?.error_kind === "timeout") {
-      throw recordTerminalHelperFailure(serial, message, signal, cause, { short: true });
-    }
-    throw isUnreachableDevice(cause)
-      ? makeHelperFailure(message, signal, cause)
-      : recordTerminalHelperFailure(serial, message, signal, cause);
+    throw new FailureError(
+      `the argent android helper is not installed on ${serial} and could not be installed: ${reason}`,
+      {
+        error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED,
+        failure_stage: "android_devtools_helper_install",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "adb",
+      },
+      { cause }
+    );
   }
 }
 
@@ -341,38 +302,22 @@ async function installHelper(serial: string, options: { force?: boolean }): Prom
  * emulator and a foreign same-version APK both read as installed. `am
  * instrument` is what finds out, and by then only a forced reinstall helps.
  *
- * Only the two terminal verdicts enter the cooldown. A missing `adb`, a ready
- * timeout or an unexpected `adb forward` reply all clear on their own once PATH
- * is fixed or the device settles, and suppressing the next attempt for five
- * minutes would outlast the fault.
+ * Only that fault is repaired. A missing `adb`, a ready timeout or an
+ * unexpected `adb forward` reply are all reported as they were.
  */
 async function spawnHelperWithRepair(serial: string): Promise<SpawnedHelper> {
-  const recent = recentHelperFailure(serial);
-  if (recent) {
-    throw new FailureError(
-      `${recent.error.message} (retrying after the cooldown; last attempt ${Math.round(recent.ageMs / 1_000)}s ago)`,
-      recent.signal,
-      { cause: recent.error }
-    );
-  }
-
   await installHelper(serial, {});
   try {
-    const spawned = await spawnHelper(serial);
-    clearHelperFailure(serial);
-    return spawned;
+    return await spawnHelper(serial);
   } catch (err) {
     if (!(err instanceof HelperSpawnError) || err.fault !== "instrumentation-missing") throw err;
 
     await installHelper(serial, { force: true });
     try {
-      const spawned = await spawnHelper(serial);
-      clearHelperFailure(serial);
-      return spawned;
+      return await spawnHelper(serial);
     } catch (repairErr) {
       if (!(repairErr instanceof HelperSpawnError)) throw repairErr;
-      throw recordTerminalHelperFailure(
-        serial,
+      throw new FailureError(
         `the argent android helper could not start on ${serial} even after reinstalling it: ${repairErr.message}. ` +
           `Run \`adb -s ${serial} shell am instrument -w ${helperManifest().instrumentationRunner}\` for the device's own error.`,
         {
@@ -382,7 +327,7 @@ async function spawnHelperWithRepair(serial: string): Promise<SpawnedHelper> {
           error_kind: "subprocess",
           failure_command: "android_devtools",
         },
-        repairErr
+        { cause: repairErr }
       );
     }
   }

@@ -605,6 +605,16 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 }
 
 /**
+ * The reason without the layers wrapped around it: the registry tags a service
+ * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
+ * sentence, neither of which tells the author anything the reason does not.
+ */
+function innermostTreeReason(message: string): string {
+  const unwrapped = /helper is unavailable:\s*(.+)/s.exec(message)?.[1] ?? message;
+  return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -624,16 +634,6 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
  * measure, and it yields a measured reason instead of auto-targeting's "Launch
  * or restart the app first".
  */
-/**
- * The reason without the layers wrapped around it: the registry tags a service
- * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
- * sentence, neither of which tells the author anything the reason does not.
- */
-function innermostTreeReason(message: string): string {
-  const unwrapped = /helper is unavailable:\s*(.+)/s.exec(message)?.[1] ?? message;
-  return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
-}
-
 async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
