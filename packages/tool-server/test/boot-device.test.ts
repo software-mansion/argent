@@ -136,7 +136,9 @@ describe("boot-device — iOS path", () => {
     // and deliberately earlier than this (see the #932 assertion below), so the
     // first resolveService call is no longer NativeDevtools.
     const orderOf = (prefix: string): number => {
-      const i = resolveService.mock.calls.findIndex(([urn]) => String(urn).startsWith(prefix));
+      const i = resolveService.mock.calls.findIndex(
+        (call: unknown[]) => typeof call[0] === "string" && call[0].startsWith(prefix)
+      );
       expect(i, `no resolveService call for ${prefix}`).toBeGreaterThanOrEqual(0);
       return resolveService.mock.invocationCallOrder[i]!;
     };
