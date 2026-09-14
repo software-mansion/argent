@@ -41,12 +41,22 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// The tvOS probe lists the orchestrator's devices through the same CLI, so it is
+// replaced to keep the spawn counts below about `status_bar` alone. Only the
+// probe: `simctlStatusBar` still reaches the execFile mock above.
+vi.mock("../src/utils/sim-remote", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/utils/sim-remote")>("../src/utils/sim-remote");
+  return { ...actual, isRemoteTvOsSimulator: vi.fn(async () => false) };
+});
+
 // The suite-wide setup file (test/setup/stub-status-bar.ts) replaces this module
 // so other tests never shell out; this file is the one place that tests the real
 // implementation (against the execFile mock above), so opt back in.
 vi.unmock("../src/utils/status-bar");
 
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
+import { isRemoteTvOsSimulator } from "../src/utils/sim-remote";
 
 const ANDROID_DEVICE: DeviceInfo = {
   id: "emulator-5554",
@@ -215,6 +225,43 @@ describe("pinStatusBar (cancelled run)", () => {
       true
     );
     expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("remote tvOS simulator", () => {
+  beforeEach(() => {
+    vi.mocked(isRemoteTvOsSimulator).mockClear();
+  });
+
+  it("skips the pin without a status_bar call, so no restore is owed", async () => {
+    // tvOS has no status bar: `simctl status_bar` exits 45 "Operation not
+    // supported" there. Attempting it cost three failing round trips (the
+    // override, its undo, the teardown clear), because the double failure
+    // reports the pin as held.
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValueOnce(true);
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+    // The probe shares the status_bar bound, so a dead tunnel cannot stall it for 30s.
+    expect(isRemoteTvOsSimulator).toHaveBeenCalledWith(IOS_REMOTE_SIMULATOR.id, {
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("clears nothing on a remote tvOS simulator and reports it clear", async () => {
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValueOnce(true);
+
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("never asks the remote probe about a local simulator", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await pinStatusBar(IOS_SIMULATOR);
+    await restoreStatusBar(IOS_SIMULATOR);
+
+    expect(isRemoteTvOsSimulator).not.toHaveBeenCalled();
   });
 });
 

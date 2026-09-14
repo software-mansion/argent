@@ -4,7 +4,7 @@ import type { DeviceInfo } from "@argent/registry";
 import { adbShell } from "./adb";
 import { isIosPhysicalDevice } from "./device-info";
 import { simctlArgsForUdid } from "./ios-device-sets";
-import { simctlStatusBar } from "./sim-remote";
+import { isRemoteTvOsSimulator, simctlStatusBar } from "./sim-remote";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,8 +40,20 @@ const IOS_STATUS_BAR_OVERRIDE = [
  * cold screen capture, took 1.5s. The CLI's 30s default instead let one
  * unresponsive tunnel hold a two-step run for 90s: the override, its undo and
  * the teardown restore each waited it out, and none of them may be skipped.
+ * The tvOS probe ahead of each call shares the bound, or a dead tunnel would
+ * stall there first.
  */
 const REMOTE_STATUS_BAR_TIMEOUT_MS = 5_000;
+
+/**
+ * Whether a remote simulator is a tvOS one, which has no status bar: `simctl
+ * status_bar` exits "Operation not supported" there. It shares the
+ * `ios-remote` platform with a phone, so only the orchestrator's device list
+ * can tell them apart.
+ */
+function isRemoteTvOs(device: DeviceInfo): Promise<boolean> {
+  return isRemoteTvOsSimulator(device.id, { timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS });
+}
 
 /**
  * Returns whether the caller must schedule a run-end {@link restoreStatusBar}:
@@ -67,7 +79,10 @@ export async function pinStatusBar(device: DeviceInfo, signal?: AbortSignal): Pr
     // A remote simulator runs the same simctl verb on the other machine, so it
     // needs the same pin — without it the clock ticks through a run and drives
     // any diff whose region overlaps the bar (a `cropOn` there is not masked).
+    // A remote tvOS simulator is skipped: every call would fail, and the double
+    // failure below would report the pin as held and retry it at teardown.
     if (device.platform === "ios-remote") {
+      if (await isRemoteTvOs(device)) return false;
       await simctlStatusBar(device.id, IOS_STATUS_BAR_OVERRIDE, {
         timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS,
       });
@@ -112,7 +127,10 @@ export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
         await simctlArgsForUdid(device.id, ["status_bar", device.id, "clear"])
       );
     } else if (device.platform === "ios-remote") {
-      await simctlStatusBar(device.id, ["clear"], { timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS });
+      // A remote tvOS simulator has no status bar, so nothing can be applied.
+      if (!(await isRemoteTvOs(device))) {
+        await simctlStatusBar(device.id, ["clear"], { timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS });
+      }
     } else if (device.platform === "android") {
       try {
         await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
