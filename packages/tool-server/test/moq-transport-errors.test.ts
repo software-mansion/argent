@@ -70,6 +70,11 @@ function closedMoqClient(): MoqClient {
  * rejection being reported to the caller and the rejection not killing the
  * process are two different fixes, and only this one catches a send that is
  * awaited somewhere but still dropped on another branch.
+ *
+ * While this listener is attached, vitest's own net stands down (it ignores an
+ * unhandled rejection whenever another listener exists), so nothing else
+ * reports an escaping one. That is why it records every reason, why callers
+ * assert the list is empty, and why `finally` detaches it.
  */
 async function watchUnhandledRejections(run: () => Promise<unknown>): Promise<{
   outcome: unknown;
