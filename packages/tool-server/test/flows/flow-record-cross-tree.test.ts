@@ -1337,6 +1337,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // Still recorded, still honestly labelled UNKNOWN — just not repaired.
     expect(warning).toContain("is UNKNOWN, not known-bad");
+    // Nor sent to wait for a source that has nowhere to come back from.
+    expect(warning).toContain(
+      "this platform's runner has no tree to probe, so the conversion stays unverified"
+    );
+    expect(warning).not.toContain("re-probe once that tree source is back");
     expect(warning).not.toContain("no directive takes a bundleId");
     expect(warning).not.toContain("`launch-app`");
     expect(await recordedSteps("remoteblind")).toHaveLength(1);
@@ -1510,6 +1515,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("UNKNOWN, not known-bad");
     // A throw is an outage, not slowness: the two get different next moves.
     expect(warning).toContain("re-probe once that tree source is back");
+    expect(warning).not.toContain("has no tree to probe");
     expect(warning).not.toContain("the source is slow, not down");
     expect(warning).not.toContain("does NOT hold");
     expect(await recordedSteps("threw")).toHaveLength(1);

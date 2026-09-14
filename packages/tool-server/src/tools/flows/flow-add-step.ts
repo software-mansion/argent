@@ -568,12 +568,15 @@ async function probeAgainstRunnerTree(
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — ` +
         // A timeout and an outage need different next moves: "once that tree
-        // source is back" is nonsense for a source that never left.
+        // source is back" is nonsense for a source that never left, and for one
+        // that never existed.
         (timedOut
           ? `re-record this step when the device is quieter, or settle the conversion directly by ` +
             `putting the directive in a flow and running \`flow-execute\`, which has no such ` +
             `ceiling`
-          : `re-probe once that tree source is back before trusting the conversion` +
+          : (hasRunnerTree(args.udid)
+              ? `re-probe once that tree source is back before trusting the conversion`
+              : `this platform's runner has no tree to probe, so the conversion stays unverified`) +
             indeterminateReasonCaveat(args.udid)),
     };
   }
