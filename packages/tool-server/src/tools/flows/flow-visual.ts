@@ -297,9 +297,15 @@ export async function runSnapshot(
         kind: "screenshot",
         mimeType: "image/png",
       });
+      // The folded key makes this the file a local run compares against, so a
+      // remote capture replacing it says so. Otherwise a cloud refresh of a
+      // committed baseline reads exactly like a local one.
+      const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
       return {
         status: "pass",
-        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+        reason: exists
+          ? `baseline updated${source} (${key})`
+          : `baseline written${source} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };
