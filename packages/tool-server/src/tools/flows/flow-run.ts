@@ -233,6 +233,13 @@ export interface StepReport {
    * exporting them (the CLI's `--output`) name files by it.
    */
   snapshotKey?: string;
+  /**
+   * Set beside `snapshotKey` when a remote simulator took the capture. The key
+   * names a device class, not a host, so a local run of the same class reports
+   * the same one, and a client naming files by it needs this to keep the two
+   * runs' files apart.
+   */
+  snapshotRemote?: true;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
   scriptLog?: string;
@@ -2385,6 +2392,9 @@ async function execLeafStep(
           status: r.status,
           reason: r.reason,
           snapshotKey: r.snapshotKey,
+          ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
+            ? { snapshotRemote: true as const }
+            : {}),
           artifacts: r.artifacts,
         };
       } catch (err) {
