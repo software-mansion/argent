@@ -716,6 +716,33 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain("then retry.");
   });
 
+  it("sends a remote simulator's terminate command through sim-remote", async () => {
+    // xcrun reaches only local device sets, so the local command answers
+    // "Invalid device" for a cloud simulator. sim-remote takes the bare udid, not
+    // the `remote:` id the agent drives the device by.
+    const remote = { ...DEVICE, id: `remote:${DEVICE.id}`, platform: "ios-remote" } as DeviceInfo;
+    const lookups = vi.mocked(simctlTargetForUdid);
+    for (const branch of ["ambiguous connected set", "state probe failed, connections live"]) {
+      const { api } = targetingFailures(2).find((f) => f.branch === branch)!;
+
+      lookups.mockClear();
+      const remoteError = await queryFullHierarchyTree(registryFor(api), remote).catch(
+        (err) => err
+      );
+      expect(remoteError.message).toContain(`sim-remote simctl terminate ${DEVICE.id} <bundleId>`);
+      expect(remoteError.message).not.toContain("xcrun");
+      expect(remoteError.message).not.toContain("remote:");
+      expect(`${branch}: ${lookups.mock.calls.length}`).toBe(`${branch}: 0`);
+
+      // A local id still resolves through the gated simctl target.
+      lookups.mockClear();
+      const localError = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+      expect(localError.message).toContain("xcrun simctl terminate <udid> <bundleId>");
+      expect(localError.message).not.toContain("sim-remote");
+      expect(`${branch}: ${lookups.mock.calls.length}`).toBe(`${branch}: 1`);
+    }
+  });
+
   it("sends the launched app to restart-app when it is the connection that is missing", async () => {
     // The advice this PR exists to remove: launch-app does not terminate, so it
     // cannot instrument an app that is no longer connected. It stays the remedy
