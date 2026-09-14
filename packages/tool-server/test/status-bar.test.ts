@@ -114,6 +114,16 @@ describe("pinStatusBar (ios)", () => {
     );
   });
 
+  it("skips a physical device without spawning anything and returns false", async () => {
+    // `simctl` cannot address a hardware UDID: the override would fail, and the
+    // catch's restore would fail the same way, two wasted subprocesses per
+    // flow run. `false` also means the caller schedules no run-end restore.
+    expect(await pinStatusBar(IOS_PHYSICAL_DEVICE)).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pinStatusBar (ios-remote)", () => {
   it("pins a remote simulator through the sim-remote CLI and returns true", async () => {
     execFileMock.mockReturnValue({ stdout: "", stderr: "" });
 
@@ -145,6 +155,16 @@ describe("pinStatusBar (ios)", () => {
     expect(local).toContain("--time");
   });
 
+  it("reports pinned when the undo fails too, so the run-end restore fires", async () => {
+    // One dead tunnel fails both calls. Unlike a local `xcrun`, the override
+    // crossed a network: the CLI can fail on a response whose request the far
+    // host already applied, and a cloud simulator is shared, so a stuck pin
+    // outlives this run. Report `true` so the caller's teardown retries.
+    execFileMock.mockReturnValue(new Error("sim-remote: connection closed"));
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+  });
+
   it("undoes a partially applied remote pin and reports unpinned", async () => {
     // A cloud hiccup must not fail the run, and the caller schedules no
     // run-end restore after a `false` — so the undo has to happen here or the
@@ -156,14 +176,6 @@ describe("pinStatusBar (ios)", () => {
     await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
     const argvs = execFileMock.mock.calls.map(([, args]) => args as string[]);
     expect(argvs.some((a) => a.includes("clear"))).toBe(true);
-  });
-
-  it("skips a physical device without spawning anything and returns false", async () => {
-    // `simctl` cannot address a hardware UDID: the override would fail, and the
-    // catch's restore would fail the same way, two wasted subprocesses per
-    // flow run. `false` also means the caller schedules no run-end restore.
-    expect(await pinStatusBar(IOS_PHYSICAL_DEVICE)).toBe(false);
-    expect(execFileMock).not.toHaveBeenCalled();
   });
 });
 
