@@ -624,12 +624,23 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
  * measure, and it yields a measured reason instead of auto-targeting's "Launch
  * or restart the app first".
  */
+/**
+ * The innermost reason out of the flow-tree wrapper chain: the registry tags a
+ * service failure with `[<namespace>:<id>] `, and the Android tree source wraps
+ * that in a sentence of its own, so the part naming the next step arrives three
+ * levels deep.
+ */
+function innermostTreeReason(message: string): string {
+  const unwrapped = /\((.+)\) — flows resolve /s.exec(message)?.[1] ?? message.split(" — ")[0]!;
+  return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
+}
+
 async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
   point: { x: number; y: number }
-): Promise<{ selector?: Selector; warning?: string }> {
+): Promise<{ selector?: Selector; warning?: string; warnedTreeSource?: boolean }> {
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
@@ -668,9 +679,32 @@ async function captureTapSelector(
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
-    return {
-      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
-    };
+    const message = err instanceof Error ? err.message : String(err);
+    // On Android the tree is served by an installed helper, so this failure
+    // usually holds for the whole recording rather than for this one screen —
+    // and it is fatal to the artifact, not to this step: every tap keeps
+    // coordinates and flow-execute refuses the trimmed fallback tree. Say that
+    // once, while restarting the recording is still cheap.
+    if (resolveDevice(udid).platform === "android") {
+      if (!session.treeSourceWarned) {
+        return {
+          // Flagged, not set here: the step this paragraph explains is not
+          // recorded yet, and a tap that fails or is refused would burn the one
+          // disclosure on a step the author never sees.
+          warnedTreeSource: true,
+          warning:
+            `selector capture failed on ${udid} (${innermostTreeReason(message)}); kept coordinates. ` +
+            `Every tap in this recording will keep raw coordinates and flow-execute refuses the fallback tree, ` +
+            `so the flow will not replay until the helper starts. Fix the helper (the error above names the next step), ` +
+            `then restart the recording.`,
+        };
+      }
+      // Just the reason: the rest repeats what that paragraph already said.
+      return {
+        warning: `selector capture failed (${innermostTreeReason(message)}); kept coordinates`,
+      };
+    }
+    return { warning: `selector capture failed (${message}); kept coordinates` };
   }
 }
 
@@ -1219,7 +1253,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof args.x === "number" &&
         typeof args.y === "number";
 
-      let captured: { selector?: Selector; warning?: string } | undefined;
+      let captured:
+        | { selector?: Selector; warning?: string; warnedTreeSource?: boolean }
+        | undefined;
       if (isTap) {
         captured = await captureTapSelector(registry, session, args.udid as string, {
           x: args.x as number,
@@ -1386,6 +1422,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
+      // Only now, with the step on disk: the disclosure is raised once per
+      // recording, so it must be spent on a step the author actually got.
+      if (captured?.warnedTreeSource) session.treeSourceWarned = true;
+
       if (waitWarning) {
         (session.stepWarnings ??= new Map()).set(stepCount, {
           ...waitWarning,
