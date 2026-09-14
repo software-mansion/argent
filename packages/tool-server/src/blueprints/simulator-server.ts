@@ -64,10 +64,10 @@ export interface SimulatorServerApi {
    *
    * Awaitable because the transports differ in what they can promise. On a
    * provider's server the key rides the WebSocket, which acknowledges it, so
-   * the returned promise rejects on a lost or refused press. The spawned and
-   * MoQ paths have no ack to wait for and resolve as soon as the write is
-   * handed off. The callers await uniformly and each transport reports what it
-   * actually knows.
+   * the returned promise rejects on a lost or refused press. MoQ has no ack,
+   * but a write the session refuses still rejects. The spawned path has
+   * neither and resolves as soon as the write is handed off. The callers await
+   * uniformly and each transport reports what it actually knows.
    */
   pressKey(direction: "Down" | "Up", keyCode: number): Promise<void>;
   /**
@@ -118,8 +118,10 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
-    pressKey: (direction, keyCode) =>
-      moq.sendControl(encodeKey({ action: direction, code: keyCode })),
+    // Through `sendCommand`, as the attached instance below does, so a key the
+    // session refuses reports the same failure as a refused touch instead of a
+    // bare SDK error the caller cannot classify.
+    pressKey: (direction, keyCode) => sendCommand(api, { cmd: "key", code: keyCode, direction }),
     transport,
   };
 
