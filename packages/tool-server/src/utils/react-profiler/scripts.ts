@@ -1,25 +1,18 @@
 /**
- * JS scripts injected via Runtime.evaluate into the Hermes runtime for React
- * profiling. Grouped by use-case: instrumentation setup, session lifecycle,
- * and data collection.
+ * JS injected via `Runtime.evaluate` into the Hermes runtime for React
+ * profiling.
  */
 
 // #region Instrumentation Setup
 
 /**
- * One-time setup script injected at the start of every profiling session.
- * Monkey-patches each `rendererInterface` to track `isProfiling` state,
- * capture `startedAtEpochMs`, and expose a heartbeat helper used to keep the
- * session owner record fresh.
+ * Wraps each `rendererInterface`'s start/stop to track `isProfiling` state and
+ * `startedAtEpochMs`, and installs the session-owner heartbeat helper.
+ * Idempotent — guarded by `ri.__argent_startWrapped__`.
  *
- * Idempotent — guarded by `ri.__argent_startWrapped__` so re-injecting across
- * tool invocations does not produce cascading wrappers.
- *
- * Multi-renderer note: React Native registers two `react-native-renderer`
- * interfaces (Fabric + dormant Paper) in `hook.rendererInterfaces`. The
- * fiber-name cache is keyed by `ri` identity via a `WeakMap` so each renderer
- * has its own bucket — preventing one renderer's wrapper from clearing
- * another's cache during multi-renderer start.
+ * The fiber-name cache is a `WeakMap` keyed by `ri` identity because RN
+ * registers two `react-native-renderer` interfaces (Fabric + dormant Paper);
+ * a flat cache would let one renderer's wrapper clear the other's entries.
  */
 export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
 (function __argent_nativeProfilerInit() {
@@ -116,39 +109,28 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
 `;
 
 /**
- * Self-bootstraps the React DevTools backend when no external DevTools client
+ * Attaches the React DevTools backend when no external DevTools client
  * (Fusebox React tab, `npx react-devtools`) is connected.
  *
- * Why this exists: argent's profiler delegates React commit capture to the
- * in-app DevTools backend via `ri.startProfiling`. The backend's `attach()`
- * is what populates `hook.rendererInterfaces[id]`; React itself only fills in
- * `hook.renderers[id]` via `hook.inject()`. In a bridgeless RN dev build with
- * no DevTools client connected, `setUpReactDevTools.js` ran but its WebSocket
- * to localhost:8097 never opened, so `initBackend` was never called and the
- * profiler can't find a renderer interface to drive.
+ * `ri.startProfiling` needs `hook.rendererInterfaces`, which only the
+ * backend's `attach()` populates — React's own `hook.inject()` fills in
+ * `hook.renderers` alone. With no client connected the backend's WebSocket to
+ * localhost:8097 never opens, so `initBackend` never runs and the profiler has
+ * no renderer interface to drive.
  *
- * Strategy: look up `react-devtools-core` in the Metro module registry and
- * call its `connectWithCustomMessagingProtocol` API (5.1+) with no-op message
- * handlers. The function internally constructs a Bridge + Agent and runs
- * `initBackend(hook, agent, window)`, which iterates `hook.renderers` and
- * populates `hook.rendererInterfaces` via `attach()`. The fake wall discards
- * every outbound message, which is fine — argent talks to the renderer
- * interface directly and never reads from the bridge.
+ * Workaround: find `react-devtools-core` in the Metro module registry and call
+ * `connectWithCustomMessagingProtocol` (5.1+) with no-op handlers; it builds a
+ * Bridge + Agent and runs `initBackend`, which populates
+ * `hook.rendererInterfaces` via `attach()`. Discarding every outbound message
+ * is fine — argent drives the renderer interface directly and never reads the
+ * bridge.
  *
- * Idempotent — early-returns `already-attached` when interfaces are populated,
- * so retries within a session don't leak `hook.sub('renderer', ...)` listeners
- * via repeated `initBackend` calls.
+ * Idempotent — early-returns `already-attached`, so retries within a session
+ * do not leak `hook.sub('renderer', ...)` listeners via repeated `initBackend`
+ * calls.
  *
- * Returns a JSON string `{ ok, reason, renderersCount, rendererInterfacesCount, message? }`.
- * Distinct failure reasons let the caller emit an actionable error:
- *   - 'no-hook'              : __REACT_DEVTOOLS_GLOBAL_HOOK__ missing (production build).
- *   - 'no-renderers'         : React hasn't injected any renderer yet — legitimate wait.
- *   - 'no-metro-modules'     : __r/__r.getModules unavailable; bundle isn't Metro-style.
- *   - 'no-rdt-module'        : react-devtools-core not in the bundle (production build).
- *   - 'unsupported-rdt-version' : module found but lacks connectWithCustomMessagingProtocol
- *                                 (react-devtools-core <5.1, e.g. RN <0.74). User can still
- *                                 run `npx react-devtools` + reload to attach externally.
- *   - 'metro-scan-error' / 'bootstrap-threw' / 'bootstrap-no-effect' : unexpected.
+ * Returns a JSON string `{ ok, reason, renderersCount, rendererInterfacesCount,
+ * message? }`; the reasons are enumerated in `devtools-bootstrap.ts`.
  */
 export const BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT = `
 (function __argent_bootstrapDevtoolsBackend() {
@@ -286,9 +268,9 @@ export const BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT = `
 // #region Session Lifecycle
 
 /**
- * Bumps `lastHeartbeatEpochMs` on the current session owner so it is not
- * classified as stale by concurrent tool-server instances. Safe to evaluate
- * before `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
+ * Bumps `lastHeartbeatEpochMs` on the session owner so concurrent tool-server
+ * instances do not classify it as stale. No-op before
+ * `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
  */
 export const HEARTBEAT_SCRIPT = `
 (function(){
@@ -299,15 +281,12 @@ export const HEARTBEAT_SCRIPT = `
 `;
 
 /**
- * Reads the current profiling state without side-effects. Returns a JSON
- * string with `hookExists`, `rendererInterfaceFound`, `isRunning`, `owner`,
- * and `nowEpochMs` so the caller can decide whether to start, take over, or
- * refuse a new session.
+ * Side-effect-free read of profiling state, so the caller can decide whether
+ * to start, take over, or refuse a new session.
  *
- * `isRunning` reflects "any renderer is profiling" — with multiple renderers
- * registered (RN Fabric + dormant Paper) the operator-relevant question is
- * whether profiling is in progress anywhere, not whether the first iterated
- * renderer is profiling.
+ * `isRunning` is true when ANY renderer is profiling — with RN's Fabric +
+ * dormant Paper pair the first iterated renderer is not necessarily the
+ * active one.
  */
 export const READ_STATE_SCRIPT = `
 (function __argent_readState() {
@@ -336,21 +315,17 @@ export const READ_STATE_SCRIPT = `
 `;
 
 /**
- * Calls `ri.startProfiling` on EVERY registered renderer interface, writes the
- * provided owner JSON into `__ARGENT_PROFILER_OWNER__`, and records
- * `startedAtEpochMs` from the wrapper-captured wall-clock value to eliminate
- * clock skew. Returns a JSON result with `ok`, post-start verification flags,
- * and the resolved timestamp.
+ * Starts profiling on EVERY registered renderer interface and installs
+ * `ownerJson` as `__ARGENT_PROFILER_OWNER__`. Starting all of them is
+ * load-bearing: RN registers Fabric plus a dormant Paper renderer, and `Map`
+ * insertion order can put the dormant one first.
  *
- * Multi-renderer rationale: React Native registers two
- * `react-native-renderer` interfaces (Fabric + dormant Paper). Picking only
- * the first via `forEach` silently profiles the wrong one when `Map`
- * insertion order puts the dormant renderer first — see
- * `profiler-react19-multi-renderer-bug.md`. `ok: true` requires at least one
- * renderer to actually be profiling (`__argent_isProfiling__ === true`), not
- * just that any `forEach` body ran without throwing — otherwise we'd report
- * success when every active-root renderer threw and only a dormant one
- * accepted the call without ever capturing commits.
+ * `ok: true` requires at least one renderer to report
+ * `__argent_isProfiling__ === true`, not merely that no call threw — a dormant
+ * renderer accepts `startProfiling` without ever capturing a commit.
+ *
+ * `startedAtEpochMs` comes from the wrapper's device-side `Date.now()` rather
+ * than the host clock, so host/device skew cannot shift the session window.
  */
 export function buildStartScript(ownerJson: string): string {
   return `
@@ -405,9 +380,8 @@ export function buildStartScript(ownerJson: string): string {
 }
 
 /**
- * Stops the active profiling session on EVERY registered renderer and clears
- * the owner record so a new session can take over cleanly. Used on the
- * takeover path in `react-profiler-start`.
+ * Stops profiling on EVERY registered renderer and clears the owner record so
+ * a new session can take over cleanly.
  */
 export const STOP_FOR_TAKEOVER_SCRIPT = `
 (function __argent_stopForTakeover() {
@@ -430,28 +404,20 @@ export const STOP_FOR_TAKEOVER_SCRIPT = `
 // #region Data Collection
 
 /**
- * Injected once on connect — tracks fiber root commits for get_react_renders
- * and get_fiber_tree. Idempotent (guard via __argent_profiler_installed__).
+ * Tracks fiber roots in `hook.__argent_roots__` and, while profiling, records
+ * a per-renderer fiberID → displayName cache in `globalThis.__argent_fiberNames__`
+ * (`WeakMap<ri, {[fiberID]: name}>`). Idempotent via
+ * `hook.__argent_profiler_installed__`.
  *
- * Also populates a per-renderer commit-time fiberID → displayName cache via
- * `globalThis.__argent_fiberNames__` (a `WeakMap<ri, {[fiberID]: name}>`).
- * This is the only reliable way to recover names for transient components
- * (modals, popovers, navigation screens) that unmount between the profiled
- * interaction and `STOP_AND_READ_SCRIPT`: once a fiber is unmounted the
- * DevTools backend drops it from `idToDevToolsInstanceMap`, so the
- * display-name accessor returns null at stop time. Reading the name right
- * after React's own `handleCommitFiberRoot` runs (synchronous inside
- * `orig.call`) guarantees the fiber is still present. Fiber IDs are
- * monotonically increasing and never reused within a renderer; keying the
- * cache by `ri` identity isolates each renderer's IDs from collisions across
- * the multi-renderer (Fabric + Paper) topology.
+ * That cache is the only way to recover names for components that unmount
+ * before `STOP_AND_READ_SCRIPT` runs (modals, popovers, navigation screens):
+ * the DevTools backend drops unmounted fibers from `idToDevToolsInstanceMap`,
+ * so the display-name accessor returns null at stop time. Reading names
+ * immediately after React's `handleCommitFiberRoot` guarantees the fiber is
+ * still present. Keying by `ri` keeps Fabric's and Paper's ID spaces apart.
  *
- * Uses `ri.__argent_getDisplayName__` (resolved by the setup wrapper) so the
- * tracker works against both `getDisplayNameForElementID` (modern
- * react-devtools-core) and `getDisplayNameForFiberID` (older versions
- * bundled with RN ≤0.75-ish). Falls back to a direct lookup of either name
- * if setup hasn't stashed the accessor yet — defensive against injection
- * ordering.
+ * Prefers the accessor stashed by the setup wrapper, resolving one directly as
+ * a fallback in case setup has not run yet.
  */
 export const FIBER_ROOT_TRACKER_SCRIPT = `
 (function() {
@@ -522,19 +488,15 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
 `;
 
 /**
- * Stops the backend profiler on EVERY registered renderer, then collects the
- * live `getProfilingData()` buffer from each and merges them into a single
- * `dataForRoots` array. Iterating every renderer is load-bearing — the active
- * renderer is not necessarily the first in `Map` insertion order on RN
- * (Fabric + dormant Paper).
+ * Stops the backend profiler on EVERY registered renderer and merges each
+ * one's `getProfilingData()` buffer into a single `dataForRoots` array.
+ * Iterating all of them is load-bearing — on RN (Fabric + dormant Paper) the
+ * active renderer is not necessarily first in `Map` insertion order.
  *
- * Display names are keyed by bare `fiberID`. RN's dormant Paper renderer
- * doesn't emit commits, so its fiber-ID space never overlaps with Fabric's
- * in practice. If a future topology adds a second active renderer with
- * colliding IDs, names from the renderer iterated first win — we'd add a
- * composite key at that point, with a real failure to point at.
- *
- * Returns `{ live, displayNameById }` as a JSON string.
+ * `displayNameById` is keyed by bare `fiberID`: the dormant Paper renderer
+ * emits no commits, so its ID space never overlaps Fabric's in practice. Were
+ * a second active renderer ever added, the renderer iterated first would win
+ * and a composite key would be needed.
  */
 export const STOP_AND_READ_SCRIPT = `
 (function __argent_stopAndRead() {
@@ -625,9 +587,8 @@ export const STOP_AND_READ_SCRIPT = `
 
 /**
  * Walks the live fiber tree from all known roots and collects per-component
- * metadata — `hookTypes`, `isCompilerOptimized`, and `parentName` — keyed
- * by display name. Used to enrich commit data after `STOP_AND_READ_SCRIPT`
- * without requiring a second CDP round-trip during the stop flow.
+ * `hookTypes`, `isCompilerOptimized` and `parentName`, keyed by display name,
+ * to enrich the commit data returned by `STOP_AND_READ_SCRIPT`.
  */
 export const RESOLVE_FIBER_META_SCRIPT = `
 (function __argent_resolveFiberMeta() {

@@ -176,6 +176,38 @@ describe("regex text selectors: parse/serialize", () => {
     );
   });
 
+  it("rejects a selector carrying a key the parser refuses", () => {
+    const selectors = [
+      { text: "OK", junk: 1 },
+      { text: "OK", loose: true, junk: 1 },
+      { text: "OK", within: { identifier: "card", junk: 1 } },
+    ];
+
+    for (const selector of selectors) {
+      expect(() =>
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "tap", selector } as never],
+        })
+      ).toThrow(/cannot serialize flow selector: unknown key `junk` - allowed keys:/i);
+    }
+  });
+
+  it("rejects the YAML-only `id` spelling", () => {
+    // `parseSelector` normalizes `id` to `identifier`, so an in-memory selector
+    // carrying it is junk: dropped on the bare-string path, and on the map path
+    // written as a constraint the step never had.
+    for (const selector of [
+      { text: "OK", loose: true, id: "ok" },
+      { text: "OK", id: "ok" },
+      { identifier: "ok", id: "other" },
+    ]) {
+      expect(() => selectorToYaml(selector as never)).toThrow(
+        /cannot serialize flow selector: unknown key `id`/i
+      );
+    }
+  });
+
   it("suggests matches for a misspelled matcher key", () => {
     expect(() =>
       parseFlow("steps:\n  - assert: { visible: { text: { matchse: 'a' } } }\n")

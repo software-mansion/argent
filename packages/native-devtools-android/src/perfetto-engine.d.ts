@@ -1,12 +1,10 @@
-// Hand-written type surface for the vendored Perfetto RPC decoder
+// Hand-written types for the vendored Perfetto RPC decoder
 // (`assets/trace-processor/engine.mjs`, an esbuild of `@lynx-js/trace-processor`'s
-// `vendor/perfetto/engine.js`). The decoder is loaded at runtime by *path*
-// (dynamic `import(pathToFileURL(...))`), so TypeScript cannot associate it with
-// its own `.d.ts`; this file types only the small subset `wasm-trace-processor.ts`
-// actually uses. Keep these shapes in sync with the upstream `@lynx-js/trace-processor`
-// decoder on a Perfetto bump.
+// `vendor/perfetto/engine.js`). It is loaded by path at runtime, so TypeScript
+// cannot associate it with its own `.d.ts`. Only the subset
+// `wasm-trace-processor.ts` uses is typed; resync on a Perfetto bump.
 
-/** A single decoded cell. Integers arrive as `bigint`, floats as `number`. */
+/** Integers arrive as `bigint`, floats as `number`. */
 export type SqlValue = string | number | bigint | null | Uint8Array;
 
 export interface RowIteratorBase {
@@ -33,10 +31,9 @@ export interface EngineBaseInstance {
 }
 
 /**
- * Constructor type for `EngineBase`. It is `abstract` upstream, but the compiled
- * bundle erases that, so we treat it as a concrete zero-arg constructor and
- * supply the abstract members (`rpcSendRequestBytes`, `mode`, `id`,
- * `[Symbol.dispose]`) in the subclass.
+ * `EngineBase` is abstract upstream and the compiled bundle erases that, so it is
+ * typed here as a concrete zero-arg constructor, with the abstract members
+ * supplied by the subclass.
  */
 export interface EngineBaseCtor {
   new (): EngineBaseInstance;

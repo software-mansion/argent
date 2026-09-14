@@ -12,6 +12,7 @@ import {
   ARTIFACT_MARKER,
   type ArtifactHandle,
 } from "../src/artifacts.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 function handle(id: string, filename: string, mimeType: string): ArtifactHandle {
   return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
@@ -389,23 +390,21 @@ describe("durableSaveTarget", () => {
   let projectRoot: string;
   let home: string;
   let originalCwd: string;
-  let originalHome: string | undefined;
+  let restoreHome: () => void;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
     await writeFile(join(projectRoot, "package.json"), "{}"); // the project marker
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     originalCwd = process.cwd();
-    originalHome = process.env.HOME;
     process.chdir(projectRoot);
-    process.env.HOME = home;
+    restoreHome = redirectHomeTo(home);
     projectRoot = process.cwd(); // resolve /var → /private/var for assertions
   });
 
   afterEach(async () => {
     process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHome();
     await rm(projectRoot, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
@@ -556,9 +555,7 @@ describe("durableSaveTarget", () => {
 
   it("a blank configured value reads as unset — default location kept", async () => {
     await writeScopedConfig(projectRoot, "   ");
-    expect(durableSaveTarget(recordingHandle())!.dir).toBe(
-      join(projectRoot, ".argent/recordings")
-    );
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, ".argent/recordings"));
   });
 
   it("config never resurrects a hostile wire saveDir — the allowlist still gates first", async () => {
@@ -576,7 +573,7 @@ describe("materializeArtifacts durable destination", () => {
   let projectRoot: string; // the client's project (marker-bearing) working dir
   let home: string; // redirected HOME for the global-fallback branch
   let originalCwd: string;
-  let originalHome: string | undefined;
+  let restoreHome: () => void;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
@@ -586,9 +583,8 @@ describe("materializeArtifacts durable destination", () => {
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     process.env.ARGENT_ARTIFACTS_DIR = root;
     originalCwd = process.cwd();
-    originalHome = process.env.HOME;
     process.chdir(projectRoot);
-    process.env.HOME = home;
+    restoreHome = redirectHomeTo(home);
     // On macOS the temp dir is under a /var → /private/var symlink; the
     // materializer resolves cwd to the real path, so mirror that for assertions.
     projectRoot = process.cwd();
@@ -597,8 +593,7 @@ describe("materializeArtifacts durable destination", () => {
   afterEach(async () => {
     process.chdir(originalCwd);
     delete process.env.ARGENT_ARTIFACTS_DIR;
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHome();
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
     await rm(projectRoot, { recursive: true, force: true });

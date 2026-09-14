@@ -85,7 +85,7 @@ The AST infrastructure (`06-resolve/ast-index.ts`) exists and this is a natural 
 | ----- | ------------------- | -------------------------------------------------------------------- |
 | 0     | `00-preprocess.ts`  | Parent chain tracing — annotates cascade commits with root cause     |
 | 00    | `00-hot-commits.ts` | Groups commits by index, marks hot/margin, builds HotCommitSummary[] |
-| 1     | `01-reduce.ts`      | One-pass React commit aggregation, Welford accumulators              |
+| 1     | `01-reduce.ts`      | One-pass React commit aggregation, n/sum/sumSq accumulators          |
 | 2     | `02-enrich.ts`      | Derive stats from accumulators                                       |
 | 3     | `03-tag.ts`         | False-positive flags (isAnimated, isRecyclerChild)                   |
 | 4     | `04-rank.ts`        | Filter, rank, serialize to ComponentFinding[]                        |

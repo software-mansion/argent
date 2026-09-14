@@ -85,21 +85,28 @@ const PROBE_WINDOW_SECONDS = 10;
  * a no-op, so callers can do this on every attach without tracking state.
  */
 export function sendHidWarmUp(api: SimulatorServerApi): void {
-  // Digitizer: a release with no matching press produces no contact.
-  sendCommand(api, {
-    cmd: "touch",
-    type: "Up",
-    x: WARMUP_POINT.x,
-    y: WARMUP_POINT.y,
-    second_x: null,
-    second_y: null,
-  });
-  // Main-screen buttons: a Home release with no press does not navigate.
-  sendCommand(api, { cmd: "button", direction: "Up", button: "home" });
-  // External keyboard. Note this makes backboardd log `missing a sequence for
-  // <senderID…>` each time — harmless, but it will show up in simulator logs
-  // and is not a symptom of anything.
-  api.pressKey("Up", WARMUP_KEY_CODE);
+  // Deliberately not awaited and deliberately never rejecting. This is
+  // insurance, not a critical path: a transport that refuses a warm-up must not
+  // fail the attach that triggered it, and must not surface as an unhandled
+  // rejection either. `allSettled` gives us both. Order does not matter — each
+  // event exempts its own service independently.
+  void Promise.allSettled([
+    // Digitizer: a release with no matching press produces no contact.
+    sendCommand(api, {
+      cmd: "touch",
+      type: "Up",
+      x: WARMUP_POINT.x,
+      y: WARMUP_POINT.y,
+      second_x: null,
+      second_y: null,
+    }),
+    // Main-screen buttons: a Home release with no press does not navigate.
+    sendCommand(api, { cmd: "button", direction: "Up", button: "home" }),
+    // External keyboard. Note this makes backboardd log `missing a sequence for
+    // <senderID…>` each time — harmless, but it will show up in simulator logs
+    // and is not a symptom of anything.
+    api.pressKey("Up", WARMUP_KEY_CODE),
+  ]);
 }
 
 /** Run a command inside the booted simulator, returning stdout ("" on failure). */

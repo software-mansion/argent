@@ -5,6 +5,8 @@ description: Autonomously test an app UI (iOS or Android) by running interact-sc
 
 ## Platform-agnostic
 
+Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `launch-app` before anything; `describe` fails while the app is backgrounded.
+
 The interaction tool names are identical on iOS and Android — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, adb serial → Android).
 
 **Before testing, resolve which device to test on.** Call `list-devices` and follow `<device_selection_rule>`: prefer a running device on any platform;
@@ -32,7 +34,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay — but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`.
-   - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests.
+   - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests. Note `debugger-log-registry` returns `{ status: "not_connected", reason, guidance }` with no log file when the debugger is unreachable — that is not evidence about the app; follow its `guidance` to reconnect, then re-verify.
    - **Mixed**: collect evidence for each relevant class.
    - Report the combined verdict: expected behavior, observed behavior, evidence used, and any blocker for requested visual diffing.
 5. **Repeat** for each step in the flow.
@@ -65,7 +67,7 @@ Steps:
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side so the value never enters agent context. It comes from the `ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's `.env` / `.env.local`). If the name is not defined, the failure lists the available names and every path it checked — ask the user to add it to one of those files (which applies immediately) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
@@ -108,7 +110,7 @@ Steps:
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
-- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow` skill §10 for structured diagnosis and correction.
+- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure) — classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full flow.
 
 ## Tips
 
@@ -127,5 +129,5 @@ Steps:
 | `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                  |
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                 |
+| `argent-metro-debugger`            | Console logs, JS evaluation, component inspection        |
 | `argent-create-flow`               | Record a test sequence as a replayable flow              |

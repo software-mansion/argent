@@ -14,15 +14,13 @@ describe("base-props", () => {
   beforeEach(() => _resetBasePropsCacheForTest());
 
   it("returns the full base set with coarse CI telemetry", () => {
-    const restore = snapshotEnv(["CI", "GITHUB_ACTIONS"]);
+    const restore = snapshotEnv(["CI"]);
     try {
       process.env.CI = "false";
-      delete process.env.GITHUB_ACTIONS;
       const props = getBaseProps("cli");
       expect(Object.keys(props).sort()).toEqual(
         [
-          "$process_person_profile",
-          "$session_id",
+          "session_id",
           "arch",
           "cloud_agent",
           "cli_version",
@@ -33,15 +31,14 @@ describe("base-props", () => {
           "runtime",
         ].sort()
       );
-      expect(props.$process_person_profile).toBe(false);
       expect(props.cli_version).toBe("0.0.0");
       expect(typeof props.is_tty).toBe("boolean");
       expect(props.is_ci).toBe(false);
       expect(typeof props.node_version_major).toBe("string");
       expect(typeof props.arch).toBe("string");
       expect(props.runtime).toBe("cli");
-      expect(typeof props.$session_id).toBe("string");
-      expect(props.$session_id).toMatch(UUID_V4);
+      expect(typeof props.session_id).toBe("string");
+      expect(props.session_id).toMatch(UUID_V4);
       expect(props).not.toHaveProperty("ci_provider");
       expect(props).not.toHaveProperty("is_container");
       expect(props).not.toHaveProperty("container_runtime");
@@ -61,8 +58,11 @@ describe("base-props", () => {
   });
 
   it("sets cloud_agent when a cloud/remote agent runtime is detected", () => {
-    // REPLIT_AGENT is an env-only signal (no filesystem check) and is not the
-    // ambient env of this test process, so it resolves deterministically.
+    // REPLIT_AGENT is an env-only signal (no filesystem check). detectCloudAgent
+    // ranks claude_code, cursor and copilot ahead of it, and those are the
+    // literal ambient env of a Claude Code / Cursor / Copilot cloud runner;
+    // test/setup/clear-telemetry-env.ts clears every one of them suite-wide, so
+    // setting this one is what pins the replit branch.
     const restore = snapshotEnv(["REPLIT_AGENT"]);
     try {
       process.env.REPLIT_AGENT = "1";
@@ -84,11 +84,11 @@ describe("base-props", () => {
     expect(props.arch).toBe(process.arch);
   });
 
-  describe("$session_id", () => {
+  describe("session_id", () => {
     it("is stable within a process across calls and across runtimes", () => {
-      const a = getBaseProps("cli").$session_id;
-      const b = getBaseProps("tool_server").$session_id;
-      const c = getBaseProps("installer").$session_id;
+      const a = getBaseProps("cli").session_id;
+      const b = getBaseProps("tool_server").session_id;
+      const c = getBaseProps("installer").session_id;
       expect(a).toBe(b);
       expect(b).toBe(c);
       expect(a).toBe(getSessionId());
@@ -105,7 +105,7 @@ describe("base-props", () => {
       expect(after).not.toBe(before);
       expect(after).toMatch(UUID_V4);
       // Subsequent getBaseProps calls reflect the new id immediately.
-      expect(getBaseProps("cli").$session_id).toBe(after);
+      expect(getBaseProps("cli").session_id).toBe(after);
     });
   });
 });

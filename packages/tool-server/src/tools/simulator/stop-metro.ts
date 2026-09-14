@@ -3,23 +3,16 @@ import { execFileSync } from "node:child_process";
 import type { ToolDefinition } from "@argent/registry";
 
 /**
- * Parse the raw output of `netstat -ano` (Windows) into the deduped set of PIDs
- * *listening* on `port`. Pure string parsing, split out of `listeningPids` so
- * the win32 row-matching can be unit-tested without a Windows host.
+ * Deduped PIDs *listening* on `port`, parsed out of `netstat -ano` (Windows).
+ * Split out of `listeningPids` so the win32 row matching can be unit-tested
+ * off Windows.
  *
- * Each row is `proto localAddr foreignAddr state pid`. A row matches when it is
- * a TCP row whose local address ends in `:<port>` and whose FOREIGN address is a
- * wildcard endpoint (`0.0.0.0:0` / `[::]:0` / `*:*`) — the locale-independent
- * signature of a listener. The State column is deliberately NOT used: Windows
- * localizes it (German "ABHÖREN", French "À L'ÉCOUTE"), so keying off the literal
- * "LISTENING" silently matched nothing on a non-English host and stop-metro
- * no-opped while Metro kept running. An ESTABLISHED/other-state connection always
- * has a real remote endpoint in the foreign column, so the wildcard reliably
- * separates the listener (which we kill) from the tool-server's own CDP client
- * socket to Metro (which we must not). The leading colon guards against `:18081`
- * matching port 8081. UDP rows (4 columns, no state) are skipped, and PIDs are
- * deduplicated — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6
- * `[::]:<port>` reports the same PID on two rows.
+ * A listener is identified by its wildcard foreign endpoint (`0.0.0.0:0` /
+ * `[::]:0` / `*:*`), never by the State column, which Windows localizes
+ * (German "ABHÖREN"). A connection in any other state has a real remote
+ * endpoint there, so this also keeps the tool-server's own CDP client socket
+ * to Metro out of the result. One listener can report the same PID on an IPv4
+ * and an IPv6 row, hence the dedupe.
  */
 export function parseNetstatListeningPids(netstatOutput: string, port: number): number[] {
   const pids = new Set<number>();
@@ -29,13 +22,11 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
     if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
     // The colon guards against `:18081` matching port 8081.
     if (!cols[1].endsWith(`:${port}`)) continue;
-    // Identify a listener by its wildcard foreign endpoint (locale-independent),
-    // not the localized State text.
+    // Wildcard foreign endpoint, not the localized State text.
     const foreign = cols[2];
     if (foreign !== "*:*" && !foreign.endsWith(":0")) continue;
-    // PID is the trailing column. Read it from the end, not a fixed index — a
-    // localized State can span multiple whitespace-split tokens (French
-    // "À L'ÉCOUTE"), which would otherwise shift the PID column.
+    // From the end, not a fixed index: a localized State can span several
+    // whitespace-split tokens (French "À L'ÉCOUTE") and shift the column.
     const pid = parseInt(cols[cols.length - 1], 10);
     if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
   }
@@ -43,30 +34,21 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
 }
 
 /**
- * Resolve the PIDs of processes *listening* on a TCP port, cross-platform.
- * Only the listener (Metro itself) is returned, never processes holding an
- * ESTABLISHED connection to the port — otherwise the Argent tool-server's own
- * CDP client socket to Metro would be matched and killed alongside it.
+ * PIDs *listening* on a TCP port, cross-platform. Only the listener (Metro) is
+ * returned, never a process holding an ESTABLISHED connection to the port —
+ * that would match the tool-server's own CDP client socket to Metro.
  *
- * - POSIX: `lsof -ti tcp:<port> -sTCP:LISTEN` — one PID per line, exits
- *   non-zero when the port is free.
- * - Windows: `netstat -ano`, then keep TCP rows whose local address ends in
- *   `:<port>` and whose foreign endpoint is a wildcard — the locale-independent
- *   listener signature; the localized State column is deliberately not used (see
- *   parseNetstatListeningPids) — and read the trailing PID column. `lsof`
- *   doesn't exist on Windows, so the prior implementation threw ENOENT there.
- *
- * Both run without a shell, so `port` (already an int by the time it reaches
- * here) can never be interpreted as a shell token.
+ * `lsof` exits non-zero when the port is free, and does not exist on Windows,
+ * which parses `netstat -ano` instead. Neither runs through a shell, so `port`
+ * can never be read as a shell token.
  */
 function listeningPids(port: number): number[] {
   if (process.platform === "win32") {
     const output = execFileSync("netstat", ["-ano"], {
       encoding: "utf-8",
       timeout: 5_000,
-      // `netstat -ano` dumps every socket on the host; a busy box easily
-      // exceeds Node's default 1 MiB maxBuffer, and the resulting ENOBUFS
-      // throw would misread as "port is free" (stopped:false).
+      // `netstat -ano` dumps every socket on the host; overflowing Node's
+      // default 1 MiB throws, which this tool would misread as "port is free".
       maxBuffer: 16 * 1024 * 1024,
     });
     return parseNetstatListeningPids(output, port);
@@ -117,9 +99,8 @@ export const stopMetroTool: ToolDefinition<
 
       for (const pid of pids) {
         try {
-          // On Windows the signal is ignored and the process is terminated
-          // outright (Node maps any kill to TerminateProcess); on POSIX
-          // SIGTERM lets Metro shut down its watchers cleanly.
+          // Windows ignores the signal and terminates outright; on POSIX
+          // SIGTERM lets Metro shut down cleanly.
           process.kill(pid, "SIGTERM");
         } catch {
           // Process may have already exited
@@ -128,8 +109,7 @@ export const stopMetroTool: ToolDefinition<
 
       return { stopped: true, port, pids };
     } catch {
-      // lsof / netstat exits non-zero (or finds nothing) when no process is
-      // listening on the port.
+      // `lsof` exits non-zero when nothing is listening on the port.
       return { stopped: false, port, pids: [] };
     }
   },

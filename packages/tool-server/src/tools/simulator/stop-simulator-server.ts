@@ -1,11 +1,9 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
-import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
-import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
-import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 import { resolveDevice } from "../../utils/device-info";
+import { isExternalId } from "../../utils/external-devices";
+import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
 
 const zodSchema = z.object({
   udid: z
@@ -26,37 +24,47 @@ export function createStopSimulatorServerTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to stop simulator server for ${params.udid}: ${failureSignal.error_code}`,
     },
-    description: `Stop the transport session for a specific device (iOS / Android: simulator-server process; Chromium: CDP WebSocket) and free its resources. Use when you are done interacting with one device but want to keep others running. Returns { stopped, udid }. Fails silently if no session is open for the given id.`,
+    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use when you are done interacting with one device but want to keep others running, or to restart a wedged transport. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM that does not hold: the JS-runtime debugger declares the CDP session as a dependency, so stopping the transport cascades to it and its captured console history goes with it - reconnect with debugger-connect afterwards. Returns { stopped, udid }. Fails silently if no session is open for the given id.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
       const udid = (params as { udid: string }).udid;
-      // A single device id can back more than one service: the transport
-      // (SimulatorServer / ChromiumCdp) and — for a TV target — the focus-driven
-      // TvControl daemon, which owns the spawned tvos-ax/tvos-hid processes. A
-      // tvOS UDID is iOS-shaped, so we can't tell it apart from a phone here
-      // without an async probe; instead, dispose every namespace this id could
-      // own and report `stopped` if any of them was live. Shape narrows the set:
-      // chromium ids only have a CDP session; everything else can be a simulator
-      // server and/or a TV-control service.
+      // A device id can back more than one service: the transport
+      // (SimulatorServer / ChromiumCdp) and, on a TV target, the TvControl
+      // daemon owning the spawned tvos-ax/tvos-hid processes. See
+      // `transportNamespacesForPlatform` for why the set stops there rather than
+      // draining everything this device owns.
       const platform = resolveDevice(udid).platform;
-      const namespaces =
-        platform === "chromium"
-          ? [CHROMIUM_CDP_NAMESPACE]
-          : platform === "android"
-            ? [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE]
-            : [SIMULATOR_SERVER_NAMESPACE, TV_CONTROL_NAMESPACE];
+      const namespaces = transportNamespacesForPlatform(platform);
+
+      /**
+       * An external device has no server of ours to stop. Its `dispose()` is
+       * a no-op by design. Still drop the cached handles so the next call
+       * re-resolves against the provider's state, but report `stopped: false`.
+       * A clean no-op beats an error for an agent that calls this on every device.
+       */
+      const external = isExternalId(udid);
 
       const snapshot = registry.getSnapshot();
       let stopped = false;
-      for (const namespace of namespaces) {
-        const urn = `${namespace}:${udid}`;
+      // Scanned rather than fetched by exact URN, so ids resolve through the
+      // same case-insensitive matcher as `stop-all-simulator-servers`;
+      // `services.get()` would silently no-op on a mis-cased UDID.
+      const urns = [...snapshot.services.keys()].filter(
+        (urn) => deviceIdOwningUrn(urn, namespaces, [udid]) !== undefined
+      );
+      for (const urn of urns) {
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
-        // A non-live node (ERROR / TERMINATING) holds no running process — e.g.
-        // a tvOS UDID, where the SimulatorServer blueprint throws on start and
-        // the node settles into ERROR. Clean it up, but don't claim we stopped a
-        // server that was never running.
+
+        if (external) {
+          await registry.disposeService(urn);
+          continue;
+        }
+
+        // ERROR / TERMINATING nodes hold no process — e.g. a tvOS UDID, which
+        // the SimulatorServer factory rejects on start. Clean it up, but don't
+        // report it as stopped.
         if (isLiveServiceState(entry.state)) stopped = true;
         await registry.disposeService(urn);
       }

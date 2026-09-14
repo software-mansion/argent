@@ -1,24 +1,11 @@
 import type { IosCaptureStrategy, RecordArgsInput, CaptureTarget } from "./types";
 
 /**
- * Degraded-environment fallback for Xcode 26.4 and later, where `xctrace record
- * --device <sim>` deadlocks at the recording-start handshake and never captures.
- *
- * Instead of targeting the simulator device, record the HOST with
- * `--all-processes` (NO `--device`). Simulator apps run as ordinary host
- * processes on the shared host kernel, so host-wide kperf sampling captures the
- * target app's threads too — at the same ~1kHz PET rate, with fully symbolicated
- * USER callstacks. The host path finalizes cleanly (no `--device` handshake), so
- * there is no deadlock.
- *
- * Trade-offs vs the device strategy:
- *  - Capture is system-wide, so the exported samples must be filtered to the
- *    target app's PID (see cpuFilterPid + the pipeline's optional pid filter).
- *  - Kernel callstacks are absent (`cp-kernel-callstack` is empty for simulator
- *    processes) — but no Argent analysis consumes them, and the device path has
- *    the same limitation for simulator targets, so this is not a regression.
- *  - The target app must be on-CPU during capture to produce samples (true of
- *    any sampling profiler).
+ * Fallback for Xcode 26.4 and later, where `xctrace record --device <sim>` deadlocks
+ * at the recording-start handshake. Records the HOST with `--all-processes` (no
+ * `--device`, so no handshake): simulator apps are ordinary host processes, so the
+ * target app's threads are sampled too. Capture is system-wide, so the exported
+ * samples must be filtered to the app's PID (see cpuFilterPid).
  */
 export const allProcessesStrategy: IosCaptureStrategy = {
   name: "all-processes",
@@ -26,17 +13,10 @@ export const allProcessesStrategy: IosCaptureStrategy = {
   attachesByName: false,
 
   buildRecordArgs(input: RecordArgsInput): string[] {
-    // No --device and no --attach: profile the whole host. The simulator app is
-    // included because its process lives on the host kernel.
-    //
-    // Use the built-in "Time Profiler" template (CPU + Hangs) rather than the
-    // full Argent template: the Argent template's Leaks and Allocations
-    // instruments require a single-process target and abort with "cannot handle
-    // a target type of 'All Processes'", failing the whole recording. Time
-    // Profiler is the host-wide-compatible subset and yields the same ~1kHz PET
-    // CPU samples the pipeline consumes. Per-app leaks/allocations are not
-    // available in host-wide capture (they'd need a process-scoped tool such as
-    // `simctl spawn heap|leaks <pid>` — out of scope here).
+    // The built-in "Time Profiler" template, not the Argent one: the latter's Leaks
+    // and Allocations instruments require a single-process target and abort under
+    // `--all-processes`, failing the whole recording. So no per-app leak/allocation
+    // data in this mode.
     const args = [
       "record",
       "--template",
@@ -53,10 +33,9 @@ export const allProcessesStrategy: IosCaptureStrategy = {
   },
 
   cpuFilterPid(target: CaptureTarget): number | null {
-    // Host-wide capture → keep only the target app's samples. Null only if the
-    // app PID is unknown (target wasn't running); callers should guard against
-    // that before selecting this strategy, since unfiltered host-wide output is
-    // not a meaningful per-app profile.
+    // Host-wide capture → keep only the target app's samples. Null when the app
+    // isn't running; the start path refuses this strategy in that case, since
+    // unfiltered host-wide output is not a per-app profile.
     return target.pid;
   },
 };

@@ -1,8 +1,20 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { afterEach, describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { reactProfilerComponentSourceTool } from "../../src/tools/profiler/react/react-profiler-component-source";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 /**
  * End-to-end through the tool's execute(): when a component name resolves to
@@ -13,7 +25,7 @@ import { reactProfilerComponentSourceTool } from "../../src/tools/profiler/react
  */
 describe("react-profiler-component-source: duplicate component names", () => {
   it("returns the base-file primary source and surfaces variants under otherMatches", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "component-source-dup-"));
+    const dir = makeTempDir("component-source-dup-");
     mkdirSync(join(dir, "components"), { recursive: true });
     const base = join(dir, "components", "List.tsx");
     const web = join(dir, "components", "List.web.tsx");
@@ -34,7 +46,7 @@ describe("react-profiler-component-source: duplicate component names", () => {
   });
 
   it("omits otherMatches for a uniquely-named component", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "component-source-uniq-"));
+    const dir = makeTempDir("component-source-uniq-");
     writeFileSync(join(dir, "Solo.tsx"), `export function Solo() { return <View />; }\n`);
 
     const result = (await reactProfilerComponentSourceTool.execute(

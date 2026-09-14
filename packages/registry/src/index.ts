@@ -22,12 +22,16 @@ export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type {
   ArtifactHandle,
   ArtifactEntry,
+  ArtifactKind,
   ArtifactListItem,
   RegisterArtifactOptions,
 } from "./artifacts";
 export {
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
+  FLOW_NAME_PATTERN,
+  FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
@@ -70,6 +74,6 @@ export type {
 } from "./errors";
 export { FAILURE_CODES } from "./failure-codes";
 export type { FailureCode } from "./failure-codes";
-export { Registry } from "./registry";
+export { Registry, describeParamIssues } from "./registry";
 export { attachRegistryLogger } from "./logger";
 export { zodObjectToJsonSchema } from "./zod-to-json-schema";

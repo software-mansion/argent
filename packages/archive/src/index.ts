@@ -1,18 +1,12 @@
 /**
- * Shared `tar.gz` helpers for the file boundary — the one place that knows how
- * argent packs a bundle and how it *safely* unpacks one. Both directions move a
- * bundle (an iOS `.app` directory, an `.apk`/`.vpkg` file, a `.trace`) between
- * the client and the tool-server as a gzipped tar via the system `tar` (present
- * on macOS/Linux and Windows 10+):
+ * Shared `tar.gz` helpers for the file boundary: a bundle (an iOS `.app`, an
+ * `.apk`/`.vpkg`, a `.trace`) moves between client and tool-server as a gzipped
+ * tar via the system `tar` (present on macOS/Linux and Windows 10+).
  *
- * - server → client: an artifact is streamed out and unpacked on the client.
- * - client → server: an upload is streamed in and unpacked on the server.
- *
- * The archive always carries the source's basename as its single top-level
- * member, so extraction recreates `<destDir>/<basename>`. Extraction is
- * tar-slip hardened regardless of direction — a hostile tar can arrive either
- * way (a compromised client uploading, or a compromised tool-server serving an
- * artifact).
+ * The archive carries the source's basename as its single top-level member, so
+ * extraction recreates `<destDir>/<basename>`. Extraction is tar-slip hardened
+ * in both directions — a hostile tar can come from a compromised client
+ * uploading or a compromised tool-server serving an artifact.
  */
 
 import { execFile } from "node:child_process";
@@ -27,8 +21,7 @@ export class ArchiveError extends Error {}
 
 /**
  * `tar` argv that gzips `sourcePath`'s basename as the archive's single
- * top-level member. `target` is an output file path, or `"-"` to stream to
- * stdout (for a spawned child piped to an HTTP response).
+ * top-level member. `target` is an output file path, or `"-"` for stdout.
  */
 export function createTarGzArgs(sourcePath: string, target: string): string[] {
   return ["-czf", target, "-C", dirname(sourcePath), basename(sourcePath)];
@@ -36,7 +29,7 @@ export function createTarGzArgs(sourcePath: string, target: string): string[] {
 
 /**
  * Gzip `sourcePath` (file or directory) into the tar file at `tarPath`. Removes
- * the partial archive if `tar` fails so a mid-write failure doesn't leak it.
+ * the partial archive if `tar` fails, so a mid-write failure doesn't leak it.
  */
 export async function createTarGzFile(sourcePath: string, tarPath: string): Promise<void> {
   try {
@@ -81,13 +74,11 @@ function isEscapingLinkTarget(target: string): boolean {
 }
 
 /**
- * Reject members that could write or link outside `destDir`. Only regular files
- * and directories are unconditionally allowed. Bundles like a `.app` also carry
- * *internal* symlinks (e.g. `Current -> A`), so those are allowed when their
- * target stays inside — but absolute/`..` symlink targets, and every other type
- * (hardlink, device, fifo, …), are refused. `tar -tzvf`'s first column is the
- * type char and ` -> <target>` the symlink target across tar variants, so we
- * read only those two, never the fragile column-formatted name.
+ * Reject members that could write or link outside `destDir`. Regular files and
+ * directories pass; symlinks pass only when their target stays inside (a `.app`
+ * carries internal ones like `Current -> A`); every other type (hardlink,
+ * device, fifo, …) is refused. Only `tar -tzvf`'s type char and ` -> <target>`
+ * are read — the column-formatted name is not stable across tar variants.
  */
 async function assertSafeMemberTypes(tarPath: string): Promise<void> {
   const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath]);
@@ -96,11 +87,9 @@ async function assertSafeMemberTypes(tarPath: string): Promise<void> {
     const type = line[0];
     if (type === "-" || type === "d") continue; // regular file or directory
     if (type === "l") {
-      // `tar -tzvf` prints "<name> -> <target>". Split on ` -> `: a clean
-      // symlink yields exactly two parts. More than one ` -> ` means the name
-      // or target itself contains it — unparseable, so refuse rather than risk
-      // mis-reading the target (a name like `x -> safe` could otherwise hide a
-      // real escaping target). Legit `.app` symlinks never contain ` -> `.
+      // More than one ` -> ` means the name or target itself contains it, so
+      // the real target can't be read — refuse rather than trust a name like
+      // `x -> safe` that hides an escaping target.
       const parts = line.split(" -> ");
       const target = parts.length === 2 ? parts[1]!.trim() : "";
       if (parts.length !== 2 || !target || isEscapingLinkTarget(target)) {
@@ -138,12 +127,10 @@ async function assertSafeArchive(tarPath: string, destDir: string): Promise<void
 }
 
 /**
- * Return the path to the extracted bundle. Prefers the entry named
- * `expectedName` — required on the download path, where `destDir` is a shared
- * cache holding other artifacts. When the exact name is absent (e.g. unicode
- * normalization changed it) it falls back to the sole real entry, and errors
- * rather than guessing if there's more than one — we never hand an arbitrary
- * member to the tool.
+ * Path to the extracted bundle. Prefers the entry named `expectedName` —
+ * required on the download path, where `destDir` is a shared cache holding
+ * other artifacts. Otherwise falls back to the sole real entry, erroring rather
+ * than handing back an arbitrary one.
  */
 async function resolveMember(destDir: string, expectedName: string): Promise<string> {
   const entries = await readdir(destDir);
@@ -161,10 +148,10 @@ async function resolveMember(destDir: string, expectedName: string): Promise<str
 
 /**
  * Vet a gzipped tar (no path or symlink escaping `destDir`), extract it into
- * `destDir`, and return its top-level member path. Used by both directions —
- * neither the uploading client nor the serving tool-server is unconditionally
- * trusted. Throws {@link ArchiveError} for a bad archive; callers map that to
- * their own contract (the upload path → a 4xx, the download path → null).
+ * `destDir`, and return its top-level member path. Used in both directions —
+ * neither the uploading client nor the serving tool-server is trusted. Throws
+ * {@link ArchiveError}; callers map it to their own contract (upload path → a
+ * 4xx, download path → null).
  */
 export async function safeExtractTarGz(
   tarPath: string,

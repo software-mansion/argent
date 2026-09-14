@@ -26,6 +26,8 @@ export {
 
 export {
   createToolsClient,
+  errorBodyMessage,
+  ToolInvocationError,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
@@ -58,6 +60,7 @@ export {
   artifactsRoot,
   ARTIFACT_MARKER,
   type ArtifactHandle,
+  type ArtifactKind,
   type MaterializeContext,
   type MaterializedImage,
 } from "./artifacts.js";

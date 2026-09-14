@@ -1,6 +1,15 @@
+import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import {
+  configuredAdditionalDeviceSets,
+  deviceSetForUdid,
+  rememberDeviceSet,
+  simctlPrefix,
+  type DeviceSetPath,
+} from "./ios-device-sets";
+import { externalNativeId, isExternalId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -10,6 +19,8 @@ export interface IosSimulator {
   state: string;
   runtime: string;
   runtimeKind?: "mobile" | "tv";
+  /** Owning CoreSimulator device-set directory; absent for the default set. */
+  deviceSet?: string;
 }
 
 interface SimctlDevice {
@@ -24,21 +35,20 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/**
- * List all available iOS and tvOS simulators via `xcrun simctl list devices --json`.
- * Returns an empty array when xcrun is missing or the call fails so the
- * rest of the tool surface stays usable on non-mac hosts.
- */
-export async function listIosSimulators(): Promise<IosSimulator[]> {
+/** List one device set's iOS/tvOS simulators; [] on any failure. */
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+  // simctl materializes a missing `--set` directory as a side effect, so a
+  // config typo would leave a stray directory on disk.
+  if (deviceSet && !fs.existsSync(deviceSet)) return [];
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
-      timeout: 10_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(deviceSet), "list", "devices", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      // Accept both iOS and tvOS runtimes
       if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
@@ -49,6 +59,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
           state: d.state,
           runtime: runtimeId,
           runtimeKind,
+          ...(deviceSet ? { deviceSet } : {}),
         });
       }
     }
@@ -58,24 +69,55 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
   }
 }
 
-// A simulator's runtime kind is fixed at creation (an iOS sim can't become a
-// tvOS one), so memoize per-UDID to keep the hot describe/screenshot path from
-// paying the ~100ms `simctl list` cost on every call. Only successful lookups
-// are cached; an unknown UDID re-probes (the sim may simply not be booted yet).
+/**
+ * List available iOS and tvOS simulators across the default device set and every
+ * configured additional set (`ios.additionalDeviceSets`). Each device is tagged
+ * with its owning set and remembered in the UDID → device-set map, so later
+ * per-device simctl calls target the right set. Empty when xcrun is missing or
+ * every set fails, keeping the rest of the tool surface usable off macOS.
+ */
+export async function listIosSimulators(): Promise<IosSimulator[]> {
+  const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
+  const perSet = await Promise.all(sets.map(listDeviceSetSimulators));
+  const out: IosSimulator[] = [];
+  const seen = new Set<string>();
+  for (const simulators of perSet) {
+    for (const sim of simulators) {
+      // A UDID lives in exactly one set; first sighting wins, guarding against
+      // a set listed twice in the config.
+      if (seen.has(sim.udid)) continue;
+      seen.add(sim.udid);
+      rememberDeviceSet(sim.udid, sim.deviceSet ?? null);
+      out.push(sim);
+    }
+  }
+  return out;
+}
+
+// A simulator's runtime kind is fixed at creation, so memoize per-UDID and keep
+// the hot describe/screenshot path off `simctl list`.
 const runtimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
- * Resolve the runtime kind ("mobile" | "tv") of an iOS-shaped simulator UDID,
- * or undefined when it isn't a known available simulator (or xcrun is missing).
+ * Runtime kind of an iOS-shaped simulator UDID, or undefined when it isn't a
+ * known available simulator (or xcrun is missing).
  *
- * `resolveDevice` classifies by UDID shape alone and can't tell tvOS from iOS —
- * both are 8-4-4-4-12 UUIDs tagged `platform: "ios"`. Code paths that must
- * branch on tvOS (describe, screenshot) call this to get the real runtime.
+ * `resolveDevice` classifies by UDID shape alone — tvOS and iOS sims are both
+ * 8-4-4-4-12 UUIDs tagged `platform: "ios"` — so paths that must branch on tvOS
+ * (describe, screenshot) call this for the real runtime.
  */
 export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
-  const kind = (await listIosSimulators()).find((s) => s.udid === udid)?.runtimeKind;
+  /**
+   * An external provider's simulator is not in any configured set, so the
+   * all-sets listing cannot see it. Scope to the set the provider declared and
+   * match on the native UDID.
+   */
+  const listing = isExternalId(udid)
+    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
+    : await listIosSimulators();
+  const kind = listing.find((s) => s.udid === externalNativeId(udid))?.runtimeKind;
   if (kind) runtimeKindCache.set(udid, kind);
   return kind;
 }
@@ -86,26 +128,22 @@ export async function isTvOsSimulator(udid: string): Promise<boolean> {
 }
 
 /**
- * Memoize a runtime-kind verdict a caller already resolved out-of-band — e.g. the
- * tv-control factory, which fetches the simulator list to validate the target and
- * so holds the kind in hand. Warming the cache here lets the synchronous telemetry
- * reader refine that device without a redundant `simctl` probe, and mirrors how
- * the Android TV factory's `getAndroidRuntimeKind` warms its cache. No-op for an
- * undefined kind; a simulator's kind is fixed at creation, so it never goes stale.
+ * Memoize a runtime-kind verdict a caller already resolved out-of-band — the
+ * tv-control factory holds one from the simulator list it fetches to validate the
+ * target — so the synchronous telemetry reader can refine that device without a
+ * redundant `simctl` probe. Mirrors how `getAndroidRuntimeKind` warms the Android
+ * TV factory's cache.
  */
 export function cacheSimulatorRuntimeKind(udid: string, kind: "mobile" | "tv" | undefined): void {
   if (kind) runtimeKindCache.set(udid, kind);
 }
 
 /**
- * Synchronous, cache-only view of a UDID's runtime kind: returns the memoized
- * "mobile"/"tv" verdict if a prior `getSimulatorRuntimeKind` call resolved it,
- * otherwise undefined. It NEVER runs `simctl` — callers on a latency-sensitive
- * hot path (telemetry platform inference) use this to distinguish tvOS from iOS
- * only when the kind is already known, and fall back to the coarse platform when
- * it isn't, rather than paying a ~100ms probe per call. The cache is warmed as a
- * side effect of the describe/screenshot/keyboard/streaming and tv-remote
- * (tv-control) paths that any real tvOS session exercises.
+ * Cache-only view of a UDID's runtime kind: it NEVER runs `simctl`, so the
+ * telemetry hot path can distinguish tvOS from iOS when the kind is already known
+ * and fall back to the coarse platform otherwise. Warmed by the
+ * describe/screenshot/keyboard/screen-recording and tv-control paths any real
+ * tvOS session exercises.
  */
 export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | undefined {
   return runtimeKindCache.get(udid);

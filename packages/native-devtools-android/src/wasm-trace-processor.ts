@@ -1,9 +1,6 @@
-// In-process Perfetto trace-processor engine, backed by the exact-version v55.3
-// WASM vendored under `assets/trace-processor/`. This replaces the per-platform
-// native `trace_processor_shell` binary: one ~13 MB `.wasm` runs on every
-// OS/arch, in-process, fully offline, with no subprocess and no download.
-//
-// Loads Google's prebuilt v55.3 wasm through its Node-targeted Emscripten glue
+// In-process Perfetto trace-processor engine: the vendored `.wasm` under
+// `assets/trace-processor/` runs on every OS/arch, offline, with no subprocess
+// and no download. Google's prebuilt wasm is driven through its emscripten glue
 // plus the version-agnostic `EngineBase` RPC decoder, over a `MessageChannel`.
 // One warm engine is kept per trace path — the trace is parsed once and reused
 // across the whole analyze pipeline + drill-downs.
@@ -28,22 +25,20 @@ import type {
 } from "./perfetto-engine.js";
 
 // Time the patched glue is given to finish `onRuntimeInitialized` (addFunction +
-// trace_processor_rpc_init) before the engine accepts queries. 1500 ms is the
-// conservative default; override only on unusually slow hosts.
+// trace_processor_rpc_init) before the engine accepts queries. Override with
+// ARGENT_TRACE_PROCESSOR_INIT_MS on unusually slow hosts.
 const DEFAULT_INIT_MS = 1500;
-// Keep at most this many warm engines (one per trace path). Each holds the trace
-// (~26-76 MB) plus the wasm heap, so the cap bounds resident memory.
+// Each warm engine holds its parsed trace plus the wasm heap, so the cap bounds
+// resident memory.
 const MAX_WARM_ENGINES = 3;
 // Dispose a warm engine after this long with no query, so the MCP server doesn't
 // hold trace memory forever once an analysis is done. The timer is unref'd, so
-// it never keeps the process alive on its own.
+// it never keeps the process alive.
 const IDLE_DISPOSE_MS = 5 * 60_000;
-// Perfetto's trace-processor RPC ring buffer rejects any single request frame
-// larger than 64 MiB (proto_ring_buffer.cc: "RPC framing error, message too
-// large"). parse() emits one TPM_APPEND_TRACE_DATA frame per call, so a trace
-// bigger than the cap must be fed across several parse() calls before
-// notifyEof(). 32 MiB mirrors the Perfetto UI's own slice size and leaves
-// ample headroom for the protobuf framing overhead.
+// Perfetto's RPC ring buffer rejects any single request frame larger than
+// 64 MiB, and parse() emits one TPM_APPEND_TRACE_DATA frame per call, so a
+// bigger trace must be fed across several parse() calls before notifyEof().
+// 32 MiB mirrors the Perfetto UI's own slice size.
 const TRACE_PARSE_CHUNK_BYTES = 32 * 1024 * 1024;
 
 interface AssetPaths {
@@ -52,7 +47,7 @@ interface AssetPaths {
   enginePath: string;
 }
 
-/** Minimal worker-scope / handoff globals the prebuilt web/worker glue needs. */
+/** Worker-scope / handoff globals the prebuilt web/worker glue needs. */
 interface EngineGlobals {
   self?: typeof globalThis;
   WorkerGlobalScope?: unknown;
@@ -71,8 +66,7 @@ function engineGlobals(): EngineGlobals {
  * the built package (dist/), and the bundled argent package — the bundler copies
  * `assets/trace-processor/` next to `assets/queries/`.
  *
- * `ARGENT_TRACE_PROCESSOR_WASM` overrides the wasm file only (the offline /
- * air-gapped escape hatch — analogue of the old `ARGENT_TRACE_PROCESSOR_PATH`).
+ * `ARGENT_TRACE_PROCESSOR_WASM` overrides the wasm file only.
  */
 export function resolveTraceProcessorAssets(): AssetPaths {
   const dir = path.join(__dirname, "..", "assets", "trace-processor");
@@ -90,13 +84,12 @@ export function resolveTraceProcessorAssets(): AssetPaths {
 /**
  * Re-target Google's web/worker emscripten glue for Node. The input
  * (`engine_bundle.node.js`) already has `ENVIRONMENT_IS_NODE` forced false; this
- * applies the remaining three edits. All anchors are unique — we throw if any
- * fails to match (glue-format drift on a Perfetto bump).
+ * applies the remaining three edits, throwing if an anchor stops matching
+ * (glue-format drift on a Perfetto bump).
  */
 export function patchGlueForNode(src: string): string {
   const edits: ReadonlyArray<readonly [string, string]> = [
-    // Force memory32: skip the memory64 feature probe entirely (avoids the
-    // memory64 __syscall_mprotect path; no global WebAssembly wrapper).
+    // Force memory32: skip the memory64 probe and its __syscall_mprotect path.
     ["this.useMemory64 = hasMemory64Support();", "this.useMemory64 = false;"],
     // Hand the wasm bytes straight to emscripten -> it never calls readBinary/XHR.
     ["locateFile: (s) => s,", "locateFile: (s) => s, wasmBinary: globalThis.__TP_WASM_BYTES,"],
@@ -122,30 +115,27 @@ interface ReadyEngine {
   query(sql: string): Promise<QueryResult>;
   dispose(): void;
   /**
-   * Rejects if the engine faults inside its RPC response handler (e.g. a frame
-   * exceeds Perfetto's 64 MiB cap and EngineBase.fail() throws). Stays pending
+   * Rejects if the engine faults inside its RPC response handler; stays pending
    * for the engine's whole healthy life. Callers race their in-flight parse /
-   * query against it so a contained engine fault surfaces as a rejected
-   * promise instead of hanging — and never as a process-killing throw.
+   * query against it so a fault surfaces as a rejection instead of a hang.
    */
   fatal: Promise<never>;
 }
 
-// The decoder module is loaded once per process (the assets never change at
-// runtime); the bridge handoff, however, is a shared global, so engine *creation*
-// is serialized (createMutex) even though queries run concurrently per engine.
+// The decoder module is loaded once per process; the bridge handoff, however, is
+// a shared global, so engine *creation* is serialized (createMutex) even though
+// queries run concurrently per engine.
 let engineModulePromise: Promise<PerfettoEngineModule> | null = null;
 let wasmEngineClass: (new (port: MessagePort) => ReadyEngine) | null = null;
 let workerScopeReady = false;
 let decoderWarningSilenced = false;
 let createMutex: Promise<unknown> = Promise.resolve();
 
-// The vendored decoder is ESM (`engine.mjs`), loaded by file:// URL at runtime.
-// This must stay a literal dynamic `import()`: it's the only form vitest's vm
-// sandbox wires its dynamic-import callback to (a `new Function`/`eval` import
-// throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). The package compiles under
+// Must stay a literal dynamic `import()`: it's the only form vitest's vm sandbox
+// wires its dynamic-import callback to (a `new Function`/`eval` import throws
+// ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). The package compiles under
 // `module: nodenext`, so tsc preserves the native `import()` in its CJS emit
-// rather than downleveling it to `require()` (which can't load ESM by URL).
+// rather than downleveling it to `require()`, which can't load ESM by URL.
 function loadEngineModule(enginePath: string): Promise<PerfettoEngineModule> {
   if (!engineModulePromise) {
     engineModulePromise = import(pathToFileURL(enginePath).href) as Promise<PerfettoEngineModule>;
@@ -156,8 +146,7 @@ function loadEngineModule(enginePath: string): Promise<PerfettoEngineModule> {
 /**
  * Install the minimal worker scope the `ENVIRONMENT=web,worker` prebuilt bundle
  * assumes (`self`/`WorkerGlobalScope`/`location`). defineProperty so it also
- * overrides a runtime's built-in non-writable `self`/`location` (e.g. Deno).
- * Idempotent — only the first engine creation sets these.
+ * overrides a host's built-in non-writable `self`/`location`.
  */
 function setupWorkerScope(assetsDir: string): void {
   if (workerScopeReady) return;
@@ -183,9 +172,8 @@ function setupWorkerScope(assetsDir: string): void {
 }
 
 /**
- * Reusing the version-agnostic decoder against v55.3 responses logs a benign
- * "Unexpected QueryResult field 7" (rows still decode exactly — proven 9/9). Drop
- * just that line; wrap `console.warn` once.
+ * The version-agnostic decoder logs a benign "Unexpected QueryResult field" for
+ * fields it doesn't know; rows still decode. Drop just that line.
  */
 function silenceDecoderWarning(): void {
   if (decoderWarningSilenced) return;
@@ -212,24 +200,20 @@ function makeWasmEngineClass(Base: EngineBaseCtor): new (port: MessagePort) => R
       this.fatal = new Promise<never>((_resolve, reject) => {
         this.rejectFatal = reject;
       });
-      // Attach a no-op rejection handler so a fault that nobody happens to be
-      // awaiting (the warm engine sits idle between tool calls) can't surface
-      // as an unhandledRejection and take the process down anyway. Callers that
-      // race `fatal` still observe the rejection — a promise can have many
-      // independent consumers.
+      // A fault nobody happens to be awaiting (the warm engine sits idle between
+      // tool calls) would otherwise surface as an unhandledRejection and take the
+      // process down; callers racing `fatal` still observe the rejection.
       this.fatal.catch(() => {});
       this.port.onmessage = (m: MessageEvent): void => {
         if (!(m.data instanceof Uint8Array)) return;
         try {
           this.onRpcResponseBytes(m.data);
         } catch (err) {
-          // EngineBase.fail() throws synchronously (e.g. an RPC framing error
-          // when a response/request frame exceeds Perfetto's 64 MiB cap). This
-          // runs inside a MessagePort onmessage handler, so an escaping throw
-          // becomes a Node uncaughtException and kills the entire tool-server,
-          // wiping every device + profiler session in the registry. Contain it
-          // to this engine: reject `fatal` (so racing callers fail cleanly
-          // instead of hanging) and tear the port down so the warm-engine cache
+          // EngineBase.fail() throws synchronously (e.g. an RPC framing error),
+          // and this runs inside a MessagePort onmessage handler, so an escaping
+          // throw becomes a Node uncaughtException and kills the entire
+          // tool-server. Contain it to this engine: reject `fatal` so racing
+          // callers fail cleanly, and tear the port down so the warm-engine cache
           // evicts and the next call rebuilds from scratch.
           const e = err instanceof Error ? err : new Error(String(err));
           this.rejectFatal(e);
@@ -301,9 +285,7 @@ async function createEngine(): Promise<ReadyEngine> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Warm-engine cache (one per trace path, LRU + idle dispose)
-// ---------------------------------------------------------------------------
+// Warm-engine cache: one entry per trace path, LRU + idle dispose.
 
 interface WarmEntry {
   engine: Promise<ReadyEngine>;
@@ -327,7 +309,6 @@ function armIdleTimer(tracePath: string, entry: WarmEntry): void {
       void entry.engine.then((e) => e.dispose()).catch(() => {});
     }
   }, IDLE_DISPOSE_MS);
-  // Don't keep the event loop alive just for idle disposal.
   entry.idleTimer.unref?.();
 }
 
@@ -343,9 +324,9 @@ function evictBeyondCap(keep: string): void {
 }
 
 /**
- * Get (or create) the warm engine for a trace: boot the engine, parse the trace
- * once, notifyEof, then cache it. LRU-bumps on hit and (re)arms the idle-dispose
- * timer. A failed boot/parse is evicted so the next call retries from scratch.
+ * Get (or create) the warm engine for a trace: boot, parse the trace once,
+ * notifyEof, cache. LRU-bumps on hit and (re)arms the idle-dispose timer. A
+ * failed boot/parse is evicted so the next call retries from scratch.
  */
 function getWarmEngine(tracePath: string): Promise<ReadyEngine> {
   const hit = warmEngines.get(tracePath);
@@ -360,9 +341,7 @@ function getWarmEngine(tracePath: string): Promise<ReadyEngine> {
   const enginePromise = (async (): Promise<ReadyEngine> => {
     const engine = await createEngine();
     const bytes = new Uint8Array(await readFile(tracePath));
-    // Feed the trace in sub-cap chunks (one TPM_APPEND_TRACE_DATA frame each):
-    // a single parse() of a >64 MiB trace overflows Perfetto's RPC frame cap
-    // and the engine throws inside onmessage. Race the load against `engine.fatal`
+    // Feed the trace in sub-cap chunks, and race the load against `engine.fatal`
     // so a contained engine fault rejects here (evicting the cached promise)
     // instead of hanging on a parse() the dead engine will never acknowledge.
     const load = (async (): Promise<void> => {
@@ -380,7 +359,7 @@ function getWarmEngine(tracePath: string): Promise<ReadyEngine> {
   armIdleTimer(tracePath, entry);
   evictBeyondCap(tracePath);
 
-  // Don't cache a rejected promise: drop it so a retry can re-attempt cleanly.
+  // Don't cache a rejected promise: drop it so a retry re-attempts cleanly.
   enginePromise.catch(() => {
     if (warmEngines.get(tracePath) === entry) {
       clearIdleTimer(entry);
@@ -394,12 +373,11 @@ function getWarmEngine(tracePath: string): Promise<ReadyEngine> {
 /** Translate a `SqlValue` cell into the plain JS value the pipeline expects. */
 function readCell(v: SqlValue): unknown {
   if (typeof v === "bigint") {
-    // Trace-relative ns and sample counts stay < 2^53, so prefer Number for the
-    // arithmetic downstream; keep the bigint only for the rare unsafe-range value.
+    // Trace-relative ns and sample counts stay < 2^53, so hand downstream
+    // arithmetic a Number; keep the bigint only for the rare unsafe-range value.
     const n = Number(v);
     return Number.isSafeInteger(n) ? n : v;
   }
-  // number | string | Uint8Array | null pass through unchanged.
   return v;
 }
 
@@ -417,8 +395,8 @@ function decodeRows<Row>(result: QueryResult): Row[] {
 /**
  * Run a fully-rendered SQL string against the warm engine for `tracePath`,
  * returning decoded rows. The first call for a trace pays the engine-boot +
- * trace-parse cost; subsequent calls (other pipeline queries, drill-downs) reuse
- * the warm engine. A SQL error surfaces as a thrown Error.
+ * trace-parse cost; later calls (other pipeline queries, drill-downs) reuse the
+ * warm engine. A SQL error surfaces as a thrown Error.
  */
 export async function queryWarm<Row = Record<string, unknown>>(
   tracePath: string,
@@ -427,13 +405,12 @@ export async function queryWarm<Row = Record<string, unknown>>(
   const engine = await getWarmEngine(tracePath);
   let result: QueryResult;
   try {
-    // Race the query against `engine.fatal`: if the engine faults mid-query
-    // (its onmessage guard rejects `fatal`), surface a clean error rather than
-    // awaiting a response the dead engine will never send.
+    // Race against `engine.fatal` so a mid-query fault surfaces as a clean error
+    // rather than awaiting a response the dead engine will never send.
     result = await Promise.race([engine.query(sql), engine.fatal]);
   } catch (err) {
-    // A fatal engine fault leaves a dead engine in the warm cache; drop it so
-    // the next call rebuilds from scratch instead of reusing the corpse.
+    // A fatal fault leaves a dead engine in the warm cache; drop it so the next
+    // call rebuilds from scratch.
     await disposeWarmEngine(tracePath);
     throw err;
   }
@@ -451,18 +428,16 @@ export async function disposeWarmEngine(tracePath: string): Promise<void> {
   try {
     (await entry.engine).dispose();
   } catch {
-    // best-effort: a never-booted engine has nothing to dispose
+    // best-effort: a failed boot has nothing to dispose
   }
 }
 
 /**
- * Pre-flight the in-process engine for a trace before the analyze queries run.
- * Boots the engine and loads the trace into the warm cache, so the pipeline's
- * real queries hit a warm engine. On a wasm-load failure it throws
- * TraceProcessorUnavailableError (the analyze path renders the actionable
- * "engine failed to load" banner instead of three identical per-query errors).
- * A non-load failure (e.g. an unreadable/corrupt trace) is tolerated here and
- * left to surface per-query — matching the old binary probe's contract.
+ * Pre-flight the engine for a trace so the pipeline's real queries hit a warm
+ * engine. A wasm-load failure throws TraceProcessorUnavailableError (the analyze
+ * path renders the actionable "engine failed to load" banner instead of three
+ * identical per-query errors); any other failure (e.g. an unreadable/corrupt
+ * trace) is tolerated here and left to surface per-query.
  */
 export async function ensureTraceProcessorReady(tracePath: string): Promise<void> {
   try {
@@ -470,7 +445,6 @@ export async function ensureTraceProcessorReady(tracePath: string): Promise<void
   } catch (err) {
     if (err instanceof TraceProcessorUnavailableError) throw err;
     // Engine booted but the trace didn't parse — not an "unavailable engine".
-    // The cache already evicted the failed promise; the real queries will retry
-    // and fold the failure into exportErrors.
+    // The real queries will retry and fold the failure into exportErrors.
   }
 }

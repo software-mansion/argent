@@ -1,7 +1,4 @@
-/**
- * Parse a URN into namespace and payload (split on first colon only).
- * Payload may contain colons (e.g. "app:device1:session2" → namespace "app", payload "device1:session2").
- */
+/** Splits on the first colon only; the payload keeps any remaining colons. */
 export function parseURN(urn: string): { namespace: string; payload: string } {
   const idx = urn.indexOf(":");
   if (idx < 0) {

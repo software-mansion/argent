@@ -16,10 +16,11 @@ import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
+import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 
-export const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
+const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
@@ -60,24 +61,21 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 interface IdleResult {
-  /** True if the screen rendered content and went still before the timeout. */
+  /** Screen rendered content and went still before the timeout. */
   settled: boolean;
-  /** Wall-clock time waited (ms). */
   waitedMs: number;
-  /** Number of tree reads taken. */
   polls: number;
 }
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
 };
 
-// A cheap fingerprint of the screen: role + label + value + frame (rounded to
-// 1% of the screen) for every node below the synthetic root. Rounding tolerates
-// sub-pixel jitter while still catching real motion (a slide/fade animation),
-// so an unchanged signature means the screen has genuinely stopped moving.
+// Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
+// while still catching real motion (a slide/fade animation).
 function treeSignature(root: DescribeNode): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   const parts: string[] = [];
@@ -92,10 +90,8 @@ function treeSignature(root: DescribeNode): string {
   return parts.join("\n");
 }
 
-// `await-screen-idle` waits for the screen to *settle* — render content and stop
-// changing — rather than for a named element like `await-ui-element`. The MCP
-// layer uses it to time its auto-screenshot: capture once the screen is stable
-// instead of after a fixed delay.
+// The MCP layer times its auto-screenshot with this: capture once the screen is
+// stable instead of after a fixed delay.
 export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Params, IdleResult> {
   function fetchTree(
     device: DeviceInfo,
@@ -103,7 +99,14 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     isTvOs: boolean,
     androidIsTv: boolean
   ): Promise<DescribeTreeData> {
-    if (device.platform === "ios") {
+    // ios-remote reads the same AX tree through describeIos: the ax-service
+    // blueprint routes it over the sim-remote tunnel, so only the preflight dep
+    // differs from the local branch. `isTvOs` is false for it, matching describe.
+    if (device.platform === "ios" || device.platform === "ios-remote") {
+      // Physical devices poll the same XCUITest runner snapshot as describe.
+      if (device.kind === "device") {
+        return describeIosDevice(registry, device);
+      }
       return describeIos(registry, device, {}, { isTvOs });
     }
     if (device.platform === "android") {
@@ -143,12 +146,12 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_SCREEN_IDLE_TOOL_ID, capability, device);
       if (device.platform === "ios") await ensureDeps(iosRequires);
+      else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
 
-      // Resolved once, outside the poll loop, like `isTvOs` — an unlisted
-      // serial's TV probe is never cached, so leaving it inside
-      // `describeAndroid` would spawn `adb devices` per poll.
-      const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
+      const isTvOs =
+        device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
       const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
 

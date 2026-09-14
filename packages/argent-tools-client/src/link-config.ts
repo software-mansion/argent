@@ -7,16 +7,15 @@ const LINK_DIR = path.join(homedir(), ".argent");
 const LINK_FILE = path.join(LINK_DIR, "link.json");
 
 export interface LinkConfig {
-  /** Canonical resolved URL — readers consume this verbatim. */
+  /** Consumed verbatim by readers — never re-derived from host/port. */
   url: string;
   host: string;
   port: number;
   createdAt: string;
   /**
-   * Bearer token for the remote tool-server, if it enforces auth. Sent as
-   * `Authorization: Bearer <token>` on every request. Optional: a link to an
-   * auth-disabled server (`server start --no-auth`) has none. Treated as a
-   * secret — the link file is written 0600.
+   * Sent as `Authorization: Bearer <token>` on every request. Absent for a link
+   * to an auth-disabled server (`server start --no-auth`). Secret: the link
+   * file is written 0600.
    */
   token?: string;
 }
@@ -48,8 +47,8 @@ export async function readLinkConfig(): Promise<LinkConfig | null> {
 
 export async function writeLinkConfig(cfg: LinkConfig): Promise<void> {
   await mkdir(LINK_DIR, { recursive: true });
-  // 0600: the file may hold a bearer token. Force the mode (writeFile's `mode`
-  // only applies on create, so chmod also covers an existing looser file).
+  // Force 0600 (the file may hold a bearer token): writeFile's `mode` applies
+  // only on create, so chmod also covers an existing looser file.
   await writeFile(LINK_FILE, JSON.stringify(cfg, null, 2) + "\n", {
     encoding: "utf8",
     mode: 0o600,
@@ -61,40 +60,28 @@ export async function clearLinkConfig(): Promise<void> {
   try {
     await unlink(LINK_FILE);
   } catch {
-    // already gone
+    /* best-effort */
   }
 }
 
 export type ToolsUrlSource = "env" | "link" | "none";
 
 export interface ResolvedToolsUrl {
-  /** Resolved tool-server URL, or null when no override is configured. */
+  /** Tool-server URL, or null when no override is configured. */
   url: string | null;
-  /** Which configuration source produced this URL. */
   source: ToolsUrlSource;
-  /**
-   * Bearer token for the resolved URL, if any. For source "link" it comes from
-   * the link file; for source "env" it comes from ARGENT_AUTH_TOKEN. Undefined
-   * when the target is unauthenticated or no override is configured.
-   */
+  /** From the link file, or from ARGENT_AUTH_TOKEN when source is "env". */
   token?: string;
   /**
-   * When `source === "env"` and a link file *also* exists, this holds the
-   * link config that was shadowed by the env var. Lets callers warn the user
-   * that their persisted link is currently being overridden — without changing
-   * precedence. Undefined in all other cases.
+   * With source "env", the link config the env var shadows — so callers can warn
+   * about the overridden link without changing precedence.
    */
   shadowedLink?: LinkConfig;
 }
 
 /**
- * Resolution order:
- *   1. ARGENT_TOOLS_URL env var (highest precedence) → source: "env"
- *      (token from ARGENT_AUTH_TOKEN, if set)
- *   2. ~/.argent/link.json                            → source: "link"
- *      (token from the link file, if present)
- *   3. null                                           → source: "none"
- *      (caller falls back to auto-spawn)
+ * Precedence: ARGENT_TOOLS_URL (token from ARGENT_AUTH_TOKEN) > ~/.argent/link.json
+ * (token from the file) > null, where the caller falls back to auto-spawn.
  */
 export async function getResolvedToolsUrl(): Promise<ResolvedToolsUrl> {
   const envUrl = process.env.ARGENT_TOOLS_URL;
@@ -117,8 +104,8 @@ export async function getResolvedToolsUrl(): Promise<ResolvedToolsUrl> {
 
 /**
  * True when an env var or link file routes requests to an external tool-server.
- * Used by the MCP server to gate auto-spawn / health-monitor logic — when a
- * caller chose a remote target, we must NOT silently fall back to a local spawn.
+ * The MCP server gates auto-spawn and health restarts on it — a remote target
+ * must never silently fall back to a local spawn.
  */
 export async function isRemoteRouted(): Promise<boolean> {
   const { url } = await getResolvedToolsUrl();
@@ -127,10 +114,9 @@ export async function isRemoteRouted(): Promise<boolean> {
 
 export const LINK_PATHS = { LINK_DIR, LINK_FILE };
 
-// ── Connection string (`argent://[<token>@]<host>:<port>`) ──────────────
-// A single copy-pasteable pairing string emitted by `argent server start` and
-// consumed by `argent link`. The token rides in the URL userinfo position so
-// the whole string is shell-safe (no `#`/`?` that zsh/bash would mangle).
+// `argent://[<token>@]<host>:<port>`: the pairing string `argent server start`
+// prints and `argent link` consumes. The token rides in the userinfo position so
+// the string stays shell-safe (no `#`/`?` that zsh/bash would mangle).
 
 export const LINK_URL_SCHEME = "argent:";
 
@@ -150,9 +136,8 @@ export function formatLinkUrl(parts: ParsedLinkUrl): string {
 
 /**
  * Parse an `argent://` connection string. Returns null when the input isn't an
- * argent URL (so callers can fall back to treating it as a bare host or error).
- * Throws {@link Error} when it *is* an argent URL but is malformed (missing
- * host/port), so the caller can surface a precise message.
+ * argent URL, so callers can fall back to treating it as a bare host; throws
+ * {@link Error} when it is one but malformed.
  */
 export function parseLinkUrl(input: string): ParsedLinkUrl | null {
   if (!input.startsWith(`${LINK_URL_SCHEME}//`)) return null;
@@ -172,14 +157,13 @@ export function parseLinkUrl(input: string): ParsedLinkUrl | null {
   return { host, port, ...(token ? { token } : {}) };
 }
 
-// ── Full-URL targets ────────────────────────────────────────────────────
 // `argent link` also accepts a full http(s) URL so it can point at a reverse
 // proxy / tunnel (ngrok, cloudflared, nginx) rather than only a bare host:port.
 
 export interface ParsedLinkTarget {
   /** Canonical URL to persist and hit verbatim (no trailing slash). */
   url: string;
-  /** Hostname (for display, the loopback check, and re-prompt defaults). */
+  /** Hostname — display, the loopback check, and re-prompt defaults. */
   host: string;
   /** Port — explicit, or the scheme default (443 for https, 80 for http). */
   port: number;
@@ -192,7 +176,7 @@ function httpFromHostPort(host: string, port: number): string {
 }
 
 /**
- * Parse a `link` target. Accepts:
+ * Parse a `link` target:
  *   - argent://[<token>@]<host>:<port>  — the server-start pairing string (→ http)
  *   - http://… / https://…              — a full URL (scheme, host, optional port + path)
  *
@@ -200,7 +184,7 @@ function httpFromHostPort(host: string, port: number): string {
  * to --host/--port). Throws on a recognized-but-malformed URL.
  */
 export function parseLinkTarget(input: string): ParsedLinkTarget | null {
-  // argent:// → http://host:port (parseLinkUrl throws on a malformed argent URL).
+  // argent:// → http://host:port (parseLinkUrl throws on a malformed one).
   const argent = parseLinkUrl(input);
   if (argent) {
     return {
@@ -221,9 +205,8 @@ export function parseLinkTarget(input: string): ParsedLinkTarget | null {
   const host = u.hostname.startsWith("[") ? u.hostname.slice(1, -1) : u.hostname;
   if (!host) throw new Error(`URL "${input}" is missing a host.`);
   const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
-  // Canonical: scheme + host (keeps an explicit non-default port) + path,
-  // dropping a bare trailing slash and any query/fragment. `${url}/tools` then
-  // composes cleanly even when the proxy mounts the server under a path prefix.
+  // `u.host` keeps an explicit non-default port; dropping query/fragment and a
+  // trailing slash keeps `${url}/tools` composable behind a path-prefix proxy.
   const path = u.pathname === "/" ? "" : u.pathname.replace(/\/+$/, "");
   const url = `${u.protocol}//${u.host}${path}`;
   const token = u.username ? decodeURIComponent(u.username) : undefined;

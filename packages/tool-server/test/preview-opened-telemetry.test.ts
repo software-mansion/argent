@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 import type { Registry } from "@argent/registry";
 
-// Capture telemetry without touching PostHog: keep every real export (other
+// Capture telemetry without touching the transport: keep every real export (other
 // modules in the router's import graph read them at load) and spy only `track`.
 vi.mock("@argent/telemetry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/telemetry")>();

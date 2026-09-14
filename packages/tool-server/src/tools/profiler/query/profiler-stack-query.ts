@@ -17,9 +17,10 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator UDID or Android serial."),
+  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(
@@ -278,12 +279,11 @@ export function renderLeakStacksIos(
   topN: number,
   mallocStackLogging?: boolean | null
 ): string {
-  // Same capture-mode contract as the analyze/combined reports: attribution
-  // evidence decides first — any attributed group in the FULL capture (never
-  // the object_type-filtered slice) proves the target process ran under
-  // malloc stack logging, however it was launched, so even an explicit
-  // attach-mode flag must not claim "no malloc-stack history" above a row
-  // with a resolved frame. The flag only lifts the zero-attributed case.
+  // Read from the FULL capture, never the object_type-filtered slice: one
+  // attributed group proves the process ran under malloc stack logging however
+  // it was launched, so an attach-mode flag must not claim "no malloc-stack
+  // history" above a resolved frame. The flag only lifts the zero-attributed
+  // case — same contract as renderUnattributedLeaksNote in ios-profiler/render.ts.
   const mallocWasOn = memoryLeaks.some((l) => l.attributed) || mallocStackLogging === true;
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
@@ -298,8 +298,8 @@ export function renderLeakStacksIos(
       : "_No memory leaks detected._";
   }
 
-  // Attributed leaks first (so a small real leak survives the top-N slice ahead
-  // of larger unattributed system noise), then by size within each group.
+  // Attributed first so a small real leak survives the top-N slice ahead of
+  // larger unattributed system noise.
   const sorted = [...filtered]
     .sort((a, b) => {
       if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
@@ -380,9 +380,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n
       );
     case "leak_stacks":
-      // Capture mode comes from parsedData — frozen at analyze/load time with
-      // the leaks it describes — not the live session field, which a recording
-      // started after the analyze would have re-stamped.
+      // Capture mode from parsedData, frozen with the leaks it describes — the
+      // live session field is re-stamped by any later recording.
       return renderLeakStacksIos(
         data.memoryLeaks,
         params.object_type,
@@ -443,11 +442,9 @@ Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
-  // iOS: reads xctrace output. Android: queries the Perfetto .pftrace via the
-  // in-process trace-processor engine (see executeAndroid). Chromium has no
-  // native trace capture.
+  // No chromium entry: it has no native trace capture.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
   },
   services: (params) => ({
@@ -455,6 +452,26 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;
+    // No capture state at all means this call minted the session, so nothing is
+    // known about the device. The message names no platform: classification is
+    // shape-based and calls any opaque id "android" (utils/device-info.ts:52),
+    // and a forwarded Metro logicalDeviceId — resolvable only while its debugger
+    // connection lives — lands here routinely (#618).
+    if (!api.traceFile && !api.exportedFiles && !api.parsedData) {
+      throw new FailureError(
+        `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
+          "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
+          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_stack_query_load_native_data",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
+      );
+    }
+
     if (api.platform === "android") {
       return executeAndroid(api, params);
     }

@@ -2,18 +2,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parse as parseStackTrace } from "stacktrace-parser";
 
-// Source extensions we are willing to read into a debug response. Anything
-// else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project, or a
-// .json holding service-account / firebase / EAS credentials) is rejected
-// even if the path passes the project-root containment check. Stack frames
-// and React fiber _debugSource only ever point at code files, never .json.
+// The project-root containment check alone still admits an .env or a
+// credential-bearing .json inside the project, hence this allowlist. Stack
+// frames and React fiber _debugSource only ever point at code files.
 const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
-  // Containment against an empty root is meaningless: `path.resolve("")` is the
-  // tool-server's cwd, not the app's, so every path under the tool-server would
-  // read as "inside the project". Callers must not get here with an empty root
-  // (readSourceFragment bails first), but keep the predicate total.
+  // `path.resolve("")` is the tool-server's cwd, not the app's, so an empty
+  // root would make everything under the tool-server read as "inside the
+  // project". readSourceFragment bails first; keep the predicate total anyway.
   if (!projectRoot) return false;
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedFile = path.resolve(absFile);
@@ -50,13 +47,11 @@ interface StackFrame {
 }
 
 /**
- * Parse _debugStack into individual frames.
- * Frame[0] is React internal, frame[1] is the JSX call-site in parent.
+ * Frame[0] is React internal, frame[1] is the JSX call-site in the parent.
  *
- * Delegates to `stacktrace-parser`, which handles the V8/Hermes/JSC line
- * shapes RN emits (and locations buried in a bundle URL with its own `:port`
- * and query string) far more reliably than a hand-rolled `at fn (file:l:c)`
- * regex.
+ * `stacktrace-parser` covers the V8/Hermes/JSC line shapes RN emits, including
+ * `:line` with no column and locations inside a bundle URL that carries its own
+ * `:port` and query string.
  */
 export function parseDebugStack(stack: string): StackFrame[] {
   return parseStackTrace(stack).map((frame) => ({
@@ -68,9 +63,8 @@ export function parseDebugStack(stack: string): StackFrame[] {
 }
 
 /**
- * Normalize bundle URL for symbolication:
- * - iOS: //& → ?
- * - Android: rewrite host to localhost with correct port
+ * iOS emits `//&` where the query's `?` belongs; Android reaches Metro through a
+ * device-side host alias (10.0.2.2) that only resolves on the device.
  */
 export function normalizeBundleUrl(rawUrl: string, port: number): string {
   let url = rawUrl.replace(/\/\/&/, "?");
@@ -113,17 +107,14 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
       const frame = data.stack?.[0];
       if (!frame?.file) return null;
 
-      // A failed symbolication echoes the bundle URL back unchanged (an
-      // http(s) URL); reject those. A successful one yields a real file path,
-      // including legitimate node_modules sources (e.g. expo-router /
-      // react-navigation route components), which we keep.
+      // A failed symbolication echoes the bundle URL back unchanged. A
+      // successful one yields a real file path, including node_modules sources
+      // (expo-router / react-navigation route components) worth keeping.
       if (/^https?:\/\//.test(frame.file)) return null;
 
-      // Relativize against the project root when Metro reported one. With no
-      // root (RN 0.72 / Vega Metro sends no X-React-Native-Project-Root) there
-      // is nothing to strip, and `replace("" + "/", "")` would delete the first
-      // slash ANYWHERE in the path — turning "src/screens/Home.tsx" into
-      // "srcscreens/Home.tsx" — so hand the path back untouched instead.
+      // With no root (RN 0.72 / Vega Metro sends no X-React-Native-Project-Root)
+      // `replace("" + "/", "")` would delete the first slash anywhere in the
+      // path, so hand it back untouched instead.
       const relFile = projectRoot
         ? frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "")
         : frame.file;
@@ -151,28 +142,21 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
     async readSourceFragment(location: SourceLocation, contextLines = 3): Promise<string | null> {
       // Fail closed with no project root (RN 0.72 / Vega Metro reports none):
       // containment cannot be established, and the checks below would otherwise
-      // lean on `fs.realpath("")` rejecting — an implementation detail of the
-      // promises API (the sync one happily returns the tool-server's cwd).
+      // lean on `fs.realpath("")` rejecting — a quirk of the promises API (the
+      // sync one happily returns the tool-server's cwd).
       if (!projectRoot) return null;
       try {
         // location.file ultimately comes from a React fiber's
-        // _debugSource.fileName, which is attacker-controllable code running
-        // inside the JS runtime. Without these checks, a malicious app (or a
-        // cross-origin caller via debugger-evaluate) could read any file the
-        // tool-server's user can read — ~/.gitconfig, ~/.aws/credentials,
-        // /etc/passwd, and so on. Two gates:
-        //   1. Path stays inside projectRoot after resolve (no `..` escape,
-        //      no absolute paths to /etc/anything).
-        //   2. Extension is in a small allowlist of source-file extensions,
-        //      so even an .env file inside the project is not readable here.
+        // _debugSource.fileName, i.e. from attacker-controllable code inside
+        // the JS runtime, so the containment and extension gates below are all
+        // that stop it reading any file the tool-server's user can read.
         const absPath = path.isAbsolute(location.file)
           ? path.resolve(location.file)
           : path.resolve(projectRoot, location.file);
-        // Resolve symlinks (and any symlinked path components, e.g. macOS
-        // /tmp -> /private/tmp) before the containment/extension checks: a
-        // symlink inside projectRoot can point outside it and fs.readFile
-        // would happily follow it. realpath throws ENOENT for a missing file,
-        // which the surrounding try/catch turns into a silent null.
+        // Resolve symlinks (including symlinked path components, e.g. macOS
+        // /tmp -> /private/tmp) before the checks: a symlink inside projectRoot
+        // can point outside it and fs.readFile would follow it. realpath throws
+        // ENOENT for a missing file, which the surrounding catch turns to null.
         const realRoot = await fs.realpath(projectRoot);
         const realPath = await fs.realpath(absPath);
         if (!isInsideProject(realPath, realRoot)) return null;

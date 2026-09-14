@@ -1,7 +1,7 @@
 import { TypedEventEmitter } from "../src/event-emitter";
 import type { ServiceBlueprint, ServiceEvents, ToolDefinition } from "../src/types";
 
-export interface StaticBlueprintResult {
+interface StaticBlueprintResult {
   blueprint: ServiceBlueprint<Record<string, unknown>, string>;
   emitters: TypedEventEmitter<ServiceEvents>[];
 }

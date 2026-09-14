@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 
 const zodSchema = z.object({
   component_name: z.string().describe("Name of the React component to look up"),
@@ -10,10 +11,9 @@ const zodSchema = z.object({
 });
 
 /**
- * The AST lookup scans the whole project tree, which can't ride along in a
- * tool call — so the boundary gates on the directory existing on this host. A
- * remote caller whose checkout isn't mirrored here gets an actionable error
- * instead of a silent empty index ("component not found" for everything).
+ * A project tree can't ride along in a tool call, so `kind: "directory"` fails
+ * a remote caller whose checkout isn't mirrored on this host, instead of
+ * indexing nothing and reporting "component not found" for everything.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "directory" },
@@ -36,18 +36,19 @@ Call this per-finding after react-profiler-analyze to inspect source before prop
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
 When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col) — check it before assuming the returned file is the one you meant.`,
   zodSchema,
-  // Companion to react-profiler-analyze. Carries the same RN-only capability
-  // declaration as the rest of react-profiler-* for intent-clarity, even
-  // though the HTTP gate is a no-op here (the tool takes no device_id, so
-  // there's nothing for the gate to inspect). An LLM agent reading the tool
-  // catalogue should see this is paired with the other react-profiler tools
-  // and not reach for it on a Chromium app.
+  // Declared so the tool catalogue groups this with the other react-profiler-*
+  // tools; the HTTP gate itself is a no-op here, as there is no device arg to
+  // inspect.
   capability: RN_ONLY_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
-    const entry = astIndex.index.get(params.component_name);
+    // The profiler reports DevTools names (`Forget(Foo)`); the index is keyed on
+    // source identifiers (`Foo`).
+    const lookupKeys = astLookupCandidates(params.component_name);
+    const matchedKey = lookupKeys.find((k) => astIndex.index.has(k));
+    const entry = matchedKey ? astIndex.index.get(matchedKey) : undefined;
 
     if (!entry) {
       if (!astIndex.treeSitterAvailable) {
@@ -63,7 +64,14 @@ When several files define a component with the same name (e.g. platform variants
       return {
         found: false,
         component: params.component_name,
-        message: `Component "${params.component_name}" not found in ${params.project_root} (searched ${astIndex.indexedFiles} files).`,
+        message:
+          `Component "${params.component_name}" not found in ${params.project_root} ` +
+          `(searched ${astIndex.indexedFiles} files; also tried ${
+            lookupKeys
+              .slice(1)
+              .map((k) => `"${k}"`)
+              .join(", ") || "no variants"
+          }).`,
       };
     }
 
@@ -75,12 +83,15 @@ When several files define a component with the same name (e.g. platform variants
       const endLine = Math.min(lines.length, startLine + 50);
       source = lines.slice(startLine, endLine).join("\n");
     } catch {
-      // non-fatal — file may have been renamed or deleted
+      // file may have been renamed or deleted
     }
 
     return {
       found: true,
-      component: params.component_name,
+      // The key that matched, so the caller sees when a wrapped name resolved
+      // through to a bare source identifier.
+      component: matchedKey ?? params.component_name,
+      requested: params.component_name,
       file: entry.file,
       line: entry.line,
       col: entry.col,

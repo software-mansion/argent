@@ -8,7 +8,7 @@ description: Set up and connect to an iOS simulator using argent MCP tools. Use 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
 1. **Find a booted simulator**
-   Use `list-devices`. Filter for entries with `platform: "ios"` — booted iPhones are listed first.
+   Use `list-devices`. Filter for entries with `platform: "ios"` and skip any with `kind: "device"` (a physical iPhone, never a simulator target): booted simulators are listed first.
    If none are booted, call `boot-device` with `udid: <chosen UDID>`.
 
 2. **Verify connection**

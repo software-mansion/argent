@@ -15,7 +15,6 @@ async function readFileSafe(path: string): Promise<string | null> {
 export async function detectSessionContext(input: RawProfilingInput): Promise<SessionContext> {
   const { projectRoot, platform } = input.sessionMeta;
 
-  // reactCompilerEnabled
   let reactCompilerEnabled = false;
   const packageJson = await readFileSafe(join(projectRoot, "package.json"));
   if (packageJson) {
@@ -41,7 +40,6 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     }
   }
 
-  // strictModeEnabled
   let strictModeEnabled = false;
   const indexJs = await readFileSafe(join(projectRoot, "index.js"));
   const indexTs = await readFileSafe(join(projectRoot, "index.ts"));
@@ -50,7 +48,6 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     strictModeEnabled = true;
   }
 
-  // buildMode — infer from flamegraph node URLs (flamegraph is optional)
   let buildMode: "dev" | "prod" = "dev";
   if (input.flamegraph) {
     for (const node of input.flamegraph.nodes) {
@@ -61,14 +58,11 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     }
   }
 
-  // rnArchitecture
   let rnArchitecture: "bridge" | "bridgeless";
   if (input.sessionMeta.detectedArchitecture !== undefined) {
     rnArchitecture = input.sessionMeta.detectedArchitecture;
   } else {
     const rnVersionStr = input.sessionMeta.rnVersion ?? "";
-    // coerce tolerates partial / prefixed / pre-release version strings
-    // ("0.81", "v0.81.0", "0.76.0-rc.1") that a bare split(".")[1] mishandles.
     const rnMinor = coerce(rnVersionStr)?.minor ?? 0;
     const newArchDefault = rnMinor >= 76;
     rnArchitecture = newArchDefault ? "bridgeless" : "bridge";

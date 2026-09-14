@@ -3,12 +3,6 @@ import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
 import type { SimctlBackend } from "../../../utils/simctl-backend";
 import type { RestartAppIosServices, RestartAppParams, RestartAppResult } from "../types";
 
-/**
- * Shared iOS handler for both local (`xcrun simctl`) and remote
- * (`sim-remote simctl`) branches. Termination is best-effort — the app may not
- * be running. Only the simctl verbs differ between branches, parametrised via
- * `backend`.
- */
 export function buildIosRestartHandler(backend: SimctlBackend) {
   return async (
     services: RestartAppIosServices,
@@ -20,7 +14,7 @@ export function buildIosRestartHandler(backend: SimctlBackend) {
     try {
       await backend.terminate(udid, bundleId);
     } catch {
-      // App may not be running — ignore.
+      // App may not be running
     }
     try {
       await backend.launch(udid, bundleId);

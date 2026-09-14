@@ -8,19 +8,32 @@ import type {
 } from "../../../utils/react-profiler/types/input";
 import { deriveReason } from "../../../utils/react-profiler/pipeline/utils";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
+import {
+  resolveComponentName,
+  renderComponentNameMiss,
+  describeResolution,
+} from "../../../utils/react-profiler/component-names";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const timeRangeSchema = z.object({
-  start: z.coerce.number().describe("Start of range in ms (performance.now clock)"),
-  end: z.coerce.number().describe("End of range in ms (performance.now clock)"),
+  start: z.coerce
+    .number()
+    .describe(
+      "Start of range in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
+  end: z.coerce
+    .number()
+    .describe(
+      "End of range in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
 });
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
     .describe(
@@ -38,8 +51,13 @@ const zodSchema = z.object({
     .number()
     .int()
     .positive()
-    .default(20)
-    .describe("Max results to return (default 20)"),
+    .optional()
+    .describe(
+      "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
+        "commits. by_index counts individual fibers and returns all of them unless this is set, " +
+        "because one commit's fibers collapse to far fewer distinct components — a small cap there " +
+        "can show less than the analyze report it is meant to expand on."
+    ),
 });
 
 async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCommitTree> {
@@ -92,12 +110,25 @@ function renderByComponent(
   componentName: string,
   topN: number
 ): string {
-  const matching = commits.filter((c) => c.componentName === componentName);
+  // Accept the display name the report prints, not just the raw DevTools name.
+  const resolution = resolveComponentName(
+    componentName,
+    commits.map((c) => c.componentName)
+  );
+  if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
+    return renderComponentNameMiss(resolution, {
+      fiberRenders: commits.length,
+      commits: new Set(commits.map((c) => c.commitIndex)).size,
+    });
+  }
+  const resolvedName = resolution.rawName;
+  const resolutionNote = describeResolution(resolution);
+
+  const matching = commits.filter((c) => c.componentName === resolvedName);
   if (matching.length === 0) {
-    return `_Component \`${componentName}\` not found in commit data._`;
+    return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
-  // Group by commitIndex
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const c of matching) {
     let group = byCommit.get(c.commitIndex);
@@ -122,8 +153,9 @@ function renderByComponent(
     .slice(0, topN);
 
   const lines: string[] = [
-    `## Commits for \`${componentName}\``,
+    `## Commits for \`${resolvedName}\``,
     "",
+    ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Total occurrences:** ${matching.length} across ${byCommit.size} commits`,
     "",
     "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
@@ -151,7 +183,6 @@ function renderByTimeRange(
     return `_No commits found in the range ${start.toFixed(0)}ms → ${end.toFixed(0)}ms._`;
   }
 
-  // Group by commitIndex
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const c of matching) {
     let group = byCommit.get(c.commitIndex);
@@ -196,7 +227,11 @@ function renderByTimeRange(
   return lines.join("\n");
 }
 
-function renderByIndex(commits: DevToolsFiberCommit[], commitIndex: number): string {
+export function renderByIndex(
+  commits: DevToolsFiberCommit[],
+  commitIndex: number,
+  topN?: number
+): string {
   const matching = commits.filter((c) => c.commitIndex === commitIndex);
   if (matching.length === 0) {
     return `_Commit #${commitIndex} not found in stored data._`;
@@ -205,18 +240,23 @@ function renderByIndex(commits: DevToolsFiberCommit[], commitIndex: number): str
   const commitDuration = matching[0]!.commitDuration;
   const timestamp = matching[0]!.timestamp;
 
+  const sorted = [...matching].sort((a, b) => b.actualDuration - a.actualDuration);
+  // Uncapped by default: rows are fibers, so a small cap would show less than
+  // the analyze report that points here.
+  const shown = topN !== undefined ? sorted.slice(0, topN) : sorted;
+  const hidden = sorted.length - shown.length;
+
   const lines: string[] = [
-    `## Commit #${commitIndex} — Full Detail`,
+    `## Commit #${commitIndex} — ${hidden > 0 ? "Top Fibers" : "Full Detail"}`,
     "",
-    `**Time:** ${timestamp.toFixed(0)}ms  **Duration:** ${commitDuration.toFixed(1)}ms  **Fibers:** ${matching.length}`,
+    `**Time:** ${timestamp.toFixed(0)}ms  **Duration:** ${commitDuration.toFixed(1)}ms  ` +
+      `**Fibers:** ${matching.length}${hidden > 0 ? ` (showing ${shown.length})` : ""}`,
     "",
     "| Component | Duration (ms) | Self (ms) | Reason | Parent | Compiler |",
     "|---|---|---|---|---|---|",
   ];
 
-  const sorted = [...matching].sort((a, b) => b.actualDuration - a.actualDuration);
-
-  for (const c of sorted) {
+  for (const c of shown) {
     const reason = formatReason(c);
     const parent = c.parentName ?? "—";
     const compiler = c.isCompilerOptimized ? "✓" : "";
@@ -225,7 +265,18 @@ function renderByIndex(commits: DevToolsFiberCommit[], commitIndex: number): str
     );
   }
 
-  // Root cause chain if available
+  if (hidden > 0) {
+    lines.push("");
+    lines.push(
+      `_Showing the ${shown.length} costliest of ${sorted.length} fibers — ${hidden} cheaper ` +
+        `fibers hidden. Note these are fibers, not components: the full set covers ` +
+        `${new Set(sorted.map((c) => c.componentName)).size} distinct components and this view ` +
+        `covers ${new Set(shown.map((c) => c.componentName)).size}. Omit top_n for everything._`
+    );
+  }
+
+  // Scans the full commit, not the truncated table: the root-cause fiber is
+  // often cheap and falls outside top_n.
   const withRootCause = matching.find((c) => c.rootCauseParent);
   if (withRootCause?.rootCauseChain && withRootCause.rootCauseChain.length > 0) {
     lines.push("");
@@ -246,7 +297,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
     return `_Commit #${commitIndex} not found in stored data._`;
   }
 
-  // Build parent-child adjacency from parentName
   const children = new Map<string, DevToolsFiberCommit[]>();
   const roots: DevToolsFiberCommit[] = [];
 
@@ -266,7 +316,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
 
   const lines: string[] = [`## Cascade Tree — Commit #${commitIndex}`, ""];
 
-  // Deduplicate: group by component name at same level
   const rendered = new Set<string>();
 
   function renderNode(name: string, depth: number): void {
@@ -289,7 +338,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
     }
   }
 
-  // Deduplicate roots by name
   const rootNames = new Set(roots.map((r) => r.componentName));
   for (const name of rootNames) {
     renderNode(name, 0);
@@ -347,11 +395,11 @@ Use when drilling into specific components or time windows after react-profiler-
 Returns a markdown table or tree of commit data matching the requested mode.
 Fails if react-profiler-stop has not been called or no commit data is stored.`,
   zodSchema,
-  // RN-only: reads React commit data captured via the React DevTools backend.
+  // Reads React commit data captured via the React DevTools backend.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const commitTree = await getCommitTree(params.port, params.device_id);
+    const commitTree = await getCommitTree(metroPort(params), params.device_id);
 
     switch (params.mode) {
       case "by_component": {
@@ -363,7 +411,7 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
             error_kind: "validation",
           });
         }
-        return renderByComponent(commitTree.commits, params.component_name, params.top_n);
+        return renderByComponent(commitTree.commits, params.component_name, params.top_n ?? 20);
       }
 
       case "by_time_range": {
@@ -379,7 +427,7 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
           commitTree.commits,
           params.time_range_ms.start,
           params.time_range_ms.end,
-          params.top_n
+          params.top_n ?? 20
         );
       }
 
@@ -392,7 +440,7 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
             error_kind: "validation",
           });
         }
-        return renderByIndex(commitTree.commits, params.commit_index);
+        return renderByIndex(commitTree.commits, params.commit_index, params.top_n);
       }
 
       case "cascade_tree": {

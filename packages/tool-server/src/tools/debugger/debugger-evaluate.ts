@@ -1,10 +1,16 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type ToolDefinition,
+} from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import { metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Chromium)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -33,7 +39,30 @@ Returns the evaluation result as a JSON-serializable value, along with deviceNam
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    const result = await api.cdp.evaluate(params.expression);
+    let result: unknown;
+    try {
+      result = await api.cdp.evaluate(params.expression);
+    } catch (err) {
+      // The agent's expression throwing is not a tool malfunction, so re-code it
+      // to keep it separable from genuine CDP faults in telemetry. getFailureSignal
+      // is breadth-first, so this outer signal wins over the cause's.
+      if (
+        err instanceof Error &&
+        getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION
+      ) {
+        throw new FailureError(
+          err.message,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_EVALUATE_EXPRESSION_THREW,
+            failure_stage: "debugger_evaluate_expression",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+          { cause: err }
+        );
+      }
+      throw err;
+    }
     return {
       result,
       deviceName: api.deviceName,

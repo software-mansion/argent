@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import supertest from "supertest";
-import type { Response } from "superagent";
+import type { Response } from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
-import type { Registry, InvokeToolOptions } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type Registry,
+  type InvokeToolOptions,
+} from "@argent/registry";
 
 // Streaming rides the same response path as the update note — pin the checker
 // to "no update" so result lines stay minimal and deterministic.
@@ -127,6 +132,40 @@ describe("HTTP NDJSON streaming (Accept: application/x-ndjson)", () => {
     expect(lines[0]).toEqual({ event: "progress", data: { index: 0, status: "pass" } });
     expect(lines[1].event).toBe("error");
     expect(String(lines[1].error)).toContain("device went away");
+  });
+
+  it("carries the failure signal on the terminal error line and the buffered 500", async () => {
+    const registry = stubRegistry(async () => {
+      throw new FailureError("flow file is not valid YAML", {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    });
+    handle = createHttpApp(registry);
+
+    const streamed = await supertest(handle.app)
+      .post("/tools/test-tool")
+      .set("Accept", "application/x-ndjson")
+      .send({})
+      .buffer(true)
+      .parse(collectText)
+      .expect(200);
+    const [line] = parseLines(streamed.body as string);
+    expect(line).toEqual({
+      event: "error",
+      error: "flow file is not valid YAML",
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      error_kind: "validation",
+    });
+
+    const buffered = await supertest(handle.app).post("/tools/test-tool").send({}).expect(500);
+    expect(buffered.body).toEqual({
+      error: "flow file is not valid YAML",
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      error_kind: "validation",
+    });
   });
 
   it("keeps plain-JSON status codes for failures before the invoke (unknown tool)", async () => {

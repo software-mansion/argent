@@ -4,18 +4,47 @@
 // string kept its surrounding quotes, so the `startsWith("/")` guard rejected
 // an otherwise-valid absolute path).
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveAvdPath } from "../src/utils/adb";
 
-const prevAvdHome = process.env.ANDROID_AVD_HOME;
+// resolveAvdPath consults five roots in priority order; ANDROID_AVD_HOME is
+// only the second. Snapshot all of them, plus the pair backing the default
+// root: it is os.homedir()/.android/avd, and os.homedir() reads USERPROFILE on
+// Windows — where this file also runs (.github/workflows/windows-e2e.yml) — and
+// HOME elsewhere. With those pinned, an ambient ANDROID_USER_HOME (the Studio
+// >= 4.2 convention, which outranks ANDROID_AVD_HOME) cannot decide these
+// answers.
+const ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "ANDROID_USER_HOME",
+  "ANDROID_AVD_HOME",
+  "ANDROID_SDK_HOME",
+  "XDG_CONFIG_HOME",
+] as const;
+const originalEnv: Record<string, string | undefined> = {};
 const created: string[] = [];
 
+beforeEach(async () => {
+  for (const k of ENV_KEYS) originalEnv[k] = process.env[k];
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "argent-avd-home-"));
+  created.push(home);
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.ANDROID_USER_HOME;
+  delete process.env.ANDROID_AVD_HOME;
+  delete process.env.ANDROID_SDK_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+});
+
 afterEach(async () => {
-  if (prevAvdHome === undefined) delete process.env.ANDROID_AVD_HOME;
-  else process.env.ANDROID_AVD_HOME = prevAvdHome;
+  for (const k of ENV_KEYS) {
+    if (originalEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = originalEnv[k];
+  }
   await Promise.all(created.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 

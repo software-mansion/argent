@@ -32,8 +32,7 @@ export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, st
     const debuggerApi = deps.debugger as JsRuntimeDebuggerApi;
     const cdp = debuggerApi.cdp;
 
-    // Inject the fetch-level network interceptor. Idempotent — the script
-    // guards itself with __argent_network_installed.
+    // Idempotent — the script guards itself with __argent_network_installed.
     await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(
@@ -61,7 +60,7 @@ export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, st
     return {
       api,
       dispose: async () => {
-        // Nothing to dispose — the CDP connection is owned by JsRuntimeDebugger.
+        // The CDP connection is owned by JsRuntimeDebugger.
       },
       events,
     };

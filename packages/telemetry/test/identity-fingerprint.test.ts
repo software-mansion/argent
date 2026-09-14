@@ -65,7 +65,7 @@ describe("identity – fingerprint-derived id", () => {
     expect(fs.readFileSync(identityFilePath(), "utf8").trim()).toBe(LEGACY_V4);
 
     // The background upgrade migrates the file to the fingerprint, off the hot
-    // path (local rewrite only — no alias/$identify).
+    // path (local rewrite only — no remote identity/alias event).
     scheduleFingerprintUpgrade(() => Promise.resolve(FP));
     await flushUpgrade();
 

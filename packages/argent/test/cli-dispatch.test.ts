@@ -158,6 +158,35 @@ describe("cli dispatcher: installer-help guard", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  it("`mcp --help` prints usage and never starts the server", async () => {
+    // It used to start it: the stdio server then blocked reading JSON-RPC from
+    // stdin, so the command looked like it hung (or, with stdin closed, like it
+    // printed nothing and succeeded).
+    const marker = freshMarker();
+    const { exitCode, stdout } = await runCli(["mcp", "--help"], marker);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Usage: argent mcp");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("`mcp` with no arguments still starts the server", async () => {
+    // How every editor launches argent. If the help guard ever fired here it
+    // would print usage onto the JSON-RPC channel and break the handshake, so
+    // this control matters more than the case above.
+    const marker = freshMarker();
+    await runCli(["mcp"], marker);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.readFileSync(marker, "utf8")).toContain("startMcpServer");
+  });
+
+  it("`mcp` with a non-help argument still starts the server", async () => {
+    // Proves the guard keys on help rather than on "any argv" — hand-edited
+    // configs do carry extra arguments.
+    const marker = freshMarker();
+    await runCli(["mcp", "--metro-port", "8082"], marker);
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+
   it("`init --help` prints usage (with real options) and never runs the installer", async () => {
     const marker = freshMarker();
     const { exitCode, stdout } = await runCli(["init", "--help"], marker);
@@ -250,6 +279,11 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     );
     expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
     expect(stdout).toContain("Alias for init");
+    // Pin the flow row to the current interface: `argent flow run` takes
+    // either form — a saved flow's name or any YAML file's path.
+    expect(stdout).toContain(
+      "flow        Run a flow by name or YAML path (use `argent flow --help` for options)"
+    );
     expect(fs.existsSync(marker)).toBe(false);
   });
 

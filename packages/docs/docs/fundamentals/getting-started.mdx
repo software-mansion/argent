@@ -1,0 +1,45 @@
+---
+sidebar_position: 1
+sidebar_label: Getting started
+title: Getting started
+sidebar_custom_props:
+  icon: rocket
+---
+
+Argent is an agentic toolkit that gives your AI assistant direct access to iOS simulators, Android emulators and physical devices, TVs (Apple TV, Android TV, Fire TV) and Electron or Chromium desktop and web apps. Ask it to tap a button, run a profiler or reproduce an issue manually, all from within your CLI, without switching context.
+
+## Install
+
+Run the installation wizard from your project root:
+
+```bash
+npx @swmansion/argent@latest init
+```
+
+The wizard registers the Argent MCP server in your editor. See [Installation](/docs/fundamentals/installation) for the prerequisites, the pnpm command, the manual install and the team setup.
+
+## Try it out
+
+Open your editor and ask your assistant to do something on a device:
+
+- _"Boot an iOS simulator and launch my app."_
+- _"Tap through the sign up flow and tell me where it breaks."_
+- _"Take a screenshot of the settings screen."_
+
+<Video
+  src="/video/interact.mp4"
+  width={1256}
+  height={900}
+  caption="The agent describes the screen, taps a photo, then pinches to zoom in on one person"
+/>
+
+To see the full surface, ask:
+
+> What can Argent do?
+
+Your assistant will walk you through every capability available in your workspace.
+
+## Where to go next
+
+- [Supported platforms](/docs/fundamentals/supported-platforms) lists every target and its interaction model.
+- [Interacting with apps](/docs/features/interacting-with-apps) explains how the agent discovers and drives UI.

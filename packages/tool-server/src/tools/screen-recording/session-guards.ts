@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
+import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
 
 export interface StartRecordingResult {
   status: "recording";
@@ -15,10 +16,9 @@ export interface StopRecordingFile {
   outputFile: string;
   sizeBytes: number;
   /**
-   * Length of the returned video. With static-frame trimming on this is the
-   * frame-derived length (always present) and shorter than the wall clock — it
-   * counts only the frames that survived. Null only when trimming is off and the
-   * session lost its start stamp.
+   * With static-frame trimming on, the frame-derived length of the returned
+   * video (never null). Null only when trimming is off and the session lost its
+   * start stamp.
    */
   durationMs: number | null;
   /** Real elapsed recording time. Present only when trimming actually applied. */
@@ -37,14 +37,11 @@ export function clip(s: string, max = 300): string {
 
 /**
  * Reject a start while a capture is live, while another start/stop is mid-flight
- * on the same session, OR while a finalized-but-unretrieved capture is still
- * waiting to be handed over (the `pendingRetrieval` state a cap or crash leaves
- * behind). The pending flags are set synchronously before the first await of
- * start/stop, closing the check-then-stamp gap that would otherwise let two
- * overlapping calls both pass this guard and cross-corrupt the shared session
- * state. Guarding `pendingRetrieval` too stops a start-after-cap from
- * overwriting the earlier recording's `outputFile`/`logoFile` and orphaning its
- * video on disk (stop still recovers it — the guard points the caller there).
+ * on the same session, or while a finalized-but-unretrieved capture is still
+ * waiting to be handed over (the `pendingRetrieval` a cap or crash leaves
+ * behind). Guarding `pendingRetrieval` stops a start-after-cap from overwriting
+ * the earlier recording's `outputFile`/`logoFile` and orphaning its video on
+ * disk; stop still recovers it, and the message points the caller there.
  */
 export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: string): void {
   const awaitingRetrieval = api.pendingRetrieval && api.outputFile !== null;
@@ -72,16 +69,15 @@ export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: s
 
 /**
  * Stop is valid while the capture runs, and also after it ended on its own
- * (time limit, crash, earlier failed pull) with a file still to hand over —
- * the "finalized, awaiting retrieval" recovery the reminder note keeps
- * pointing at. A second stop overlapping a running one is rejected: two
- * concurrent finalize sequences would race into the same host file.
+ * (time limit, crash) with a file still to hand over. A stop overlapping a
+ * running start/stop is rejected: two concurrent finalize sequences would race
+ * into the same host file.
  */
 export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: string): void {
   if (api.startPending) {
-    // A start is mid-readiness: a stop admitted now (e.g. against a previous
-    // finalized capture) would wipe the superseding capture's session the
-    // moment it stamps, leaving that recording unmanageable forever.
+    // A stop admitted now (e.g. against a previous finalized capture) would
+    // wipe the superseding capture's session the moment it stamps, leaving that
+    // recording unmanageable.
     throw new FailureError(
       `A screen-recording-start is currently in flight on device ${api.deviceId}; ` +
         `wait for it to return, then stop that recording.`,
@@ -106,14 +102,22 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
   }
   const recoverable = api.pendingRetrieval && api.outputFile !== null;
   if (!api.recordingActive && !recoverable) {
+    // A teardown reaps this device's session and the registry nulls the
+    // instance, so the session resolved above never heard of the capture that
+    // was running a moment ago; without the breadcrumb "destroyed, here is the
+    // video" is indistinguishable from "you never started one".
+    const reaped = takeReapedSession("screen-recording", api.deviceId);
     throw new FailureError(
-      `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
+      reaped
+        ? describeReapedSession(reaped, "screen recording")
+        : `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
       {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION,
+        error_code: reaped
+          ? FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+          : FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION,
         failure_stage: stage,
         failure_area: "tool_server",
-        // Session-state, not caller input — matches the profiler family's
-        // "no active session" kind.
+        // Session-state, not caller input — matches the profiler family's kind.
         error_kind: "not_found",
       }
     );
@@ -121,15 +125,25 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
 }
 
 /**
- * Reject a start whose readiness resumed after the session was disposed
- * (process shutdown). Call synchronously right before spawn, with no await
- * between this check and the spawn/pendingChild stamp, so no capture is
- * launched that dispose's teardown can no longer see and reap.
+ * Reject a start whose readiness resumed after the session was disposed. Call
+ * synchronously right before spawn, with no await between this check and the
+ * spawn/pendingChild stamp, so no capture is launched that dispose's teardown
+ * can no longer reap.
+ *
+ * `dispose()` runs on process shutdown but also whenever
+ * `stop-all-simulator-servers` reaps this device-owned session (commonly another
+ * agent ending its session). `api.disposed` cannot tell the two apart, so the
+ * message names both and invites a retry: after a reap the device is usually
+ * still up. The `SCREEN_RECORDING_SERVER_SHUTTING_DOWN` wording is historical,
+ * not a second claim about the cause.
  */
 export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string): void {
   if (api.disposed) {
     throw new FailureError(
-      `The tool-server is shutting down; screen recording was not started on device ${api.deviceId}.`,
+      `The screen-recording session for device ${api.deviceId} was torn down while this start ` +
+        `was still initializing, so nothing was recorded. That is either the tool-server shutting ` +
+        `down or a stop-all-simulator-servers reaping this device (e.g. another agent ending its ` +
+        `session). If the device is still up, start the recording again.`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
         failure_stage: stage,
@@ -140,7 +154,7 @@ export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string)
   }
 }
 
-/** Stat the finished video and reject an empty/missing container loudly. */
+/** Size of the finished video; rejects a missing or empty container. */
 export async function statNonEmptyOutput(outputFile: string, stage: string): Promise<number> {
   let size: number;
   try {

@@ -5,10 +5,10 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState } from "../../utils/update-checker";
 
-// dist/cli.js shipped next to this bundle. Spawning it — not a bare `argent` on
-// PATH — updates the SAME install serving this session and works in local
-// (committable) mode, where `argent` isn't on PATH. Null when not found
-// (unbundled dev layout); the caller falls back to `argent`.
+// dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
+// PATH, updates the SAME install serving this session and works in local
+// (committable) mode where `argent` isn't on PATH. Null in the unbundled dev
+// layout; the caller falls back to `argent`.
 function resolveCliEntry(): string | null {
   try {
     const entry = path.join(__dirname, "cli.js");
@@ -20,17 +20,14 @@ function resolveCliEntry(): string | null {
 
 const PACKAGE_NAME = "@swmansion/argent";
 
-// Which install serves THIS session — the global PATH install or a project's
-// local devDependency — and, for local, WHICH project. The `update` command
-// re-resolves its target from ITS cwd, and the detached updater inherits this
-// server's editor-chosen cwd (often `/` or `$HOME`), so the target must be
-// pinned explicitly. Authoritative signals: ARGENT_INSTALL_KIND /
-// ARGENT_PROJECT_ROOT, classified by the launcher at process start while cwd
-// is still trustworthy (see argent's bundled-paths.ts). Fallback for servers
-// spawned by older argent versions: if this package root sits inside a
-// node_modules reached by walking up from cwd (covers hoisted-workspace /
-// pnpm layouts) it is that project's local install, otherwise global — but
-// that cwd is editor-chosen, which is why the env signals take precedence.
+// Which install serves THIS session — global PATH install or a project's local
+// devDependency — and, for local, WHICH project. `argent update` re-resolves
+// its target from ITS cwd, and the detached updater inherits this server's
+// editor-chosen cwd (often `/` or `$HOME`), so the target must be pinned
+// explicitly. ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT win: argent classifies
+// them at process start while cwd is still trustworthy (bundled-paths.ts). The
+// cwd walk below is only a fallback for servers spawned by older argent
+// versions, since that cwd is editor-chosen.
 function classifyRunningInstall(): { kind: "global" | "local"; projectRoot: string | null } {
   const envKind = process.env.ARGENT_INSTALL_KIND;
   const envRoot = process.env.ARGENT_PROJECT_ROOT;
@@ -60,8 +57,7 @@ function classifyRunningInstall(): { kind: "global" | "local"; projectRoot: stri
   return { kind: "global", projectRoot: null };
 }
 
-// Last-resort project root when a global server is asked to update a local
-// install: the nearest ancestor of cwd that PROVABLY hosts one — a committed
+// Nearest ancestor of cwd that PROVABLY hosts a local install: a committed
 // .argent/install.json or a manifest declaring the dependency. A bare
 // package.json is deliberately not enough; with an editor-chosen cwd of
 // `$HOME`, a stray home-dir manifest must not become the update target.
@@ -75,7 +71,7 @@ function findDeclaringProjectRoot(startDir: string): string | null {
   while (true) {
     if (fs.existsSync(path.join(dir, ".argent", "install.json"))) return dir;
     try {
-      // Same declaration shapes the installer's own probe accepts
+      // Same declaration shapes as the installer's probe
       // (topology.ts readManifestDeclaration).
       const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
@@ -98,8 +94,7 @@ function findDeclaringProjectRoot(startDir: string): string | null {
   }
 }
 
-// Map the resolved target to the `argent update` flags that pin it, so the
-// spawned update never re-guesses from cwd.
+// Pin the target on the spawned `argent update` so it never re-guesses from cwd.
 function targetFlagsFor(target: "global" | "local" | "both"): string[] {
   if (target === "both") return ["--global", "--local"];
   return [`--${target}`];
@@ -138,26 +133,24 @@ export const updateArgentTool: ToolDefinition<{
     // Resolve the target BEFORE the availability gates: getUpdateState only
     // knows the RUNNING install, so a cross-install (or 'both') target must not
     // be refused on its version — the spawned installer re-checks each target
-    // against the registry and gets the final word.
+    // against the registry.
     const requested = params?.target ?? "auto";
     const running = classifyRunningInstall();
     const resolved = requested === "auto" ? running.kind : requested;
 
-    // A local-targeted update needs an explicitly pinned project root: the
-    // spawned updater must not re-derive it from its inherited (editor-chosen)
-    // cwd. Re-validate the recorded root on disk (the project may be gone
-    // since this server started); if no root can be proven, refuse the local
-    // part rather than bind an update to the wrong project.
+    // A local-targeted update needs an explicitly pinned project root, since
+    // the spawned updater must not re-derive it from its inherited cwd.
+    // Re-validate the recorded root on disk — the project may be gone since
+    // this server started — and refuse rather than pin the wrong project.
     let projectRoot: string | null = null;
     let effectiveTarget = resolved;
     if (resolved === "local" || resolved === "both") {
       const recordedRoot =
         running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null;
-      // The cwd-walk fallback is only meaningful for a LOCAL-serving server,
-      // whose cwd is its own project. A global-serving server is shared
-      // across every project of that install and its cwd is frozen at
-      // whatever session spawned it FIRST — walking it could pin a different
-      // project than the caller's and rewrite that project's manifest.
+      // The cwd walk is only meaningful for a LOCAL-serving server, whose cwd
+      // is its own project. A global-serving server is shared across projects
+      // with its cwd frozen at whatever session spawned it FIRST, so walking
+      // it could rewrite a different project's manifest.
       projectRoot =
         recordedRoot ?? (running.kind === "local" ? findDeclaringProjectRoot(process.cwd()) : null);
       if (!projectRoot) {
@@ -212,9 +205,8 @@ export const updateArgentTool: ToolDefinition<{
 
     updateScheduled = true;
 
-    // Delay the actual update spawn so the HTTP response can be flushed first.
-    // The update process calls killToolServer() which sends SIGTERM — we need
-    // the response to reach the MCP server before that happens.
+    // Delay the spawn so this response reaches the MCP server before the
+    // updater SIGTERMs this tool-server.
     setTimeout(() => {
       const cliEntry = resolveCliEntry();
       // Pin --version only when the target IS the running install — it came
@@ -237,9 +229,9 @@ export const updateArgentTool: ToolDefinition<{
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
       });
-      // Without an error listener, a spawn failure (ENOENT when `argent` isn't
-      // on PATH — the norm in local mode) crashes the whole tool-server.
-      // Swallow it; the next update notification re-offers.
+      // Without an error listener a spawn failure (ENOENT when `argent` isn't
+      // on PATH — the norm in local mode) crashes the tool-server. The next
+      // update notification re-offers.
       child.on("error", (err) => {
         console.error(`[update-argent] failed to spawn updater: ${err}`);
         updateScheduled = false;
@@ -256,10 +248,9 @@ export const updateArgentTool: ToolDefinition<{
       effectiveTarget === "both"
         ? "global and project-local installs"
         : `${effectiveTarget} install`;
-    // When we auto-updated only one of two possible installs, hint at how to
-    // update the other. A local-serving server can target the global install
-    // through this tool; the reverse needs the CLI (a shared global server
-    // cannot prove WHICH project's local install the caller means).
+    // A local-serving server can target the global install through this tool;
+    // the reverse needs the CLI, since a shared global server cannot prove
+    // WHICH project's local install the caller means.
     const otherHint =
       requested === "auto" && resolved !== "both"
         ? resolved === "local"
@@ -279,8 +270,8 @@ export const updateArgentTool: ToolDefinition<{
       : " The installer checks each targeted install against the registry and no-ops if it is already current.";
 
     // Only a target covering the RUNNING install restarts this session's
-    // server; promising a restart for a cross-install update would leave the
-    // agent waiting for a reconnect that never happens.
+    // server; promising a restart otherwise leaves the agent waiting for a
+    // reconnect that never happens.
     const coversRunningInstall = targetsOnlyRunningInstall || effectiveTarget === "both";
     const restartNote = coversRunningInstall
       ? ` The tool server will stop and restart automatically once the update is installed. ` +

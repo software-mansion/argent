@@ -2,15 +2,10 @@ import type { UiHang, UiHangStateBreakdownEntry } from "../../profiler-shared/ty
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
 /**
- * Fold per-hang state-breakdown rows and GC overlap rows back into the
- * UiHang object. Called once per hang from pipeline/index.ts. Pure: no I/O.
+ * Fold per-hang state-breakdown and GC rows into a copy of the UiHang.
  *
- * State durations are reported in ms (rounded). `blockedFunction` is carried
- * through from the SQL row — non-null only for non-Running states.
- *
- * GC overlap sums the intersection of each `GC: <reason>` slice with the hang
- * window (the SQL already filters slices whose [ts, ts+dur] overlaps the
- * window, but we compute the actual intersection in JS for accuracy).
+ * The SQL only selects GC slices that overlap the hang window; the actual
+ * intersection is clipped here, so `gcRows` must already be trace-relative.
  */
 export function foldHangAnnotations(
   hang: UiHang,

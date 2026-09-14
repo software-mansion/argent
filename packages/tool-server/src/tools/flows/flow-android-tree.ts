@@ -18,31 +18,20 @@ import {
 } from "../describe/contract";
 
 /**
- * Flow-owned Android tree fetch — the counterpart to `flow-ios-tree.ts` on
- * iOS.
+ * Flow-owned Android tree fetch — the counterpart to `flow-ios-tree.ts`.
  *
- * The android-devtools helper's `getHierarchy` dump already contains every
- * view — UiAutomation surfaces not-important views (the
- * `importantForAccessibility="no"` wrappers RN puts around `testID`-bearing
- * layout containers) and their `resource-id`s. What makes a `testID`
- * unresolvable by the agent-facing `describe` is purely host-side parsing: its
- * interactables-only trim collapses a testID-only container (no label, not
- * clickable) into a passthrough and discards the node carrying the id.
- *
- * This module parses the same dump without that trim: it flattens the
- * hierarchy keeping **every** view with a `resource-id` (RN `testID`) or a
- * label — exactly the shape `flow-ios-tree.ts` produces on iOS. The trim's
- * scroll-clip prune IS preserved (see `flattenHoisting`): a view a scrolling
- * ancestor has scrolled out of its window is dropped here too, so the flow
- * tree agrees with the agent-facing `describe` on what is visible. Throws when
- * the helper is unavailable rather than letting the caller degrade to the
- * trimmed uiautomator tree — see `fetchFlowTree` for why a silent fallback
- * would flip flow outcomes.
+ * The helper's `getHierarchy` dump already carries every view and its
+ * `resource-id` (RN `testID`); what makes a testID unresolvable by the
+ * agent-facing `describe` is purely host-side parsing — its interactables-only
+ * trim collapses a testID-only container (no label, not clickable) into a
+ * passthrough and discards the node carrying the id. This module parses the
+ * same dump without that trim. The trim's scroll-clip prune IS preserved (see
+ * `flattenHoisting`), so both trees agree on what is visible. Throws rather
+ * than degrade to the trimmed uiautomator tree — see `fetchFlowTree`.
  */
 
-// Flows keep far more of the dump than the trimmed agent describe, so raise
-// the cap above the helper's 5000 default to avoid truncating a dense screen
-// mid-walk.
+// Above the helper's 5000 default: flows keep far more of the dump than the
+// trimmed describe, so a dense screen would truncate mid-walk.
 const FLOW_MAX_NODES = 12_000;
 
 interface PixelRect {
@@ -65,9 +54,7 @@ function isSystemChrome(attrs: Record<string, string>): boolean {
   return SYSTEM_RID_PREFIXES.some((p) => rid.startsWith(p));
 }
 
-// Screen-reader label: prefer content-desc (role/placeholder), else text.
-// Mirrors the trim's `labelOf` so the flow tree reads the same field an author
-// would from a `describe`.
+// Mirrors the trim's `labelOf` so both trees read the same field.
 function labelOf(attrs: Record<string, string>): string {
   const cd = (attrs["content-desc"] ?? "").trim();
   if (cd) return cd;
@@ -91,21 +78,15 @@ interface ParsedXmlNode {
   children: ParsedXmlNode[];
 }
 
-// Only child `<node>` elements carry views; other tags are uiautomator noise.
+// Non-`node` tags are uiautomator noise, not views.
 function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
   return node.children.filter((c) => c.tag === "node");
 }
 
 /**
- * Project a uiautomator XML node for the shared flatten (see
- * `flow-tree-flatten`). A view is emitted as a leaf when it carries a
- * `resource-id` (React Native `testID`), a label, or a specific semantic role —
- * or holds input focus, which the type directive's focus wait reads — and has
- * an on-screen frame; system chrome is skipped; an identified node — or a
- * password field — shields its text so hoisting scopes to the nearest
- * identified ancestor. A password field never contributes its secret: its own
- * text is the `[password]` placeholder and its raw `text` is never read into
- * the leaf value.
+ * Project a uiautomator XML node for the shared flatten (`flow-tree-flatten`).
+ * A password field never contributes its secret: its text is the `[password]`
+ * placeholder and its raw `text` is never read into the leaf value.
  */
 function projectAndroidNode(
   node: ParsedXmlNode,
@@ -113,9 +94,9 @@ function projectAndroidNode(
   screenH: number
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
-  // System chrome can introduce false matches (a system "Back"), while SVG
-  // implementation nodes can add dozens of meaningless leaves per icon. Drop
-  // both kinds of noise with their subtrees, matching the shared parser.
+  // System chrome yields false matches (a system "Back"); SVG implementation
+  // nodes add dozens of meaningless leaves per icon. Both go with their
+  // subtrees, as the shared parser does.
   const skip = isSystemChrome(attrs) || isNoisyUiAutomatorClass(attrs.class ?? "");
 
   const identifier = (attrs["resource-id"] ?? "").trim();
@@ -126,26 +107,24 @@ function projectAndroidNode(
   const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
   const className = attrs.class ?? "";
   const role = deriveUiAutomatorRole(className);
-  // Known layout containers are passthroughs. Every other concrete class is a
-  // role target, including controls whose role is the class-name fallback
-  // (SeekBar, Spinner, ProgressBar, and app-specific widgets).
+  // Every non-layout class is a role target, including controls whose role is
+  // only the class-name fallback (SeekBar, Spinner, ProgressBar).
   const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
 
-  // The node's own visible text mirrors what `nodeText` reads off the leaf
-  // (label plus a distinct text value) — never the secret behind a password.
+  // Mirrors what `nodeText` reads off the leaf (label plus a distinct value) —
+  // never the secret behind a password.
   const ownText = [label, hasValue ? rawText : ""].filter(Boolean).join(" ");
 
-  // Raw pixel bounds — unclipped, exactly as `pruneSubtree` compares them —
-  // feed the flatten's scroll-clip prune for every node, leaf-eligible or not.
+  // Unclipped, exactly as `pruneSubtree` compares them: the scroll-clip prune
+  // needs raw bounds for every node, leaf-eligible or not.
   const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  // Keep any view a selector could address — a resource-id (RN testID), label,
-  // or concrete semantic role — plus the focused view, which the type
-  // directive's focus wait needs even when it carries neither (an anonymous
-  // EditText). Pure layout scaffolding is dropped — but its children are still
-  // walked, so a testID nested under an unlabelled container survives.
+  // Keep any view a selector could address — resource-id (RN testID), label or
+  // concrete role — plus the focused view, which the type directive's focus
+  // wait needs even for an anonymous EditText. Scaffolding is dropped but still
+  // walked, so a testID nested under it survives.
   if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
@@ -167,18 +146,17 @@ function projectAndroidNode(
   return {
     skip,
     children: childNodes(node),
-    // Text hoists only from on-screen nodes (frame is null when the bounds clip
-    // to zero area) — otherwise a text assert against an ancestor would pass on
-    // content the screen doesn't show. Every text-carrying node is
-    // leaf-eligible (its label is non-empty), so `frame` was computed for it.
+    // Off-screen text must not hoist, or an ancestor text assert would pass on
+    // content the screen doesn't show. Any node with text is leaf-eligible (its
+    // label is non-empty), so `frame` was computed for it.
     ownText: frame ? ownText : "",
     leaf,
-    // A password node shields its placeholder text like any identified node —
-    // even if it somehow lacks an id — so the secret can never bubble upward.
+    // A password field shields even when it carries no id, so nothing from it
+    // bubbles into an ancestor's hoisted text.
     shield: Boolean(identifier) || isPassword,
-    // Scroll-clip inputs (see `flattenHoisting`): a scrolling container's raw
-    // bounds clip its subtree, so a row it has scrolled out of view — still
-    // on the device screen — is dropped, matching the describe path's prune.
+    // Scroll-clip inputs (see `flattenHoisting`): a scroller's raw bounds clip
+    // its subtree, so a row scrolled out of view — but still on the device
+    // screen — is dropped, matching the describe path's prune.
     rect,
     scrolls: isUiAutomatorScrollable(attrs),
   };
@@ -187,10 +165,8 @@ function projectAndroidNode(
 /**
  * Flatten a full-hierarchy `uiautomator`-schema XML dump into the
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
- * only views with a `resource-id`, label, or specific semantic role and an
- * on-screen frame. Layout scaffolding is dropped while its selectable
- * descendants are preserved — the same trade the iOS full-hierarchy adapter
- * makes.
+ * only on-screen views with a `resource-id`, label or specific semantic role.
+ * Layout scaffolding is dropped, its selectable descendants preserved.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,
@@ -214,11 +190,11 @@ export function adaptFullAndroidHierarchyToDescribeResult(
 }
 
 /**
- * Query the Android view hierarchy via the android-devtools helper and adapt
- * it untrimmed. Throws — with the reason — when the helper is unavailable /
- * errors: flows never degrade to the trimmed uiautomator tree (see
- * `fetchFlowTree`), so the caller's retry loop either rides out a transient
- * failure or surfaces this message as the step's failure reason.
+ * Query the Android view hierarchy via the android-devtools helper and adapt it
+ * untrimmed. Throws with the reason when the helper is unavailable or errors:
+ * flows never degrade to the trimmed uiautomator tree (see `fetchFlowTree`), so
+ * the caller's retry loop either rides out a transient failure or surfaces this
+ * message as the step's failure reason.
  */
 export async function queryAndroidFullHierarchy(
   registry: Registry,

@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 /**
- * Grades all packages/skills/skills/*\/SKILL.md files on description quality.
- *
- * Criteria (each 0 or 1, normalized to 0–10):
- *   1. Has `description` in frontmatter
- *   2. Description contains "Use when" trigger (case-insensitive)
- *   3. Description starts with capital letter + verb OR describes a workflow
- *   4. Content body has at least 2 ## headings
- *   5. Content body has numbered steps (1., 2., …) or bullet lists (- / *)
- *   6. Content length > 300 characters
- *   7. Description length > 50 characters
+ * Grades every packages/skills/skills/*\/SKILL.md on description quality; exits 1 unless
+ * every skill scores a perfect 10.
  *
  * Usage:
  *   node scripts/grade-skills.mjs
@@ -23,8 +15,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dir = dirname(__filename);
 const skillsRoot = join(__dir, "..", "packages", "skills", "skills");
 
-// ─── YAML frontmatter parser (no deps) ────────────────────────────────────────
-
 function parseFrontmatter(src) {
   const match = src.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return { frontmatter: {}, body: src };
@@ -33,7 +23,7 @@ function parseFrontmatter(src) {
   const body = src.slice(match[0].length).trimStart();
 
   const frontmatter = {};
-  // Simple key: value parser; handles multi-line values indented with spaces
+  // Continuation lines of a multi-line value are indented with spaces
   const lines = rawFm.split(/\r?\n/);
   let currentKey = null;
   let currentVal = [];
@@ -63,8 +53,6 @@ function parseFrontmatter(src) {
   return { frontmatter, body };
 }
 
-// ─── Scoring ──────────────────────────────────────────────────────────────────
-
 const CRITERIA = [
   {
     id: "has_description",
@@ -81,7 +69,6 @@ const CRITERIA = [
     label: "Starts with capital + verb / workflow",
     check: ({ description }) => {
       if (!description) return false;
-      // Starts with a capital letter followed by a word (verb-like) or "workflow"
       return /^[A-Z][a-z]/.test(description) || /workflow/i.test(description);
     },
   },
@@ -110,7 +97,7 @@ const CRITERIA = [
   },
 ];
 
-const MAX_SCORE = CRITERIA.length; // 7
+const MAX_SCORE = CRITERIA.length;
 
 function grade(skillPath) {
   const src = readFileSync(skillPath, "utf8");
@@ -124,8 +111,6 @@ function grade(skillPath) {
 
   return { description, body, results, raw, score };
 }
-
-// ─── Table rendering ──────────────────────────────────────────────────────────
 
 function pad(str, width, align = "left") {
   const s = String(str);
@@ -154,8 +139,6 @@ function renderTable(rows, columns) {
   return [top, header, mid, ...body, bot].join("\n");
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
 const skillDirs = readdirSync(skillsRoot).filter((name) => {
   const full = join(skillsRoot, name);
   return statSync(full).isDirectory();
@@ -172,8 +155,6 @@ for (const dir of skillDirs.sort()) {
     console.error(`  Error reading ${dir}: ${err.message}`);
   }
 }
-
-// ─── Per-skill table ──────────────────────────────────────────────────────────
 
 const criteriaColumns = [
   { key: "name", label: "Skill", width: 38, align: "left" },
@@ -197,13 +178,9 @@ const tableRows = allResults.map((r) => {
 console.log("\n Skill Description Quality Report\n");
 console.log(renderTable(tableRows, criteriaColumns));
 
-// ─── Average ──────────────────────────────────────────────────────────────────
-
 const avg = allResults.reduce((sum, r) => sum + parseFloat(r.score), 0) / allResults.length;
 
 console.log(`\n Average score: ${avg.toFixed(1)} / 10  (${allResults.length} skills)\n`);
-
-// ─── Per-criterion summary ────────────────────────────────────────────────────
 
 const summaryRows = CRITERIA.map((c) => {
   const passing = allResults.filter((r) =>
@@ -226,7 +203,6 @@ console.log(" Criterion breakdown:\n");
 console.log(renderTable(summaryRows, summaryColumns));
 console.log();
 
-// Fail if any skill scores below 10.0
 const failing = allResults.filter((r) => parseFloat(r.score) < 10.0);
 if (failing.length > 0) {
   console.error(

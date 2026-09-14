@@ -12,19 +12,12 @@ import type {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // An empty focus set right after launch-app / restart-app has two causes that
-// look identical from the host:
-//   1. The app is still on its splash / loading screen and genuinely has no
-//      focusable views yet (a React Native app only exposes focus once its JS
-//      bundle has loaded).
-//   2. (Apple TV) the ax daemon's AXRuntime `primaryApp` cache is stale — still
-//      pointing at the app process that launch-app / restart-app killed — so it
-//      reports nothing for a screen that is actually fully rendered.
-// We can't tell them apart from a single probe, so: first ride out a brief
-// transition window with in-place retries (handles case 1's tail). If still
-// empty, recycle the read path once and re-probe — on Apple TV a fresh daemon
-// rebinds to the current foreground app, so a stale cache (case 2) now
-// populates while a truly loading screen (case 1) stays empty. (On Android TV
-// `recycleAx` is a no-op; the empty-focus fallback below covers it instead.)
+// look identical from the host: the app is still on its splash screen (a React
+// Native app exposes focus only once its JS bundle has loaded), or (Apple TV)
+// the ax daemon's AXRuntime `primaryApp` cache still points at the killed app
+// process. So retry in place first, then recycle the read path once — a fresh
+// daemon rebinds to the current foreground app, so a stale cache populates
+// while a genuinely loading screen stays empty.
 const EMPTY_RETRY_ATTEMPTS = 3;
 const EMPTY_RETRY_DELAY_MS = 600;
 const EMPTY_HINT =
@@ -34,12 +27,9 @@ const EMPTY_HINT =
   "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
   "what's actually on screen.";
 
-// Android TV reads focus from the OS accessibility tree (uiautomator). Many
-// react-native-tvos screens manage focus with RN's *own* focus engine, which
-// Android's accessibility tree does not expose — so the focus view can be empty
-// on a screen that visibly has selectable tiles. When that happens we fall back
-// to the full uiautomator tree (the same one `describe` returns on a phone) so
-// the agent still gets a usable rendering instead of "(none reported)".
+// Android TV reads focus from the OS accessibility tree (uiautomator), which
+// does not expose focus driven by react-native-tvos's own focus engine — so the
+// focus view can be empty on a screen that visibly has selectable tiles.
 const ANDROID_FOCUS_EMPTY_HINT =
   "The Android TV focus engine reported no focusable elements — common on react-native-tvos " +
   "screens that drive focus with RN's own engine (invisible to the OS accessibility tree). " +
@@ -47,16 +37,13 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
 
-/** A describe result is "empty" when the focus engine reports nothing actionable. */
 function isEmpty(res: TvDescribeResponse): boolean {
   return res.focusable.length === 0 && !res.focused;
 }
 
 /**
  * tvOS AX labels are often compound multi-line strings, e.g.
- * "Home\nLander\nSide bar content item\n1 of 5\nselected". Focus-by-label
- * matches on the first line, so that is the label the agent should copy. Return
- * it as the actionable label and keep the remaining lines as compact context.
+ * "Home\nLander\nSide bar content item\n1 of 5\nselected".
  */
 function primaryLabel(label: string | undefined): string {
   if (!label) return "(no label)";
@@ -68,8 +55,6 @@ function fmtElement(e: TvElement): string {
   const traits = e.traits?.length ? ` [${e.traits.join(",")}]` : "";
   const value = e.value ? ` = "${e.value}"` : "";
   const label = primaryLabel(e.label);
-  // Surface any extra lines of a compound label as dim context, so the agent
-  // sees the full text but knows the first line is what focus-by-label wants.
   const extraLines = (e.label ?? "")
     .split("\n")
     .slice(1)
@@ -79,12 +64,6 @@ function fmtElement(e: TvElement): string {
   return `${label}${value}${traits}${context}`;
 }
 
-/**
- * Render the TV focus state as text. A TV UI is focus-driven — there are no tap
- * coordinates to act on — so the agent moves the highlight with `tv-remote`
- * (up/down/left/right/select/…) and confirms with another `describe`.
- * The rendering centers on "what's focused" and "what can be focused".
- */
 function renderFocusView(res: TvDescribeResponse): string {
   const lines: string[] = [];
   if (res.bundleId) lines.push(`App: ${res.bundleId}`);
@@ -103,23 +82,17 @@ function renderFocusView(res: TvDescribeResponse): string {
 
 /**
  * `describe` for a TV target (Apple TV simulator or Android TV / leanback
- * device). Returns the focus-driven view — the currently focused element and
- * all focusable elements — instead of the touch-oriented element tree, since a
- * TV UI has no tap coordinates. The agent moves the highlight with `tv-remote`
- * (up/down/left/right/select/…) and re-reads with `describe`.
- *
- * Routed here from `describe`'s execute before the iOS/Android dispatch, so the
- * agent uses one `describe` for every target and never has to know up front
- * whether a UDID is a phone or an Apple TV.
+ * device): the focus-driven view instead of the touch element tree, since a TV
+ * UI has no tap coordinates — the agent moves the highlight with `tv-remote`
+ * and re-reads with `describe`.
  */
 export async function describeTv(registry: Registry, device: DeviceInfo): Promise<DescribeResult> {
   const api: TvControlApi = await resolveTvApi(registry, device.id);
 
-  // Ride out a brief post-launch / transition window where the focus engine
-  // hasn't populated yet (see EMPTY_RETRY_* / EMPTY_HINT). Apple TV only: on
-  // Android TV an empty focus set is steady state for react-native-tvos screens,
-  // not a transition, so retrying just burns uiautomator dumps before the
-  // empty-focus fallback below. Take one probe and go straight there.
+  // Ride out a brief post-launch transition window (see EMPTY_RETRY_*). Apple TV
+  // only: on Android TV an empty focus set is steady state for react-native-tvos
+  // screens, not a transition, so retrying would just burn uiautomator dumps
+  // before the empty-focus fallback below.
   let res = await api.describe();
   if (device.platform !== "android") {
     for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
@@ -128,16 +101,10 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     }
   }
 
-  // Still empty after the transition window: on Apple TV the daemon may be
-  // holding a stale primaryApp cache from a killed app. Recycle it once and
-  // re-probe — a fresh daemon rebinds to the current foreground app, recovering
-  // a fully-rendered screen the stale cache reported as empty.
-  //
-  // Skip this on Android TV: `recycleAx` is a documented no-op there, so the
-  // re-probe would just repeat the uiautomator dump the retry loop already
-  // found empty (and the empty-focus fallback below dumps once more). Going
-  // straight to that fallback saves two redundant dumps on the empty-focus path
-  // — the headline case for RN-focus-engine screens.
+  // Still empty: on Apple TV the daemon may hold a stale primaryApp cache from a
+  // killed app, and a fresh daemon rebinds to the current foreground app.
+  // Skipped on Android TV, where `recycleAx` is a no-op and the re-probe would
+  // only repeat the dump the retry loop already found empty.
   if (isEmpty(res) && device.platform !== "android") {
     await api.recycleAx();
     res = await api.describe();
@@ -146,12 +113,10 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // Android TV with a still-empty focus engine: fall back to the full
   // uiautomator tree so describe stays useful on RN-focus-engine screens.
   if (isEmpty(res) && device.platform === "android") {
-    // We only reach here on a confirmed Android TV (the dispatcher routed us
-    // here via isAndroidTv), so pass isTv through to skip a redundant probe.
-    // Let a capture failure propagate rather than swallowing it: describeAndroid
+    // The dispatcher routed us here via isAndroidTv, so pass isTv through to
+    // skip a redundant probe. Let a capture failure propagate: describeAndroid
     // throws an actionable error (device locked / keyguard / DRM / secure
-    // overlay, or an adb-level failure), all strictly more useful than masking
-    // it as the generic "app is probably still launching" EMPTY_HINT below.
+    // overlay, or an adb failure), more useful than the generic EMPTY_HINT.
     const data = await describeAndroid(registry, device.id, undefined, true);
     return {
       description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {

@@ -5,6 +5,5 @@ export {
   selectIosCaptureStrategy,
   resolveIosCaptureStrategy,
   warnIfInvalidCaptureOverride,
-  type CaptureStrategyDecision,
   type CaptureStrategyReason,
 } from "./select";

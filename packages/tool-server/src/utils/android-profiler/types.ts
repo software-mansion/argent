@@ -1,8 +1,8 @@
 /**
- * Android-specific raw row shapes emitted by the `queries/*.sql` files and
- * decoded from the in-process Perfetto engine's QueryResult (integers come back
- * as JS numbers when safe, else bigint). The Android pipeline maps them into the
- * platform-agnostic Bottleneck shape in profiler-shared/types.ts.
+ * Raw row shapes returned by the SQL in native-devtools-android/assets/queries.
+ * Integers arrive as JS numbers unless outside the safe range, where readCell
+ * keeps them as bigint. The pipeline maps these into the platform-agnostic
+ * Bottleneck shape in profiler-shared/types.ts.
  */
 
 export interface AndroidCpuHotspotRow {
@@ -10,19 +10,17 @@ export interface AndroidCpuHotspotRow {
   is_main_thread: 0 | 1 | null;
   leaf_function: string | null;
   /**
-   * Mapping (loaded object) the leaf frame lives in — `/kernel` for kernel
-   * frames, a real module path (`/system/lib64/libhwui.so`, …) for user space.
-   * Fed to classifyNativeFrame so kernel leaves with no recognisable name (e.g.
-   * `writel`) are still classed as system. From cpu-hotspots.sql's MIN(spm.name).
+   * Loaded object the leaf frame lives in — `/kernel`, or a module path such as
+   * `/system/lib64/libhwui.so`. Fed to classifyNativeFrame so kernel leaves with
+   * no recognisable name (e.g. `writel`) are still classed as system.
    */
   leaf_mapping: string | null;
   sample_count: number;
   first_ts_ns: number;
   last_ts_ns: number;
   /**
-   * SQL-side burst windows: comma-separated `start_ms:end_ms:count` triples in
-   * NATIVE (monotonic) ms (pipeline subtracts traceStartMs). Replaces the old
-   * per-sample `ts_array`.
+   * Comma-separated `start_ms:end_ms:count` triples in NATIVE (monotonic) ms;
+   * the pipeline subtracts traceStartMs.
    */
   burst_windows: string | null;
   total_samples: number;
@@ -67,7 +65,7 @@ export interface AndroidThreadRow {
 export interface AndroidFunctionCallersRow {
   thread_name: string;
   is_main_thread: 0 | 1 | null;
-  /** The real (mangled) leaf frame name that matched — may differ from the query. */
+  /** Raw (mangled) leaf frame name; the queried name is matched as a substring of it. */
   matched_function: string;
   /** 1 when matched_function equals the query verbatim, 0 for a substring match. */
   is_exact: 0 | 1;

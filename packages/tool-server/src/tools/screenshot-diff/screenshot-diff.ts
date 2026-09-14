@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { PNG } from "pngjs";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   analyzeScreenshotTextChanges,
   DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
@@ -54,6 +55,16 @@ export interface PngDiffResult {
     expected: Size;
     actual: Size;
   };
+  /**
+   * Present only when the inputs were resampled to a common size to compare, so
+   * its presence is the signal that a green result means "equal after
+   * rescaling", not "equal".
+   */
+  sizeNormalization?: {
+    baseline: Size;
+    current: Size;
+    comparedAt: Size;
+  };
   regions: DiffRegion[];
   textAnalysis?: TextAnalysis;
 }
@@ -93,6 +104,9 @@ interface DiffArtifactPaths {
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
+// Sized for a baseline PNG stored across sessions, machines and OS versions, so
+// it absorbs real drift. flow-pixels' PIXEL_THRESHOLD is deliberately tighter
+// (one live session, a far lower noise floor); see the rationale there.
 const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
@@ -134,11 +148,10 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
     decodePngFile(options.currentPath),
   ]);
 
-  // Same-aspect screenshots saved at different scales (e.g. a 0.3x baseline vs
-  // a 1.0x live capture) are uniform scalings of one framebuffer, so normalize
-  // them to a common size and compare instead of failing on the resolution
-  // mismatch. Genuinely different aspect ratios still hard-fail below — and
-  // with normalizeSizes: false, so does ANY dimension difference.
+  // Same-aspect screenshots saved at different scales are uniform scalings of
+  // one framebuffer, so resample them to a common size instead of failing on
+  // the resolution mismatch. Different aspect ratios still hard-fail below —
+  // and with normalizeSizes: false, so does ANY dimension difference.
   const normalized =
     options.normalizeSizes === false
       ? sameDimensionsOrNull(decodedBaseline, decodedCurrent)
@@ -153,6 +166,18 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   }
   const baseline = normalized.baseline;
   const current = normalized.current;
+
+  // Reported from here because normalizeToCommonSize does not return the
+  // original sizes.
+  const sizeNormalization =
+    decodedBaseline.width === decodedCurrent.width &&
+    decodedBaseline.height === decodedCurrent.height
+      ? undefined
+      : {
+          baseline: { width: decodedBaseline.width, height: decodedBaseline.height },
+          current: { width: decodedCurrent.width, height: decodedCurrent.height },
+          comparedAt: { width: baseline.width, height: baseline.height },
+        };
 
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
@@ -181,13 +206,9 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
-  // The OCR pass re-reads the two files from disk, so each image's text bounds
-  // come back in its own original coordinate space. When the inputs were
-  // normalized to a common size, rescale those bounds into that shared space
-  // (and hand the font-geometry pass the normalized images to match) so the
-  // cross-image comparison and the summary share the same coordinates the pixel
-  // diff uses. The scale factors are 1/1 when the inputs already match, and the
-  // top cutoff is derived from the normalized height for the same reason.
+  // OCR re-reads the two files from disk, so its bounds come back in each
+  // image's own coordinate space; the scales rebase them onto the normalized
+  // space the pixel diff and summary use (1/1 when the sizes already matched).
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
@@ -209,6 +230,7 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
     contextDiffPath: artifactPaths.contextDiffPath,
     regions,
     textAnalysis,
+    ...(sizeNormalization && { sizeNormalization }),
   });
 }
 
@@ -225,7 +247,6 @@ function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult 
   return { ...result, summary: formatScreenshotDiffSummary(result) };
 }
 
-// normalizeSizes: false — compare as-is when dims match exactly, else bail.
 function sameDimensionsOrNull(
   baseline: DecodedPng,
   current: DecodedPng
@@ -292,7 +313,6 @@ function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number
 }
 
 // Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
-// Both dimensions are 1 when the sizes match, so same-size inputs are untouched.
 function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
   return {
     x: from.width === 0 ? 1 : to.width / from.width,
@@ -367,14 +387,28 @@ async function writeDiffArtifacts(params: {
   );
 }
 
+// Both sides decode concurrently, so naming the path is the only thing that
+// tells the caller which of the two images was the bad one.
 async function decodePngFile(filePath: string): Promise<DecodedPng> {
-  const buffer = await fs.readFile(filePath);
-  const png = PNG.sync.read(buffer);
-  return {
-    width: png.width,
-    height: png.height,
-    data: png.data,
-  };
+  try {
+    const buffer = await fs.readFile(filePath);
+    const png = PNG.sync.read(buffer);
+    return {
+      width: png.width,
+      height: png.height,
+      data: png.data,
+    };
+  } catch (err) {
+    throw new FailureError(
+      `Could not read PNG at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+        failure_stage: "screenshot_diff_decode_failed",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 async function analyzeScreenshotTextChangesSafely(

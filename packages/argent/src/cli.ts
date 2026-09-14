@@ -1,30 +1,8 @@
 #!/usr/bin/env node
 /**
- * argent CLI — globally-installed entry point.
- *
- * This dispatcher is intentionally minimal: it parses the top-level command,
- * lazy-imports the matching bundle, and forwards arguments. The actual
- * subcommand implementations live in sibling workspace packages and ship as
- * pre-bundled CJS files in dist/ alongside this dispatcher.
- *
- * Usage:
- *   argent mcp                    Start the MCP stdio server (used by editors)
- *   argent init                   Set up argent in a workspace (MCP + skills + rules)
- *   argent install                Alias for init
- *   argent update                 Check for updates, refresh configuration
- *   argent uninstall              Remove argent from a workspace
- *   argent remove                 Alias for uninstall
- *   argent tools                  List tools exposed by the tool-server
- *   argent tools describe <name>  Show one tool's flags
- *   argent run <tool> [flags]     Invoke a tool by name
- *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
- *   argent server status|stop|logs   Manage the shared tool-server
- *   argent lens                   Open Argent Lens bound to a fresh coding-agent session (macOS)
- *   argent link [flags]           Route client requests to a remote tool-server
- *   argent unlink                 Remove the persisted remote link
- *   argent enable <flag>          Enable a feature flag (global by default)
- *   argent disable <flag>         Disable a feature flag (global by default)
- *   argent flags                  Show current feature-flag state
+ * argent CLI entry point. Dispatch only: subcommand implementations live in the
+ * sibling workspace packages (@argent/installer, @argent/mcp, @argent/cli) and
+ * are lazy-imported from bundles in dist/.
  */
 
 import * as fs from "node:fs";
@@ -45,8 +23,6 @@ const PACKAGE_NAME = "@swmansion/argent";
 
 function getInstalledVersion(): string | null {
   try {
-    // dist/cli.js lives in the published package's dist/, so two-up is the
-    // package root containing the shipped package.json.
     const pkgPath = path.resolve(import.meta.dirname, "..", "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
     return pkg.version ?? null;
@@ -60,11 +36,8 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
-// One installer row of the command table: the command's one-line summary plus
-// its indented detail lines, both from INSTALLER_COMMAND_META. The summary is
-// shared with the per-command `--help`, so the two can't drift; the details
-// are table-only prose kept in the meta so each command's help text lives in
-// one place.
+// `summary` is shared with the per-command `--help` so the two can't drift;
+// `details` are rendered only in this table.
 function installerHelpEntry(command: InstallerCommand): string {
   const meta = INSTALLER_COMMAND_META[command];
   const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");
@@ -79,7 +52,7 @@ argent v${version}
 Usage: argent <command> [options]
 
 Commands:
-  mcp         Start the MCP stdio server (used by editors)
+  mcp         ${installerHelpEntry("mcp")}
   init        ${installerHelpEntry("init")}
   install     ${installerHelpEntry("install")}
   update      ${installerHelpEntry("update")}
@@ -87,7 +60,7 @@ Commands:
   remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  flow        Run a saved flow (use \`argent flow --help\` for options)
+  flow        Run a flow by name or YAML path (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
@@ -95,7 +68,9 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  providers   Inspect and manage external device providers (list / check / publish / withdraw / prune)
   config      Manage configuration (list / get / set / unset, project & global)
+  secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
@@ -108,9 +83,8 @@ Package: ${PACKAGE_NAME}
 `);
 }
 
-// Lazy-load each subcommand bundle. Bundles are produced at build time by
-// scripts/bundle-tools.cjs and shipped alongside this dispatcher in dist/.
-// Typed against the workspace packages so calls are still checked.
+// The bundles are produced at build time by scripts/bundle-tools.cjs into dist/;
+// typed against the workspace packages so calls are still checked.
 async function loadInstaller(): Promise<typeof Installer> {
   return (await import("./installer.mjs" as any)) as typeof Installer;
 }
@@ -122,11 +96,11 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
-  // The installer subcommands (init / install / update / uninstall / remove)
-  // forward their argv straight to the side-effecting installer functions,
-  // which do not short-circuit on `--help` — so `argent uninstall --help`
-  // would run the real (destructive) command. Intercept help for exactly that
-  // set before dispatching. All other subcommands handle `--help` themselves.
+  // The installers forward argv to side-effecting functions that ignore
+  // `--help` (so `argent uninstall --help` would run the real, destructive
+  // command), and `mcp` is handed no argv at all, so a help flag there starts
+  // the stdio server and blocks on stdin. Every other subcommand parses
+  // `--help` itself.
   if (installerHelpRequested(command, rest)) {
     // installerHelpRequested only returns true for an InstallerCommand.
     printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
@@ -134,8 +108,26 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
-    case "mcp":
-      return (await loadMcp()).startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
+    case "mcp": {
+      const mcp = await loadMcp();
+      /**
+       * Best-effort heal of `~/.argent/cli.json`, off the startup path. A
+       * committed local install (`npm install` only) never runs
+       * `init`/`update` and device providers need the record to find a CLI. The
+       * CLI path comes from `bundlePath` so it stays on the version-stable
+       * package dir.
+       */
+      void loadInstaller()
+        .then(({ healCliRecord }) =>
+          healCliRecord({
+            cli: path.join(path.dirname(BUNDLED_RUNTIME_PATHS.bundlePath), "cli.js"),
+            mode: BUNDLED_RUNTIME_PATHS.installKind ?? "global",
+            version: BUNDLED_RUNTIME_PATHS.version ?? getInstalledVersion(),
+          })
+        )
+        .catch(() => {});
+      return mcp.startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
+    }
     case "init":
     case "install":
       return (await loadInstaller()).init(rest);
@@ -166,8 +158,12 @@ async function main(): Promise<void> {
       return (await loadCli()).flags(rest);
     case "config":
       return (await loadCli()).config(rest);
+    case "secrets":
+      return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
+    case "providers":
+      return (await loadCli()).providers(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

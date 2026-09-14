@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createToolsClient } from "../src/tools-client.js";
+import { createToolsClient, errorBodyMessage, ToolInvocationError } from "../src/tools-client.js";
 
 let server: Server | undefined;
 
@@ -103,6 +103,100 @@ describe("callTool progress streaming", () => {
     expect(events).toEqual([{ index: 0 }]);
   });
 
+  it("surfaces the terminal error line's failure signal as a ToolInvocationError", async () => {
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.end(
+        `${JSON.stringify({
+          event: "error",
+          error: "flow file is not valid YAML",
+          error_code: "FLOW_FILE_INVALID",
+          error_kind: "validation",
+        })}\n`
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}, { onProgress: () => {} }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect((err as ToolInvocationError).message).toBe("flow file is not valid YAML");
+    expect((err as ToolInvocationError).errorCode).toBe("FLOW_FILE_INVALID");
+    expect((err as ToolInvocationError).errorKind).toBe("validation");
+  });
+
+  it("surfaces a buffered JSON error response's failure signal the same way", async () => {
+    await startServer((_req, res) => {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({ error: "boom", error_code: "FLOW_FILE_INVALID", error_kind: "validation" })
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect((err as ToolInvocationError).message).toBe("boom");
+    expect((err as ToolInvocationError).errorKind).toBe("validation");
+  });
+
+  it("carries a 400's schema issue list beside its prose message", async () => {
+    const issues = [{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }];
+    await startServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "`x`: Too big: expected <=1. You sent: `x`.", issues }));
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).issues).toEqual(issues);
+  });
+
+  it("reads the prose from `message`, leaving `error` to an older CLI", async () => {
+    const issues = [{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }];
+    await startServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: JSON.stringify(issues),
+          message: "`x`: Too big: expected <=1. You sent: `x`.",
+          issues,
+        })
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).message).toBe("`x`: Too big: expected <=1. You sent: `x`.");
+    expect((err as ToolInvocationError).issues).toEqual(issues);
+  });
+
+  it("keeps `error` as the message when the body carries no `issues`", async () => {
+    await startServer((_req, res) => {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "boom", message: "something else entirely" }));
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).message).toBe("boom");
+  });
+
+  it("leaves `issues` undefined when the body carries none, or a non-list", async () => {
+    await startServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "boom", issues: "not a list" }));
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).issues).toBeUndefined();
+  });
+
   it("rejects when the stream ends without a terminal line (connection lost)", async () => {
     await startServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
@@ -114,5 +208,16 @@ describe("callTool progress streaming", () => {
     await expect(callTool("streamy", {}, { onProgress: () => {} })).rejects.toThrow(
       /without a result/
     );
+  });
+});
+
+describe("errorBodyMessage", () => {
+  it("takes the prose only when the body is the validation pair", () => {
+    const issues = [{ code: "too_big", path: ["x"], message: "Too big" }];
+    expect(errorBodyMessage({ error: "[...]", message: "prose", issues })).toBe("prose");
+    expect(errorBodyMessage({ error: "boom", message: "prose" })).toBe("boom");
+    expect(errorBodyMessage({ error: "boom" })).toBe("boom");
+    expect(errorBodyMessage({ message: "prose" })).toBe("prose");
+    expect(errorBodyMessage({})).toBeUndefined();
   });
 });

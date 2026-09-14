@@ -1,0 +1,57 @@
+name: Docs build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/docs/**"
+      - ".github/workflows/docs-build.yml"
+      - ".github/workflows/docs-publish.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/docs/**"
+      - ".github/workflows/docs-build.yml"
+      - ".github/workflows/docs-publish.yml"
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Formatting and linting run from the repo root: the Format workflow
+  # (.github/workflows/format.yml) and the Lint workflow
+  # (.github/workflows/lint.yml) both cover packages/docs.
+  docs-build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/docs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/docs/package-lock.json
+
+      # packages/docs is excluded from the root npm workspaces and carries its
+      # own lockfile, so it installs on its own.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Docusaurus is configured with onBrokenLinks/onBrokenAnchors: "throw",
+      # so the build is what catches links left dangling by a moved page.
+      - name: Build
+        run: npm run build

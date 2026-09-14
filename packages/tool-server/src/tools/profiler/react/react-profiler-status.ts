@@ -10,9 +10,10 @@ import {
 } from "../../../utils/react-profiler/scripts";
 import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -61,7 +62,7 @@ export function createReactProfilerStatusTool(
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`;
 
       const noRuntime = (note: string): StatusResponse => ({
         hook_exists: false,
@@ -89,11 +90,11 @@ export function createReactProfilerStatusTool(
         );
       }
 
-      // Idempotent; safe to re-run.
+      // Idempotent.
       try {
         await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
       } catch {
-        /* non-fatal — READ_STATE_SCRIPT still works without the wrapper */
+        /* best-effort */
       }
 
       let stateJson: string | undefined;
@@ -174,7 +175,7 @@ export function createReactProfilerStatusTool(
         session_status: isMine ? "active" : "taken_over",
         note: isMine
           ? "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling."
-          : "A different profiling session is running (another tool-server instance took over, or this process restarted after start). Data from the prior session is lost at the takeover moment. Use react-profiler-start { force: true } to reclaim.",
+          : "A different profiling session is running (another tool-server instance took over, this process restarted after start, or a stop-all-simulator-servers reaped this device's JS-runtime debugger and took this session down with it, leaving the in-app owner behind). Data from the prior session is lost at the takeover moment. Use react-profiler-start { force: true } to reclaim.",
       };
     },
   };

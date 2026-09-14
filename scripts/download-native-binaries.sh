@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Downloads signed native binaries from argent-private-releases:
-#   - iOS dylibs + ax-service
-#   - Android argent-android-devtools.apk (helper APK consumed by
-#     packages/native-devtools-android)
-#
-# The host-side Perfetto trace processor is no longer a native binary: it ships
-# as a single ~13 MB `trace_processor.wasm` vendored into the repo
-# (packages/native-devtools-android/assets/trace-processor/), so there is nothing
-# to download for it here.
+# Downloads signed native binaries from argent-private-releases: the iOS, tvOS
+# and TCP dylibs, the ax-service daemons, and the Android helper APK consumed by
+# packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
@@ -21,7 +15,6 @@ REPO="software-mansion-labs/argent-private-releases"
 
 TAG="${1:-argent-main}"
 
-# Verify the release exists before attempting downloads.
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
   echo "Error: release '${TAG}' not found in ${REPO}." >&2
   echo "Build and publish the native binaries for this version first, then retry." >&2
@@ -30,14 +23,11 @@ fi
 
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"
 BIN_DIR="packages/native-devtools-ios/bin"
-# ax-service is macOS-only (it spawns inside an iOS Simulator), so it lives
-# under the darwin/ host-platform subdirectory — matching what
-# axServiceBinaryPath() resolves (bin/<platform>/ax-service) and what
-# packages/argent/scripts/bundle-tools.cjs copies into the published package
-# (bin/darwin/ax-service). Writing it to the flat bin/ root instead silently
-# drops it from every release: bundle-tools looks under darwin/, finds nothing,
-# and skips the copy, so describe's ax-service path is unusable (regressed in
-# the Linux-support layout migration, #249).
+# ax-service is macOS-only, and both axServiceBinaryPath() and
+# packages/argent/scripts/bundle-tools.cjs read it from bin/darwin/. Written to
+# the flat bin/ root it is silently dropped from every release: bundle-tools
+# finds nothing under darwin/ and skips the copy (regressed in the Linux-support
+# layout migration, #249).
 IOS_BIN_DIR="${BIN_DIR}/darwin"
 ANDROID_BIN_DIR="packages/native-devtools-android/bin"
 ANDROID_MANIFEST_FILE="packages/native-devtools-android/assets/manifest.json"
@@ -63,18 +53,14 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
-# tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
-# filenames with the iOS dylibs, so the release ships them as a tarball
-# (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
-# the directory bootstrapDylibPathTvos() reads from. The two daemons
-# (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
-# names and download flat into bin/darwin/.
+# The three tvOS injection dylibs share filenames with the iOS ones, so they
+# ship as a tarball extracted into dylibs/tvos/, the directory
+# bootstrapDylibPathTvos() reads from; the two daemons have unique names and
+# download flat into bin/darwin/.
 #
-# These assets only exist on releases built with TV support. A pre-TV-support
-# tag (the optional [release-tag] arg lets you pull older releases) simply has
-# no tvOS artifacts, so a missing asset is skipped with a warning rather than
-# aborting the whole download (`gh release download` exits non-zero on no match,
-# which under `set -e` would otherwise leave a half-populated tree).
+# Pre-Apple-TV-support tags carry no tvOS assets, so a missing one is skipped
+# with a warning: `gh release download` exits non-zero on no match, which under
+# `set -e` would leave a half-populated tree.
 TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
 mkdir -p "${TVOS_DYLIBS_DIR}"
 
@@ -113,24 +99,18 @@ else
   echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
 fi
 
-# TCP-transport iOS binaries (sim-remote / ios-remote support). The remote
-# (ios-remote) code path spawns the ax-service and injects the native-devtools
-# dylibs over a TCP socket tunnelled by sim-remote, rather than the AF_UNIX
-# sockets the local path uses — so it needs -DARGENT_USE_TCP=1 builds kept in a
-# separate tcp/ slot (axServiceBinaryPathTcp()/bootstrapDylibPathTcp() read from
-# bin/tcp/ and dylibs/tcp/). Both are platform-NEUTRAL: these are darwin/iOS-sim
-# artifacts uploaded to and run on the *remote* macOS orchestrator, so they must
-# resolve from any host platform (a Linux host must not look under bin/linux/).
-# Like the tvOS dylibs, the three TCP dylibs share basenames with the flat iOS
-# dylibs, so they ship as a tarball extracted into dylibs/tcp/; tcp-ax-service
-# has a unique release name and lands flat as bin/tcp/ax-service.
+# The ios-remote path talks to ax-service and the injected dylibs over AF_INET
+# instead of the AF_UNIX sockets the local path uses, so it needs separate
+# -DARGENT_USE_TCP=1 builds in bin/tcp/ and dylibs/tcp/
+# (axServiceBinaryPathTcp()/bootstrapDylibPathTcp()). Both slots are
+# platform-NEUTRAL: these are darwin artifacts run on the *remote* macOS
+# orchestrator, so a Linux host must not look under bin/linux/. Like the tvOS
+# dylibs they share basenames with the flat iOS ones and ship as a tarball;
+# tcp-ax-service has a unique release name.
 #
-# These assets only exist on releases built with TCP support. A pre-sim-remote
-# tag simply has no TCP artifacts, so a missing asset is skipped with a warning
-# rather than aborting the whole download (`gh release download` exits non-zero
-# on no match, which under `set -e` would otherwise leave a half-populated tree).
+# Pre-sim-remote tags carry no TCP assets, so a missing one is skipped with a
+# warning rather than aborting under `set -e`.
 TCP_DYLIBS_DIR="${DYLIBS_DIR}/tcp"
-# Platform-neutral (bin/tcp, not bin/darwin/tcp): see the comment above.
 TCP_BIN_DIR="${BIN_DIR}/tcp"
 mkdir -p "${TCP_DYLIBS_DIR}" "${TCP_BIN_DIR}"
 
@@ -153,8 +133,8 @@ if gh release download "${TAG}" \
   --pattern "tcp-ax-service" \
   --dir "${TCP_BIN_DIR}" \
   --clobber; then
-  # Uploaded under a unique name to avoid colliding with the iOS ax-service in
-  # the flattened release dir; restore the basename the runtime resolver expects.
+  # Uniquely named to avoid colliding with the iOS ax-service in the flattened
+  # release dir; restore the basename axServiceBinaryPathTcp() expects.
   mv -f "${TCP_BIN_DIR}/tcp-ax-service" "${TCP_BIN_DIR}/ax-service"
   chmod +x "${TCP_BIN_DIR}/ax-service"
 else
@@ -162,9 +142,6 @@ else
 fi
 
 echo "  Downloading argent-android-devtools.apk..."
-# The release publishes the APK under a stable name (no versioning in the
-# filename) so this script doesn't have to know the version ahead of time;
-# the local copy is renamed to match what manifest.json expects.
 TMP_APK="$(mktemp -t argent-android-devtools.XXXXXX.apk)"
 trap 'rm -f "$TMP_APK"' EXIT
 gh release download "${TAG}" \
@@ -173,8 +150,7 @@ gh release download "${TAG}" \
   --output "${TMP_APK}" \
   --clobber
 
-# Read the versionName from the local manifest so the filename matches
-# bundledHelperApkPath()'s expectation.
+# bundledHelperApkPath() looks for the manifest's versionName in the filename.
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
@@ -182,20 +158,18 @@ trap - EXIT
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
-# Verify the downloaded injection dylibs carry the expected Mach-O platform.
-# This is the exact failure a mis-built release can reintroduce: a tvOS-built
-# libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
-# skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
-# match the process, so native-devtools never injects on an iOS simulator and
-# every native-* tool returns restart_required — with no error at download,
-# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
-# vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
+# A mis-built release can land a tvOS-built dylib in the flat iOS slot. dyld
+# silently skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform
+# does not match the process, so injection never happens and nothing errors at
+# download, sign or pack time; the native-* tools then report service_stale or
+# restart_required and send the agent to fix something that is not broken.
+# vtool is macOS-only, so the check is skipped on other hosts.
 if command -v vtool &>/dev/null; then
   echo "Verifying dylib platforms..."
   dylib_verify_failed=0
-  assert_dylib_platform() { # <file> <expected-platform>
+  assert_dylib_platform() {
     local f="$1" want="$2" arch got
-    [ -f "$f" ] || return 0  # tvOS dylibs are absent on pre-Apple-TV tags
+    [ -f "$f" ] || return 0  # tvOS/TCP dylibs are absent on older tags
     for arch in arm64 x86_64; do
       got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
       if [ "$got" != "$want" ]; then
@@ -207,8 +181,8 @@ if command -v vtool &>/dev/null; then
   for d in libNativeDevtoolsIos libKeyboardPatch libArgentInjectionBootstrap; do
     assert_dylib_platform "${DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
     assert_dylib_platform "${TVOS_DYLIBS_DIR}/${d}.dylib" TVOSSIMULATOR
-    # TCP dylibs are iOS-simulator Mach-Os (same SDK, -DARGENT_USE_TCP=1), so a
-    # tvOS slice leaking into dylibs/tcp/ is the same dyld-silent-skip failure.
+    # TCP dylibs are iOS-simulator Mach-Os, so a tvOS slice leaking into
+    # dylibs/tcp/ is the same dyld-silent-skip failure.
     assert_dylib_platform "${TCP_DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
   done
   if [ "${dylib_verify_failed}" -ne 0 ]; then

@@ -2,12 +2,11 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import { metroPortField } from "../../utils/debugger/metro-port";
+import { takeReapedSession } from "../../utils/reaped-sessions";
 
 const zodSchema = z.object({
-  port: z.coerce
-    .number()
-    .default(8081)
-    .describe("Metro server port (ignored for Chromium — its CDP port is encoded in device_id)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -44,8 +43,22 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   services: (params) => ({
     debugger: debuggerServiceRef(params),
   }),
-  async execute(services) {
+  async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
+    // Drop this device's teardown breadcrumb: its only consumer,
+    // `debugger-log-registry`, reads it only on an EMPTY registry, so one left
+    // here outlives every read that finds entries and later blames an unrelated
+    // empty read on a teardown. An explicit connect makes it wrong anyway —
+    // from here the capture is this session's.
+    //
+    // Not in the blueprint's factory: that also runs for the implicit resolve
+    // `debugger-log-registry` reconnects through, which would consume the
+    // breadcrumb just before the read that exists to report it.
+    for (const id of new Set(
+      [params.device_id, api.logicalDeviceId].filter((v): v is string => v !== undefined)
+    )) {
+      takeReapedSession("js-runtime-debugger", id);
+    }
     return {
       port: api.port,
       projectRoot: api.projectRoot,

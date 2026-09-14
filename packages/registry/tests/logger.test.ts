@@ -86,14 +86,15 @@ describe("attachRegistryLogger — formatError via serviceError", () => {
 
     const inner = new Error("root cause");
     const outer = new Error("wrapper", { cause: inner });
-    // Delete the outer stack so only the inner stack is available
-    outer.stack = undefined;
 
     registry.events.emit("serviceError", "svc:5", outer);
 
     const output = errorSpy.mock.calls[0]![0] as string;
-    // Should contain the inner error's stack (which has "root cause" in its first line)
-    expect(output).toMatch(/at /);
+    // The chain walk must select the innermost error's frames even though the
+    // outer error carries a stack of its own.
+    const innerBody = inner.stack!.slice(inner.stack!.indexOf("\n"));
+    expect(output.endsWith(innerBody)).toBe(true);
+    expect(output).not.toContain(outer.stack!.slice(outer.stack!.indexOf("\n")));
   });
 });
 

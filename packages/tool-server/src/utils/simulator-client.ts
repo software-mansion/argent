@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
@@ -14,30 +14,32 @@ import {
   type TouchActionName,
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
+import { assertAllowedSimServerEndpoint } from "./external-devices";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_SCREENSHOT_SCALE = 0.3;
+// Context cost is pixel area, so this constant is the whole lever. 0.25 measured
+// as the lowest scale where Opus 5 and Haiku 4.5 both still read every label and
+// selected-tab underline (#878).
+const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
-// A simulator-server captures screenshots from its live frame stream, so the
-// first frame must have arrived before a capture can succeed. Right after the
-// server starts streaming it replies HTTP 200 `{ error: "no image to export" }`
-// until that first frame lands — typically ~0.5-1s, and reliably so for a
-// backgrounded simulator when more than one is booted (the regression in
-// https://github.com/software-mansion/argent/issues/391). Poll past that
+// A simulator-server captures from its live frame stream, so it answers HTTP 200
+// `{ error: "no image to export" }` until the first frame lands — reliably so for
+// a backgrounded simulator when more than one is booted
+// (https://github.com/software-mansion/argent/issues/391). Poll past that
 // transient instead of surfacing it as a hard failure.
 const NO_IMAGE_ERROR = /no image to export/i;
-const FIRST_FRAME_WAIT_MS = 6_000;
+export const FIRST_FRAME_WAIT_MS = 6_000;
 const FIRST_FRAME_POLL_MS = 250;
 
 /**
- * Transport-level interface every `SimulatorServerApi` produces. Local sims
- * back this with the WebSocket+HTTP client; remote sims back it with a MoQ
- * client. Keeping the high-level shape (touch/button/rotate/screenshot)
- * here means every tool call site stays transport-agnostic.
+ * The input surface `sendCommand` re-encodes onto when a device has no local
+ * WebSocket, which today means only ios-remote's MoQ session. Every send is
+ * awaitable so a transport that can fail says so; the `| void` half keeps one
+ * that cannot from having to be async.
  */
 export interface SimulatorServerTransport {
   touch(opts: {
@@ -46,12 +48,11 @@ export interface SimulatorServerTransport {
     y: number;
     secondX?: number;
     secondY?: number;
-  }): void;
-  button(opts: { direction: KeyActionName; button: ButtonName }): void;
-  rotate(direction: RotationName): void;
-  /** Multi-character text paste (host pasteboard → simulator pasteboard + Cmd+V on remote). */
+  }): Promise<void> | void;
+  button(opts: { direction: KeyActionName; button: ButtonName }): Promise<void> | void;
+  rotate(direction: RotationName): Promise<void> | void;
   paste(text: string): Promise<void> | void;
-  pressKey(direction: KeyActionName, keyCode: number): void;
+  pressKey(direction: KeyActionName, keyCode: number): Promise<void> | void;
   screenshot(opts?: {
     rotation?: RotationName;
     scale?: number;
@@ -59,56 +60,254 @@ export interface SimulatorServerTransport {
   }): Promise<{ url: string; path: string }>;
 }
 
-const connections = new Map<string, WebSocket>();
+// A command ack is a localhost round-trip behind an already-open socket: 0.06ms
+// p50 / 0.17ms max, measured over 200 sends against a booted iOS sim. The budget
+// is for a server that is reachable but no longer answering (a wedged device),
+// not for normal latency, so it can be generous without ever being reached in a
+// healthy run.
+const COMMAND_ACK_TIMEOUT_MS = 5_000;
+
+interface PendingCommand {
+  settle: (err?: FailureError) => void;
+  cmd: string;
+}
+
+interface Connection {
+  ws: WebSocket;
+  /**
+   * Outstanding commands in send order. simulator-server answers in the order
+   * it received them, and `sendCommand` awaits each ack, so this normally holds
+   * at most one entry — the ordering matters only for an id-less reply (below)
+   * when two tools drive one device at once.
+   */
+  pending: Map<string, PendingCommand>;
+}
+
+const connections = new Map<string, Connection>();
 let cmdId = 0;
 
-function getOrCreateWs(api: SimulatorServerApi): WebSocket {
+/**
+ * A reply to a command. simulator-server echoes the request id on success
+ * (`{"id":"7","status":"ok"}`) but NOT on failure — a rejected command answers
+ * `{"status":"error","message":"parse error: unknown variant ..."}` with no id
+ * at all, so an error can only be matched positionally, against the oldest
+ * command still outstanding.
+ */
+interface CommandAck {
+  id?: string;
+  status?: string;
+  message?: string;
+}
+
+function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
+  const entries = [...conn.pending.values()];
+  conn.pending.clear();
+  for (const entry of entries) entry.settle(makeError(entry.cmd));
+}
+
+/** A command that never reached the device, whichever transport dropped it. */
+const COMMAND_TRANSPORT_FAILURE: FailureSignal = {
+  error_code: FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED,
+  failure_stage: "simulator_command_transport",
+  failure_area: "tool_server",
+  error_kind: "network",
+  network_failure: "connection_reset",
+  failure_command: "simulator_server",
+};
+
+function transportError(cmd: string, apiUrl: string, detail: string): FailureError {
+  return new FailureError(
+    `simulator-server did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. Check that the simulator is still booted ` +
+      `and the simulator-server for ${apiUrl} is running.`,
+    COMMAND_TRANSPORT_FAILURE
+  );
+}
+
+/**
+ * The MoQ twin of `transportError`: the send itself rejected, so the input was
+ * never written to the remote simulator.
+ */
+function remoteTransportError(cmd: string, cause: unknown): FailureError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return wrapFailure(
+    cause,
+    COMMAND_TRANSPORT_FAILURE,
+    `The remote simulator did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. Call stop-simulator-server for this ` +
+      `device and retry - the next call opens a new cloud session. If the machine itself ` +
+      `was released, acquire one again before retrying.`
+  );
+}
+
+function getOrCreateConnection(api: SimulatorServerApi): Connection {
   const key = api.apiUrl;
   const existing = connections.get(key);
   if (
     existing &&
-    (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+    (existing.ws.readyState === WebSocket.OPEN || existing.ws.readyState === WebSocket.CONNECTING)
   ) {
     return existing;
   }
+  /**
+   * `ws:` unconditionally, because `apiUrl` is `http:` unconditionally.
+   * Argent's own spawn path reads it off the binary's `api_ready` line and the
+   * provider contract refuses any other scheme, so there is no `https:` apiUrl
+   * to mistake for a `wss:` endpoint that nothing serves.
+   */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
-  ws.on("error", () => connections.delete(key));
-  ws.on("close", () => connections.delete(key));
-  connections.set(key, ws);
-  return ws;
+  const conn: Connection = { ws, pending: new Map() };
+
+  ws.on("message", (data: WebSocket.RawData) => {
+    const text = Buffer.isBuffer(data)
+      ? data.toString()
+      : Array.isArray(data)
+        ? Buffer.concat(data).toString()
+        : Buffer.from(data).toString();
+    let ack: CommandAck;
+    try {
+      ack = JSON.parse(text) as CommandAck;
+    } catch {
+      return; // Not a command reply; the socket carries nothing else today.
+    }
+    if (ack.status !== "ok" && ack.status !== "error") return;
+
+    // A reply that names an id argent is no longer waiting on is stale — a late
+    // ack for a command that already timed out. Dropping it matters: falling
+    // back to positional matching here would settle whatever command is in
+    // flight *now* with an answer meant for an earlier one, reintroducing the
+    // phantom success this whole change exists to remove.
+    if (ack.id != null && !conn.pending.has(ack.id)) return;
+    // Only an id-less reply (i.e. an error) is matched positionally, against
+    // the oldest outstanding command, which is what an in-order server means by it.
+    const id = ack.id ?? conn.pending.keys().next().value;
+    if (id == null) return;
+    const entry = conn.pending.get(id);
+    if (entry == null) return;
+    conn.pending.delete(id);
+
+    if (ack.status === "ok") {
+      entry.settle();
+      return;
+    }
+    entry.settle(
+      new FailureError(
+        `simulator-server rejected the '${entry.cmd}' command: ${ack.message ?? "unknown error"}. ` +
+          `The command was NOT delivered to the device.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_COMMAND_REJECTED,
+          failure_stage: "simulator_command_rejected",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+          failure_command: "simulator_server",
+        }
+      )
+    );
+  });
+
+  // A socket that dies with commands in flight is the shut-the-simulator-down
+  // case: nothing was delivered, and without this the callers would hang until
+  // their ack timeout instead of failing at once.
+  ws.on("error", (err: Error) => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, err.message));
+  });
+  ws.on("close", () => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+  });
+
+  connections.set(key, conn);
+  return conn;
 }
 
 /**
- * Send a JSON command to the simulator-server.
+ * Send a JSON command to the simulator-server and resolve once it has been
+ * acknowledged. Call sites always speak the WebSocket command shape
+ * (`{cmd: "touch", ...}`); with `api.transport` set it is re-encoded onto MoQ
+ * instead.
  *
- * On local sims this goes over the WebSocket; on remote sims (when
- * `api.transport` is set) it is routed through the MoQ-backed transport.
- * Call sites stay transport-agnostic — they always speak the WebSocket
- * command shape (`{cmd: "touch", ...}`).
+ * Rejects — rather than reporting a phantom success — when the server answers
+ * `status: "error"`, when the socket fails or closes with the command in
+ * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS`. Awaiting
+ * the ack is what separates a delivered input from a lost one: every one of
+ * those cases used to be indistinguishable from a landed tap
+ * (https://github.com/software-mansion/argent/issues/932).
+ *
+ * MoQ has no per-command ack, so it reports less: a send the session refuses
+ * (a closed track, a released machine) rejects, while a send that goes out is
+ * reported as delivered. That is strictly narrower than the WebSocket ack, and
+ * it is still the difference between a failed gesture and `{ tapped: true }`.
  */
-export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): void {
-  if (api.transport) {
-    routeViaTransport(api.transport, cmd);
-    return;
-  }
-  const ws = getOrCreateWs(api);
-  const payload = JSON.stringify({ id: String(++cmdId), ...cmd });
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(payload);
-  } else {
-    ws.once("open", () => ws.send(payload));
-  }
+export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
+  const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  if (api.transport) return sendViaTransport(api.transport, cmd, cmdName);
+  const conn = getOrCreateConnection(api);
+  const id = String(++cmdId);
+  const payload = JSON.stringify({ id, ...cmd });
+
+  return new Promise<void>((resolve, reject) => {
+    let done = false;
+    const settle = (err?: FailureError) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      conn.pending.delete(id);
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () =>
+        settleAndDropConnection(
+          new FailureError(
+            `simulator-server did not acknowledge the '${cmdName}' command within ` +
+              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `the simulator may be wedged or the simulator-server unresponsive.`,
+            {
+              error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
+              failure_stage: "simulator_command_ack",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+              failure_command: "simulator_server",
+            }
+          )
+        ),
+      COMMAND_ACK_TIMEOUT_MS
+    );
+    // `unref` so a pending ack never holds the process open on shutdown.
+    timer.unref?.();
+
+    // A timeout leaves the reply stream permanently out of step with `pending`:
+    // the answer to this command is still owed, and once it lands nothing can
+    // tell it apart from the answer to a later one. Drop the socket instead of
+    // guessing — the next command reconnects, and `close` fails anything else
+    // still in flight rather than leaving it to mismatch.
+    const settleAndDropConnection = (err: FailureError) => {
+      settle(err);
+      connections.delete(api.apiUrl);
+      conn.ws.close();
+    };
+
+    conn.pending.set(id, { settle, cmd: cmdName });
+
+    const write = () =>
+      conn.ws.send(payload, (err) => {
+        if (err) settle(transportError(cmdName, api.apiUrl, err.message));
+      });
+    // A socket still CONNECTING queues the write; if it never opens, the
+    // `error`/`close` handlers above fail the command instead of dropping it.
+    if (conn.ws.readyState === WebSocket.OPEN) write();
+    else conn.ws.once("open", write);
+  });
 }
 
 /**
- * Toggle simulator-server's on-screen touch visualizer (its "pointer" overlay).
- * When on, every touch argent sends is drawn into the frame stream server-side —
- * a pulse for a tap, a comet trail for a swipe/drag, two markers for a two-finger
- * pinch/rotate — which is what makes those gestures visible in a screen
- * recording. Needs the streaming/pointer simulator-server build (the bundled
- * argent one has it). Best-effort: returns false instead of throwing, so a
- * recording is never lost to a pointer toggle.
+ * Toggle simulator-server's on-screen touch visualizer: taps, swipe/drag comet
+ * trails and two-finger markers are drawn into the frame stream server-side,
+ * which is what makes gestures visible in a screen recording. Returns false
+ * instead of throwing, so a recording is never lost to a pointer toggle.
  */
 export function setPointerVisible(
   api: SimulatorServerApi,
@@ -118,7 +317,7 @@ export function setPointerVisible(
   return pointerPost(api, { show }, signal);
 }
 
-/** Length of the fading comet trail behind a moving touch (0 disables it). */
+/** Frames of comet trail left behind a moving touch. */
 export function setPointerTrail(
   api: SimulatorServerApi,
   trail: number,
@@ -132,9 +331,10 @@ async function pointerPost(
   body: { show: boolean } | { trail: number },
   signal?: AbortSignal
 ): Promise<boolean> {
-  // Remote (MoQ) sims expose no HTTP pointer endpoint; recording gates them out,
-  // so the stubbed apiUrl simply makes this fetch fail and return false.
+  // Remote (MoQ) sims are gated out of recording and expose no HTTP pointer
+  // endpoint; their stubbed apiUrl simply makes this fetch fail and return false.
   try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/pointer");
     const res = await fetch(`${api.apiUrl}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -153,8 +353,72 @@ async function pointerPost(
 }
 
 /**
- * POST to a simulator-server endpoint, handling network errors and non-JSON
- * responses uniformly.  Callers handle domain-specific response validation.
+ * Put `text` on the DEVICE clipboard through simulator-server's
+ * `POST /api/clipboard/text`; the host clipboard is untouched. Resolves once the
+ * device pasteboard holds the text, so a paste keystroke sent afterwards cannot
+ * race the fill.
+ *
+ * A simulator-server built without clipboard support — an older build, or a
+ * provider's — answers the route with a bare 404, reported as "unsupported"
+ * rather than as a network fault.
+ */
+export async function setSimulatorClipboardText(
+  api: SimulatorServerApi,
+  text: string,
+  signal?: AbortSignal
+): Promise<void> {
+  if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
+
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError("Paste", err, api.apiUrl);
+  }
+  if (res.status === 404) {
+    /**
+     * A provider's binary is not argent's, so "update argent" would be the
+     * wrong advice there.
+     */
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a build with " +
+        "clipboard support. Type the text with the keyboard tool instead."
+      : "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.";
+    throw new FailureError(
+      "Paste failed: this simulator-server build has no clipboard endpoint. " + fix,
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
+        failure_stage: "simulator_clipboard_endpoint_missing",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  // Like the other simulator-server POST routes, this one answers HTTP 200 for
+  // both outcomes and reports a failure in-band (`{ error }`).
+  const body = (await res.json().catch(() => null)) as { status?: string; error?: string } | null;
+  if (!res.ok || body?.status !== "ok") {
+    throw new FailureError(
+      `Paste failed: could not set the device clipboard (${body?.error ?? `HTTP ${res.status}`}).`,
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_SET_FAILED,
+        failure_stage: "simulator_clipboard_set",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
+    );
+  }
+}
+
+/**
+ * POST to simulator-server, normalizing network and non-JSON failures. Callers
+ * validate the body.
  */
 async function simulatorPost<T>(
   toolLabel: string,
@@ -164,6 +428,12 @@ async function simulatorPost<T>(
   signal?: AbortSignal,
   fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
+  /**
+   * Parity rule: on a server Argent did not spawn, use only the endpoints its
+   * own build serves.
+   */
+  if (api.external) assertAllowedSimServerEndpoint(endpoint);
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}${endpoint}`, {
@@ -196,21 +466,32 @@ async function simulatorPost<T>(
   return { res, body };
 }
 
+/** One warning per distinct value: the parse runs on every capture. */
+let warnedScaleValue: string | undefined;
+
 export function getScreenshotScale(): number {
   const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
     const n = parseFloat(v);
-    if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
+    // Below the floor the `scale` parameter enforces, a capture rounds towards
+    // zero pixels and screenshot-diff reports the resulting dimension mismatch
+    // as if the screens differed.
+    if (!Number.isNaN(n) && n >= 0.01 && n <= 1) return n;
+    if (v !== warnedScaleValue) {
+      warnedScaleValue = v;
+      console.warn(
+        `[screenshot] Ignoring ARGENT_SCREENSHOT_SCALE=${v}: expected a number between 0.01 and 1.0. ` +
+          `Using ${DEFAULT_SCREENSHOT_SCALE}.`
+      );
+    }
   }
-  return DEFAULT_SCREENSHOT_SCALE; // default: halve the resolution
+  return DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**
- * Take a screenshot via the simulator-server HTTP API.
- *
- * If the api has a `transport` field set (e.g. MoQ for ios-remote), the
- * transport's screenshot method is used instead — the response shape
- * (`{ url, path }`) is preserved either way.
+ * Take a screenshot over the simulator-server HTTP API, or through
+ * `api.transport` when set (MoQ for ios-remote); the `{ url, path }` shape is
+ * the same either way.
  */
 export async function httpScreenshot(
   api: SimulatorServerApi,
@@ -256,9 +537,8 @@ export async function httpScreenshot(
       return { url: resBody.url, path: resBody.path };
     }
 
-    // HTTP 200 with no url/path. A "no image to export" means the frame stream
-    // hasn't produced its first frame yet; poll until it does (or the deadline
-    // passes) rather than failing a freshly-spawned or backgrounded simulator.
+    // "no image to export" means the frame stream has no first frame yet; poll
+    // until it does rather than failing a fresh or backgrounded simulator.
     if (
       resBody.error &&
       NO_IMAGE_ERROR.test(resBody.error) &&
@@ -269,16 +549,11 @@ export async function httpScreenshot(
       continue;
     }
 
-    // Other HTTP-200 capture failures carry an `error` field rather than a
-    // non-2xx status (e.g. Android full-resolution requests that exceed what
-    // the emulator framebuffer can stream: "wrong data size, expected X got
-    // Y"). Surface that message instead of the misleading generic hint so the
-    // real cause is visible rather than sending callers to restart a perfectly
-    // healthy server.
+    // Other capture failures also arrive as HTTP 200 with an `error` field (e.g.
+    // Android full-resolution requests the emulator framebuffer cannot stream:
+    // "wrong data size, expected X got Y"). The server answered, so surface its
+    // message as a capture failure instead of the generic restart-the-server hint.
     if (resBody.error) {
-      // HTTP 200 with an in-band `error` field: the server was reachable and
-      // answered, so this is a server-reported capture failure, not a transport
-      // problem — classify it as such rather than as a network error.
       throw new FailureError(`Screenshot failed: ${resBody.error}.`, {
         error_code: FAILURE_CODES.SIMULATOR_SCREENSHOT_FAILED,
         failure_stage: "simulator_screenshot_error_field",
@@ -300,53 +575,60 @@ export async function httpScreenshot(
   }
 }
 
+/**
+ * `sendCommand` over `api.transport`. Async, so an unknown command rejects
+ * instead of throwing out of a function that returns a promise, and routed
+ * outside the `try`, so that caller bug is not reported as a refused send.
+ */
+async function sendViaTransport(
+  transport: SimulatorServerTransport,
+  cmd: Record<string, unknown>,
+  cmdName: string
+): Promise<void> {
+  const sent = routeViaTransport(transport, cmd);
+  try {
+    await sent;
+  } catch (cause) {
+    throw remoteTransportError(cmdName, cause);
+  }
+}
+
 function routeViaTransport(
   transport: SimulatorServerTransport,
   cmd: Record<string, unknown>
-): void {
+): Promise<void> | void {
   switch (cmd.cmd) {
     case "touch": {
-      // Local WebSocket protocol uses snake_case second_x/second_y (set to
-      // null when absent); the proto-encoder takes optional secondX/secondY.
+      // Call sites speak the WebSocket protocol's snake_case second_x/second_y
+      // (null when absent); the proto encoder takes optional secondX/secondY.
       const sx = (cmd.second_x ?? cmd.secondX) as number | null | undefined;
       const sy = (cmd.second_y ?? cmd.secondY) as number | null | undefined;
-      transport.touch({
+      return transport.touch({
         type: cmd.type as TouchActionName,
         x: cmd.x as number,
         y: cmd.y as number,
         secondX: sx == null ? undefined : sx,
         secondY: sy == null ? undefined : sy,
       });
-      return;
     }
     case "button":
-      transport.button({
+      return transport.button({
         direction: cmd.direction as KeyActionName,
         button: cmd.button as ButtonName,
       });
-      return;
     case "rotate":
-      transport.rotate(cmd.direction as RotationName);
-      return;
-    case "paste": {
-      // paste() may be async on remote (pbcopy + Cmd+V); fire and forget
-      // here to preserve sendCommand's sync shape. Errors land in the host
-      // process's unhandledRejection logger — same as a websocket send fail.
-      void Promise.resolve(transport.paste(cmd.text as string));
-      return;
-    }
+      return transport.rotate(cmd.direction as RotationName);
+    case "key":
+      return transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);
   }
 }
 
-// ── MoQ transport adapter ─────────────────────────────────────────────────
-
 /**
  * Build a `SimulatorServerTransport` that routes touch/button/rotate/key/
- * screenshot operations over an `@moq/net`-backed `MoqClient`. Screenshots
- * are written into argent's temp dir to match the local HTTP path's
- * `{ url, path }` contract.
+ * screenshot operations over a `MoqClient`. Screenshots are written to disk to
+ * match the local HTTP path's `{ url, path }` contract.
  */
 export function createMoqTransport(
   moq: MoqClient,
@@ -362,8 +644,8 @@ export function createMoqTransport(
   };
 
   return {
-    touch(opts) {
-      void moq.sendControl(
+    async touch(opts) {
+      await moq.sendControl(
         encodeTouch({
           action: opts.type,
           x: opts.x,
@@ -373,20 +655,19 @@ export function createMoqTransport(
         })
       );
     },
-    button(opts) {
-      void moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
+    async button(opts) {
+      await moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
     },
-    rotate(direction) {
-      void moq.sendControl(encodeRotate(direction));
+    async rotate(direction) {
+      await moq.sendControl(encodeRotate(direction));
     },
     async paste(text) {
-      // sim-remote pbcopy + Cmd+V on the remote sim. The cmd+v sequence is
-      // emitted on the host via the option's pasteText callback so the
-      // transport stays platform-agnostic.
+      // The pasteboard fill and ⌘V pair live in the caller's `pasteText`, so
+      // this transport stays platform-agnostic.
       await options.pasteText(text);
     },
-    pressKey(direction, keyCode) {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+    async pressKey(direction, keyCode) {
+      await moq.sendControl(encodeKey({ action: direction, code: keyCode }));
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();

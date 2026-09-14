@@ -106,7 +106,8 @@ describe("remembered agent (lens config)", () => {
     setRememberedAgent("claude");
     clearRememberedAgent();
     expect(getRememberedAgent()).toBeNull();
-    expect(readConfigFile()).toEqual({ telemetry: { enabled: true }, lens: {} });
+    // Siblings survive; the emptied `lens` container does not.
+    expect(readConfigFile()).toEqual({ telemetry: { enabled: true } });
   });
 
   it("clearing when nothing is stored is a no-op that doesn't throw", () => {

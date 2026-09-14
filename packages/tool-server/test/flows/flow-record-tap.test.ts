@@ -13,16 +13,14 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentTreeData()),
 }));
 
+import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import {
-  clearActiveFlow,
-  clearActiveProjectRoot,
-  parseFlow,
-  setActiveProjectRoot,
-} from "../../src/tools/flows/flow-utils";
+import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
+import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
+const FLOW = "rec";
 const PREREQ = "App on home screen";
 
 let tmpDir: string;
@@ -53,29 +51,108 @@ async function recordTap(point: { x: number; y: number }) {
   const tool = createFlowAddStepTool(mockRegistry());
   return tool.execute(
     {},
-    { command: "gesture-tap", args: JSON.stringify({ udid: DEVICE, ...point }) }
+    {
+      name: FLOW,
+      project_root: tmpDir,
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...point }),
+    }
   );
 }
 
 async function recordedSteps() {
-  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", "rec.yaml"), "utf8");
+  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${FLOW}.yaml`), "utf8");
   return parseFlow(content).steps;
 }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-record-tap-"));
-  setActiveProjectRoot(tmpDir);
-  clearActiveFlow();
+  __resetRecordingsForTesting();
   await flowStartRecordingTool.execute(
     {},
-    { name: "rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    { name: FLOW, project_root: tmpDir, executionPrerequisite: PREREQ }
   );
 });
 
 afterEach(async () => {
-  clearActiveFlow();
-  clearActiveProjectRoot();
+  __resetRecordingsForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+// The tree source needs the launched bundle id to measure and explain a read it
+// could not take; without one it raises auto-targeting's stock "Launch or
+// restart the app first". The recorder is where that lands hardest: it relaunches
+// the app AFTER this tool-server bound its listener, so the first tap reads
+// during the connect window — the states whose measured message says NOT to
+// restart the app. The runner threads the id from its `launch:` step; here the
+// equivalent is the `launch` the recorder just captured.
+describe("flow-add-step tap capture targets the recorded launch", () => {
+  const BUNDLE = "com.example.app";
+  // A leading `launch` and an executionPrerequisite are mutually exclusive, so
+  // this block records into an e2e flow of its own rather than the fragment the
+  // outer setup opens.
+  const E2E_FLOW = "rec-e2e";
+
+  beforeEach(async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: E2E_FLOW, project_root: tmpDir, executionPrerequisite: "" }
+    );
+  });
+
+  function registryWithRestart(): Registry {
+    return {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "gesture-tap") return { tapped: true };
+        if (id === "restart-app") return { restarted: true };
+        throw new Error(`Tool "${id}" not found`);
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+  }
+
+  async function recordRestart(): Promise<void> {
+    await createFlowAddStepTool(registryWithRestart()).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({ udid: DEVICE, bundleId: BUNDLE }),
+      }
+    );
+  }
+
+  it("passes the recorded launch's app to the tree read", async () => {
+    setTree([]);
+    await recordRestart();
+    vi.mocked(fetchFlowTree).mockClear();
+
+    await createFlowAddStepTool(registryWithRestart()).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.5 }),
+      }
+    );
+
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({
+      bundleId: BUNDLE,
+      pinned: false,
+      probeAnswered: false,
+    });
+  });
+
+  it("passes nothing when the recording has captured no launch", async () => {
+    setTree([]);
+    vi.mocked(fetchFlowTree).mockClear();
+
+    await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toBeUndefined();
+  });
 });
 
 describe("flow-add-step tap selector capture", () => {
@@ -94,6 +171,40 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([
       { kind: "tap", selector: { identifier: "add-to-cart" } },
     ]);
+  });
+
+  it("reports the captured selector in the `recorded` line, in the file's spelling", async () => {
+    // The coordinates the caller passed are NOT what gets stored, and the
+    // recorder no longer returns the YAML per step — so `recorded` is the only
+    // thing telling the author their tap became a portable selector. It must
+    // also use the FILE's spelling: capture produces `identifier`, which
+    // selectorToYaml maps to `id` on the way to disk, so a line quoting
+    // `identifier` would not match the YAML the author goes on to hand-edit.
+    setTree([
+      n({
+        identifier: "add-to-cart",
+        label: "Add to cart",
+        frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 },
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.52 });
+
+    expect(result.recorded).toBe('1. tap: {"id":"add-to-cart"}');
+    expect(result.recorded).toBe(summarizeStep((await recordedSteps())[0], 1));
+    expect(result.stepCount).toBe(1);
+  });
+
+  it("reports the coordinate fallback in the `recorded` line", async () => {
+    // The other half of the same signal: when no stable selector is derivable
+    // the step stays a coordinate tap, and `recorded` has to say so — that is
+    // how the author knows the brittle form was kept, alongside the warning.
+    setTree([]);
+
+    const result = await recordTap({ x: 0.5, y: 0.52 });
+
+    expect(result.recorded).toBe("1. tap: (0.5, 0.52)");
+    expect(result.recorded).toBe(summarizeStep((await recordedSteps())[0], 1));
   });
 
   it("captures a strict text selector when the node has no identifier", async () => {
@@ -128,6 +239,8 @@ describe("flow-add-step tap selector capture", () => {
     await tool.execute(
       {},
       {
+        name: FLOW,
+        project_root: tmpDir,
         command: "gesture-tap",
         args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52, clickCount: 2 }),
       }
@@ -151,6 +264,48 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.52 }]);
   });
 
+  it("flags a role-only selector rather than recording the downgrade silently", async () => {
+    // The raised iOS flow tree depth cap now keeps unlabeled icons. One is the
+    // smallest frame under the tap, so `nodeAtPoint` picks it and
+    // `deriveSelector` falls back to its role. Replay then depends on that icon
+    // ranking first for the role.
+    setTree([
+      n({
+        identifier: "product-card",
+        frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        children: [n({ role: "AXImage", frame: { x: 0.48, y: 0.48, width: 0.04, height: 0.04 } })],
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("matches by role alone");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
+  });
+
+  // `roleOnlySelectorWarning` withholds the warning under separate guards for an
+  // identifier and for visible text, so both need a case. Each node also carries
+  // a role, so the withholding follows from the stable field, not a missing role.
+  it.each([
+    {
+      carries: "an id",
+      node: { identifier: "add-to-cart" },
+      selector: { identifier: "add-to-cart" },
+    },
+    { carries: "text", node: { label: "Add to cart" }, selector: { text: "Add to cart" } },
+  ])("does not flag a selector that carries $carries", async ({ node, selector }) => {
+    setTree([
+      n({ ...node, role: "AXButton", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.52 });
+
+    // Assert the step too. A coordinate fallback also carries no role-only
+    // warning, so the negative check alone proves nothing.
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector }]);
+    expect(result.message).not.toContain("matches by role alone");
+  });
+
   it("records the selector with a caveat when captured from the fallback tree source", async () => {
     setTree(
       [n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],
@@ -161,6 +316,30 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("fallback ax-service tree");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  it("reports both caveats when a role-only selector comes off the fallback tree", async () => {
+    // The two warnings are independent and can fire on one capture. A
+    // fallback-source read is the most likely to return an unlabeled node. Other
+    // tests cover each warning alone, so only this test holds the pair.
+    setTree(
+      [
+        n({
+          identifier: "product-card",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+          children: [
+            n({ role: "AXImage", frame: { x: 0.48, y: 0.48, width: 0.04, height: 0.04 } }),
+          ],
+        }),
+      ],
+      "ax-service"
+    );
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("matches by role alone");
+    expect(result.message).toContain("fallback ax-service tree");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
   });
 
   it("keeps coordinates with a warning when the tree fetch fails", async () => {

@@ -11,9 +11,6 @@ import {
  * The injected scripts are self-contained IIFE strings — eval them against a
  * mock `globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__` to verify they iterate
  * every renderer (RN registers Fabric + Paper) and not just the first.
- *
- * These tests are the regression harness for
- * `profiler-react19-multi-renderer-bug.md`.
  */
 
 interface BackendCommit {
@@ -31,10 +28,8 @@ interface MockRi {
   startProfiling: ReturnType<typeof vi.fn>;
   stopProfiling: ReturnType<typeof vi.fn>;
   getProfilingData: ReturnType<typeof vi.fn>;
-  // Either name may exist on a real rendererInterface depending on
-  // react-devtools-core version (`Element` in modern, `Fiber` in older
-  // bundles). Both are optional in the mock so individual tests can prove
-  // the scripts handle each surface.
+  // A real rendererInterface has one or the other depending on
+  // react-devtools-core version: `Element` in modern, `Fiber` in older bundles.
   getDisplayNameForElementID?: ReturnType<typeof vi.fn>;
   getDisplayNameForFiberID?: ReturnType<typeof vi.fn>;
 }
@@ -46,10 +41,8 @@ function makeRi(
     rootID?: number;
     commits?: BackendCommit[];
     names?: Record<number, string>;
-    // 'element' → only getDisplayNameForElementID exists (modern devtools)
-    // 'fiber'   → only getDisplayNameForFiberID exists (RN ≤0.75-ish)
-    // 'both'    → both (defensive)
-    // 'none'    → neither (unrecognized devtools version)
+    // Mocked devtools vintage: 'element' modern, 'fiber' RN ≤0.75-ish,
+    // 'none' unrecognized.
     nameApi?: "element" | "fiber" | "both" | "none";
   } = {}
 ): MockRi {
@@ -83,8 +76,7 @@ function makeRi(
 }
 
 function evalIIFE<T = unknown>(script: string): T {
-  // Use indirect eval to run the IIFE in a fresh-ish scope while preserving
-  // access to globalThis (which holds the hook mock the script reads).
+  // Indirect eval runs the IIFE in global scope, where the hook mock lives.
   return (0, eval)(script) as T;
 }
 
@@ -127,14 +119,10 @@ interface StopReadResult {
 }
 
 afterEach(() => {
-  // Defensive — withHook restores its own state, but if a test throws between
-  // setting and restoring we want the next test to start clean.
   const g = globalThis as Record<string, unknown>;
   delete g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   delete g.__ARGENT_PROFILER_OWNER__;
 });
-
-// ── buildStartScript ──────────────────────────────────────────────────
 
 describe("buildStartScript (multi-renderer)", () => {
   it("starts profiling on every registered renderer", () => {
@@ -155,9 +143,6 @@ describe("buildStartScript (multi-renderer)", () => {
   });
 
   it("starts the active renderer even when the dormant ri is iterated first", () => {
-    // Reverse insertion order: dormant Paper first, active Fabric second.
-    // Pre-fix code took the first ri from forEach and never touched the
-    // active renderer — bug doc §3 reproduction.
     const dormant = makeRi();
     const active = makeRi();
     const ris = new Map<number, MockRi>([
@@ -190,9 +175,8 @@ describe("buildStartScript (multi-renderer)", () => {
   });
 
   it("treats a renderer that flips its own __argent_isProfiling__ flag as success", () => {
-    // Boundary case: every active-root ri throws, only a dormant one
-    // succeeds. ok requires `__argent_isProfiling__ === true` on at least
-    // one ri, so as long as the dormant one's flag flipped we report ok.
+    // ok needs `__argent_isProfiling__ === true` on some ri, not merely that
+    // no call threw.
     const broken = makeRi({ willThrowOnStart: true });
     const dormant = makeRi(); // its mock startProfiling flips the flag
     const ris = new Map<number, MockRi>([
@@ -240,8 +224,6 @@ describe("buildStartScript (multi-renderer)", () => {
   });
 });
 
-// ── STOP_AND_READ_SCRIPT ──────────────────────────────────────────────
-
 describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
   function commit(fiberID: number): BackendCommit {
     return {
@@ -279,9 +261,8 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
   });
 
   it("resolves names from every renderer into the merged displayNameById map", () => {
-    // Distinct fiber IDs (RN's dormant Paper doesn't actually emit commits in
-    // practice, so collisions don't occur). Both names should appear in the
-    // merged map.
+    // Bare-fiberID keys only collide if two renderers emit commits; RN's
+    // dormant Paper does not.
     const fabric = makeRi({
       rootID: 10,
       commits: [commit(42)],
@@ -329,11 +310,6 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
     expect(r.displayNameById).toEqual({});
   });
 
-  // Regression: this is the exact bug observed against RN 0.74-era runtimes
-  // whose bundled react-devtools-core exposes getDisplayNameForFiberID
-  // instead of getDisplayNameForElementID. Pre-fix the script blindly called
-  // ElementID, every call threw, the catch dropped every fiber, and the stop
-  // tool reported 0 captured / 18,921 unattributed.
   it("resolves names via getDisplayNameForFiberID when ElementID is absent (old react-devtools)", () => {
     const ri = makeRi({
       rootID: 10,
@@ -390,8 +366,8 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
   });
 
   it("flags displayNameApiAvailable=false when no accessor exists on any ri", () => {
-    // This is the diagnostic that distinguishes "wrong react-devtools version"
-    // from "transient-unmount race" in the unattributed-fibers report.
+    // Lets the stop tool's unattributed report blame the missing accessor
+    // instead of a transient-unmount race.
     const ri = makeRi({ rootID: 10, commits: [commit(42)], nameApi: "none" });
     const ris = new Map<number, MockRi>([[1, ri]]);
     const out = withHook(ris, () => evalIIFE<string>(STOP_AND_READ_SCRIPT));
@@ -401,8 +377,6 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
     expect(r.displayNameById["42"]).toBeNull();
   });
 });
-
-// ── STOP_FOR_TAKEOVER_SCRIPT ──────────────────────────────────────────
 
 describe("STOP_FOR_TAKEOVER_SCRIPT (multi-renderer)", () => {
   it("calls stopProfiling on every renderer, even if one throws", () => {
@@ -424,8 +398,6 @@ describe("STOP_FOR_TAKEOVER_SCRIPT (multi-renderer)", () => {
     expect(b.stopProfiling).toHaveBeenCalledTimes(1);
   });
 });
-
-// ── READ_STATE_SCRIPT ────────────────────────────────────────────────
 
 describe("READ_STATE_SCRIPT (multi-renderer)", () => {
   it("reports isRunning: true when any renderer is profiling, even if the first iterated one is not", () => {
@@ -454,14 +426,10 @@ describe("READ_STATE_SCRIPT (multi-renderer)", () => {
   });
 });
 
-// ── REACT_NATIVE_PROFILER_SETUP_SCRIPT (cache isolation) ───────────────
-
 describe("REACT_NATIVE_PROFILER_SETUP_SCRIPT (per-renderer cache isolation)", () => {
   it("clearing one renderer's cache bucket does not affect another's", () => {
-    // Direct check on the WeakMap semantics that the wrapper relies on.
-    // The actual wrapper invokes `cache.set(ri, Object.create(null))` on
-    // start; if the cache were a flat object we shared across renderers,
-    // ri#2's start would wipe ri#1's entries.
+    // The wrapper does `cache.set(ri, Object.create(null))` on start; a flat
+    // cache shared across renderers would let ri#2's start wipe ri#1's entries.
     const a = makeRi();
     const b = makeRi();
     const ris = new Map<number, MockRi>([
@@ -469,19 +437,18 @@ describe("REACT_NATIVE_PROFILER_SETUP_SCRIPT (per-renderer cache isolation)", ()
       [2, b],
     ]);
     withHook(ris, () => {
-      // Run setup so the wrapper is installed and the cache is the new WeakMap.
+      // Setup installs the wrapper that b.startProfiling exercises below.
       evalIIFE(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
       const cache = (globalThis as Record<string, unknown>).__argent_fiberNames__ as WeakMap<
         MockRi,
         Record<number, string>
       >;
 
-      // Pre-populate ri#a's bucket as if a prior FIBER_ROOT_TRACKER capture happened.
+      // Pre-populate a's bucket as FIBER_ROOT_TRACKER_SCRIPT would.
       const aBucket: Record<number, string> = Object.create(null);
       aBucket[7] = "FromA";
       cache.set(a, aBucket);
 
-      // Start on ri#b — wrapper should reset only b's bucket, leaving a's intact.
       (b.startProfiling as () => void)();
       expect(cache.get(a)?.[7]).toBe("FromA");
       expect(cache.get(b)).toBeDefined();

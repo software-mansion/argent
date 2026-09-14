@@ -34,7 +34,10 @@ on:
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
-      # The unit tests this job runs — editing one must re-run it here.
+      # The unit tests this job runs — editing one must re-run it here, and so
+      # must editing the config or a setup file every one of them loads.
+      - "packages/tool-server/vitest.config.ts"
+      - "packages/tool-server/test/setup/**"
       - "packages/tool-server/test/command-on-path.test.ts"
       - "packages/tool-server/test/android-binary-windows.test.ts"
       - "packages/tool-server/test/adb-resolve-avd-path.test.ts"
@@ -76,7 +79,7 @@ jobs:
         run: npm install @rollup/rollup-win32-x64-msvc --no-save
 
       - name: Build workspace
-        run: npx tsc --build
+        run: npm run build
 
       - name: Resolver unit tests on Windows (tool-server)
         # The win32 branches added for Windows support, exercised on a real

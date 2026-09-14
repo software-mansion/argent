@@ -1,26 +1,13 @@
-// The configuration schema: the single source of truth for every recognized
-// config value, its shape, where it may be set, and how the two scopes merge.
-//
-// Adding a new configuration is meant to be a one-liner here: give it a dotted
-// `key`, a `description`, the `scopes` it accepts, a `parse` validator, and a
-// `merge` policy (a preset name, or your own function). Nothing else in the
-// system needs to change — `argent config`, the merged reader, and validation
-// are all schema-driven.
+// Every recognized config value: its shape, where it may be set, and how the
+// two scopes merge. `argent config`, the merged reader (config-access.ts) and
+// validation all read this registry.
 
 import type { FlagScope } from "./flags.js";
 import type { MergePolicy } from "./merge.js";
 
-/**
- * One recognized configuration value.
- *
- * `key` is a dotted path into the shared config document (`ios.deviceSet` →
- * `{ "ios": { "deviceSet": ... } }`). `parse` both validates and normalizes a
- * raw JSON value, returning `undefined` for anything malformed so a broken
- * config never crashes a reader. `merge` decides the effective value when both
- * scopes are set.
- */
+/** One recognized configuration value. */
 export interface ConfigDefinition<T = unknown> {
-  /** Dotted path into config.json, e.g. `"ios.deviceSet"`. */
+  /** Dotted path into config.json. */
   readonly key: string;
   /** One-line summary shown by `argent config` / `argent config list`. */
   readonly description: string;
@@ -33,19 +20,21 @@ export interface ConfigDefinition<T = unknown> {
   /** Effective value when no scope contributes one. */
   readonly default?: T;
   /**
-   * When set, `argent config set/unset` refuses this key and points the user at
-   * the given command instead. Used for values that have a dedicated,
-   * lifecycle-aware command (e.g. telemetry, which must also drain the running
-   * client on opt-out) while still surfacing them read-only under `argent config`.
+   * `argent config set/unset` refuses this key and points at this command
+   * instead — for values whose command does lifecycle work beyond writing the
+   * file (telemetry drains the running client on opt-out). Still readable
+   * through `argent config`.
    */
   readonly manageCommand?: string;
-  /** Optional example value shown in help/usage. */
+  /** Example value, shown by `argent config list` and when a value is rejected. */
   readonly example?: string;
+  /**
+   * What a valid value looks like, in words, for the message shown when one is
+   * rejected. Only needed for a bespoke `parse` — a shared helper describes
+   * itself, see {@link describeExpectedValue}.
+   */
+  readonly expected?: string;
 }
-
-// ── parse/normalize helpers ──────────────────────────────────────────────
-// Reusable validators so schema entries stay one-liners. Each returns the
-// normalized value or `undefined` for an absent/wrong-typed input.
 
 /** Accept a JSON boolean. */
 export function asBoolean(raw: unknown): boolean | undefined {
@@ -64,6 +53,23 @@ export function asNumber(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
+export function asPositiveInteger(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
+}
+
+export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
+
+/**
+ * The smallest ceiling a flow `script` step can run under and still report on
+ * the script rather than on the host. The step starts a Node process before
+ * the script runs, and that start alone costs tens of milliseconds, so under
+ * this the same script passes or times out according to how busy the machine
+ * was. Floored rather than defaulted for the reason the heap limit is: the
+ * step that loses the race errors, and names neither this bound nor the value
+ * that caused it.
+ */
+export const MIN_SCRIPT_TIMEOUT_MS = 100;
+
 /** Accept an array of non-blank strings (blank entries dropped). */
 export function asStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -74,34 +80,62 @@ export function asStringArray(raw: unknown): string[] | undefined {
   return out;
 }
 
-// ── The registry ─────────────────────────────────────────────────────────
-// The only place you edit to add a configuration.
+/**
+ * How each shared validator describes the value it accepts. Keyed on the
+ * validator itself, so swapping a key's `parse` swaps its description with it
+ * instead of letting a per-entry wording drift from what is enforced.
+ */
+const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
+  [asBoolean, "a boolean (true or false)"],
+  [asString, "a non-empty string"],
+  [asNumber, "a number"],
+  [asPositiveInteger, "a whole number greater than zero"],
+  [asStringArray, "an array of strings"],
+]);
+
+/**
+ * What a valid value for this key looks like, in words — undefined for a bespoke
+ * validator that set no `expected`, so callers describe nothing rather than guess.
+ */
+export function describeExpectedValue(def: ConfigDefinition): string | undefined {
+  return def.expected ?? PARSER_EXPECTATIONS.get(def.parse);
+}
 
 export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "telemetry.enabled",
     description:
       "Whether anonymous opt-out telemetry is enabled (on by default; environment opt-outs " +
-      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent).",
-    scopes: ["global"],
+      "like DO_NOT_TRACK are not reflected here — `argent telemetry status` shows effective consent). " +
+      "`false` in either scope wins, so a committed project opt-out holds for every teammate.",
+    scopes: ["project", "global"],
     parse: asBoolean,
-    // A committed project file must never re-enable telemetry a user disabled
-    // globally, so the more-restrictive (opt-out) value always wins.
     merge: "prioritize-restrictive",
-    // Telemetry is opt-out: with nothing stored, consent.ts treats it as
-    // enabled, and the config surface must report the same instead of "(unset)".
+    // Opt-out: consent.ts reads an unstored value as enabled, so the config
+    // surface must show the same rather than "(unset)".
     default: true,
-    // Read-only under `argent config`: opt-in/out goes through the dedicated
-    // command so the live client is drained/reset, not just the file rewritten.
+    // Opt-in/out goes through the dedicated command so the live client is
+    // drained/reset, not just the file rewritten.
     manageCommand: "argent telemetry",
+  },
+  {
+    key: "allowlist.enabled",
+    description:
+      "Whether `argent update` re-applies editor auto-approve allowlist rules. Unset (the " +
+      "default) keeps the current behavior: update refreshes the rules for editors that " +
+      "already have argent configured. Set to `false` to keep update from touching editor " +
+      "allowlists. `false` in either scope wins, so a committed project opt-out holds for " +
+      "every teammate.",
+    scopes: ["project", "global"],
+    parse: asBoolean,
+    merge: "prioritize-restrictive",
+    example: "false",
   },
   {
     key: "lens.agent",
     description: "Coding-agent id remembered by `argent lens` to skip the picker.",
     scopes: ["project", "global"],
     parse: asString,
-    // A repo can pin the agent its screenshots should use; falls back to the
-    // user's global remembered choice.
     merge: "prioritize-local",
     example: "claude",
   },
@@ -113,11 +147,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "the project root (project scope) or home (global scope).",
     scopes: ["project", "global"],
     parse: asStringArray,
-    // Additive: the scopes extend each other rather than shadow — a repo's
-    // committed device sets are appended to the user's global ones (global
-    // baseline first, project extras after, deduplicated). Note that
-    // `getAdditionalIosDeviceSets` re-implements this union (path resolution
-    // must precede dedup) and guards on the preset staying "union".
+    // Additive rather than shadowing: global baseline first, project extras
+    // after, deduplicated. `getAdditionalIosDeviceSets` re-implements this union
+    // (path resolution must precede dedup) and guards on the preset staying "union".
     merge: "union",
     example: '["~/DeviceSets/ci"]',
   },
@@ -129,12 +161,47 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "Unset ⇒ `.argent/recordings` under the project root.",
     scopes: ["project", "global"],
     parse: asString,
-    // A repo can pin where its recordings land; falls back to the user's global
-    // preference. Resolution happens on the client (the machine the mp4 is
-    // persisted to), so with a remote `argent link` tool-server it is the
-    // *client's* config that decides.
+    // Resolved on the client (the machine the mp4 is persisted to), so with a
+    // remote `argent link` tool-server it is the *client's* config that decides.
     merge: "prioritize-local",
     example: "~/Movies/argent",
+  },
+  // Global-scope only: a checked-in `.argent/config.json` must not raise the
+  // ceiling on how much of the machine a script step may occupy. `merge` is
+  // nominal here — the project scope of a global-only key is never read.
+  {
+    key: "scripts.maxTimeoutMs",
+    description:
+      "Upper bound, in milliseconds, on the time limit a flow `script` step may ask for " +
+      "(default 300000 — five minutes). Bounds how long one script can occupy the host. " +
+      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a Node process ` +
+      "before the script runs, so a smaller ceiling ends a script that did nothing wrong.",
+    scopes: ["global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value >= MIN_SCRIPT_TIMEOUT_MS ? value : undefined;
+    },
+    expected: `a whole number of milliseconds, at least ${MIN_SCRIPT_TIMEOUT_MS}`,
+    merge: "prioritize-global",
+    default: 5 * 60_000,
+    example: "300000",
+  },
+  {
+    key: "scripts.heapLimitMb",
+    description:
+      "Old-space heap limit, in MiB, given to each flow `script` process (default 512). " +
+      `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
+      "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
+      "V8's own startup before any script runs.",
+    scopes: ["global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value >= MIN_SCRIPT_HEAP_LIMIT_MB ? value : undefined;
+    },
+    expected: `a whole number of MiB, at least ${MIN_SCRIPT_HEAP_LIMIT_MB}`,
+    merge: "prioritize-global",
+    default: 512,
+    example: "512",
   },
 ] as const;
 

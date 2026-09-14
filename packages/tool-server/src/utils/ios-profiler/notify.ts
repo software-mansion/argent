@@ -13,17 +13,14 @@ export interface NotifyHandle {
 }
 
 /**
- * Subscribe to a Darwin notification via `/usr/bin/notifyutil -1 <name>`.
+ * Subscribe to a Darwin notification via `notifyutil -v -1 <name>`.
  *
- * Darwin notifications are not queued: a fast-starting `xctrace record` can
- * post the notification before a late-spawned listener registers, and the
- * resolve trigger is missed. Callers MUST await `ready` before spawning the
- * notifying process so the listener is live first.
+ * Darwin notifications are not queued: a fast-starting `xctrace record` can post
+ * the notification before a late-spawned listener registers, and it is missed.
+ * Callers MUST await `ready` before spawning the notifying process.
  *
- * `notifyutil -v` only writes to stdout when the notification fires, so we
- * cannot detect the registration boundary by reading bytes. We use a fixed
- * delay tuned empirically against `xctrace record` startup.
- * If `notifyutil` fails to spawn at all, `ready` rejects so callers can fall back.
+ * `notifyutil` writes nothing until the notification fires, so registration cannot
+ * be observed; `ready` is just a fixed delay. It rejects if the spawn fails.
  */
 export function listenForDarwinNotification(name: string): NotifyHandle {
   const proc = spawn(NOTIFYUTIL_PATH, ["-v", "-1", name]);

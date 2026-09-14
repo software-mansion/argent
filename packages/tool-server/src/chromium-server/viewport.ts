@@ -2,10 +2,8 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ViewportSize } from "./types";
 
-// Convention: a malformed/absent payload from an uncontrolled source (the
-// renderer's main world) is `unknown` — we can't validate output we don't own.
-// `validation` is reserved for checks against a schema we control (cf. the
-// android profiler metadata sidecar).
+// `unknown`, not `validation`: the renderer's main world is not a schema we own
+// (unlike the android profiler metadata sidecar).
 const VIEWPORT_FAILURE = {
   error_code: FAILURE_CODES.CHROMIUM_VIEWPORT_READ_FAILED,
   failure_area: "tool_server",
@@ -13,9 +11,8 @@ const VIEWPORT_FAILURE = {
 } as const;
 
 /**
- * Read window.innerWidth/Height/devicePixelRatio from the renderer's main
- * world. Throws when the call returns nothing — silently substituting a fake
- * 800×600 would corrupt every subsequent tap's normalized → CSS-pixel math.
+ * Throws rather than falling back to a default size: wrong dimensions would
+ * corrupt every subsequent tap's normalized → CSS-pixel math.
  */
 export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
   const out = (await cdp.send("Runtime.evaluate", {

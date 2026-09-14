@@ -109,7 +109,8 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "validated-thing",
-      {},
+      // Schema-declared names of the failing params only — never values.
+      { invalid_params: ["count"] },
       {
         error_code: "HTTP_ZOD_VALIDATION_FAILED",
         failure_stage: "http_zod_validation",
@@ -119,6 +120,32 @@ describe("http dependency gate", () => {
       expect.any(Number)
     );
     expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("Expected number");
+  });
+
+  it("reports strict-schema unknown keys as the literal token, never the user-typed names", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "strict-thing",
+      zodSchema: z.object({ port: z.number() }).strict(),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app)
+      .post("/tools/strict-thing")
+      .send({ port: 1, secret_user_key: "hunter2" });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "strict-thing",
+      { invalid_params: ["unrecognized_keys"] },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+    expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("secret_user_key");
   });
 
   it("invokes the tool normally when declared deps are present", async () => {

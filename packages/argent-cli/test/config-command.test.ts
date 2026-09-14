@@ -240,3 +240,90 @@ describe("argent config — list & json", () => {
     });
   });
 });
+
+describe("argent config — a rejected value says what to type instead", () => {
+  it("names the expected shape and suggests the user's own value, correctly wrapped", () => {
+    // The reported case: a list-valued key given a single path.
+    expect(() =>
+      config([
+        "set",
+        "ios.additionalDeviceSets",
+        "~/Library/Developer/Radon/Devices",
+        "--scope",
+        "project",
+      ])
+    ).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected an array of strings");
+    // The suggestion carries the path they typed, not a stand-in from the docs,
+    // and keeps them on the scope they asked for.
+    expect(err).toContain(
+      `Did you mean: argent config set ios.additionalDeviceSets '["~/Library/Developer/Radon/Devices"]' --scope project`
+    );
+    expect(err).toContain("argent config list");
+  });
+
+  it("suggests nothing beyond the shape when wrapping would not help", () => {
+    expect(() => config(["set", "lens.agent", "42"])).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected a non-empty string");
+    expect(err).not.toContain("Did you mean");
+    expect(err).toContain("Example: argent config set lens.agent claude");
+  });
+
+  it("keeps the global default out of the suggestion when no scope was given", () => {
+    expect(() => config(["set", "ios.additionalDeviceSets", "/a"])).toThrow(ExitError);
+
+    expect(errors()).toContain(`Did you mean: argent config set ios.additionalDeviceSets '["/a"]'`);
+    expect(errors()).not.toContain("--scope");
+  });
+
+  it("shows each key's expected value in list", () => {
+    config(["list"]);
+    expect(output()).toContain("an array of strings");
+    expect(output()).toContain('e.g. ["~/DeviceSets/ci"]');
+  });
+
+  it("carries the expected shape through list --json", () => {
+    config(["list", "--json"]);
+    const parsed = JSON.parse(output());
+    const entry = parsed.config.find((e: { key: string }) => e.key === "ios.additionalDeviceSets");
+    expect(entry.expected).toBe("an array of strings");
+    expect(entry.example).toBe('["~/DeviceSets/ci"]');
+  });
+});
+
+describe("argent config — unset leaves no empty parent behind", () => {
+  const projectConfig = () =>
+    fs.readFileSync(path.join(projectDir, ".argent", "config.json"), "utf8");
+
+  it("restores the document rather than leaving an empty group", () => {
+    config(["set", "ios.additionalDeviceSets", '["/a"]', "--scope", "project"]);
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(JSON.parse(projectConfig())).toEqual({});
+  });
+
+  it("keeps sibling keys and their groups", () => {
+    config(["set", "lens.agent", "codex", "--scope", "project"]);
+    config(["set", "ios.additionalDeviceSets", '["/a"]', "--scope", "project"]);
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(JSON.parse(projectConfig())).toEqual({ lens: { agent: "codex" } });
+  });
+
+  it("does not rewrite a file to tidy an empty group it did not create", () => {
+    // A no-op unset must not touch the file at all — that guarantee is why the
+    // fast path exists, and tidying would quietly break it.
+    const dir = path.join(projectDir, ".argent");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "config.json");
+    fs.writeFileSync(file, '{"ios":{}}');
+
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(fs.readFileSync(file, "utf8")).toBe('{"ios":{}}');
+  });
+});

@@ -197,7 +197,18 @@ describe("simulator-server path resolution", () => {
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
+  });
+
+  it("run dir is the bin root when the shared resources/android copy exists", async () => {
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "shared-resources-"));
+    const platDir = path.join(dir, process.platform);
+    fs.mkdirSync(platDir, { recursive: true });
+    fs.writeFileSync(path.join(platDir, ssBinName()), "", { mode: 0o755 });
+    fs.mkdirSync(path.join(dir, "resources", "android"), { recursive: true });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.simulatorServerRunDir()).toBe(dir);
   });
 
   it("throws when the per-platform binary is missing", async () => {
@@ -246,7 +257,7 @@ describe("host platform key (arch-aware Linux bin dirs)", () => {
     const r = await loadResolver();
     expect(r.hostPlatformKey()).toBe("linux-arm64");
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
   });
 
   it("keeps resolving bin/linux on x86_64 Linux", async () => {
@@ -310,7 +321,7 @@ describe("Windows (win32) binary resolution", () => {
     expect(r.hostPlatformKey()).toBe("win32");
     expect(r.simulatorServerBinaryName()).toBe("simulator-server.exe");
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
   });
 
   it("does not resolve an extensionless binary on Windows", async () => {

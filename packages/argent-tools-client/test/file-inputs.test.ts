@@ -123,6 +123,53 @@ describe("prepareFileInputs", () => {
     expect(out).toBe(args);
   });
 
+  it("does not derive flow_file when the superseding flow_path source is set (skipWhenSet)", async () => {
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    const savedPath = path.join(flowsDir, "my-flow.yaml");
+    await fs.writeFile(savedPath, "steps: []\n");
+    const explicitPath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(explicitPath, "steps: []\n");
+
+    const specs: FileInputSpec[] = [
+      { target: "flow_path", path: "${flow_path}", kind: "file", optional: true },
+      {
+        target: "flow_file",
+        path: "${project_root}/.argent/flows/${name}.yaml",
+        kind: "file",
+        skipWhenSet: "flow_path",
+      },
+    ];
+
+    // Dual-source misuse: flow_file must not be derived — even though the
+    // saved flow exists — so the server's exactly-one validation, not this
+    // boundary's file resolution, diagnoses the call.
+    const both = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir, flow_path: explicitPath },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(both.flow_file).toBeUndefined();
+    expect(both.flow_path).toMatchObject({ [FILE_INPUT_MARKER]: true, path: explicitPath });
+
+    // "" is still a provided source to the server's `=== undefined`
+    // dual-source check, so it must suppress the derivation the same way.
+    const emptySource = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir, flow_path: "" },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(emptySource.flow_file).toBeUndefined();
+
+    // Name-only calls keep deriving the wrapper exactly as before.
+    const nameOnly = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(nameOnly.flow_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: savedPath });
+  });
+
   it("respects an explicitly set derived target (server-side override)", async () => {
     const specs: FileInputSpec[] = [
       { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },

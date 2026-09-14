@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -56,10 +57,7 @@ const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
 const NO_RENDERERS_ERROR = "no renderers attached to hook";
 const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-// "Hook missing" and "renderers not attached" point at different runtime
-// states and have different remediations. The two codes funnel into
-// FIBER_ROOT_TRACKER_SCRIPT for the retry path, but the verbose throw
-// branches on the actual code so the operator gets accurate guidance.
+// Both codes share the retry path but need different remediation text.
 function messageForHookError(code: string): string {
   if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
   if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
@@ -97,7 +95,7 @@ function renderMarkdownTable(entries: RenderEntry[]): string {
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -127,7 +125,7 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
@@ -179,7 +177,6 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
       return null;
     }
 
-    // Re-inject hook once if missing and retry
     const firstError = getErrorString(parsed);
     if (firstError !== null && HOOK_NOT_PRESENT_ERRORS.has(firstError)) {
       await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(() => {});

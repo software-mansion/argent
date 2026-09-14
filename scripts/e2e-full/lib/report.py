@@ -32,7 +32,7 @@ def main() -> int:
 
     total = defaultdict(int)
     per_phase = defaultdict(lambda: defaultdict(int))
-    tools = OrderedDict()  # tool -> {"validation": status, "happy": status}
+    tools = OrderedDict()
     fails = []
 
     for r in rows:
@@ -47,7 +47,7 @@ def main() -> int:
                 tools[tool]["validated"] = True
         if ph in DEVICE_PHASES:
             cur = tools[tool]["happy"]
-            # a single pass anywhere marks the tool happy-path covered
+            # pass wins over a fail or skip in any other device phase
             if st == "pass":
                 tools[tool]["happy"] = "pass"
             elif st == "fail" and cur != "pass":
@@ -66,7 +66,6 @@ def main() -> int:
     w(f"- **totals:** ✅ {total['pass']} pass · ❌ {total['fail']} fail · ∼ {total['skip']} skip"
       f" ({sum(total.values())} cases)\n")
 
-    # Per-phase summary
     w("## Per-phase\n")
     w("| phase | pass | fail | skip |")
     w("|---|---:|---:|---:|")
@@ -77,7 +76,6 @@ def main() -> int:
         w(f"| {p} | {d['pass']} | {d['fail']} | {d['skip']} |")
     w("")
 
-    # Coverage matrix
     w("## Tool coverage\n")
     w(f"{len(tools)} tools observed. `validated` = argument-schema rejection tests passed; "
       "`happy-path` = a real device/app run (or why it was skipped).\n")
@@ -92,7 +90,6 @@ def main() -> int:
         w(f"| `{tool}` | {mark(t['validated'])} | {mark(t['happy'])} |")
     w("")
 
-    # Failures
     w("## Failures\n")
     if not fails:
         w("None. 🎉\n")

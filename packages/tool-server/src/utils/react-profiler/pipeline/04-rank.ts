@@ -1,17 +1,4 @@
-/**
- * Stage 4: Filter, Rank, Serialize to ComponentFinding[]
- *
- * Filter rules — component included if ANY of these hold:
- *   1. normalizedRenderCount >= 3   (frequent re-renderer)
- *   2. maxDurationMs >= 30ms        (single expensive render)
- *
- * Additional gates (all must hold):
- *   - dominantReason ∈ {parent, props, hooks, context, state}
- *   - isAnimated = false AND isRecyclerChild = false
- *
- * Ranking: sort surviving components by totalRenderMs DESC.
- * Pareto cutoff: top-20 OR components where totalRenderMs > 0.5% of recordingMs.
- */
+/** Stage 4: filter, rank and serialize components to ComponentFinding[]. */
 import type { TagOutput } from "../types/pipeline";
 import type { ComponentFinding, ReRenderReason } from "../types/output";
 
@@ -30,9 +17,6 @@ const MIN_MAX_DURATION_MS = 30;
 export function rank(input: TagOutput): ComponentFinding[] {
   const { sessionContext, recordingMs } = input;
 
-  // -------------------------------------------------------------------------
-  // Filter components
-  // -------------------------------------------------------------------------
   type TaggedComp = typeof input.components extends Map<string, infer V> ? V : never;
   const candidates: Array<{ name: string; comp: TaggedComp }> = [];
 
@@ -48,18 +32,12 @@ export function rank(input: TagOutput): ComponentFinding[] {
     candidates.push({ name, comp });
   }
 
-  // -------------------------------------------------------------------------
-  // Rank by totalRenderMs DESC, apply Pareto cutoff
-  // -------------------------------------------------------------------------
   candidates.sort((a, b) => b.comp.totalRenderMs - a.comp.totalRenderMs);
 
   const paretoMin = recordingMs * PARETO_THRESHOLD_PCT;
   const ranked = candidates.filter((c, i) => c.comp.totalRenderMs >= paretoMin || i < MAX_FINDINGS);
   const topCandidates = ranked.slice(0, MAX_FINDINGS);
 
-  // -------------------------------------------------------------------------
-  // Serialize to ComponentFinding[]
-  // -------------------------------------------------------------------------
   const findings: ComponentFinding[] = topCandidates.map(({ name, comp }) => {
     const topChangedHookNames: string[] =
       comp.hookTypeNames !== undefined

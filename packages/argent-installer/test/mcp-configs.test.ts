@@ -54,6 +54,17 @@ function setupTmpDir(): string {
   return dir;
 }
 
+// Temp dirs minted inside an it() body. Registering on creation keeps their
+// removal off the body's last line, where an assertion throwing above would
+// strand the directory.
+const bodyTempDirs: string[] = [];
+
+function mintTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  bodyTempDirs.push(dir);
+  return dir;
+}
+
 function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -77,6 +88,9 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  for (const dir of bodyTempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   // Safety net for tests that set the override inside an it() body: a leaked
   // override points homedir() at an already-removed tmpdir, which silently
   // neutralizes the home-branch of every later detection/adapter test (and
@@ -1644,6 +1658,10 @@ describe("copyRulesAndAgents", () => {
     fs.mkdirSync(agentsDir, { recursive: true });
     fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
     fs.writeFileSync(path.join(agentsDir, "environment-inspector.md"), "# Agent");
+    // The bundled agents tree is not flat — it carries a references/
+    // subdirectory — so the fixture mirrors that shape.
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, "references", "checklist.md"), "# Checklist");
   });
 
   it("copies rules to .claude/rules for Claude Code adapter (local)", () => {
@@ -1661,6 +1679,14 @@ describe("copyRulesAndAgents", () => {
     expect(fs.existsSync(path.join(tmpDir, ".claude", "agents", "environment-inspector.md"))).toBe(
       true
     );
+  });
+
+  it("names the target plainly when nothing redirects", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results.every((r) => !r.includes(" -> "))).toBe(true);
   });
 
   it("copies rules to .cursor/rules for Cursor adapter (local)", () => {
@@ -1697,6 +1723,56 @@ describe("copyRulesAndAgents", () => {
     expect(
       fs.existsSync(path.join(homedirOverride, ".gemini", "agents", "environment-inspector.md"))
     ).toBe(true);
+  });
+
+  // Issue #701: a `.claude/agents -> ../.agents/agents` layout keeps one
+  // canonical copy of the agent definitions and points each harness's path at
+  // it. Before the fix the copy tried to replace the link with a directory and
+  // failed, so argent-environment-inspector never landed even though
+  // rules/argent.md kept referencing it.
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("installs agents into a symlinked .claude/agents, including nested files", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      const link = path.join(tmpDir, ".claude", "agents");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), link);
+
+      const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+      expect(fs.existsSync(path.join(canonical, "environment-inspector.md"))).toBe(true);
+      expect(fs.existsSync(path.join(canonical, "references", "checklist.md"))).toBe(true);
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(results.some((r) => r.includes("Could not copy agents"))).toBe(false);
+    });
+
+    it("names both paths when a target redirects through a symlink", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      const link = path.join(tmpDir, ".claude", "agents");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), link);
+
+      const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+      const agentsLine = results.find((r) => r.includes("Copied agents"))!;
+
+      expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
+    });
+
+    it("installs rules into a symlinked .claude/rules", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "rules");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "rules"), path.join(tmpDir, ".claude", "rules"));
+
+      copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+      expect(fs.existsSync(path.join(canonical, "argent.md"))).toBe(true);
+    });
   });
 
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {
@@ -2018,7 +2094,7 @@ describe("generated configs are portable across machines (issue #238)", () => {
 describe("installer preserves foreign MCP config", () => {
   it("remove keeps an unrelated server's empty env/args and a sibling user key (Cursor)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".cursor", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2039,12 +2115,11 @@ describe("installer preserves foreign MCP config", () => {
     const after = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(after.mcpServers.other).toEqual({ command: "other-bin", args: [], env: {} });
     expect(after.userSettings).toEqual({ theme: "dark", overrides: {} });
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("VS Code write preserves a pre-existing server in a JSONC (commented) file", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".vscode", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2057,7 +2132,6 @@ describe("installer preserves foreign MCP config", () => {
     }) as Record<string, any>;
     expect(after.servers).toHaveProperty("argent");
     expect(after.servers).toHaveProperty("myserver");
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // Same Defect B, but for the { mcpServers } adapters: Cursor and Kiro are
@@ -2069,7 +2143,7 @@ describe("installer preserves foreign MCP config", () => {
   for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
     it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const dir = mintTempDir("argent-fc-");
       const configPath = path.join(dir, "mcp.json");
       fs.writeFileSync(
         configPath,
@@ -2081,7 +2155,6 @@ describe("installer preserves foreign MCP config", () => {
       const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
       expect(after.mcpServers).toHaveProperty("argent");
       expect(after.mcpServers).toHaveProperty("myserver");
-      fs.rmSync(dir, { recursive: true, force: true });
     });
   }
 
@@ -2092,7 +2165,7 @@ describe("installer preserves foreign MCP config", () => {
   // file on disk (it still has a foreign server), with only argent gone.
   it("VS Code remove preserves a comment and a foreign server (uninstall round-trip)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".vscode", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2107,13 +2180,12 @@ describe("installer preserves foreign MCP config", () => {
     expect(after.servers).not.toHaveProperty("argent");
     expect(after.servers).toHaveProperty("myserver");
     expect(fs.existsSync(configPath)).toBe(true);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
     it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const dir = mintTempDir("argent-fc-");
       const configPath = path.join(dir, "mcp.json");
       fs.writeFileSync(
         configPath,
@@ -2126,7 +2198,6 @@ describe("installer preserves foreign MCP config", () => {
       const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
       expect(after.mcpServers).not.toHaveProperty("argent");
       expect(after.mcpServers).toHaveProperty("myserver");
-      fs.rmSync(dir, { recursive: true, force: true });
     });
   }
 
@@ -2136,7 +2207,7 @@ describe("installer preserves foreign MCP config", () => {
     // tree (pruneEmptyConfig), silently stripping a foreign server's `args = []`
     // and any sibling empty table alongside deleting the argent entry.
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, "config.toml");
     fs.writeFileSync(
       configPath,
@@ -2156,17 +2227,15 @@ describe("installer preserves foreign MCP config", () => {
     expect(after).toContain("[other_section]");
     expect(after).toContain("[mcp_servers.other]");
     expect(after).toContain("args = []");
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("Codex remove deletes the file when argent was the only content (TOML)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, "config.toml");
     fs.writeFileSync(configPath, '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n');
     expect(adapter.remove(configPath)).toBe(true);
     expect(fs.existsSync(configPath)).toBe(false);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // ── Allowlist writers (the last readJson → writeJson clobber path) ──────────
@@ -2183,7 +2252,7 @@ describe("installer preserves foreign MCP config", () => {
 
   it("Cursor addAllowlist preserves a comment and foreign rules in permissions.json", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(
@@ -2197,12 +2266,11 @@ describe("installer preserves foreign MCP config", () => {
     expect(after.mcpAllowlist).toContain("other:*"); // foreign rule survives
     expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
     expect(raw).toContain("do not touch"); // comment survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("Cursor addAllowlist/removeAllowlist round-trip preserves foreign rules and keeps the file", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(permPath, `{\n  // keep me\n  "mcpAllowlist": ["other:*"]\n}\n`);
@@ -2213,17 +2281,15 @@ describe("installer preserves foreign MCP config", () => {
     const after = readJsoncFile(permPath);
     expect(after.mcpAllowlist).toEqual(["other:*"]); // argent gone, foreign kept
     expect(raw).toContain("keep me"); // comment survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("Cursor removeAllowlist deletes the file when argent was the only rule", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     cursor.addAllowlist!(tmpDir, "global"); // fresh create: { mcpAllowlist: ["argent:*"] }
     cursor.removeAllowlist!(tmpDir, "global");
     expect(fs.existsSync(permPath)).toBe(false);
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("addClaudePermission preserves a comment and foreign permissions in settings.json", () => {
@@ -2360,7 +2426,7 @@ describe("installer preserves foreign MCP config", () => {
 
   it("Cursor removeAllowlist prunes an emptied mcpAllowlist but keeps the file for a foreign key", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(
@@ -2372,7 +2438,6 @@ describe("installer preserves foreign MCP config", () => {
     const after = readJsoncFile(permPath);
     expect(after).not.toHaveProperty("mcpAllowlist"); // emptied array pruned
     expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 });
 

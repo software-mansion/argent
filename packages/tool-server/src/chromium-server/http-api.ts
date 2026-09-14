@@ -4,32 +4,15 @@ import type { IncomingMessage, Server } from "node:http";
 import type { ButtonType, ChromiumServer, KeyDirection, Rotation, TouchType } from "./types";
 
 /**
- * Express router mirroring sim-server's HTTP surface, scoped per Chromium
- * device id. Mounted under `/chromium-server/:id/...` by the tool-server so
- * the preview UI / external consumers can drive a Chromium app the same way
- * they drive a simulator. Endpoints intentionally mirror sim-server names so
- * a generic client can be written once.
- *
- * Routes:
- *   POST /api/screenshot         { rotation?, scale?, downscaler? } → { url, path }
- *   POST /api/clipboard/text     { text } → { status: "ok" }
- *   POST /api/fps                { report: bool } → { status: "ok" }
- *   POST /api/navigate           { url } → { status: "ok" }     [extra: not in sim-server]
- *   POST /api/reload             {} → { status: "ok" }          [extra]
- *   POST /api/history/back       {} → { moved: bool }           [extra]
- *   POST /api/history/forward    {} → { moved: bool }           [extra]
- *   GET  /viewport               → { width, height, devicePixelRatio }
- *
- * Plus an MJPEG endpoint `GET /stream.mjpeg` mounted directly by the
- * `attachMjpegEndpoint` helper because Express+streaming response bodies are
- * awkward without manually flushing.
+ * Express router mounted under `/chromium-server/:id/...`. Endpoint names
+ * deliberately match sim-server's so a generic client (preview UI, external
+ * consumers) can drive Chromium and a simulator with the same code.
  */
 export function createChromiumServerRouter(server: ChromiumServer): Router {
   const router = Router();
   router.use((req, _res, next) => {
-    // JSON parsing isn't pre-wired on this sub-router — the tool-server uses
-    // express.json() at the top level, but make the dependency obvious here so
-    // the router is reusable outside the tool-server.
+    // express.json() runs at the tool-server top level; defaulting the body
+    // keeps this router usable when mounted without it.
     if (!req.body) req.body = {};
     next();
   });
@@ -118,10 +101,8 @@ export function createChromiumServerRouter(server: ChromiumServer): Router {
     res.json(server.getViewport());
   });
 
-  // MJPEG stream — Chromium's screencast format is already JPEG, so the loop
-  // is just "subscribe → write multipart body → unsubscribe on close". One
-  // screencast session is shared across all MJPEG clients via the refcounted
-  // ScreencastManager.
+  // Frames arrive as JPEG, so this is a straight multipart relay. One
+  // refcounted ScreencastManager session is shared by all MJPEG clients.
   router.get("/stream.mjpeg", async (req: Request, res: Response) => {
     res.status(200);
     res.setHeader("Content-Type", "multipart/x-mixed-replace;boundary=NextFrame");
@@ -195,18 +176,12 @@ interface WsRequest {
 }
 
 /**
- * Attach a WebSocket endpoint at `<base>/ws` for the given Chromium server.
- * Mirrors sim-server's WS contract: each message is `{ id, cmd, ...payload }`
- * and the response is `{ id, status: "ok"|"error", message? }`. Server-pushed
- * events (FPS reports) are JSON-encoded with the original event name.
+ * Attach a WebSocket endpoint at `<base>/ws`. Mirrors sim-server's WS
+ * contract: `{ id, cmd, ...payload }` in, `{ id, status, message? }` out;
+ * server-pushed events are JSON frames tagged with the event name.
  *
- * Lives in this file rather than the Express router because Express doesn't
- * own the HTTP upgrade handshake — the `ws` library does.
- *
- * `authorizeUpgrade` gates every handshake (Host / Origin guard). Because the
- * `ws` library — not Express — owns the upgrade, none of the HTTP middleware
- * (Host guard, auth) runs here, so this is the only place the same-origin /
- * DNS-rebinding defense can be applied to the control channel.
+ * Lives here rather than in the Express router because the `ws` library, not
+ * Express, owns the HTTP upgrade handshake.
  */
 export function attachChromiumServerWebsocket(
   httpServer: Server,
@@ -214,17 +189,16 @@ export function attachChromiumServerWebsocket(
   resolveServer: (req: IncomingMessage) => ChromiumServer | null,
   authorizeUpgrade: (req: IncomingMessage) => boolean
 ): WebSocketServer {
-  // noServer mode: we handle the upgrade ourselves so we can route by URL.
+  // noServer mode so we can route the upgrade by URL ourselves.
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (req, socket, head) => {
     const url = req.url ?? "";
     if (!url.startsWith(basePath) || !url.endsWith("/ws")) return;
-    // Reject cross-origin / DNS-rebinding handshakes before the socket is bound
-    // to a device. Without this, any web page could open this control channel
-    // cross-origin (CSWSH) and inject synthetic input — the HTTP Host/auth
-    // middleware never runs on an upgrade. Checked before resolveServer so a
-    // cross-origin probe can't even learn whether a device exists.
+    // Reject cross-origin handshakes (CSWSH / DNS rebinding): the HTTP Host and
+    // auth middleware never runs on an upgrade, so any page could otherwise
+    // inject input here. Checked before resolveServer so a cross-origin probe
+    // can't learn whether a device exists.
     if (!authorizeUpgrade(req)) {
       socket.destroy();
       return;
@@ -254,9 +228,8 @@ function bindWsToServer(ws: WebSocket, server: ChromiumServer): void {
   const onFrame = (frame: { sessionId: number }) =>
     sendJson({ event: "frame", sessionId: frame.sessionId });
   server.events.on("fpsReport", onFps);
-  // Optional: clients subscribed to the WS may not want every frame echoed; we
-  // only signal the sessionId so they can correlate without paying for base64
-  // payloads on this channel. MJPEG clients use the dedicated /stream.mjpeg.
+  // Frames are announced by sessionId only; the base64 payload goes over
+  // /stream.mjpeg.
   server.events.on("frame", onFrame);
 
   ws.on("close", () => {
@@ -331,12 +304,9 @@ async function handleWsCommand(
       return {};
     }
     default:
-      // handleWsCommand's only caller catches this and reformats it to a
-      // `{ status: "error", message }` frame, so a FailureError's structured
-      // signal is dropped before any registry boundary — this WS server isn't
-      // driven through a registered tool. Left a plain Error like the adjacent
-      // sendButton path; CHROMIUM_PARAM_INVALID still buckets via its reachable
-      // tool sites (chromium-cookies / chromium-storage / chromium-tabs).
+      // Plain Error: the only caller reformats it into a `{ status: "error" }`
+      // frame, so a FailureError's structured signal would be dropped — this WS
+      // server isn't driven through a registered tool.
       throw new Error(`Unknown ws cmd: ${msg.cmd}`);
   }
 }

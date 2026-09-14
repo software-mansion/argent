@@ -1,16 +1,11 @@
 /**
- * Cross-platform native profiler types — the home of the iOS/Android symmetry.
- *
- * Hoisted from utils/ios-profiler/types.ts so the Android pipeline produces the
- * same `Bottleneck` shape without forking the render path. `platform` lets
- * render branches choose row text (jank reason / state breakdown for Android)
- * without splitting the union. iOS source-compat re-exports stay in ios-profiler/types.ts.
+ * Bottleneck types shared by the iOS and Android profilers. `platform` keeps both
+ * in one union; ios-profiler/types.ts re-exports these for source compatibility.
  */
 
 /**
- * Hard cap on a native profiler recording's wall-clock duration. After this the
- * platform start handlers auto-stop the capture so a forgotten session can't run
- * unbounded. Shared by the Android and iOS start paths.
+ * Both platform start handlers auto-stop the capture at this point, so a
+ * forgotten session can't record unbounded.
  */
 export const RECORDING_CAP_MS = 10 * 60 * 1000;
 
@@ -23,28 +18,24 @@ export interface CpuHotspot {
   sampleCount: number;
   thread: string;
   severity: "RED" | "YELLOW";
-  /** Representative app call chain for this hotspot */
   topCallChain: string[];
-  /** Top 3 most frequent app call chains */
+  /** Most frequent first, capped at 3. */
   topCallChains: { chain: string[]; count: number }[];
-  /** Whether this function was also seen during a UI hang window */
+  /** iOS only: samples overlap a UI hang window. Always false on Android. */
   duringHang: boolean;
-  /** Time range of samples in this hotspot (ms from trace start) */
+  /** ms from trace start */
   timeRangeMs: { first: number; last: number };
-  /** Burst windows: clusters of activity separated by >500ms gaps */
+  /** Clusters of activity separated by >500ms gaps. */
   burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
   /**
-   * Android-only: whether the dominant frame is app code ("app") or
-   * system/emulator overhead ("system") such as the goldfish/QEMU GPU pipe or
-   * a kernel syscall. Drives the labelling and advice in the render layer.
-   * Undefined on iOS.
+   * Android-only: "system" means emulator/kernel overhead (goldfish/QEMU GPU
+   * pipe, syscalls) rather than app code. Drives render labelling and advice.
    */
   frameClass?: "app" | "system";
   /**
-   * Android-only: the mapping (loaded object) the dominant leaf lives in —
-   * `/kernel` for kernel frames, a real module path for user space. Fed to
-   * classifyNativeFrame so kernel leaves with unrecognisable names are still
-   * classed as system. Undefined on iOS (no mapping in the iOS sample data).
+   * Android-only: the mapping (loaded object) the dominant leaf lives in. Fed to
+   * classifyNativeFrame so `/kernel` leaves with unrecognisable names are still
+   * classed as system.
    */
   dominantMapping?: string;
 }
@@ -58,18 +49,18 @@ export interface UiHangStateBreakdownEntry {
 export interface UiHang {
   type: "ui_hang";
   platform: "ios" | "android";
-  /** iOS: "hang"/"microhang"; Android: "anr" | "jank" */
+  /** Android: "anr" | "jank"; iOS: xctrace's own hang-type label. */
   hangType: string;
   durationMs: number;
   startTimeFormatted: string;
-  /** Trace-relative nanoseconds — preferred over parsing startTimeFormatted. */
+  /** Trace-relative nanoseconds; startTimeFormatted is display-only. */
   startNs: number;
   endNs: number;
   suspectedFunctions: string[];
-  /** Top app call chains found during the hang window, with sample counts */
+  /** Top app call chains in the hang window, with sample counts. Empty on Android. */
   appCallChains: { chain: string[]; sampleCount: number }[];
   severity: "RED" | "YELLOW";
-  /** Android-only: FrameTimeline jank_type (AppDeadlineMissed, BufferStuffing, ...) */
+  /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
   jankReason?: string;
   /** Android-only: main-thread state durations during this hang. */
   stateBreakdown?: UiHangStateBreakdownEntry[];
@@ -79,7 +70,7 @@ export interface UiHang {
 
 export interface MemoryLeak {
   type: "memory_leak";
-  /** v1: iOS only — Android leak detection is deferred. */
+  /** Android leak detection is not implemented. */
   platform: "ios";
   objectType: string;
   totalSizeBytes: number;
@@ -87,25 +78,22 @@ export interface MemoryLeak {
   responsibleFrame: string;
   responsibleLibrary: string;
   /**
-   * Whether xctrace resolved a real responsible frame for this leak. Captures
-   * via `xctrace --attach` (what Argent does) have no malloc-stack history, so
-   * most simulator leaks are unattributed: frame `<Call stack limit reached>`,
-   * empty library, generic `Malloc N Bytes` object types — benign system noise
-   * rather than confirmed app leaks. Drives severity.
+   * Whether xctrace resolved a real responsible frame. Without malloc-stack
+   * history the frame is `<Call stack limit reached>` and the leak is more
+   * likely system noise than a confirmed app leak.
    */
   attributed: boolean;
   /** RED only when attributed; unattributed leaks are a low-confidence YELLOW. */
   severity: "RED" | "YELLOW";
 }
 
-/** Android-only weak signal — never emitted on iOS. */
 export interface MemoryRssGrowth {
   type: "memory_rss_growth";
   platform: "android";
   startMb: number;
   peakMb: number;
   growthMb: number;
-  /** Always YELLOW — this is a weak signal, not a confirmed leak. */
+  /** Weak signal, not a confirmed leak. */
   severity: "YELLOW";
 }
 
@@ -125,15 +113,10 @@ export interface NativeProfilerAnalyzeResult {
   reportFile: string | null;
   bottlenecksTotal: number;
   /**
-   * "ok" when every analyzer query/export succeeded; "analysis_failed" when
-   * one or more entries are present in `exportErrors`. Lets MCP/CLI callers
-   * tell a truly clean trace apart from a run where queries blew up and
+   * Lets callers tell a genuinely clean trace apart from a run where
    * `bottlenecksTotal === 0` only because nothing could be analyzed.
    */
   status: "ok" | "analysis_failed";
-  /**
-   * Per-exporter error messages keyed by exporter name (Android: cpu/hangs/rss;
-   * iOS: cpu/hangs/leaks). Empty object when `status === "ok"`.
-   */
+  /** Error messages keyed by exporter name. Empty object when `status === "ok"`. */
   exportErrors: Record<string, string>;
 }

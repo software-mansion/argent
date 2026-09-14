@@ -1,21 +1,13 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
 ---
 
 ## Unified tool surface
 
 All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
 
-**Chromium (CDP) app** = any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app (boot it with `boot-device` + `electronAppPath`), or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`. The latter is auto-discovered by `list-devices` on port `9222` plus anything in `ARGENT_CHROMIUM_PORTS`. The same describe/tap/swipe/keyboard/screenshot surface drives all of them.
-
-**Multi-tab / windows (Chromium only):** a Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to `list` them (stable ids `t1`, `t2`, …, optional labels), open a `new` one, `select` which is active, or `close` one. Every other tool (`describe`, `gesture-tap`, `screenshot`, `debugger-evaluate`, `open-url`, …) acts on the **active** tab, so `chromium-tabs action=select` before driving a different tab. Note: a cross-process navigation (some redirects) can swap a tab's underlying CDP target — re-run `chromium-tabs action=list` to pick it up under a fresh id.
-
-**Cookies & storage (Chromium only):** `chromium-cookies` reads/writes cookies via the Network domain (so HttpOnly cookies are visible): `action=get` (optionally scoped by `url`), `set` (`name`, `value`, + `url`/`domain`, optional `secure`/`httpOnly`/`sameSite`/`expires`), `delete` (`name`), `clear` (all). `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`. Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
-
-> **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*` tools are the wrong tools for it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tv-interact` skill: `describe` to read focus, `tv-remote` for remote / D-pad presses, and `keyboard` to type.
-
-For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
+**Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
 
 ## 1. Before You Start
 
@@ -29,10 +21,10 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
-3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
+3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`. Pass `momentum: false` when the swipe should decelerate before ending for a precise movement.
 4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For app navigation, use the element tree returned after each action** (`--- Elements after action (describe) ---`); call `describe` only when no fresh tree is available for the current screen. It works on any screen without app restart. Do not navigate from screenshot pixels on regular in-app screens unless the tree failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -56,25 +48,28 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool               | Notes                                                            |
-| ----------------- | ------------------ | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`   | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`   | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`         | iOS+Android. Supports Enter, Escape, arrows                      |
-| Rotate device     | `rotate`           | Orientation changes                                              |
-| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text    |
+| Action            | Tool                | Notes                                                             |
+| ----------------- | ------------------- | ----------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)             |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                          |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                               |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                        |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                     |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down  |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                            |
+| Long press        | `gesture-custom`    | Context menus, drag start                                         |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions                                         |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                          |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                       |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                 |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
+| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
+| Rotate device     | `rotate`            | Orientation changes                                               |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
 
 ## 5. Finding Tap Targets
 
@@ -93,7 +88,7 @@ Point follow-up native diagnostics after you already have a candidate point:
 - `native-user-interactable-view-at-point`: deepest native view that would receive touch at a known raw iOS point; requires `bundleId`
 - `native-view-at-point`: deepest visible native view at a known raw iOS point; requires `bundleId`
 
-### If `describe` Fails
+### If `describe` Tool Fails
 
 Read the exact error and choose the action that matches it:
 
@@ -104,7 +99,7 @@ Read the exact error and choose the action that matches it:
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
 - You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
-  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection — call `restart-app` first if needed.
+  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection.
 - You already have a candidate point and want to confirm what would actually receive touch:
   use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 
@@ -127,6 +122,8 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 ```
 
 Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
+
+`"momentum"` defaults to `true` (a natural flinging swipe). Pass `"momentum": false` for a momentum-free swipe: the finger decelerates into the end point, resulting in little to no fling. It needs `durationMs` of at least 150 and is rejected below it.
 
 ### gesture-pinch — Two-finger pinch
 
@@ -166,22 +163,32 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 ### keyboard — Type text or press special keys
 
 ```json
-{ "udid": "<UDID>", "text": "search query", "key": "enter" }
+{ "udid": "<UDID>", "text": "search query" }
 ```
+
+One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
 ```json
-{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}", "key": "enter" }
+{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
 ```
 
-The placeholder is resolved on the machine running the tool-server from the `ARGENT_SECRET_<NAME>` environment variable (here `ARGENT_SECRET_APP_PASSWORD`) — the CI-native pattern: expose the secret under that prefix in the environment that starts the tool-server. Rules:
+Where the value is read from, and the rules for using a placeholder — including not screenshotting the field afterwards — are in `references/secrets.md`. Read it before typing any credential.
 
-- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_.
-- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen.
-- Only `ARGENT_SECRET_*` variables are resolvable; never ask the user to paste a secret value into the conversation — ask them to export the env var instead.
+### paste — Paste text into the focused field
+
+```json
+{ "udid": "<UDID>", "text": "482913" }
+```
+
+Puts `text` on the **device** clipboard (the host clipboard is untouched) and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
+
+`paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
+
+Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
 
 ### rotate — Change orientation
 
@@ -193,20 +200,30 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 ### await-ui-element — Block until a UI element reaches a state
 
-Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to block server-side until an element reaches an expected state (or `timeoutMs`, default 5000ms, elapses). It polls the same accessibility/DOM tree as `describe`. (For a plain pause, use your own harness sleep — this tool deliberately has no bare-timer mode.)
+**Never poll `screenshot`/`describe` in a loop to wait for something.** Use `await-ui-element`: it blocks server-side on the same tree `describe` reads. It has no bare-timer mode by design — for a plain pause, use your own harness sleep.
 
 ```json
 { "udid": "<UDID>", "condition": "visible", "selector": { "text": "Continue" } }
 ```
 
-- `condition`: `exists`, `visible`, `hidden`, or `text`.
-- `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
-- `text` condition also needs `expectedText` (substring the matched element must contain).
-- `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. Double-check the selector for `hidden` waits — the result `note` flags when the selector never matched any element. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
-- Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
+The tool's own description carries the conditions, selector matching, defaults and return shape. What it does not tell you:
 
-Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
+- A `hidden` check that succeeds **immediately** may be a false pass — its `note` then says the selector never matched anything at all. Treat that as a failed check and fix the selector; do not read it as "the element went away".
+- The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
+- To disambiguate a loose selector, pin the `role` to a text role like `StaticText` — that skips a same-named button.
+- On a `text` timeout the `note` quotes the text of the element the check actually read, so you can see which match it landed on.
+
+### await-screen-idle — Block until the screen stops changing
+
+Use after launch/navigation and before a raw tap, when an early-painted element may still be moving:
+
+```json
+{ "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
+```
+
+On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
+
+Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
 ---
 
@@ -254,24 +271,20 @@ For visual regression checks, before/after screenshot comparisons, and detailed 
 
 ## 8. Action Sequencing with `run-sequence`
 
-Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
-scrolling multiple times, typing and submitting automatically, known sequence of multiple taps, rotating device back and forth.
+Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete.
 
-Do **not** use `run-sequence` when any step depends on observing the result of a previous step
+Do **not** use `run-sequence` when any step depends on observing the result of a previous step.
 
 ### Use cases
 
-Use the sequencing when:
-
-- Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
-- "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- "scroll to bottom", "scroll to top", "scroll until X" -> sequence 3-5 scrolls
+- form interactions, "clear and retype field" -> triple-tap to select all, then type the new value
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 
 ### Allowed tools inside `run-sequence`
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `await-ui-element`
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `paste`, `rotate`, `shake`, `tv-remote`, `await-ui-element`
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
@@ -292,7 +305,7 @@ Scroll down three times:
 }
 ```
 
-Type into a focused field and submit:
+Type into a focused field and submit. This is the only way to mix text and a key, because one `keyboard` call cannot carry both:
 
 ```json
 {
@@ -350,6 +363,10 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
+
+### Chromium
+
+See `references/chromium.md` — tabs, cookies/storage.
 
 ### iOS
 

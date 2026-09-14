@@ -6,9 +6,6 @@ interface NavigationHistory {
 }
 
 export async function navigate(cdp: CDPClient, url: string): Promise<void> {
-  // Page.navigate accepts about:blank, file://, data:, http(s):, etc.
-  // No URL whitelist here — the caller is the tool-server, which already
-  // validated the URL against the tool's zod schema.
   await cdp.send("Page.navigate", { url });
 }
 
@@ -20,11 +17,7 @@ async function getHistory(cdp: CDPClient): Promise<NavigationHistory> {
   return (await cdp.send("Page.getNavigationHistory", {})) as NavigationHistory;
 }
 
-/**
- * Walk one step back in the renderer's navigation history. Returns false
- * when already at the oldest entry — matches browser `history.back()` no-op
- * semantics instead of throwing.
- */
+/** Returns false at the oldest entry — no-op like `history.back()`, not a throw. */
 export async function goBack(cdp: CDPClient): Promise<boolean> {
   const history = await getHistory(cdp);
   if (history.currentIndex <= 0) return false;

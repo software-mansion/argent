@@ -1,0 +1,339 @@
+:root {
+  --swm-expandable-transition: transform 200ms ease;
+}
+
+table {
+  display: table;
+  width: 100%;
+}
+
+@media (max-width: 1280px) {
+  table {
+    display: block;
+    width: 100%;
+  }
+}
+
+table thead tr {
+  border-bottom: 1px solid var(--ifm-table-border-color);
+}
+
+.header-github {
+  margin-left: 1.5em;
+}
+
+.header-github:before {
+  display: flex;
+  height: 24px;
+  width: 24px;
+
+  mask: url("../../static/img/github.svg") no-repeat 100% 100%;
+  mask-size: cover;
+  content: "";
+
+  background-color: var(--ifm-navbar-link-color);
+}
+
+@media (max-height: 768px) {
+  .header-github:before {
+    height: 20px;
+    width: 20px;
+  }
+}
+
+.header-github:hover:before {
+  background-color: var(--ifm-navbar-link-hover-color);
+}
+
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
+[class*="codeBlockContent"] pre,
+[class*="codeBlockContent"] code {
+  border: none;
+  border-radius: var(--swm-radius);
+  background-color: var(--swm-off-background);
+}
+
+/* Add small padding, when some of the lines are too long in a code block */
+[class*="codeBlockLines"] span:last-of-type {
+  margin-right: 1em;
+}
+
+.theme-doc-version-badge {
+  color: var(--swm-version-badge);
+  background: var(--swm-version-badge-background);
+  padding: 6px 10px;
+  border-radius: var(--swm-radius-small);
+  border: none;
+  margin-bottom: 8px;
+}
+
+[class*="DocCategoryGeneratedIndexPage"][class*="title"] {
+  font-size: var(--swm-h1-font-size);
+}
+
+button[class*="DocSearch-Button"] {
+  margin: 0 !important;
+}
+
+/* Center logo vertically in navbar items */
+.navbar__items a[href="/argent/"] img,
+.navbar__brand a[href="/argent/"] img,
+.navbar__brand img {
+  vertical-align: middle;
+}
+
+[class*="hireUsContainer"] {
+  display: none;
+}
+
+[class*="headerWithBadges"] {
+  align-items: baseline;
+}
+
+.theme-doc-sidebar-container [class*="_badge_"] {
+  font-size: 11px;
+  padding: 1px 5px;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.theme-doc-sidebar-container .menu__link {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* Tabs nested inside details: bump label contrast against the details background. */
+details .tabs__item {
+  color: var(--swm-details-color) !important;
+  opacity: 0.7;
+}
+
+details .tabs__item:hover {
+  opacity: 1;
+}
+
+details .tabs__item--active {
+  opacity: 1;
+  border-bottom-color: var(--swm-details-color) !important;
+}
+
+/*
+ * The shared theme always mounts a DocSearch bar. Argent has no DocSearch
+ * application yet, so keep it hidden until ALGOLIA_* credentials are wired up.
+ */
+.navbar [class*="navbarSearchWrapper"] {
+  display: none;
+}
+
+/*
+ * The hidden search bar was the flexible element in the left navbar group, so
+ * the color mode toggle takes over pushing the trailing items to the right.
+ */
+.navbar [class*="colorModeToggle"] {
+  margin-left: auto !important;
+}
+
+/*
+ * Shape - every surface that reads as a card, pill or panel shares the 24px
+ * radius; small inline chips keep the smaller one so they stay readable.
+ */
+[class*="cardContainer"],
+[class*="admonition"],
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
+[class*="llmDropdown"],
+[class*="tocCollapsible"],
+[class*="pagination"],
+[class*="searchQueryInput"],
+[class*="searchVersionInput"],
+[class*="navbarSearch"] button,
+[class*="buttonGroup"] button,
+[class*="llmButton"],
+[class*="toggleButton"],
+.button,
+.card,
+.tabs-container,
+.markdown img,
+details {
+  border-radius: var(--swm-radius);
+}
+
+[class*="_badge_"],
+[class*="tagRegular"],
+[class*="tagWithCount"] span,
+.menu__link,
+.pagination-nav__link {
+  border-radius: var(--swm-radius-small);
+}
+
+/* Nested code inside a rounded panel would otherwise double up the corners. */
+.markdown a code,
+p code,
+li code,
+td code {
+  border-radius: var(--swm-radius-small);
+}
+
+/*
+ * Important buttons sit on the ink color; the highlight stays reserved for
+ * links and active states.
+ */
+.button--primary {
+  --ifm-button-background-color: var(--swm-navy-light-100);
+  --ifm-button-border-color: var(--swm-navy-light-100);
+  color: var(--swm-white);
+}
+
+.button--primary:hover {
+  --ifm-button-background-color: var(--swm-navy-light-80);
+  --ifm-button-border-color: var(--swm-navy-light-80);
+  color: var(--swm-white);
+}
+
+/* Hovering a surface that sits on white lifts it to the secondary background. */
+.menu__link:hover,
+.dropdown__link:hover,
+.table-of-contents__link:hover {
+  background-color: var(--swm-off-background);
+}
+
+/* On the dark background the ink button would disappear, so it inverts. */
+:root[data-theme="dark"] .button--primary {
+  --ifm-button-background-color: var(--swm-off-white);
+  --ifm-button-border-color: var(--swm-off-white);
+  color: var(--swm-navy-light-100);
+}
+
+:root[data-theme="dark"] .button--primary:hover {
+  --ifm-button-background-color: var(--swm-navy-light-20);
+  --ifm-button-border-color: var(--swm-navy-light-20);
+  color: var(--swm-navy-light-100);
+}
+
+/* Code blocks read as flat surfaces - no drop shadow, no border. */
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
+[class*="codeBlockContent"] pre {
+  box-shadow: none;
+}
+
+/*
+ * Sidebar - the menu reads as an inset panel floating on the white page: a
+ * transparent border cuts it away from the page edges so the background shows
+ * around its 24px corners.
+ */
+@media (min-width: 997px) {
+  .theme-doc-sidebar-container,
+  .theme-doc-sidebar-container [class*="sidebarViewport"],
+  .theme-doc-sidebar-container [class*="sidebar_"] {
+    border-right: none !important;
+    background-color: var(--swm-background);
+  }
+
+  .theme-doc-sidebar-container nav.menu {
+    border: 12px solid transparent;
+    border-radius: var(--swm-radius);
+    background-color: var(--swm-sidebar-background);
+    background-clip: padding-box;
+    padding: 8px 24px;
+  }
+
+  .theme-doc-sidebar-container nav.menu > ul.menu__list {
+    background-color: transparent;
+  }
+
+  /*
+   * The shared theme paints every class containing "sidebar" with the off
+   * background, which catches the logo the desktop sidebar shows once the
+   * hideOnScroll navbar slides away. It sits above the inset panel, on the
+   * page itself, so it takes the page background.
+   */
+  .theme-doc-sidebar-container [class*="sidebarLogo"],
+  .theme-doc-sidebar-container [class*="logoWrapper"] {
+    background-color: var(--swm-background);
+  }
+}
+
+/* The sidebar menu keeps the ink color so it matches body copy. */
+.menu__link,
+.menu__list-item-collapsible > .menu__link {
+  color: var(--swm-sidebar-menu-color);
+}
+
+/*
+ * Inline code in tables flips against the row it sits on, so the badge stays
+ * visible on both the plain and the striped rows.
+ */
+th code,
+table tr:nth-child(2n) td code {
+  background-color: var(--swm-background);
+}
+
+table tr:nth-child(2n + 1) td code {
+  background-color: var(--swm-off-background);
+}
+
+/*
+ * "Copy page" button - the LLMButton from the shared theme ships with square
+ * corners, a hard ink outline, a browser-default font and a shadowed dropdown.
+ * It sits next to the page title, so it takes the same shape language as the
+ * rest of the site: a pill on the page background, the secondary surface on
+ * hover, and a flat rounded panel for the menu. The `article` prefix wins over
+ * the theme's own class rules, which load after this file.
+ */
+article [class*="llmButtonBar"] {
+  margin-top: 4px;
+}
+
+article button[class*="llmButton_"] {
+  gap: 8px;
+  padding: 8px 14px;
+  font-family: var(--swm-body-font);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius);
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+article button[class*="llmButton_"]:hover,
+article button[class*="llmButton_"][class*="active"] {
+  background-color: var(--swm-off-background);
+  border-color: var(--swm-border);
+}
+
+article button[class*="llmButton_"] svg {
+  flex-shrink: 0;
+}
+
+article [class*="llmDropdown_"] {
+  top: calc(100% + 8px);
+  min-width: 200px;
+  padding: 8px;
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius);
+  box-shadow: none;
+}
+
+article [class*="llmDropdownItem"] {
+  gap: 10px;
+  padding: 10px 12px;
+  font-family: var(--swm-body-font);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ifm-font-color-base);
+  background-color: transparent;
+  border-radius: var(--swm-radius-small);
+}
+
+article [class*="llmDropdownItem"]:hover {
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-off-background);
+}

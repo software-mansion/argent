@@ -1,7 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// `defaultAndroidRoots()` ends with three LITERAL roots — /opt/android-sdk,
+// /usr/lib/android-sdk (the Debian `android-sdk` apt package) and
+// /usr/local/share/android-sdk (the Homebrew cask) — that no environment
+// variable can suppress. On a host that has one, the three tests below that
+// assert "not resolvable" find it and go red, so their answer is a property of
+// the machine rather than of the resolver. Confine the probe to the temp
+// directory this file's fixtures live in; every candidate outside it reports
+// absent, which is also what those tests want from a machine that has no SDK.
+//
+// This mock is not coverage of those three roots, and nothing here can be:
+// reaching one positively would mean writing under /opt or /usr. Deleting any
+// of them from the resolver leaves this file green — only the two home-derived
+// Studio roots are pinned, each by the test named for it.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    access: async (path: Parameters<typeof actual.access>[0], mode?: number) => {
+      if (!String(path).startsWith(tmpdir())) {
+        throw Object.assign(new Error(`ENOENT: outside the test sandbox, ${String(path)}`), {
+          code: "ENOENT",
+        });
+      }
+      return actual.access(path, mode);
+    },
+  };
+});
 import {
   __resetAndroidBinaryCacheForTesting,
   resolveAndroidBinary,
@@ -15,11 +43,15 @@ import {
 // Snapshot the env vars we mutate so a failing assertion can't leak state into
 // the next test (or the surrounding process: vitest reuses the worker for
 // other suites and a stale ANDROID_HOME would silently flip their behavior).
-// HOME is included because `androidRoots()` derives Android Studio's default
-// install path from `os.homedir()`, which on Linux/macOS honors $HOME. Pinning
-// HOME to a tmpdir keeps the resolver from accidentally finding the dev's real
-// SDK during tests that assert "not resolvable".
-const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME"] as const;
+// HOME is included because `defaultAndroidRoots()` derives Android Studio's
+// default install paths from `os.homedir()`; pinning it to a tmpdir keeps those
+// roots off the dev's real SDK during tests that assert "not resolvable", and
+// the literal system roots are handled by the fs mock above. USERPROFILE rides
+// along only to keep the snapshot total: `os.homedir()` reads it instead of HOME
+// on Windows, but `fakeSdk` writes extensionless binaries the win32 resolver
+// never accepts, so both describes skip there and nothing here runs on that
+// platform — `android-binary-windows.test.ts` covers `.exe`.
+const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "USERPROFILE"] as const;
 const originalEnv: Record<string, string | undefined> = {};
 
 async function fakeSdk(root: string, name: "adb" | "emulator"): Promise<string> {
@@ -34,7 +66,7 @@ async function fakeSdk(root: string, name: "adb" | "emulator"): Promise<string> 
   return path;
 }
 
-describe("resolveAndroidBinary", () => {
+describe.skipIf(process.platform === "win32")("resolveAndroidBinary", () => {
   let tmpRoot: string;
 
   beforeEach(async () => {
@@ -115,6 +147,7 @@ describe("resolveAndroidBinary", () => {
     // accidentally pick up a real Android Studio install at
     // `~/Android/Sdk` or `~/Library/Android/sdk` on the dev's box.
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     const path = await resolveAndroidBinary("emulator");
     expect(path).toBeNull();
@@ -130,6 +163,7 @@ describe("resolveAndroidBinary", () => {
     delete process.env.ANDROID_HOME;
     delete process.env.ANDROID_SDK_ROOT;
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     const path = await resolveAndroidBinary("emulator");
     expect(path).toBe(expected);
@@ -142,6 +176,7 @@ describe("resolveAndroidBinary", () => {
     delete process.env.ANDROID_HOME;
     delete process.env.ANDROID_SDK_ROOT;
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     const path = await resolveAndroidBinary("adb");
     expect(path).toBe(expected);
@@ -161,6 +196,7 @@ describe("resolveAndroidBinary", () => {
     process.env.ANDROID_HOME = envSdk;
     delete process.env.ANDROID_SDK_ROOT;
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     const path = await resolveAndroidBinary("emulator");
     expect(path).toBe(envBinary);
@@ -181,6 +217,7 @@ describe("resolveAndroidBinary", () => {
     // the dev's box (~/android-sdk, ~/Android/Sdk, etc.) and turn this into
     // a "found something else, test passes for the wrong reason" pass.
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     const path = await resolveAndroidBinary("emulator");
     // Resolver should refuse the non-executable candidate. With no other
@@ -189,7 +226,7 @@ describe("resolveAndroidBinary", () => {
   });
 });
 
-describe("ensureDep('emulator')", () => {
+describe.skipIf(process.platform === "win32")("ensureDep('emulator')", () => {
   let tmpRoot: string;
 
   beforeEach(async () => {
@@ -224,6 +261,7 @@ describe("ensureDep('emulator')", () => {
     // Same reason as the resolver test: keep the default-install probe from
     // finding a real SDK on the dev box and turning this into a flaky pass.
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
 
     await expect(ensureDep("emulator")).rejects.toBeInstanceOf(DependencyMissingError);
     try {

@@ -1,10 +1,5 @@
 import { z } from "zod";
-import {
-  zodObjectToJsonSchema,
-  type ToolCapability,
-  type ToolContext,
-  type ToolDefinition,
-} from "@argent/registry";
+import { type ToolCapability, type ToolContext, type ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendTouchEvent } from "../../utils/gesture-utils";
@@ -62,20 +57,6 @@ const zodSchema = z
     message: "Pass radius, or both radiusX and radiusY.",
   });
 
-// Explicit because the auto-derived JSON Schema loses the .refine() cross-field
-// rules — the anyOf re-encodes both: the per-axis pair together, or radius with
-// neither half of the pair.
-const inputSchema = {
-  ...zodObjectToJsonSchema(zodSchema),
-  anyOf: [
-    { required: ["radiusX", "radiusY"] },
-    {
-      required: ["radius"],
-      not: { anyOf: [{ required: ["radiusX"] }, { required: ["radiusY"] }] },
-    },
-  ],
-};
-
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
@@ -84,7 +65,7 @@ interface Result {
 }
 
 const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
@@ -108,9 +89,9 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.
+Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected.`,
   zodSchema,
-  inputSchema,
   capability,
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
@@ -119,13 +100,12 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
-    // The refine guarantees radius exists whenever the per-axis pair is absent.
+    // Refines guarantee radius is set whenever the per-axis pair is absent.
     const radiusX = params.radiusX ?? params.radius!;
     const radiusY = params.radiusY ?? params.radius!;
 
     let timestampMs = 0;
-    // Last dispatched finger positions, so an abort can lift from where the
-    // fingers actually are.
+    // Last dispatched positions, so an abort lifts from where the fingers are.
     let lastX1 = 0;
     let lastY1 = 0;
     let lastX2 = 0;
@@ -133,13 +113,20 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
 
     for (let i = 0; i <= steps; i++) {
       if (ctx?.signal?.aborted) {
-        // Once Down has been dispatched, the synthetic fingers are on the glass —
-        // send a terminal Up so a cancelled run doesn't leave them held down.
-        if (i > 0) sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
         const err = new Error(
           `gesture-rotate aborted — cancelled mid-gesture after ${i} of ${steps + 1} frames`
         );
         err.name = "AbortError";
+        // Fingers are on the glass from i=0 on; lift them so a cancelled run
+        // doesn't leave them held down. Best effort, as in gesture-swipe: a
+        // refused lift rides along as `cause` instead of masking the abort.
+        if (i > 0) {
+          try {
+            await sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
+          } catch (liftErr) {
+            err.cause = liftErr;
+          }
+        }
         throw err;
       }
 
@@ -155,7 +142,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
+      await sendTouchEvent(api, type, x1, y1, x2, y2);
       lastX1 = x1;
       lastY1 = y1;
       lastX2 = x2;

@@ -4,37 +4,32 @@ import { existsSync } from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
-// Absolute path to `ps`, resolved once. An MCP server launched from a GUI /
-// launchd context inherits a sanitized PATH that omits `/bin`, so a bare `"ps"`
-// spawn ENOENTs — the callers below swallow it, yielding an empty running-VVD set
-// that silently defeats the VVD adb-shadow dedup in list-devices (VVD listed
-// twice). Pin the canonical location; fall back to bare `"ps"` only if neither
-// exists, preserving PATH resolution for an atypical layout.
+// Absolute `ps`, resolved once: an MCP server launched from a GUI / launchd context
+// inherits a PATH without `/bin`, so a bare `"ps"` ENOENTs — and the callers below
+// swallow that into an empty running-VVD set, defeating list-devices' VVD adb-shadow
+// dedup (the VVD is then listed twice). Bare `"ps"` only if neither path exists.
 export const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((p) => existsSync(p)) ?? "ps";
 
 /**
- * Running VVD discovery from the OS process table: the `vega-virtual-device`
- * (legacy `kepler-virtual-device`) process is a positive Vega identity a stock
- * Android emulator / QEMU can't forge, and its console port is read off the live
- * argv (`-ports <console>,<adb>`).
+ * Running-VVD discovery from the OS process table: a `vega-virtual-device` (legacy
+ * `kepler-virtual-device`) process is a Vega identity a stock Android emulator / QEMU
+ * can't forge, and its console port is read off the live argv.
  */
 
-// `-A` (POSIX, all processes) + `-ww` (untruncated argv) are accepted by both
-// macOS/BSD `ps` and Linux procps; the BSD `-x` form is not portable. `command=`
-// (alias of `args` on procps) prints the full argv with no header.
+// `-A` (all processes) + `-ww` (untruncated argv) work on both macOS/BSD `ps` and Linux
+// procps; the BSD `-x` form does not. `command=` prints the full argv with no header.
 export const PS_ARGS = ["-A", "-ww", "-o", "command="] as const;
 
-// Same probe, with a leading PID column, for the stop/kill path: the `vega` CLI
-// can lose track of a running VVD and refuse to stop it (see `stopVvd`), so we
-// terminate the process directly. `pid=,command=` prints `<pid> <argv>` per line
-// with no header on both macOS/BSD `ps` and Linux procps.
+// Same probe with a leading PID column, for the stop/kill path: the `vega` CLI can lose
+// track of a running VVD and refuse to stop it (see `stopVvd`), so we kill by pid.
+// `pid=,command=` is header-less on both macOS/BSD `ps` and Linux procps.
 export const PS_ARGS_WITH_PID = ["-A", "-ww", "-o", "pid=,command="] as const;
 
-// The VVD's emulator binary, anchored to a path boundary + a following arg/EOL so
-// it can't match a substring like `…/vega-virtual-device-wrapper`.
+// Anchored to a path boundary + a following arg/EOL so it can't match a substring like
+// `…/vega-virtual-device-wrapper`.
 const VVD_PROCESS_RE = /(?:^|\/)(?:vega|kepler)-virtual-device(?:\s|$)/;
 
-/** Console ports of running VVDs from `ps` command-line output (pure; unit-tested). */
+/** Console ports of running VVDs from `ps` command-line output. */
 export function parseVvdConsolePorts(psOutput: string): Set<number> {
   const ports = new Set<number>();
   for (const line of psOutput.split("\n")) {
@@ -45,10 +40,10 @@ export function parseVvdConsolePorts(psOutput: string): Set<number> {
   return ports;
 }
 
-// Read the console port from the emulator's own `-ports <console>,<adb>` flag
-// (fallback: the `-qmp …/qmp-socket-<console>.sock` path). Matching an actual flag
-// — not just a loose `qmp-socket-NNNN.sock` substring — keeps a stray path in some
-// other process's argv from contributing a phantom port.
+// Console port from the emulator's `-ports <console>,<adb>` flag, else its
+// `-qmp …/qmp-socket-<console>.sock` path. Matching an actual flag — not a loose
+// `qmp-socket-NNNN.sock` substring — keeps a stray path in some other process's argv
+// from contributing a phantom port.
 function consolePortFromVvdArgs(line: string): number | null {
   const ports = line.match(/(?:^|\s)-ports\s+(\d+),\d+/);
   if (ports) return parseInt(ports[1]!, 10);
@@ -57,32 +52,26 @@ function consolePortFromVvdArgs(line: string): number | null {
   return null;
 }
 
-// Timeout for the `ps` process-table read. This is a LOCAL read (it never talks
-// to a device), so it is near-instant in practice; the timeout is a backstop
-// against a pathologically-loaded host, not a wedged device. Exported so
-// list-devices' BRANCH_DEADLINE_MS accounting can include it: a single
-// `listVegaDevices()` recovery can run two of these serially (the recovery gate
-// plus the `-d emulator-<port>` selector probe), and that budget has to stay
-// under the branch deadline so the backstop never truncates a completing branch.
+// Backstop for the local `ps` read against a pathologically-loaded host, not a wedged
+// device. Exported so list-devices' BRANCH_DEADLINE_MS accounting can include it: one
+// `listVegaDevices()` recovery runs two of these serially (the recovery gate plus the
+// `-d emulator-<port>` selector probe).
 export const VVD_PS_PROBE_TIMEOUT_MS = 5_000;
 
 /**
- * PIDs of running VVD emulator processes from `ps -o pid=,command=` output
- * (pure; unit-tested). Same VVD identity as `parseVvdConsolePorts` — only the
- * pid (not the console port) is read, since the stop path kills by pid.
+ * PIDs of running VVD emulator processes from `ps -o pid=,command=` output. Same VVD
+ * identity as `parseVvdConsolePorts`; the stop path kills by pid.
  */
 export function parseVvdPids(psOutput: string): number[] {
   const pids: number[] = [];
   for (const line of psOutput.split("\n")) {
-    // `<leading spaces><pid> <argv...>`; split the pid off, then identity-match argv.
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!m) continue;
     const argv = m[2]!;
-    // Require BOTH the VVD binary name AND an emulator console-port signal
-    // (`-ports`/`-qmp`). The pid feeds SIGTERM/SIGKILL, so demand a positive
-    // emulator identity — otherwise a process that merely mentions a
-    // `…/vega-virtual-device` path in its argv (e.g. a git command on a branch
-    // of that name) could be mistaken for the device and signalled.
+    // Require an emulator console-port signal (`-ports`/`-qmp`) as well as the binary
+    // name: the pid feeds SIGTERM/SIGKILL, so a process that merely mentions a
+    // `…/vega-virtual-device` path (e.g. a git command on a branch of that name) must
+    // not be mistaken for the device and signalled.
     if (!VVD_PROCESS_RE.test(argv) || consolePortFromVvdArgs(argv) === null) continue;
     pids.push(parseInt(m[1]!, 10));
   }
@@ -101,8 +90,8 @@ export async function listRunningVvdConsolePorts(): Promise<Set<number>> {
     });
     return parseVvdConsolePorts(stdout);
   } catch (err) {
-    // Don't fail every list-devices / Vega tool call if `ps` errors — but log it, so
-    // a flag incompatibility (vs a genuine "no VVD") is diagnosable rather than silent.
+    // Don't fail every list-devices / Vega tool call on a `ps` error; log it so a flag
+    // incompatibility isn't silently indistinguishable from a genuine "no VVD".
     process.stderr.write(
       `[vega-process] ps probe failed; assuming no running VVD: ${String(err)}\n`
     );

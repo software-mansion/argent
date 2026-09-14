@@ -3,14 +3,12 @@ import pc from "picocolors";
 import type { McpConfigAdapter } from "./mcp-configs.js";
 import { InitCancelled } from "./init-args.js";
 
-export interface AllowlistResult {
+interface AllowlistResult {
   enabled: boolean;
   lines: string[];
 }
 
-// Tool auto-approval step. Returns whether allowlisting was enabled (so the
-// orchestrator can emit allowlist_decision) and the per-adapter summary lines.
-// Throws InitCancelled("allowlist") on cancel.
+// `enabled` is returned so the caller can emit the allowlist_decision telemetry event.
 export async function configureAllowlist(args: {
   adapters: McpConfigAdapter[];
   effectiveRoot: string;

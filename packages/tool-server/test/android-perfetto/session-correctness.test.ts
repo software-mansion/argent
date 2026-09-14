@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { formatTraceFreshness } from "../../src/utils/profiler-shared/freshness";
 
 const MIN = 60_000;
@@ -171,6 +174,23 @@ describe("validateAndroidAppProcess", () => {
 });
 
 describe("renderNativeProfilerReport — freshness note", () => {
+  // The renderer writes a real report file next to the trace, named after it
+  // (deriveReportPath: `<traceFile without extension>-report.md`), so the
+  // fixture path decides where that lands. Own the directory: a literal one
+  // would have every concurrent run write the same name, and nothing would
+  // ever remove it.
+  let traceDir: string;
+  let traceFile: string;
+
+  beforeEach(async () => {
+    traceDir = await mkdtemp(join(tmpdir(), "argent-freshness-report-"));
+    traceFile = join(traceDir, "native-profiler-x.pftrace");
+  });
+
+  afterEach(async () => {
+    await rm(traceDir, { recursive: true, force: true });
+  });
+
   const NOTE = "> ⚠️ **Stale trace:** this recording was captured 3 days ago";
 
   it("renders the stale-trace warning in the all-clear (zero-bottleneck) header when provided", async () => {
@@ -191,7 +211,7 @@ describe("renderNativeProfilerReport — freshness note", () => {
     const { report } = await renderNativeProfilerReport({
       payload: {
         metadata: {
-          traceFile: "/tmp/native-profiler-x.pftrace",
+          traceFile,
           platform: "Android",
           timestamp: "2026-01-01T00:00:00.000Z",
         },
@@ -215,7 +235,7 @@ describe("renderNativeProfilerReport — freshness note", () => {
           },
         ],
       },
-      traceFile: "/tmp/native-profiler-x.pftrace",
+      traceFile,
       freshnessNote: NOTE,
     });
     expect(report).toContain("Stale trace");

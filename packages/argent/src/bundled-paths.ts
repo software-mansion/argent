@@ -2,12 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolsServerPaths } from "@argent/tools-client";
 
-// Installed package version, read from the shipped package.json. Lets the
-// launcher detect a stale tool-server after an in-place version bump (a local
-// devDependency update rewrites tool-server.cjs at the same path) and respawn
-// it — with no install-time hook: install scripts are frequently disabled
-// (--ignore-scripts, pnpm's build gate, Yarn PnP, locked-down CI), which is
-// why argent ships no postinstall script at all.
+// Installed package version, read from the shipped package.json. Feeds the
+// launcher's version gate as the fallback for its on-disk read, so an in-place
+// bump (a local devDependency update rewrites tool-server.cjs at the same
+// path) retires the stale tool-server with no install-time hook: install
+// scripts are frequently disabled (--ignore-scripts, pnpm's build gate, Yarn
+// PnP, locked-down CI), which is why argent ships no postinstall script.
 function readPackageVersion(): string | undefined {
   try {
     const pkg = JSON.parse(
@@ -55,12 +55,10 @@ function findDeclaringRoot(startDir: string): string | null {
 // The version-STABLE package dir: the conventional <dir>/node_modules/<pkg>
 // symlink closest to cwd that resolves to the running package. Unlike
 // import.meta's realpath — pnpm's version-pinned .pnpm store dir, pruned on a
-// bump — this symlink survives an in-place update. In a pnpm WORKSPACE the
-// symlink sits in the DECLARING member's node_modules, a level below the root
-// where the .pnpm store lives, so scan every level from cwd up rather than
-// only the level where the store matched. Only ever returns a path whose
-// realpath equals the running package, so it can never point at a different
-// install — just a different (stable) alias of the same real dir.
+// bump — this symlink survives an in-place update. Scan every level from cwd
+// up: in a pnpm WORKSPACE the symlink sits in the DECLARING member's
+// node_modules, below the root where the .pnpm store lives. The realpath check
+// means the result is only ever another alias of the same real dir.
 export function findStablePackageDir(startDir: string, packageRoot: string): string | undefined {
   let dir = startDir;
   for (;;) {
@@ -79,8 +77,7 @@ export function findStablePackageDir(startDir: string, packageRoot: string): str
 // Install topology of this running package: a project's local devDependency
 // (package root inside a node_modules found by walking up from cwd) or the
 // global PATH install — and, for local, WHICH project. Classified at process
-// start, the moment cwd is trustworthy (a committed local MCP command only
-// resolves with cwd at the project root); the launcher forwards both as
+// start, while cwd is still trustworthy; the launcher forwards both as
 // ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT so update-argent doesn't re-infer
 // them from the detached server's editor-chosen cwd.
 function classifyInstall(): {
@@ -93,8 +90,8 @@ function classifyInstall(): {
   let cwd: string;
   try {
     packageRoot = fs.realpathSync(path.join(import.meta.dirname, ".."));
-    // cwd can throw (ENOENT) when the shell's directory was deleted — and this
-    // runs at module import, before any fatal handler is installed.
+    // cwd throws (ENOENT) when the shell's directory was deleted, and this runs
+    // at module import, before fatal handlers are installed.
     cwd = process.cwd();
     dir = cwd;
   } catch {
@@ -104,11 +101,9 @@ function classifyInstall(): {
     try {
       const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
       if (packageRoot === nmReal || packageRoot.startsWith(nmReal + path.sep)) {
-        // Local install. Prefer the DECLARING root over this physical hoist
-        // root: in a hoisted workspace the declaring manifest sits at cwd
-        // (the member root) or an ancestor below `dir`. The version-stable
-        // package dir (used for runtime paths that must survive a pnpm store
-        // prune) is found by its own cwd-up scan — see findStablePackageDir.
+        // Prefer the DECLARING root over this physical hoist root: in a
+        // hoisted workspace the declaring manifest sits at cwd (the member
+        // root) or an ancestor below `dir`.
         return {
           kind: "local",
           projectRoot: findDeclaringRoot(cwd) ?? dir,
@@ -122,10 +117,9 @@ function classifyInstall(): {
     if (parent === dir) break;
     dir = parent;
   }
-  // Yarn PnP local installs have no node_modules anywhere: the package runs
-  // from the project's .yarn dir (unplugged/cache). Falling through to
-  // "global" would make the agent-triggered update target a global install
-  // the user may not even have.
+  // Yarn PnP has no node_modules anywhere: the package runs from the project's
+  // .yarn dir. Falling through to "global" would point the update at a global
+  // install the user may not even have.
   if (packageRoot.includes(`${path.sep}.yarn${path.sep}`)) {
     const declRoot = findDeclaringRoot(cwd);
     if (declRoot) return { kind: "local", projectRoot: declRoot };
@@ -135,9 +129,8 @@ function classifyInstall(): {
 
 const classifiedInstall = classifyInstall();
 
-// __dirname in ESM (compiled from TS) will be dist/. Bundle artifacts ship
-// next to the compiled launcher; prefer the version-stable package dir when
-// the classification found one (see classifyInstall).
+// import.meta.dirname is dist/ in the published package, so ".." is the
+// package root; prefer the version-stable alias when classification found one.
 const packageDir = classifiedInstall.stablePackageDir ?? path.join(import.meta.dirname, "..");
 
 export const BUNDLED_RUNTIME_PATHS: ToolsServerPaths = {

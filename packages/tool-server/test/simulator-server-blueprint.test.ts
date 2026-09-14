@@ -29,7 +29,7 @@ vi.mock("../src/blueprints/ax-service", () => ({
 
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
-  simulatorServerBinaryDir: () => "/fake/bin",
+  simulatorServerRunDir: () => "/fake/bin",
 }));
 
 // The factory now probes the runtime kind to reject tvOS sims. Mock it to the
@@ -37,6 +37,14 @@ vi.mock("@argent/native-devtools-ios", () => ({
 // which would otherwise hang the fake-timer test waiting on a child process.
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
+}));
+
+// Device-set resolution reads the user's config + probes simctl — mock it to
+// the default set (null) so spawns stay hermetic; the additional-set spawn
+// test flips it per-case.
+const deviceSetForUdidMock = vi.fn(async (_udid: string): Promise<string | null> => null);
+vi.mock("../src/utils/ios-device-sets", () => ({
+  deviceSetForUdid: (udid: string) => deviceSetForUdidMock(udid),
 }));
 
 function makeFakeProc() {
@@ -130,6 +138,27 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
   });
 
+  it("passes --device-set for an iOS device from an additional CoreSimulator set", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const radonSet = "/Users/dev/Library/Caches/com.swmansion.radon-ide/Devices/iOS";
+    deviceSetForUdidMock.mockResolvedValueOnce(radonSet);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const udid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    const device = iosDevice(udid);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55556);
+    const instance = await factoryPromise;
+
+    const [, args] = spawnMock.mock.calls[0]!;
+    // Same flag Radon IDE passes to this binary for its own set's devices.
+    expect(args).toEqual(["ios", "--id", udid, "--device-set", radonSet]);
+
+    await instance.dispose();
+  });
+
   it("spawns the `android` subcommand for an Android device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
@@ -163,6 +192,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android_device", "--id", serial]);
+    // The binary resolves resources/android relative to cwd — must be the run dir.
+    expect(spawnMock.mock.calls[0]![2]).toMatchObject({ cwd: "/fake/bin" });
   });
 
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
@@ -194,8 +225,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     signalReady(fakeProc, 55558);
     const instance = await factoryPromise;
 
-    instance.api.pressKey("Down", 0x29);
-    instance.api.pressKey("Up", 0x29);
+    await instance.api.pressKey("Down", 0x29);
+    await instance.api.pressKey("Up", 0x29);
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");

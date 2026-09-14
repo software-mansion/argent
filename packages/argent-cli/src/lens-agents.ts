@@ -1,44 +1,28 @@
 /**
- * The coding-agent CLIs `argent lens` can bind to. Lens spawns and owns exactly
- * one agent terminal; this registry says which CLIs are supported, how to detect
- * them on PATH, and how to launch each one seeded with the CLI-Lens prompt.
- *
- * Two seeding styles:
- *  - arg mode (most CLIs): the seed is passed as the initial-prompt argument, so
- *    the agent reads it the moment it boots (`claude "<seed>"`, `gemini -i …`).
- *  - inject mode (`injectSeed`): the CLI's interactive TUI takes no prompt arg
- *    (e.g. opencode), so lens launches the bare TUI and types the seed in as the
- *    first message once it's up — the same channel the feedback relay uses.
- *
- * Only CLI agents for now; GUI/editor integrations may come later.
+ * Registry of the coding-agent CLIs `argent lens` can bind to: how to detect
+ * each on PATH and how to launch it.
  */
 
 import { execFileSync } from "node:child_process";
 
 export interface AgentSpec {
-  /** Stable id used by `--agent` and in messages. */
+  /** Stable id used by `--agent` and the picker. */
   id: string;
   /** Human label shown in the picker. */
   displayName: string;
-  /** Executable looked up on PATH (also what gets spawned). */
+  /** Executable looked up on PATH. */
   bin: string;
   /**
-   * Build the shell command run in the spawned terminal's interactive shell.
-   * `cwdQuoted` and `seedQuoted` are ALREADY shell-quoted by the caller. In
-   * inject mode `seedQuoted` is unused (the seed is typed in after boot).
+   * Shell command to run in the agent's terminal. `cwdQuoted` and `seedQuoted`
+   * are ALREADY shell-quoted by the caller; `seedQuoted` is the path to the
+   * seed file, and is unused in inject mode.
    */
   launch: (cwdQuoted: string, seedQuoted: string) => string;
   /** The CLI has no initial-prompt arg — type the seed in after the TUI boots. */
   injectSeed?: boolean;
 }
 
-/**
- * Supported agents, in preference order (the picker's default is the first
- * installed one). `claude "<seed>"`, `codex "<seed>"`, and `cursor-agent
- * "<seed>"` all forward the positional to their interactive session; gemini uses
- * `-i` ("execute this prompt then stay interactive"); opencode's TUI takes only a
- * project path, so it's seeded by injection.
- */
+/** Supported agents, in the order the picker lists them. */
 export const AGENTS: readonly AgentSpec[] = [
   {
     id: "claude",
@@ -73,17 +57,15 @@ export const AGENTS: readonly AgentSpec[] = [
   },
 ];
 
-/** Look up an agent by its id. */
 export function findAgentById(id: string): AgentSpec | undefined {
   return AGENTS.find((a) => a.id === id);
 }
 
-/** All known agent ids — for help text and `--agent` validation messages. */
 export function agentIds(): string[] {
   return AGENTS.map((a) => a.id);
 }
 
-/** Default PATH probe: `which`/`where` exits non-zero when the binary is absent. */
+/** `which`/`where` exits non-zero when the binary is absent. */
 function defaultIsOnPath(bin: string): boolean {
   try {
     execFileSync(process.platform === "win32" ? "where" : "which", [bin], {
@@ -95,12 +77,10 @@ function defaultIsOnPath(bin: string): boolean {
   }
 }
 
-/** Whether an agent's binary is installed (on PATH). */
 export function isAgentInstalled(agent: AgentSpec, isOnPath = defaultIsOnPath): boolean {
   return isOnPath(agent.bin);
 }
 
-/** The supported agents currently installed on PATH, in preference order. */
 export function detectInstalledAgents(isOnPath = defaultIsOnPath): AgentSpec[] {
   return AGENTS.filter((a) => isOnPath(a.bin));
 }

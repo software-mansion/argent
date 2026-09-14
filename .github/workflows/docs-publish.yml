@@ -1,0 +1,58 @@
+name: Docs publish
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/docs/**"
+      - ".github/workflows/docs-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-publish
+  cancel-in-progress: false
+
+jobs:
+  docs-publish:
+    name: Publish to GitHub Pages
+    if: github.repository == 'software-mansion/argent'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: packages/docs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/docs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # `path` is repository-relative and ignores `defaults.run.working-directory`.
+      - name: Upload generated content as a Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: packages/docs/build
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

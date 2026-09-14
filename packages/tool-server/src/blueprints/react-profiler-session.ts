@@ -5,9 +5,13 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
-import { FIBER_ROOT_TRACKER_SCRIPT } from "../utils/react-profiler/scripts";
+import {
+  FIBER_ROOT_TRACKER_SCRIPT,
+  STOP_FOR_TAKEOVER_SCRIPT,
+} from "../utils/react-profiler/scripts";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -44,8 +48,8 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
-  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
-  ownerToolServerPid: number | null; // process.pid when this tool-server owns; null otherwise
+  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId while we own the run
+  ownerToolServerPid: number | null; // process.pid while this tool-server owns the run
   disposeSession: () => void;
 }
 
@@ -85,6 +89,16 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         error_kind: "validation",
       });
     }
+
+    /**
+     * The React profiler rides the same CDP session as the JS debugger, so it
+     * is gated by the same mechanism. `JsRuntimeDebugger` is a declared
+     * dependency and has already checked this. Repeating it here keeps the
+     * gate visible at the blueprint that owns the tools rather than relying on
+     * a dependency edge staying in place. A no-op for Argent's own devices.
+     */
+    await assertExternalCapability(REACT_PROFILER_SESSION_NAMESPACE, deviceId, "js-debugger");
+
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -114,10 +128,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       disposeSession: () => events.emit("terminated"),
     };
 
-    // Enable Profiler domain
     await cdp.send("Profiler.enable").catch(warnOnError("Profiler.enable"));
 
-    // Track script sources for source map resolution in analyze_profile
     cdp.events.on("scriptParsed", (script) => {
       if (script.sourceMapURL) {
         state.scriptSources.set(script.scriptId, {
@@ -127,10 +139,9 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       }
     });
 
-    // Inject fiber root tracker (idempotent — guarded in JS)
+    // Idempotent — guarded in JS
     await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(warnOnError("FIBER_ROOT_TRACKER_SCRIPT"));
 
-    // Detect RN architecture
     try {
       const archJson = (await cdp.evaluate(
         `JSON.stringify({
@@ -160,7 +171,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       warnOnError("architecture detection")(err);
     }
 
-    // Get Hermes version
     try {
       const propsJson = (await cdp.evaluate(
         "JSON.stringify(HermesInternal.getRuntimeProperties())"
@@ -175,8 +185,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     }
 
     cdp.events.on("disconnected", (error) => {
-      // Only clear cache if profiling was in progress — preserves data from a completed session
-      // that survived app restart, while preventing stale in-flight data from being returned.
+      // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
       }
@@ -195,7 +204,25 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     return {
       api: state,
       dispose: async () => {
-        // Profiler.stop is called explicitly in react-profiler-stop before disposal.
+        // `react-profiler-stop` stops the renderers and the sampler before
+        // disposing; a dispose from `stop-all-simulator-servers` arrives
+        // mid-run instead, leaving the in-app DevTools backend recording every
+        // commit and argent's commit hook re-serializing its buffer on React's
+        // commit path, inside the user's app. `Registry._teardown` disposes
+        // dependents before their dependency, so the JsRuntimeDebugger is
+        // still connected — the last moment anything can reach the app.
+        if (state.profilingActive) {
+          state.profilingActive = false;
+          await cdp
+            .send("Runtime.evaluate", {
+              expression: STOP_FOR_TAKEOVER_SCRIPT,
+              returnByValue: true,
+            })
+            .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
+          // `Profiler.disable` is not documented to end the Hermes sampler
+          // `react-profiler-start` started.
+          await cdp.send("Profiler.stop").catch(ignore);
+        }
         await cdp.send("Profiler.disable").catch(ignore);
       },
       events,

@@ -10,13 +10,10 @@ interface VendorDefinition {
   env: VendorEnv | VendorEnv[];
 }
 
-// Copied verbatim from ci-info 4.4.0's `isCI` detector: the same generic env
-// vars and the `CI === "false"` bypass in isCi() below. ci-info is the de-facto
-// ecosystem standard (npm, Jest, etc.), so we inherit exactly its false-positive
-// surface — narrowing this list would diverge from it and risk false negatives
-// (missing real Jenkins/TeamCity/TaskCluster CI). We re-implement rather than
-// import ci-info's `isCI` because that value is computed once at import time;
-// this wrapper takes `env` lazily so tests can inject it.
+// ci-info 4.4.0's generic `isCI` list, kept unnarrowed so we don't diverge from
+// it and start missing real CI. Re-implemented rather than imported because
+// ci-info computes `isCI` once at import time; this reads `env` lazily so tests
+// can inject it.
 const GENERIC_CI_ENV_VARS = [
   "BUILD_ID",
   "BUILD_NUMBER",
@@ -57,5 +54,4 @@ export function isCi(env: NodeJS.ProcessEnv = process.env): boolean {
   return isKnownVendorCi(env);
 }
 
-/** Exposed for vitest coverage assertions; do not import outside tests. */
 export const _CI_VENDOR_COUNT_FOR_TEST: number = (vendors as VendorDefinition[]).length;

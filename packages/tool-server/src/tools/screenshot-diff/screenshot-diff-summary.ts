@@ -8,7 +8,20 @@ type ScreenshotDiffSummaryInput = Omit<PngDiffResult, "summary">;
 type TextSummaryChange = TextChange & {
   appearanceChange?: TextChange;
 };
-type SummaryStatus = "unchanged" | "changed" | "dimension_mismatch" | "unknown";
+/**
+ * `resized_no_change`: the inputs differed in resolution, one was resampled, and
+ * nothing differed afterwards — kept distinct from `unchanged`, which claims the
+ * two images are the same at their own resolutions (#617).
+ *
+ * Not named `unchanged_after_resize`: that string contains "unchanged", so a
+ * gate matching `includes("status: unchanged")` would read it as a plain pass.
+ */
+type SummaryStatus =
+  | "unchanged"
+  | "changed"
+  | "resized_no_change"
+  | "dimension_mismatch"
+  | "unknown";
 type CoordinateSpace = { imageSize: Size } | undefined;
 
 export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput): string {
@@ -23,6 +36,17 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
 
   const lines: string[] = ["Screenshot diff summary", "", "Overall:"];
   lines.push(`- status: ${status}`);
+
+  if (result.sizeNormalization) {
+    // Placed directly under the status so it frames every figure below it; the
+    // wording holds whether or not anything differed.
+    const { baseline, current, comparedAt } = result.sizeNormalization;
+    lines.push(
+      `- size_normalized: baseline=${formatSize(baseline)} current=${formatSize(current)} compared_at=${formatSize(comparedAt)}`,
+      "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; any pixel or text differences below may include resampling artifacts, and the diff images are at compared_at rather than full size",
+      "  - re-capture the baseline at the same scale as the current image (screenshot with scale: 1.0) to compare without resampling"
+    );
+  }
 
   if (result.dimensionMismatch) {
     lines.push(
@@ -40,7 +64,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
 
   if (result.diffPath || result.contextDiffPath) {
     // Reference the result fields instead of embedding the paths: the client
-    // rewrites `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw
+    // rewrites `diffPath`/`contextDiffPath` to paths on its own machine, so a
     // server path inlined here would dangle when the tool-server runs remotely.
     lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
     lines.push(
@@ -98,6 +122,9 @@ function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus
   if (result.textAnalysis?.status === "ok" && result.textAnalysis.changes.length > 0) {
     return "changed";
   }
+  // Checked last: a normalized comparison that did find a difference stays a
+  // plain `changed`, so the caveat never softens a real regression.
+  if (result.sizeNormalization) return "resized_no_change";
   return "unchanged";
 }
 

@@ -9,9 +9,8 @@ const zodSchema = z.object({
 });
 
 /**
- * The snapshot reads dozens of files across the workspace tree, which can't
- * ride along in a tool call — gate on the directory existing on this host so
- * a remote caller gets an actionable error instead of the all-nulls snapshot
+ * `kind: "directory"` gates on the path existing on this host so a remote
+ * caller gets an actionable error instead of the all-nulls snapshot
  * readWorkspaceSnapshot returns for an unreadable path.
  */
 const fileInputs: FileInputSpec[] = [

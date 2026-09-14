@@ -1,22 +1,19 @@
 /**
  * Guards scripts/extract-tools.mjs against dropping or corrupting tool
  * definitions before they reach the downstream `spidershield scan --tools-json`
- * security scan. The motivating bug: the old extractor scanned a fixed
- * 2000-char window after each `id:`, so run-sequence's ~4285-char multi-line
- * template-literal description came back null and the tool was silently
- * excluded from the scan.
+ * security scan. Motivating bug: the old extractor searched a fixed 2000-char
+ * window after each `id:`, so run-sequence's long multi-line template-literal
+ * description came back null and the tool was silently excluded.
  *
- * Ground truth: the real-tree tests parse every tool source file with the
- * actual TypeScript parser and require the extractor's output to match the AST
- * exactly - names AND descriptions. Any drop (regex-literal lexing gap, window
- * regression, walk change), corruption (truncation, bad unescape), or
- * fabrication diverges from the AST and fails, with no reliance on stderr
- * warning formats and no false red from `id:`-like text in comments or strings.
+ * Ground truth: the real-tree tests parse every tool source file with the real
+ * TypeScript parser and require the extractor's output to equal the AST -
+ * names AND descriptions - so nothing depends on stderr warning formats and
+ * `id:`-like text in comments or strings cannot cause a false red.
  *
- * The TypeScript package is a test-only dependency (a root devDependency,
- * installed by unit-tests.yml's `npm ci`): the extractor itself must stay
- * dependency-free because tool-description-quality.yml runs it on a bare
- * checkout without installing.
+ * The TypeScript package is test-only (a root devDependency, installed by
+ * unit-tests.yml's `npm ci`): the extractor itself must stay dependency-free
+ * because tool-description-quality.yml runs it on a bare checkout without
+ * installing.
  *
  * Run: node --test scripts/extract-tools.test.mjs
  */
@@ -53,34 +50,32 @@ function captureWarnings(fn) {
   }
 }
 
-// --- TypeScript-AST oracle --------------------------------------------------
-// Computes the ground-truth tool set the extractor must emit: every object
-// literal with a static `id` (string literal or no-substitution template
-// literal; `as const` / `satisfies` / parens unwrapped) whose `description` is
-// a plain string / no-substitution template literal written AFTER the id.
-// `.text` is the COOKED value (escapes resolved), so it doubles as an oracle
-// for the extractor's unescaping.
+// TypeScript-AST oracle
 //
-// Everything else an id-bearing object can do with `description` lands in a
-// LOUD bucket instead of silently escaping the safety net:
+// Ground-truth tool set: every object literal with a static `id` (string or
+// no-substitution template literal; `as const` / `satisfies` / parens
+// unwrapped) whose `description` is a plain string / no-substitution template
+// literal written AFTER the id. `.text` is the COOKED value, so it also
+// oracles the extractor's unescaping.
+//
+// Anything else an id-bearing object does with `description` lands in a LOUD
+// bucket instead of silently escaping the safety net:
 //   - nonStatic: the rendered text cannot be read statically - a non-literal
 //     initializer (concatenation, interpolation, method call, const reference,
 //     `as const`), a shorthand / getter / method `description` member, a
-//     dynamic computed key, a spread written AFTER the description (it may
-//     override it at runtime; one before it cannot), a spread with no explicit
-//     description at all (it may carry one), or a getter/method `id` beside a
-//     description.
+//     spread written AFTER the description (it may override it at runtime; one
+//     before it cannot), a spread with no explicit description at all (it may
+//     carry one), or a getter/method `id` beside a description.
 //   - misordered: a plain-literal description written BEFORE the id - the
 //     extractor's scan is forward-only and cannot capture it.
 // The real tree must keep both buckets empty.
 //
-// The policy buckets apply only to objects that could BE tool definitions: an
-// object literal reached as (part of) another object literal's property value
-// is data (a payload, example, or config fragment - no real tool is written
-// that way), so demanding "make your description static" of it would be a
-// false red. Equality mirroring still covers nested data: an id-then-plain-
-// description data object is emitted by both sides alike. Ids with no
-// description-ish member at all (nested payload keys, descriptionless tools)
+// The buckets apply only to objects that could BE tool definitions: an object
+// literal reached as (part of) another object literal's property value is data
+// (a payload, example, or config fragment), so demanding a static description
+// of it would be a false red. Equality still covers nested data - an
+// id-then-plain-description data object is emitted by both sides alike. Ids
+// with no description-ish member (nested payload keys, descriptionless tools)
 // stay out of the emitted set by design (the extractor warn-skips them), and
 // dynamic ids (const references, shorthand, interpolated templates) are out of
 // scope on both sides.
@@ -99,9 +94,9 @@ function isStaticText(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 }
 
-// Property/member name as static text, or null when it can't be known
-// statically (a dynamic computed key). `["description"]: ...` resolves to
-// "description" so a computed spelling can't slip past the net.
+// Null when the name cannot be known statically (a dynamic computed key).
+// `["description"]: ...` resolves to "description" so a computed spelling
+// can't slip past the net.
 function memberName(prop) {
   if (!prop.name) return null;
   if (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) return prop.name.text;
@@ -112,9 +107,9 @@ function memberName(prop) {
   return null;
 }
 
-// True when the object literal is (part of) another object literal's property
-// value - possibly through array elements or as/satisfies/paren wrappers. Such
-// an object is data, not a tool-definition site.
+// An object literal reached as (part of) another object literal's property
+// value - through array elements or as/satisfies/paren wrappers - is data, not
+// a tool-definition site.
 function isNestedDataValue(node) {
   let cur = node.parent;
   while (
@@ -158,7 +153,7 @@ function oracleFromSource(src, fileName = "oracle.ts") {
               idIndex = index;
             }
           } else if (ts.isGetAccessorDeclaration(prop) || ts.isMethodDeclaration(prop)) {
-            // A computed id the lexical extractor can never see; beside a
+            // An id the lexical extractor can never see; beside a
             // description it would be a fully silent scan bypass.
             hasDynamicIdMember = true;
           }
@@ -166,9 +161,8 @@ function oracleFromSource(src, fileName = "oracle.ts") {
         if (name === "description") {
           hasDescMember = true;
           descIndex = index;
-          // Only a direct PropertyAssignment to a plain literal is readable;
-          // deliberately NOT unwrapped - `description: "x" as const` is not a
-          // shape the extractor can capture, so it must stay non-static.
+          // Deliberately NOT unwrapped: `description: "x" as const` is not
+          // a shape the extractor can capture, so it must stay non-static.
           if (ts.isPropertyAssignment(prop) && isStaticText(prop.initializer)) {
             descIsPlain = true;
             descValue = prop.initializer.text.trim();
@@ -230,28 +224,27 @@ const flagList = (entries) => entries.map((e) => `${e.id} (${e.file})`).join(", 
 
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
-// --- Real-tree ground-truth tests -------------------------------------------
+// Real-tree ground-truth tests
 
 test("extractor output equals the TypeScript-AST ground truth exactly", () => {
   const { tools } = runExtractor();
   const oracle = oracleFromTree();
 
   // Sanity floor: an oracle bug that empties BOTH sides would make the
-  // equality below pass vacuously; the real tree has ~72 tools.
+  // equality below pass vacuously.
   assert.ok(
     oracle.tools.length >= 60,
     `oracle found only ${oracle.tools.length} tools - oracle or tree layout broke`
   );
 
-  // Unique ids: a same-name collision would mean one tool's description
-  // silently replaces another's in the scan.
+  // A same-name collision would mean one tool's description silently replaces
+  // another's in the scan.
   const names = oracle.tools.map((t) => t.name);
   const dupes = names.filter((n, i) => names.indexOf(n) !== i);
   assert.deepEqual(dupes, [], `duplicate tool ids in the source tree: ${dupes.join(", ")}`);
 
-  // The invariant: nothing dropped, nothing corrupted, nothing fabricated.
-  // Name-level diffs first for a readable failure, then the full deep equality
-  // (which also compares every description byte-for-byte).
+  // Name-level diffs first for a readable failure; the deep equality then
+  // compares every description byte-for-byte.
   const extractedNames = new Set(tools.map((t) => t.name));
   const oracleNames = new Set(names);
   const dropped = [...oracleNames].filter((n) => !extractedNames.has(n));
@@ -289,9 +282,8 @@ test("every real tool description is a plain literal (statically extractable, so
 });
 
 test("run-sequence and describe (the two originally dropped tools) and gesture-tap (control) are present", () => {
-  // Presence-only on purpose: fullness and exact wording are covered
-  // byte-for-byte by the AST-equality test, so a legitimate rewrite of a
-  // description cannot fail this suite while capture stays complete.
+  // Presence-only: wording is covered byte-for-byte by the AST-equality test,
+  // so rewording a description cannot fail this while capture stays complete.
   const { tools } = runExtractor();
   const names = new Set(tools.map((t) => t.name));
   for (const expected of ["run-sequence", "describe", "gesture-tap"]) {
@@ -299,13 +291,13 @@ test("run-sequence and describe (the two originally dropped tools) and gesture-t
   }
 });
 
-// --- Boundary-parsing rules (pure, fixture-driven) -------------------------
+// Boundary-parsing rules (pure, fixture-driven)
 
 test("a >4000-char multi-line description is captured in full (the original regression)", () => {
-  // Pins the fixed-window bug class forever, independent of any real tool's
-  // current wording or length: the old extractor cut its search at 2000 chars.
+  // Pins the fixed-window bug class independently of any real tool's current
+  // wording or length: the old extractor cut its search at 2000 chars.
   const sentence = "Runs one scripted step against the target device and reports the outcome. ";
-  const longDescription = sentence.repeat(60).trim(); // ~4560 chars
+  const longDescription = sentence.repeat(60).trim();
   const src = `
     export const longTool = defineTool({
       id: "long-description-tool",
@@ -319,10 +311,9 @@ test("a >4000-char multi-line description is captured in full (the original regr
 });
 
 test("a description containing an id: token is still captured in full", () => {
-  // The closing-delimiter-anchored search must not be truncated by an `id:`
-  // that appears INSIDE the description text (e.g. a structured example). The
-  // old "stop at the next id:" bound dropped such a tool — the exact class of
-  // silent scan-bypass this script exists to prevent.
+  // The description must run to its closing delimiter, not stop at an `id:`
+  // appearing INSIDE the text (e.g. a structured example) - the old
+  // "stop at the next id:" bound dropped such a tool.
   const src = `
     export const menuTool = defineTool({
       id: "menu-item-tool",
@@ -339,7 +330,6 @@ test("a description containing an id: token is still captured in full", () => {
     byId["menu-item-tool"].includes("nested menu item"),
     "description was truncated at the inner id: instead of its closing backtick"
   );
-  // The `id: "sub-thing"` inside the description text is not a real tool.
   assert.ok(!("sub-thing" in byId), "an id: inside a description was mistaken for a tool");
 });
 
@@ -370,10 +360,9 @@ test("a description-less tool does not borrow the next tool's description", () =
 });
 
 test("tools with mixed description forms in one file are both captured", () => {
-  // Position-based (not delimiter-form-priority) matching: an earlier tool's
-  // double-quoted description must not be lost to a LATER tool's template
-  // literal. A form-priority scan would grab the later template ahead of the
-  // nearer double-quoted one, then drop the earlier tool.
+  // Matching is position-based, not delimiter-form-priority: a form-priority
+  // scan would grab the later tool's template ahead of the nearer
+  // double-quoted one and drop the earlier tool.
   const src = `
     export const first = defineTool({
       id: "first-tool",
@@ -411,11 +400,9 @@ test("single-quoted id and description are captured (with escapes)", () => {
 });
 
 test("standard escapes render as their actual characters, not literal backslash sequences", () => {
-  // A template-literal description with a literal "\n" must become a real
-  // newline in the extracted text — not survive as a stray backslash-n.
-  // (Descriptions in the real tree come and go from this shape — flow-add-step
-  // shipped a \n between sentences for a while — so the fixture, not any live
-  // tool, pins it.)
+  // A template-literal `\n` must cook to a real newline, not survive as a
+  // stray backslash-n. Real descriptions come and go from this shape, so a
+  // fixture pins it rather than any live tool.
   const src = `
     export const withEscapes = defineTool({
       id: "with-escapes",
@@ -431,8 +418,8 @@ test("standard escapes render as their actual characters, not literal backslash 
 test("a regex literal between id: and description: does not hide the description", () => {
   // The lexer must skip regex literals whole: a brace inside a character class
   // (`/[{]/`) must not shift the tracked object depth, and a quote inside a
-  // regex (`/["']/`) must not open a fake string. Either would make the sibling
-  // description: invisible and drop the tool from the security scan.
+  // regex (`/["']/`) must not open a fake string. Either hides the sibling
+  // description: and drops the tool from the security scan.
   for (const [label, field] of [
     ["brace class", "match: /[{]/,"],
     ["quote class", `schema: z.string().regex(/["']/),`],
@@ -459,8 +446,7 @@ test("a regex literal between id: and description: does not hide the description
 });
 
 test("a quote-bearing regex BEFORE the id: does not swallow the tool", () => {
-  // A regex containing a quote that appears before the id: (an earlier
-  // property, or earlier code in the file) must not open a fake string that
+  // A quote-bearing regex before the id: must not open a fake string that
   // hides the id: token itself — that variant produced no warning at all.
   const src = `
     export const t = defineTool({
@@ -497,14 +483,11 @@ test("division is not mistaken for a regex literal", () => {
 });
 
 test("a TS postfix non-null assertion before a division is not read as a regex opener", () => {
-  // `a!` is a postfix non-null assertion that ENDS a value, so the following `/`
-  // is division, not a regex opener. If it were mis-read as a regex, the quote
-  // in the divisor (`"x/y"`) would open a fake string that hides this tool's
-  // description: AND swallows the next tool - both dropping out of the scan. A
-  // PREFIX logical-NOT (`!/re/`) is the opposite case and must stay a regex -
-  // both at operator position (`=> !/re/`) and after a keyword (`return !/re/`),
-  // where the char before the `!` is an identifier char but the `!` is still
-  // prefix.
+  // `a!` is a postfix non-null assertion that ENDS a value, so the following
+  // `/` is division; read as a regex, the quote in the divisor (`"x/y"`) opens
+  // a fake string that hides this description: and swallows the next tool. A
+  // PREFIX `!` (`=> !/re/`, `return !/re/`) is the opposite case and must stay
+  // a regex, even though the char before it is an identifier char.
   const src = `
     export const helpers = {
       needsQuote: (x) => { return !/["']/.test(x); },
@@ -537,11 +520,10 @@ test("a TS postfix non-null assertion before a division is not read as a regex o
 });
 
 test("a non-static description (concatenation / interpolation / method suffix) is dropped loudly, not emitted wrong", () => {
-  // The captured literal is only the description if nothing extends it. A `+`
-  // concatenation, a template `${...}` interpolation, or a method/operator
-  // suffix (`"...".slice(0, 3)`) means the rendered text differs from the
-  // leading literal; emitting just that literal would feed silently wrong text
-  // into the security scan. All must warn on stderr and be skipped.
+  // The captured literal is the description only if nothing extends it: a `+`
+  // concatenation, a `${...}` interpolation or a method/operator suffix makes
+  // the rendered text differ from the leading literal, so emitting that
+  // literal would feed silently wrong text into the security scan.
   for (const [label, id, src] of [
     [
       "concatenation",
@@ -576,8 +558,8 @@ test("a non-static description (concatenation / interpolation / method suffix) i
 });
 
 test("an escaped \\${ in a template is a literal, not interpolation, and is captured", () => {
-  // \\${...} is an escaped dollar-brace: it renders as the literal text "${...}"
-  // and is NOT runtime interpolation, so the tool must be captured normally.
+  // An escaped `\${...}` renders as the literal text "${...}", not runtime
+  // interpolation, so the tool must still be captured.
   const src =
     'defineTool({ id: "escaped-dollar", description: `price is \\${amount} today`, handler() {} });';
   const tools = extractToolsFromSource(src, "fixture.ts");
@@ -588,11 +570,10 @@ test("an escaped \\${ in a template is a literal, not interpolation, and is capt
 });
 
 test("an id: key inside a nested object value is not mistaken for a tool", () => {
-  // A structured value between a tool's id: and its description: (a
-  // defaultPayload, example, etc.) can itself contain an `id:` key. That nested
-  // id: must neither (a) be emitted as a spurious tool nor (b) drop the real
-  // tool from the security scan. Matching the description by brace scope rather
-  // than raw position is what prevents both.
+  // A structured value between a tool's id: and its description: can itself
+  // contain an `id:` key, which must neither be emitted as a spurious tool nor
+  // drop the real one. Matching the description by brace scope rather than raw
+  // position is what prevents both.
   const src = `
     export const createThing = defineTool({
       id: "create-thing",
@@ -609,9 +590,8 @@ test("an id: key inside a nested object value is not mistaken for a tool", () =>
 });
 
 test("a balanced nested object (with a deep inner id:) between id: and description: keeps the tool", () => {
-  // Mirrors the real `capability: { apple: { ... } }` shape 7 tools already
-  // use, but with an inner id: key added at depth 2 - the deepest footgun form.
-  // The tool must be captured in full and the inner id: must not leak out.
+  // Mirrors the real `capability: { apple: { ... } }` shape, with an inner id:
+  // key at depth 2 - the deepest footgun form.
   const src = `
     export const t = defineTool({
       id: "native-thing",
@@ -628,10 +608,9 @@ test("a balanced nested object (with a deep inner id:) between id: and descripti
 });
 
 test("a *description: sibling (subdescription:) before the real description: is not captured", () => {
-  // findOwnDescriptionValue matches `description:` only on a word boundary, so a
-  // sibling key that merely ENDS in `description` (`subdescription:`) appearing
-  // first must not be read as the tool's own description - that would feed the
-  // wrong text into the security scan. The real `description:` after it wins.
+  // findOwnDescriptionValue matches `description:` only on a word boundary, so
+  // a sibling key merely ENDING in `description` must not be read as the
+  // tool's own and feed the wrong text into the security scan.
   const src = `
     export const t = defineTool({
       id: "subdescription-tool",
@@ -651,9 +630,8 @@ test("a *description: sibling (subdescription:) before the real description: is 
 
 test("a *id: sibling (uuid:, grid:) is not mistaken for a tool id", () => {
   // findIdLiteralsInCode matches `id:` only on a word boundary, so sibling keys
-  // that merely END in `id` (`uuid:`, `grid:`) must not be discovered as tool
-  // ids - that would fabricate spurious tools into the scan. Only the real
-  // `id:` is a tool.
+  // merely ENDING in `id` must not be discovered as tool ids and fabricate
+  // spurious tools into the scan.
   const src = `
     export const t = defineTool({
       uuid: "11111111-2222-3333-4444-555555555555",
@@ -673,9 +651,9 @@ test("a *id: sibling (uuid:, grid:) is not mistaken for a tool id", () => {
 });
 
 test("a line comment with an apostrophe between id: and description: keeps the tool", () => {
-  // A `//` comment is not code: an apostrophe inside it (e.g. `don't`) must not
-  // open a fake string that swallows the source up to the next quote, which
-  // would hide the real description: and silently drop the tool from the scan.
+  // An apostrophe in a `//` comment must not open a fake string that swallows
+  // the source up to the next quote, hiding the real description: and silently
+  // dropping the tool from the scan.
   const src = `
     export const t = defineTool({
       id: "line-commented-tool",
@@ -717,11 +695,10 @@ test("a block comment between id: and description: keeps the tool", () => {
 });
 
 test("an id: literal inside a comment does not corrupt a real tool's description", () => {
-  // id detection must be lexically aware: an `id: "..."` in a COMMENT (a common
-  // cross-reference to another tool) must not be picked up as a tool candidate.
-  // If it were, it would read the enclosing object's real description and, via
-  // first-wins dedup, silently overwrite the referenced tool's description in the
-  // security scan — a silent mis-capture, the exact class this script prevents.
+  // An `id: "..."` in a COMMENT (a common cross-reference to another tool)
+  // must not become a tool candidate: it would read the enclosing object's
+  // real description and, via first-wins dedup, overwrite the referenced
+  // tool's description in the security scan.
   const src = `
     export const foo = defineTool({
       // Related to id: "screenshot"; call that first to capture the screen.
@@ -747,10 +724,9 @@ test("an id: literal inside a comment does not corrupt a real tool's description
 });
 
 test("a top-level tool with no description is dropped loudly (stderr warning)", () => {
-  // `description?` is optional in ToolDefinition, so a real top-level tool can
-  // legally omit it. It can't be extracted, but it must not vanish from the
-  // security scan silently - it has to warn on stderr so the drop is diagnosed
-  // rather than only surfacing as a cryptic count mismatch in CI.
+  // `description` is optional in ToolDefinition, so a real tool can legally
+  // omit it. Such a tool cannot be extracted, but the drop must warn on stderr
+  // rather than surface only as a cryptic count mismatch in CI.
   const src = `
     export const bare = defineTool({
       id: "no-description-real-tool",
@@ -784,13 +760,13 @@ test("duplicate tool ids keep the first occurrence and warn about the rest", () 
   );
 });
 
-// --- Lexer soundness: regex positions, templates, id forms ------------------
+// Lexer soundness: regex positions, templates, id forms
 
 test("a keyword-position regex (return /[\"']/) before a tool does not swallow it", () => {
   // `/` after `return` is a regex, not division; without keyword awareness the
   // quotes inside it open a fake string and every later tool in the file is
-  // silently dropped. Helper functions with return-regexes share files with
-  // tool definitions in the real tree today.
+  // silently dropped. Helper functions with return-regexes do share files with
+  // tool definitions in the real tree.
   const src = `
     function isQuote(c) { return /["']/.test(c); }
     export const t = defineTool({
@@ -811,9 +787,9 @@ test("a keyword-position regex (return /[\"']/) before a tool does not swallow i
 
 test("a keyword-NAMED property access before a slash is division, not a regex opener", () => {
   // `counts.in / 2` and `i++ / 2` end in values; without the property-access
-  // and postfix checks the following `/` opened a fake regex that, combined
-  // with a second slash on the same line, desynchronized string lexing and
-  // could silently steal description text.
+  // and postfix checks the following `/` opens a fake regex that, with a
+  // second slash on the same line, desynchronizes string lexing and could
+  // silently steal description text.
   const src = `
     export const t = defineTool({
       id: "division-after-member-tool",
@@ -856,11 +832,10 @@ test("a nested template literal before a tool is skipped whole (interpolation in
 });
 
 test("a quote-bearing regex inside a template interpolation is skipped whole", () => {
-  // The real tree already contains this shape (open-url's android.ts shell
-  // quoting) — just never yet in a file with an id:, so only this fixture pins
-  // it. If the interpolation scanner did not lex the regex whole, the
-  // apostrophes in /'/g would open a fake string inside the interpolation and
-  // the following tool would vanish with no warning at all.
+  // The real tree has this shape (open-url's android.ts shell quoting) but
+  // never yet beside an id:, so only this fixture pins it. Without lexing the
+  // regex whole, the apostrophes in /'/g open a fake string inside the
+  // interpolation and the following tool vanishes with no warning at all.
   const src = `
     const quoted = \`'\${params.url.replace(/'/g, "'\\\\''")}'\`;
     export const t = defineTool({
@@ -902,8 +877,7 @@ test("a fake description: inside a template interpolation cannot be stolen as th
 test("a no-substitution template-literal id is captured, and the AST oracle agrees", () => {
   // `id: \`x\`` is runtime-identical to `id: "x"`. Both the extractor and the
   // oracle must see it - if either side skipped it, a real tool would leave
-  // the scan with the equality test still green (the one shape that used to
-  // defeat the whole safety net).
+  // the scan with the equality test still green.
   const src =
     'export const t = defineTool({ id: `template-id-tool`, description: "Real description T.", handler() {} });';
   const tools = extractToolsFromSource(src, "fixture.ts");
@@ -936,7 +910,7 @@ test('an `id: "x" as const` tool is captured, and the AST oracle agrees', () => 
   assert.deepEqual(oracleFromSource(src).tools, [{ name: "as-const-tool", description: "Real." }]);
 });
 
-// --- Cooked-text fidelity ----------------------------------------------------
+// Cooked-text fidelity
 
 test("full JS escape semantics: \\xNN, \\uNNNN, \\u{...}, identity escapes, line continuations", () => {
   const src = `
@@ -987,7 +961,7 @@ test("surrounding whitespace in a description literal is trimmed", () => {
   assert.equal(tools.find((t) => t.name === "padded-tool")?.description, "padded text");
 });
 
-// --- Search-scope rules -------------------------------------------------------
+// Search-scope rules
 
 test(">2000 chars of properties between id: and description: are scanned through", () => {
   // The other axis of the fixed-window class: not the description LENGTH but
@@ -1049,7 +1023,7 @@ test("a plain description written before its id: is skipped loudly and flagged b
   );
 });
 
-// --- Oracle safety net for member kinds --------------------------------------
+// Oracle safety net for member kinds
 
 test("the oracle flags description members it cannot read statically (shorthand, getter, computed, spread)", () => {
   // These shapes are invisible to the lexical extractor; each must land in the
@@ -1110,15 +1084,14 @@ test("nested data objects never trigger the policy buckets", () => {
   assert.deepEqual(oracle.misordered, [], "a nested example payload must not demand reordering");
   assert.deepEqual(oracle.nonStatic, [], "a nested defaults fragment must not be flagged");
   assert.deepEqual(oracle.tools, [{ name: "host-tool", description: "Host tool description." }]);
-  // The extractor agrees: only the host tool is emitted.
   const { result: tools } = captureWarnings(() => extractToolsFromSource(src, "fixture.ts"));
   assert.deepEqual(tools, [{ name: "host-tool", description: "Host tool description." }]);
 });
 
 test("a getter or method id beside a description is flagged, never silently green", () => {
-  // The lexical extractor can never see a computed id, and such an object IS a
-  // runtime-real tool - without this flag it would bypass the scan with zero
-  // signal on any channel.
+  // The lexical extractor can never see a getter/method id, and such an object
+  // IS a runtime-real tool - without this flag it would bypass the scan with
+  // zero signal on any channel.
   for (const [label, src] of [
     [
       "getter id",
@@ -1145,9 +1118,9 @@ test("an escaped id literal is cooked to its runtime name on both sides", () => 
 });
 
 test("U+2028/U+2029 line continuations cook to nothing, like backslash-newline", () => {
-  // Built programmatically so no raw LS/PS bytes live in this file: the
-  // fixture string contains backslash + U+2028 (and + U+2029), each a legal
-  // LineTerminatorSequence continuation that cooks to the empty string.
+  // Written with `\u2028` / `\u2029` escapes so no raw LS/PS bytes live in
+  // this file: the fixture string holds backslash + U+2028 (and + U+2029),
+  // each a legal LineTerminatorSequence continuation that cooks to nothing.
   const src =
     'defineTool({ id: "ls-tool", description: "before \\\u2028after \\\u2029end", handler() {} });';
   const tools = extractToolsFromSource(src, "fixture.ts");

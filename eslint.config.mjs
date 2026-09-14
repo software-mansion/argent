@@ -1,17 +1,16 @@
 // @ts-check
 import eslint from "@eslint/js";
 import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    // Not linted: build outputs, deps, generated/copied assets, and the
-    // argent-private submodule (it has its own repo and CI). Mirrors the
-    // ignores in .prettierignore + .gitignore.
     ignores: [
       "**/dist/",
       "**/node_modules/",
       "**/*.tsbuildinfo",
+      // Git submodule with its own repo.
       "packages/argent-private/",
       "packages/argent/bin/",
       "packages/argent/dylibs/",
@@ -21,43 +20,39 @@ export default tseslint.config(
       "packages/argent/rules/",
       "packages/native-devtools-ios/bin/",
       "packages/native-devtools-ios/dylibs/",
-      // Downloaded Perfetto trace-processor bundle (git-ignored build artifact,
-      // fetched by download-trace-processor.sh) — generated, not ours to lint.
+      // Fetched by scripts/download-trace-processor.sh.
       "packages/native-devtools-android/assets/trace-processor/",
+      "packages/docs/build/",
+      "packages/docs/.docusaurus/",
+      "packages/docs/static/",
       "coverage/",
     ],
   },
 
-  // Keep the gate honest: a stale or unjustified `eslint-disable` is a hard
-  // error, so suppressions can't quietly pile up or be used to dodge a rule.
   {
     linterOptions: {
       reportUnusedDisableDirectives: "error",
     },
   },
 
-  // Type-aware linting for the TypeScript sources — this is where the value is
-  // (floating promises, misused promises, throwing non-Errors, etc.).
   {
-    files: ["**/*.ts", "**/*.mts", "**/*.cts"],
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
     extends: [eslint.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
-        // Explicit project list rather than `projectService`: each package keeps
-        // its test files in a separate tsconfig.test.json (which projectService
-        // does not auto-discover), so we point the type-aware parser at both.
+        // Explicit list rather than `projectService`, which would not pick up
+        // the per-package tsconfig.test.json. The glob also matches
+        // packages/docs, which is outside the npm workspaces, so `npm ci` there
+        // has to run before this lint (see .github/workflows/lint.yml).
         project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json"],
         tsconfigRootDir: import.meta.dirname,
       },
       globals: { ...globals.node },
     },
     rules: {
-      // --- Kept on, tuned ---
-      // Catch the real promise hazards (a promise used in a condition or
-      // spread) while skipping the noisy void-return variant that flags
-      // legitimate async callbacks (event handlers, array iteration, etc.).
+      // checksVoidReturn flags legitimate async callbacks (event handlers,
+      // array iteration).
       "@typescript-eslint/no-misused-promises": ["error", { checksVoidReturn: false }],
-      // Allow intentionally-unused identifiers when prefixed with `_`.
       "@typescript-eslint/no-unused-vars": [
         "error",
         {
@@ -67,10 +62,8 @@ export default tseslint.config(
         },
       ],
 
-      // --- Parked: pre-existing debt, out of scope for the initial rollout ---
-      // These flag broad classes of existing code (mostly `any` flowing across
-      // untyped boundaries, and stylistic cleanups). Turned off now so the gate
-      // is green; ratchet each back to "error" in follow-up passes.
+      // Pre-existing debt, off to keep the gate green; ratchet each back to
+      // "error".
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unsafe-argument": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",
@@ -87,8 +80,20 @@ export default tseslint.config(
     },
   },
 
-  // Test files lean on mocks/stubs and partial fixtures; relax the rules that
-  // fight that without losing the promise-correctness checks.
+  {
+    files: ["packages/docs/src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+    plugins: {
+      "react-hooks": reactHooks,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+    },
+  },
+
+  // Mocks and partial fixtures trip these.
   {
     files: ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],
     rules: {
@@ -97,8 +102,6 @@ export default tseslint.config(
     },
   },
 
-  // Plain JS — this config plus the loosely-typed build/dev scripts. No type
-  // information available, so disable the type-checked rules for these.
   {
     files: ["**/*.js", "**/*.mjs", "**/*.cjs"],
     extends: [eslint.configs.recommended, tseslint.configs.disableTypeChecked],

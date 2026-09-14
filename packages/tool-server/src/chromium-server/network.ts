@@ -1,10 +1,9 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
- * A recorded network request/response, captured passively from the page's CDP
- * `Network` domain events. This is the data source behind `view-network-logs`
- * and `view-network-request-details` on Chromium devices — the browser exposes
- * this natively, so (unlike the RN path) no in-app interceptor is injected.
+ * Backs `view-network-logs` and `view-network-request-details` on Chromium:
+ * recorded passively from CDP `Network` events, with no injected interceptor
+ * as on the RN path.
  */
 export interface NetworkRequestRecord {
   requestId: string;
@@ -16,12 +15,11 @@ export interface NetworkRequestRecord {
   mimeType?: string;
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
-  /** Request body, when the request carried one (POST/PUT/…). */
   postData?: string;
   initiator?: { type: string; url?: string; lineNumber?: number };
-  /** ISO timestamp the request started (from CDP wallTime). */
+  /** ISO timestamp, from CDP wallTime. */
   startedDateTime: string;
-  /** monotonic CDP timestamp of requestWillBeSent (seconds). */
+  /** Monotonic CDP timestamp of requestWillBeSent, in seconds. */
   startTs: number;
   durationMs?: number;
   fromCache?: boolean;
@@ -31,11 +29,10 @@ export interface NetworkRequestRecord {
 }
 
 export interface NetworkManager {
-  /** All recorded requests, oldest first (capped ring buffer). */
+  /** Oldest first; capped at MAX_RECORDS, evicting the oldest. */
   requests(): NetworkRequestRecord[];
-  /** Look up a single recorded request by its CDP requestId. */
   get(requestId: string): NetworkRequestRecord | undefined;
-  /** (Re-)enable the Network domain on the active page. Called on connect and after a tab switch. */
+  /** Enables the Network domain; called on connect and after a tab switch. */
   reattach(): Promise<void>;
   dispose(): void;
 }
@@ -73,9 +70,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         const rec = record(params.requestId as string);
         rec.method = r.method ?? rec.method;
         rec.url = r.url ?? rec.url;
-        // Merge (don't replace): the full on-the-wire headers — including ones
-        // added by fetch()/CORS like Authorization — arrive separately in
-        // requestWillBeSentExtraInfo, which may land before or after this event.
+        // Merge, don't replace: requestWillBeSentExtraInfo carries the rest of the
+        // headers and may land before or after this event.
         if (r.headers) rec.requestHeaders = { ...(rec.requestHeaders ?? {}), ...r.headers };
         if (r.postData != null) rec.postData = r.postData;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
@@ -103,9 +99,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         rec.resourceType = (params.type as string) ?? rec.resourceType;
         break;
       }
-      // The *ExtraInfo events carry the actual on-the-wire headers (Authorization,
-      // Set-Cookie, …) that the base events omit. Merge them in; they may arrive
-      // before the base event, so `record()` creates the entry if needed.
+      // The *ExtraInfo events carry on-the-wire headers (Authorization, Set-Cookie, …)
+      // the base events omit, and may arrive before them — hence `record()`, not `get()`.
       case "Network.requestWillBeSentExtraInfo": {
         const h = params.headers as Record<string, string> | undefined;
         if (h) {

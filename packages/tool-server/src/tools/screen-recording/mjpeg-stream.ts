@@ -2,29 +2,21 @@ import http from "http";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 /**
- * Client for simulator-server's `/stream.mjpeg` endpoint — the same live frame
- * stream the preview UI renders. The server is a `multipart/x-mixed-replace`
- * producer that emits a JPEG whenever the device screen CHANGES (a still
- * screen produces no frames at all), so this client only tracks the most
- * recent frame; turning that into an even-cadence video is the pump's job in
- * `capture.ts`.
- *
- * Multiple clients are supported by the server (it refcounts subscribers onto
- * one shared encoder), so recording does not disturb a preview window that is
- * already streaming the same device.
+ * Client for simulator-server's live frame stream — the same one the preview UI
+ * renders. It is a `multipart/x-mixed-replace` producer that emits a JPEG only
+ * when the device screen CHANGES (a still screen produces no frames), so this
+ * client tracks just the most recent frame; turning that into an even-cadence
+ * video is the pump's job in `capture.ts`.
  */
 
-/** Frames arrive fast and large; refuse to grow the reassembly buffer forever. */
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export interface MjpegStream {
   /** Most recent complete JPEG frame, or null until the first one lands. */
   readonly latest: Buffer | null;
-  /** Frames seen since connect — diagnostics for "the device never drew". */
   readonly frameCount: number;
-  /** Set when the connection dropped mid-recording. */
   readonly error: Error | null;
-  /** Resolves with the first frame, or rejects when none arrives in time. */
+  /** Resolves with the first frame; rejects on timeout or a stream drop. */
   waitForFirstFrame(timeoutMs: number): Promise<Buffer>;
   close(): void;
 }
@@ -64,10 +56,8 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
   return new Promise<MjpegStream>((resolve, reject) => {
     let settled = false;
     const request = http.get(url, (res) => {
-      // The timeout armed below is an INACTIVITY timeout, not a connect-only
-      // one. A still screen produces no frames — and therefore no bytes — so
-      // leaving it armed would tear the stream down mid-recording exactly when
-      // nothing is happening on screen. The connection is up now, so disarm it.
+      // The timeout armed below is an INACTIVITY one: a still screen sends no
+      // bytes, so leaving it armed would tear the stream down mid-recording.
       request.setTimeout(0);
       res.socket?.setTimeout(0);
       if (res.statusCode !== 200) {
@@ -83,8 +73,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
       }
 
       const delimiter = delimiterFromContentType(res.headers["content-type"]);
-      // `subarray` narrows to ArrayBufferLike, so the accumulator is declared
-      // that way rather than as the ArrayBuffer-backed default.
+      // `subarray` narrows to ArrayBufferLike, hence the explicit annotation.
       let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
       const state = {
         latest: null as Buffer | null,
@@ -99,18 +88,16 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         for (;;) {
           const partStart = buffer.indexOf(delimiter);
           if (partStart < 0) break;
-          // Part headers run to the blank line; the JPEG payload starts after it.
           const headerEnd = buffer.indexOf("\r\n\r\n", partStart);
           if (headerEnd < 0) break;
           const frameStart = headerEnd + 4;
           // The server writes the next delimiter directly after the JPEG's last
-          // byte (no trailing CRLF), so the frame is everything up to it. Until
-          // that delimiter lands the frame is still incomplete.
+          // byte (no trailing CRLF), so the frame runs up to it.
           const frameEnd = buffer.indexOf(delimiter, frameStart);
           if (frameEnd < 0) break;
           if (frameEnd > frameStart) {
-            // Copy out of the reassembly buffer: a subarray would pin the whole
-            // (multi-megabyte) chunk alive for as long as we hold the frame.
+            // Copy out: a subarray would pin the whole multi-megabyte chunk
+            // alive for as long as the frame is held.
             const frame = Buffer.from(buffer.subarray(frameStart, frameEnd));
             state.latest = frame;
             state.frameCount++;
@@ -122,16 +109,15 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
           }
           buffer = buffer.subarray(frameEnd);
         }
-        // A stream that never yields a delimiter (wrong endpoint, proxy that
-        // rewrites the body) must not grow the heap without bound.
+        // A stream that never yields a delimiter (wrong endpoint, rewriting
+        // proxy) must not grow the heap without bound.
         if (buffer.length > MAX_BUFFER_BYTES) buffer = Buffer.alloc(0);
       });
 
       const fail = (err: Error) => {
         state.error = err;
-        // A drop while the first frame is still pending must reject that waiter
-        // now — otherwise it blocks the full first-frame timeout and then throws
-        // a misleading "no frame arrived" message that masks the real cause.
+        // Reject a pending first-frame waiter now; otherwise it blocks the full
+        // timeout and then reports a misleading "no frame arrived".
         if (firstFrameReject) {
           const reject = firstFrameReject;
           firstFrameResolve = null;
@@ -162,8 +148,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         },
         waitForFirstFrame(timeoutMs: number) {
           if (state.latest) return Promise.resolve(state.latest);
-          // The stream already dropped before any frame — fail now rather than
-          // wait out the whole timeout for a frame that can never arrive.
+          // Already dropped, so no frame can arrive — do not wait out the timeout.
           if (state.error) {
             return Promise.reject(
               streamFailure(
@@ -200,9 +185,8 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
           });
         },
         close() {
-          // Drop the waiter hooks before destroying the socket so the resulting
-          // 'aborted'/'error' from our own teardown does not reject a caller
-          // that has already moved on.
+          // Drop the waiter hooks first so our own teardown's 'aborted'/'error'
+          // does not reject a caller that has already moved on.
           firstFrameResolve = null;
           firstFrameReject = null;
           res.destroy();
@@ -238,12 +222,9 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
   });
 }
 
-/**
- * Frame size straight from the JPEG's SOF marker, so the watermark geometry
- * needs no ffprobe pass over a file that does not exist yet.
- */
+/** Frame size straight from the JPEG's SOF marker — no ffprobe pass needed. */
 export function readJpegDimensions(jpeg: Buffer): { width: number; height: number } | null {
-  // Skip the SOI (0xFFD8) and walk the marker segments.
+  // Skip the SOI and walk the marker segments.
   let offset = 2;
   while (offset + 9 < jpeg.length) {
     if (jpeg[offset] !== 0xff) {
@@ -251,9 +232,8 @@ export function readJpegDimensions(jpeg: Buffer): { width: number; height: numbe
       continue;
     }
     const marker = jpeg[offset + 1]!;
-    // 0xFF may repeat as fill bytes before the actual marker (T.81 B.1.1.2):
-    // advance one byte so the next iteration reads the real marker instead of
-    // treating the fill pair as a segment length and jumping into garbage.
+    // 0xFF may repeat as fill before the real marker (T.81 B.1.1.2); advance one
+    // byte so the fill pair is not read as a segment length.
     if (marker === 0xff) {
       offset++;
       continue;

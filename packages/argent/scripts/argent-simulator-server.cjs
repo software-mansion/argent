@@ -1,29 +1,24 @@
 #!/usr/bin/env node
 "use strict";
 
-// Thin dispatcher exposed as the `argent-simulator-server` bin entry in
-// package.json. Picks the platform-specific simulator-server binary at
-// invocation time and execs it with the caller's args. Required because
-// npm's `bin` field resolves to a single file regardless of host platform,
-// but the binary itself is platform-specific (Mach-O for darwin, ELF for
-// linux). The native-devtools-ios resolver uses the same per-platform
-// subdirectory layout, so a stable layout lives in exactly one place.
+// Dispatcher published as the `argent-simulator-server` bin entry. npm's `bin`
+// field resolves to a single file regardless of host platform, but the
+// simulator-server binary is platform-specific, so pick it at invocation time
+// and spawn it with the caller's args.
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
-// Mirrors hostPlatformKey() in @argent/native-devtools-ios: darwin ships a
-// universal (lipo) binary, but Linux binaries are single-arch ELFs, so arm64
-// Linux resolves to its own "linux-arm64" directory next to the x86_64 one
-// ("linux"). Duplicated here because the dispatcher must stay a standalone
-// file — it ships verbatim as the npm `bin` entry.
+// Mirrors hostPlatformKey() in @argent/native-devtools-ios; duplicated because
+// this file ships verbatim as the npm `bin` entry and can't import. darwin ships
+// a universal (lipo) binary, but Linux binaries are single-arch ELFs, so arm64
+// Linux gets its own "linux-arm64" directory next to the x86_64 one ("linux").
 const platformKey =
   process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
 
-// PE `.exe` on Windows, extensionless ELF/Mach-O elsewhere. Mirrors
-// simulatorServerBinaryName() in @argent/native-devtools-ios; inlined because
-// this file ships verbatim as the npm `bin` entry and can't import.
+// Mirrors simulatorServerBinaryName() in @argent/native-devtools-ios; inlined
+// because this file ships verbatim as the npm `bin` entry and can't import.
 const binaryName = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
 
 const binary = path.join(__dirname, platformKey, binaryName);
@@ -39,9 +34,7 @@ const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
 
 // Forward termination signals so a supervisor that signals only the dispatcher
 // PID (systemd, `kill -TERM <pid>`, container stop) doesn't orphan the child.
-// Ctrl+C in a TTY already broadcasts to the whole process group so the child
-// receives it too — these handlers cover the non-TTY case where the parent
-// would otherwise exit alone and leave the binary reparented to init.
+// A TTY Ctrl+C already reaches the whole process group.
 /** @type {NodeJS.Signals[]} */
 const FORWARDED_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
 for (const sig of FORWARDED_SIGNALS) {
@@ -50,7 +43,7 @@ for (const sig of FORWARDED_SIGNALS) {
       try {
         child.kill(sig);
       } catch {
-        // Already exited between the signal arriving and us forwarding it.
+        // Child already exited between the signal arriving and forwarding.
       }
     }
   });

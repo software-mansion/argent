@@ -4,88 +4,94 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { deviceSetForUdid, simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync(
     "xcrun",
-    [
-      "simctl",
-      "spawn",
+    /**
+     * On an external device this is only reached from ax-service contexts,
+     * so that grant covers the spawn.
+     */
+    await simctlArgsForUdid(
       udid,
-      "defaults",
-      "write",
-      "com.apple.Accessibility",
-      "AutomationEnabled",
-      "-bool",
-      "true",
-    ],
+      [
+        "spawn",
+        udid,
+        "defaults",
+        "write",
+        "com.apple.Accessibility",
+        "AutomationEnabled",
+        "-bool",
+        "true",
+      ],
+      { granted: "ax-service" }
+    ),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
 }
 
 /**
- * Check whether `IgnoreAXServerEntitlements` is active on this sim.
- *
- * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
- * kAXError -25215. The pref disables the check, but SB caches it at
- * init — writing it post-boot has no effect until the next restart.
- * The only effective path is the pre-boot plist write in boot-device.
- *
- * This read-only probe tells the caller whether the pre-boot write
- * happened so describe can surface a degraded-quality hint when it didn't.
+ * SB caches `IgnoreAXServerEntitlements` at AX-server init, so only the
+ * pre-boot plist write in boot-device takes effect; a post-boot write applies
+ * from the next restart. False here means that write didn't happen, and
+ * describe surfaces a degraded-quality hint.
  */
 export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
-  return execFileAsync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "read",
-      "com.apple.Accessibility",
-      "IgnoreAXServerEntitlements",
-    ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-  )
-    .then(({ stdout }) => stdout.trim() === "1")
-    .catch(() => false);
+  try {
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      /** Same reasoning as {@linkcode ensureAutomationEnabled}. */
+      await simctlArgsForUdid(
+        udid,
+        [
+          "spawn",
+          udid,
+          "defaults",
+          "read",
+          "com.apple.Accessibility",
+          "IgnoreAXServerEntitlements",
+        ],
+        { granted: "ax-service" }
+      ),
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    );
+    return stdout.trim() === "1";
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Host-side `com.apple.Accessibility` plist inside the sim's data container.
- * Writeable while Shutdown; in-sim cfprefsd overwrites it once Booted.
+ * Host-side plist in the sim's data container: writeable while Shutdown,
+ * overwritten by in-sim cfprefsd once Booted.
+ * The device dir lives under the sim's OWNING device set — for an additional
+ * set (e.g. Radon IDE's) the default `CoreSimulator/Devices` root would point
+ * at a non-existent dir and the write would land nowhere.
  */
-function accessibilityPlistPath(udid: string): string {
-  return path.join(
-    os.homedir(),
-    "Library/Developer/CoreSimulator/Devices",
-    udid,
-    "data/Library/Preferences/com.apple.Accessibility.plist"
-  );
+async function accessibilityPlistPath(udid: string): Promise<string> {
+  const deviceSet =
+    (await deviceSetForUdid(udid)) ??
+    path.join(os.homedir(), "Library/Developer/CoreSimulator/Devices");
+  return path.join(deviceSet, udid, "data/Library/Preferences/com.apple.Accessibility.plist");
 }
 
 /**
- * Write the four AX prefs to the sim's host plist BEFORE `simctl boot` so SB
- * caches them at AX-server init and never needs the disruptive kickstart
- * (which kills the foreground app and dismisses in-flight system alerts).
- *
- * All four are required on a freshly-erased sim:
- * - `IgnoreAXServerEntitlements` bypasses the iOS 26.5+ kAXErrorNotEntitled check.
+ * Write the four AX prefs BEFORE `simctl boot` so SB caches them at AX-server
+ * init. All four are required on a freshly-erased sim:
+ * - `IgnoreAXServerEntitlements` bypasses the iOS 26.5+ entitlement check.
  * - `AutomationEnabled` opts the simctl-spawned ax-service in as an AX client.
  * - `AccessibilityEnabled` + `ApplicationAccessibilityEnabled` gate the AT
- *   subsystem bootstrap. Without them SB never spawns `AccessibilityUIServer`
- *   and describe returns an empty ROOT even though the entitlement check passes
- *   (reproduced on a wiped iPhone 17e: AccessibilityUIServer active count = 0
- *   without these two; auto-spawns at boot with them).
+ *   subsystem bootstrap; without them SB never spawns `AccessibilityUIServer`
+ *   and describe returns an empty ROOT even though the entitlement check passes.
  *
  * Caller must ensure the sim is Shutdown — in-sim cfprefsd would otherwise
  * overwrite this file on flush.
  */
 export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
-  const plistPath = accessibilityPlistPath(udid);
+  const plistPath = await accessibilityPlistPath(udid);
   await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
   const exists = await fsAsync
     .access(plistPath)

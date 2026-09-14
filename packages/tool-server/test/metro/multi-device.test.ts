@@ -4,6 +4,12 @@ import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-metro-multidevice-home-");
 
 /**
  * End-to-end regression for the "multiple debuggers all resolve to the same
@@ -81,7 +87,7 @@ beforeAll(async () => {
     wss = new WebSocketServer({ server: mockServer });
     wss.on("connection", (ws) => ws.on("message", (raw) => handleCDPMessage(ws, raw.toString())));
 
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });

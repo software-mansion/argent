@@ -1,0 +1,52 @@
+---
+sidebar_position: 5
+sidebar_label: Screen recording
+title: Screen recording
+sidebar_custom_props:
+  icon: video
+---
+
+Argent records the screen of the device to a video file. The agent starts the recording, makes the interaction, and stops the recording. Argent gives you an mp4 file that shows what happened on the screen.
+
+Use a recording when a screenshot is not sufficient. A recording shows an animation, a transition, a gesture, or a sequence of screens. A recording also documents a bug, a flow, or a change of the app for a colleague or a pull request.
+
+## How a recording works
+
+1. The agent brings the app to the state where the video must start.
+2. The agent starts the recording on the device.
+3. The agent makes the interaction: taps, swipes, navigation, text input.
+4. The agent stops the recording.
+5. Argent saves the video in the project. The agent tells you the path of the file.
+
+The recording continues while the agent uses other tools. Argent reminds the agent after each tool call that the recording is active. A recording also stops on its own after a time limit. Thus a forgotten recording does not continue forever.
+
+## What the video shows
+
+Argent draws each interaction of the agent into the video. A pulse marks each tap. A trail follows each swipe and each drag. Two markers show the contact points of a pinch or a rotation. Thus the viewer sees where each gesture landed. The agent can also record the raw screen without these markers.
+
+Argent removes the still parts of the recording. When the screen does not change, Argent keeps the first second and removes the rest. Thus a long session with a short activity gives a short video without dead air. The agent can also keep the full real-time recording, for example to measure how long an operation takes on the screen.
+
+Argent stamps a small Argent watermark into the corner of the video. You can turn the watermark off.
+
+## Where the video lands
+
+Argent saves each video in the `.argent/recordings/` directory of the project. The file name contains the device and the time of the recording. Argent does not overwrite an existing file. You can change the directory in the Argent configuration.
+
+The files stay in the working tree. Add the directory to `.gitignore` when you do not want to commit the videos.
+
+## Example instructions
+
+- "Record the login flow from the start screen to the home screen."
+- "Record the animation of the bottom sheet when it opens and closes."
+- "Record the scroll of the list. I want to see the jank that I reported."
+- "Record a video of the checkout for the pull request. Do not show the touch markers."
+
+## Limits
+
+- Argent records iOS simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, Vega devices, or remote simulators.
+- One recording per device at a time. Different devices can record at the same time.
+- Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording.
+- On Android, a secure screen such as a password field or a DRM video comes out black.
+- A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
+
+Argent does this with the `screen-recording-start` and `screen-recording-stop` tools. The [tools reference](/docs/reference/tools) contains all tools.

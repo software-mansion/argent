@@ -26,10 +26,9 @@ export const CHROMIUM_CDP_NAMESPACE = "ChromiumCdp";
 type ChromiumFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
 /**
- * Build the `ServiceRef` for a Chromium CDP session keyed by an already-resolved
- * `DeviceInfo`. Tool `services()` callbacks call this rather than hand-building
- * the URN string so the blueprint factory always receives the device through
- * the registry's `options` channel and never has to reclassify.
+ * `ServiceRef` for a Chromium CDP session. Preferred over hand-building the URN:
+ * it also carries the resolved `DeviceInfo` through the registry's `options`
+ * channel, so the factory never has to reclassify the id.
  */
 export function chromiumCdpRef(device: DeviceInfo): {
   urn: string;
@@ -41,13 +40,8 @@ export function chromiumCdpRef(device: DeviceInfo): {
   };
 }
 
-// ── Legacy compatibility surface ─────────────────────────────────────────────
-// The first cut of Chromium support exposed a thin `ChromiumCdpApi` directly
-// off the blueprint. Existing tools (gesture-tap, screenshot, describe,
-// keyboard, run-sequence, etc.) still consume that shape. The full ChromiumServer
-// is now the source of truth, and these legacy types are kept so the blueprint
-// can publish *both* the new abstraction (`server`) and the original ergonomic
-// methods without forcing a callsite-by-callsite migration.
+// `ChromiumServer` is the source of truth, but the blueprint keeps publishing
+// the original `ChromiumCdpApi` shape too so tools can migrate one at a time.
 
 export interface MouseEventArgs {
   type: "mousePressed" | "mouseReleased" | "mouseMoved";
@@ -55,7 +49,6 @@ export interface MouseEventArgs {
   x: number;
   y: number;
   button?: "none" | "left" | "middle" | "right";
-  /** Required for press/release. */
   clickCount?: number;
 }
 
@@ -73,7 +66,7 @@ export interface KeyEventArgs {
 export interface ViewportSize {
   width: number;
   height: number;
-  /** Device pixel ratio reported by the renderer. */
+  /** Renderer-reported `window.devicePixelRatio`. */
   devicePixelRatio: number;
 }
 
@@ -96,33 +89,26 @@ export interface ChromiumCdpApi {
   cdp: CDPClient;
   /** WebSocket URL to the page target (for diagnostics). */
   pageWebSocketUrl: string;
-  /** Backend node id of the document (used as the root for AX queries). */
   rootDomNodeId: number | null;
-  /** The full sim-server-equivalent abstraction layer. New callers should use this. */
+  /** Full abstraction layer; new callers should use this. */
   server: ChromiumServer;
-  /** Re-read the page viewport so normalized → CSS pixel math stays accurate after window resizes. */
+  /** Re-read the viewport after a resize so normalized → CSS pixel math stays accurate. */
   refreshViewport(): Promise<ViewportSize>;
   /** Cached viewport from the most recent connect / refresh. */
   getViewport(): ViewportSize;
   dispatchMouseEvent(event: MouseEventArgs): Promise<void>;
   dispatchKeyEvent(event: KeyEventArgs): Promise<void>;
-  /** Screenshot via CDP, persisted under tmpdir; returns file:// URL + absolute path.
-   * Supports the sim-server-style options (rotation, scale, downscaler) when sharp is installed. */
+  /** Persists a PNG under tmpdir. `rotation`/`scale`/`downscaler` need `sharp` installed. */
   captureScreenshot(opts?: ScreenshotOpts): Promise<MediaReady>;
-  /** Returns the accessibility tree rooted at the document. */
   getAxTree(): Promise<ChromiumAxNode[]>;
-  /** Navigate the renderer to a URL. */
   navigate(url: string): Promise<void>;
-  /** Evaluate JS in the renderer. Resolves to the serialized value when `returnByValue` is true. */
+  /** Evaluate JS in the renderer. With `returnByValue`, resolves to the value itself. */
   evaluate(expression: string, options?: { returnByValue?: boolean }): Promise<unknown>;
-  /** Start a screencast (one CDP session shared across all subscribers). */
+  /** One CDP screencast session is shared across all subscribers. */
   startScreencast(opts?: ScreencastOpts): Promise<ScreencastSession>;
-  /** Last received screencast frame, or null. */
   getLastFrame(): ScreencastFrame | null;
 }
 
-// Re-exports for discovery callers that previously imported these straight from
-// the blueprint module.
 export { discoverPrimaryPage, ensureCdpReachable };
 
 async function getDocumentNodeId(cdp: CDPClient): Promise<number | null> {
@@ -142,35 +128,25 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
     return `${CHROMIUM_CDP_NAMESPACE}:${device.id}`;
   },
   async factory(_deps, payload, options) {
-    // Two routes into this factory:
-    //   1) A tool's `services()` callback uses chromiumCdpRef(device) and we
-    //      get options.device for free.
-    //   2) Another blueprint declares `ChromiumCdp:<id>` as a transitive dep
-    //      (registry resolves deps via URN strings only, no options channel
-    //      — see Registry._resolve). In that case we synthesize DeviceInfo
-    //      from the URN payload, which IS the device id.
-    // Both paths must agree on the device id; if a caller passed an explicit
-    // options.device whose id doesn't match the URN, that's a wiring bug
-    // worth surfacing loudly.
+    // Two routes in: a tool's `services()` callback passes chromiumCdpRef(device),
+    // so options.device is set; or another blueprint declares `ChromiumCdp:<id>`
+    // as a dep, which the registry resolves by URN alone (no options channel — see
+    // Registry._resolve), leaving only the device id in the payload.
     const opts = options as unknown as ChromiumFactoryOptions | undefined;
     const deviceFromOpts = opts?.device;
     const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
     if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
-      // Internal wiring invariant, not a telemetry-bearing failure: on every
-      // registry path chromiumCdpRef(device) sets options.device and the URN
-      // payload from the same device.id (so the ids agree), and the transitive-dep
-      // path passes no options at all (so deviceFromOpts is undefined). A mismatch
-      // can therefore only come from a hand-crafted direct factory() call — a
-      // programmer error — so it stays a plain Error without a code.
+      // Every registry path derives options.device and the URN payload from the
+      // same device.id, or passes no options at all — so a mismatch can only come
+      // from a hand-written factory() call. Programmer error, hence no error_code.
       throw new Error(
         `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
       );
     }
     const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
     if (!device) {
-      // Also dead on any registry path (resolveDevice never returns null and the
-      // URN payload is always present); reachable only by a direct factory() call
-      // with neither options.device nor a payload. Plain Error, no code.
+      // Also unreachable via the registry: resolveDevice never returns null and a
+      // registry URN always carries the device id in its payload.
       throw new Error(
         `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`
       );
@@ -197,10 +173,6 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
       events.emit("terminated", err ?? new Error(`Chromium CDP on port ${port} disconnected`));
     });
 
-    // Legacy adapter — translates the original `dispatchMouseEvent` and
-    // `dispatchKeyEvent` calls into the new server's wire formats. Keeping
-    // these one-liners means we don't have to rewrite every tool right now;
-    // they can migrate to `api.server.send*` at their own pace.
     const api: ChromiumCdpApi = {
       port,
       cdp: server.cdp,

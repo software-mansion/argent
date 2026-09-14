@@ -1,25 +1,21 @@
-// Process-level handlers for uncaughtException and unhandledRejection.
+// Process-level uncaughtException/unhandledRejection handlers.
 //
 // In MCP-server mode we do NOT exit on every uncaught error — many are
 // transient and the editor expects the server to keep running. But the naive
 // version (`stderr.write(...); if (!isMcp) exit`) burns 100% CPU when stderr
 // itself is broken (e.g. the parent process is gone): the write emits an
-// async 'error' event on the stream, which without a listener becomes another
-// uncaughtException, runs the handler, writes to the same broken stream, ...
+// async 'error' event, which without a listener becomes another
+// uncaughtException, which writes to the same broken stream, ...
 //
-// The fix has three pieces:
-//   1. `'error'` listeners on stdout/stderr — broken stdio is fatal; exit
-//      before the failure round-trips into uncaughtException. This is what
-//      breaks the production loop.
-//   2. try/catch around `stderr.write` — synchronous write failures also exit
-//      cleanly instead of escaping into another uncaughtException.
-//   3. try/catch around the formatter — a throwing `.stack` getter or
-//      `toString` (the production trace pointed at defaultPrepareStackTrace)
-//      can't take down the handler.
+// Hence: `'error'` listeners on stdout/stderr (broken stdio is fatal — exit
+// before the failure round-trips into uncaughtException; this is what breaks
+// the loop), try/catch around `stderr.write` for synchronous failures, and
+// try/catch around the formatter, since a throwing `.stack` getter is what
+// the production trace pointed at.
 //
-// When stdio is unusable we cannot tell the parent process what went wrong,
-// so we leave a breadcrumb on disk at `~/.argent/mcp-fatal.log`. Sibling of
-// the other persistent argent diagnostic logs (`tool-server.log`, etc.).
+// With stdio unusable we cannot report to the parent, so we leave a
+// breadcrumb at `~/.argent/mcp-fatal.log`, next to the other persistent
+// argent logs.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -35,8 +31,8 @@ function appendFatalLog(label: string, detail: string): void {
     const line = `[${new Date().toISOString()}] pid=${process.pid} ${label}: ${detail}\n`;
     fs.appendFileSync(FATAL_LOG_PATH, line);
   } catch {
-    // Last-resort log — if even this write fails (read-only fs, missing home),
-    // there is nothing more we can do. Swallow so we still exit cleanly.
+    // Last-resort log; if even this fails (read-only fs, missing home) there
+    // is nothing left to try.
   }
 }
 

@@ -7,13 +7,19 @@ import {
   FAILURE_SPAWN_CODES,
   NETWORK_FAILURES,
 } from "@argent/registry";
-import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
+import {
+  DEBUGGER_TOOL_OUTCOMES,
+  DEVICE_KINDS,
+  PLATFORMS,
+  type EventName,
+  type EventPropertyMap,
+} from "./events.js";
 import { AI_CLIENTS } from "./ai-identity.js";
 
-// Per-event property allowlist and validators. Unknown keys and invalid values
-// are dropped before anything reaches PostHog.
+// Last gate before export: unknown keys and invalid values never reach the
+// OTLP collector.
 
-export type Validator = (v: unknown) => unknown | undefined;
+type Validator = (v: unknown) => unknown | undefined;
 
 const oneOf =
   <T extends string>(opts: readonly T[]): Validator =>
@@ -46,10 +52,9 @@ const arrayOf =
     return out;
   };
 
-// Shared validators
-
 const TOOL_NAME = matches(/^[a-z][a-z0-9_-]{0,63}$/, 64);
 const PLATFORM = oneOf(PLATFORMS);
+const DEVICE_KIND = oneOf(DEVICE_KINDS);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   36
@@ -83,20 +88,25 @@ const FAILURE_SIGNAL_NAME = oneOf(FAILURE_SIGNAL_NAMES);
 const FAILURE_SPAWN_CODE = oneOf(FAILURE_SPAWN_CODES);
 const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
 
+/**
+ * The vendor label of an external device provider, never the instance-unique
+ * provider id. The id is a fresh value per provider window, which would make
+ * adoption and failure rates unaggregatable without telling us anything the
+ * vendor label doesn't.
+ *
+ * @see [`externalProviderLabel`](../../tool-server/src/utils/external-devices.ts)
+ */
+const DEVICE_PROVIDER = matches(/^[a-z0-9][a-z0-9-]{0,31}$/, 32);
+
 const AI_CLIENT = oneOf(AI_CLIENTS);
 
 const INSTALL_MODE = oneOf(["global", "local"] as const);
 
-// Crash diagnostics (toolserver:stop, reason:"crash"). Each is a coded, non-
-// identifying shape — the emit side (crash-diagnostics.ts) never produces free
-// text, and these validators are the final gate that drops anything that isn't
-// the expected coded form.
-//
-// error_name  — an error class name (a code identifier), e.g. TypeError.
-// error_syscall — a Node system-error code: leading `E`, uppercase/digits/`_`,
-//   bounded length. Covers EADDRINUSE, ECONNREFUSED, EAI_AGAIN, ERR_* — and by
-//   construction can hold no path, space, or lowercase text.
-// crash_fingerprint — exactly 16 lowercase hex chars (a truncated SHA-256).
+// Crash diagnostics (toolserver:stop, reason:"crash"). crash-diagnostics.ts
+// extracts these from an untrusted error without validating them, so these
+// shapes are the only gate: an identifier-shaped class name, a Node `E...` error
+// code (covers ERR_*), and 16 hex chars of a SHA-256 — none can carry a path,
+// space or free text.
 const ERROR_NAME = matches(/^[A-Za-z][A-Za-z0-9_]{0,63}$/, 64);
 const ERROR_SYSCALL = matches(/^E[A-Z0-9_]{1,31}$/, 32);
 const CRASH_FINGERPRINT = matches(/^[0-9a-f]{16}$/, 16);
@@ -118,13 +128,9 @@ const FAILURE_SIGNAL = {
   network_failure: NETWORK_FAILURE,
 };
 
-// Per-event validators
-//
-// The type forces one validator per declared property of every event (`-?`
-// keeps optional props like `platform` required here), and forbids validators
-// for properties the event type doesn't declare. So adding/removing a field in
-// events.ts that isn't mirrored here is a compile error — the runtime allowlist
-// can't silently drift from the typed event surface.
+// `-?` keeps optional props (e.g. `platform`) required here, and undeclared
+// properties are rejected, so an events.ts field not mirrored here is a compile
+// error — the runtime allowlist can't drift from the typed event surface.
 type ValidatorMap = {
   [E in EventName]: { [K in keyof EventPropertyMap[E]]-?: Validator };
 };
@@ -155,7 +161,6 @@ export const ALLOWED: ValidatorMap = {
     install_mode: INSTALL_MODE,
   },
   "installation:global_install_decision": {
-    // `from_tar` is intentionally absent; the installer skips that dev path.
     decision: oneOf(["install", "cancel", "already_installed"] as const),
   },
   "installation:update_decision": {
@@ -217,25 +222,40 @@ export const ALLOWED: ValidatorMap = {
     ...FAILURE_SIGNAL,
   },
   "tool:invoke": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     ...AI_TELEMETRY,
   },
   "tool:complete": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     duration_ms: DURATION_MS,
     ...AI_TELEMETRY,
   },
   "tool:fail": {
+    device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    device_kind: DEVICE_KIND,
     duration_ms: DURATION_MS,
+    // Emit side sends only names declared in the tool's zod shape, capped at 16
+    // because arrayOf voids the whole array once it is longer.
+    invalid_params: arrayOf(matches(/^[a-z][a-z0-9_]{0,63}$/i, 64), 16),
     ...FAILURE_SIGNAL,
     ...AI_TELEMETRY,
+  },
+  "debugger:tool_outcome": {
+    tool: oneOf(["debugger-status", "debugger-log-registry"] as const),
+    outcome: oneOf(DEBUGGER_TOOL_OUTCOMES),
+    platform: PLATFORM,
+    tool_invocation_id: UUID,
   },
   "cli:run_fail": {
     tool: TOOL_NAME,
@@ -301,6 +321,3 @@ export function sanitize(event: string, raw: Record<string, unknown>): Record<st
   }
   return out;
 }
-
-/** Re-export of the validator combinators for unit tests. */
-export const _testValidators = { oneOf, matches, finiteNonNeg, bool, arrayOf };

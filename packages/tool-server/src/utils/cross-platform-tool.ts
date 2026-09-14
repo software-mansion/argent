@@ -4,28 +4,18 @@ import type {
   ToolCapability,
   ToolDependency,
 } from "@argent/registry";
-import { resolveDevice } from "./device-info";
+import { isIosPhysicalDevice, resolveDevice } from "./device-info";
 import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
 
 /**
- * One platform branch of a cross-platform tool: its host-binary dependencies
- * plus the handler that runs when the resolved device matches this platform.
- *
- * Co-locating `requires` with `handler` keeps each platform file self-contained
- * — when you read `platforms/ios.ts` you see exactly what binaries it shells
- * out to, not a global declaration two levels up. `dispatchByPlatform` wires
- * the right branch's `requires` into the preflight before the handler runs,
- * so an iOS-only environment never trips an `adb` check, and vice versa.
- *
- * Use the `ToolDefinition.requires` field instead when a binary is needed by
- * *every* invocation regardless of which platform branch fires (rare — usually
- * only true for analysis / no-device tools).
+ * One platform branch of a cross-platform tool. Only the resolved branch's
+ * `requires` is probed, so an iOS-only host never trips an `adb` check; use
+ * `ToolDefinition.requires` for binaries every invocation needs.
  */
 export interface PlatformImpl<Services, Params, Result> {
-  /** Host binaries this branch needs. Probed via `ensureDeps` before `handler` runs. */
+  /** Host binaries this branch needs, probed before `handler` runs. */
   requires?: ToolDependency[];
-  /** Implementation function. Receives typed services, params, the resolved device, and invoke options. */
   handler: (
     services: Services,
     params: Params,
@@ -35,22 +25,13 @@ export interface PlatformImpl<Services, Params, Result> {
 }
 
 /**
- * Build an `execute` function that resolves a `udid` parameter into a DeviceInfo,
- * asserts the tool's capability declaration covers it, runs the resolved
- * platform branch's host-binary preflight, and dispatches to its handler.
+ * Build a `ToolDefinition.execute` that resolves `udid` to a device, asserts the
+ * tool's capability covers it, probes the matching branch's host binaries, and
+ * dispatches to its handler.
  *
- * Cross-platform tools call this in their `ToolDefinition.execute` so the
- * resolveDevice + assertSupported + dep preflight + branch boilerplate is
- * one line per tool instead of ten.
- *
- * `Services` is the shape of services the tool declares — typed so handlers
- * see real names (e.g. `services.simulatorServer`) instead of the raw
- * `Record<string, unknown>` the registry hands in.
- *
- * The `chromium` branch is optional. When omitted, a chromium device triggers
- * `NotImplementedOnPlatformError` — the capability gate normally fires first,
- * so this only matters for tools that declare chromium support without wiring
- * a handler.
+ * `Services` is the tool's own service shape, so handlers see real names (e.g.
+ * `services.simulatorServer`) instead of the `Record<string, unknown>` the
+ * registry hands in.
  */
 export function dispatchByPlatform<
   IosServices,
@@ -60,25 +41,24 @@ export function dispatchByPlatform<
   ChromiumServices = Record<string, unknown>,
   VegaServices = unknown,
   IosRemoteServices = IosServices,
+  IosDeviceServices = IosServices,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
-  /**
-   * Optional ios-remote branch. When omitted, an ios-remote device will hit
-   * `assertSupported` and fail there if the tool's capability matrix doesn't
-   * include `appleRemote` — so adding ios-remote support is two changes (this
-   * branch + the matrix), and the absence of either is a clean 400.
-   */
   iosRemote?: PlatformImpl<IosRemoteServices, Params, Result>;
-  chromium?: PlatformImpl<ChromiumServices, Params, Result>;
   /**
-   * Vega (Fire TV) branch. Optional so existing iOS/Android-only tools compile
-   * unchanged. When a tool's capability declares `vega` support but no `vega`
-   * branch is wired here, a Vega device dispatch throws
-   * `NotImplementedOnPlatformError` (501) rather than silently falling through.
+   * Physical iOS device branch (`platform: "ios"`, `kind: "device"`). Optional
+   * so simulator-only tools compile unchanged. It is checked BEFORE the plain
+   * `ios` branch: a physical device must never fall through to the simulator
+   * handler, whose services (simulator-server, simctl) do not exist for
+   * hardware. Declared-but-unwired (capability says `apple: { device: true }`
+   * with no branch here) throws `NotImplementedOnPlatformError` (501) so the
+   * gap is a loud contributor hint, not a simulator-path misroute.
    */
+  iosDevice?: PlatformImpl<IosDeviceServices, Params, Result>;
+  chromium?: PlatformImpl<ChromiumServices, Params, Result>;
   vega?: PlatformImpl<VegaServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
@@ -88,6 +68,29 @@ export function dispatchByPlatform<
   return async (services, params, invokeOptions) => {
     const device = resolveDevice(params.udid);
     assertSupported(opts.toolId, opts.capability, device);
+    if (isIosPhysicalDevice(device)) {
+      if (!opts.iosDevice) {
+        throw new NotImplementedOnPlatformError({
+          toolId: opts.toolId,
+          platform: "ios",
+          // The class's stock message derives platforms/ios.ts and says to add
+          // a capability block, both wrong for hardware, so the hint corrects.
+          hint:
+            `For physical iOS devices, implement ` +
+            `tools/${opts.toolId}/platforms/ios-device.ts instead; the capability ` +
+            `block already exists.`,
+        });
+      }
+      if (opts.iosDevice.requires?.length) {
+        await ensureDeps(opts.iosDevice.requires);
+      }
+      return opts.iosDevice.handler(
+        services as unknown as IosDeviceServices,
+        params,
+        device,
+        invokeOptions
+      );
+    }
     if (device.platform === "ios") {
       if (opts.ios.requires?.length) {
         await ensureDeps(opts.ios.requires);

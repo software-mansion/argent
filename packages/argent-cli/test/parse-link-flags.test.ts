@@ -192,6 +192,6 @@ describe("parseUnlinkFlags", () => {
     expect(() => parseUnlinkFlags(["--bogus"])).toThrow(StartFlagError);
     expect(() => parseUnlinkFlags(["--bogus"])).toThrow(/Unknown flag: --bogus/);
     // Unlink takes no positional args either — anything not --yes/--help fails.
-    expect(() => parseUnlinkFlags(["foo"])).toThrow(/Unknown flag: foo/);
+    expect(() => parseUnlinkFlags(["foo"])).toThrow(/Unexpected argument "foo"/);
   });
 });

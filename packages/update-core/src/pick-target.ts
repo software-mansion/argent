@@ -8,8 +8,7 @@ function isStableUpgrade(version: string, current: string | null): boolean {
   return semver.gt(version, current);
 }
 
-// No policy → everything passes. Under a policy, an unknown/unparseable
-// publish time conservatively returns false (delay rather than nag).
+// An unknown/unparseable publish time counts as too new: delay rather than nag.
 function isOldEnough(publishedAt: string | null, minReleaseAgeMs: number): boolean {
   if (minReleaseAgeMs <= 0) return true;
   if (!publishedAt) return false;
@@ -19,12 +18,10 @@ function isOldEnough(publishedAt: string | null, minReleaseAgeMs: number): boole
 }
 
 /**
- * The newest stable version newer than `current` that the resolver could
- * install now — i.e. one that also clears the policy. With no policy this is
- * just the latest tag; under one we scan all versions, since the latest publish
- * may be held back while an older version is already eligible. `current === null`
- * means "nothing installed", so any stable release qualifies. Returns null when
- * nothing is installable.
+ * Newest stable version above `current` that also clears the release-age
+ * policy. Under a policy every version is scanned, since the latest publish may
+ * be held back while an older one is already eligible. `current === null` means
+ * nothing installed, so any stable release qualifies.
  */
 export function pickInstallableTarget(
   latest: VersionAt,
@@ -38,7 +35,7 @@ export function pickInstallableTarget(
 
   let best: VersionAt | null = null;
   for (const [version, publishedAt] of Object.entries(times)) {
-    // `times` also carries non-version keys ("created"/"modified") — filtered as invalid semver.
+    // `times` also carries non-version keys ("created"/"modified").
     if (!semver.valid(version) || semver.prerelease(version)) continue;
     if (current !== null && !semver.gt(version, current)) continue;
     if (!isOldEnough(publishedAt, minReleaseAgeMs)) continue;

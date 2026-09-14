@@ -9,11 +9,12 @@ import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
 import { startNativeProfilerIos } from "./platforms/ios";
 import { startNativeProfilerAndroid } from "./platforms/android";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
   app_process: z
     .string()
     .optional()
@@ -49,7 +50,7 @@ const zodSchema = z.object({
 });
 
 const capability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -82,10 +83,8 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
     const device = resolveDevice(params.device_id);
     assertSupported("native-profiler-start", capability, device);
 
-    // The session blueprint already classified the platform at factory time;
-    // trust that over re-parsing the udid — it lets tests build a session
-    // with a synthetic platform without their fake udid having to match the
-    // iOS-UDID regex.
+    // Dispatch on the session's platform, not the udid shape: tests pair a
+    // synthetic platform with a fake udid that fails the iOS-UDID regex.
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       return startNativeProfilerIos(api, params);

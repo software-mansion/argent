@@ -1,11 +1,6 @@
 /**
- * Pure helpers for the React DevTools backend self-bootstrap path.
- *
- * Kept separate from the tool files so they can be unit-tested without CDP /
- * vitest mocking. The bootstrap script itself lives in `scripts.ts` as
- * `BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT`; this module owns the shape of the
- * result it returns and the mapping from each failure reason to an
- * agent-facing error message.
+ * Result shape of `BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT` (see `scripts.ts`), and
+ * the agent-facing message for each failure reason.
  */
 
 export type BootstrapReason =
@@ -28,13 +23,7 @@ export type BootstrapResult = {
   message?: string;
 };
 
-/**
- * Translate a bootstrap failure into an agent-facing error message.
- *
- * Each message describes what went wrong, a plausible cause, and what the
- * agent should ask the user / do next — in one short sentence per part, with
- * no internal identifiers or jargon.
- */
+/** Translate a bootstrap failure into an agent-facing error message. */
 export function bootstrapFailureMessage(bootstrap: BootstrapResult): string {
   switch (bootstrap.reason) {
     case "no-hook":

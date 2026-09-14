@@ -14,10 +14,9 @@ export interface RegistryInfo {
 }
 
 /**
- * Fetch the full npm packument (not `/latest`) — only it carries the `time`
- * map the release-age gate needs. `url` is the packument URL, e.g.
- * `https://registry.npmjs.org/@swmansion/argent`. Returns null on any failure
- * (never throws — update checks must not crash the caller).
+ * Fetches the full packument (not `/latest`) — only it carries the `time` map
+ * the release-age gate needs. Resolves null on any failure; never throws, so
+ * an update check cannot crash its caller.
  */
 export function fetchRegistryInfo(url: string): Promise<RegistryInfo | null> {
   return new Promise((resolve) => {
