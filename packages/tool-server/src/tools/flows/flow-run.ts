@@ -1361,8 +1361,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
       // override independent of the app, so an e2e flow's leading launch step
       // (relaunch + settle) doubles as propagation headroom. No-op (returns
-      // false) on chromium/vega; restored on teardown.
-      const statusBarPinned = device !== null && (await pinStatusBar(device));
+      // false) on chromium/vega and on a run already cancelled; restored on
+      // teardown.
+      const statusBarPinned = device !== null && (await pinStatusBar(device, signal));
 
       // The chromium equivalent: front the page so a backgrounded window doesn't
       // throttle rendering — wheel-event acks (scroll steps) stall on a throttled

@@ -178,6 +178,44 @@ describe("pinStatusBar (ios-remote)", () => {
     const argvs = execFileMock.mock.calls.map(([, args]) => args as string[]);
     expect(argvs.some((a) => a.includes("clear"))).toBe(true);
   });
+
+  it("bounds every remote call well under the CLI's 30s default", async () => {
+    // One unresponsive tunnel fails the override, its undo and the teardown
+    // restore in turn. Under the default each waited 30s, holding a two-step
+    // run for 90s; a healthy call takes 0.15-0.25s on a cloud simulator.
+    execFileMock.mockReturnValue(new Error("sim-remote: timed out"));
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+
+    const timeouts = execFileMock.mock.calls.map(
+      ([, , options]) => (options as { timeout?: number }).timeout
+    );
+    expect(timeouts).toEqual([5_000, 5_000, 5_000]);
+  });
+});
+
+describe("pinStatusBar (cancelled run)", () => {
+  it("pins nothing once the run is cancelled, so no restore is owed", async () => {
+    // A client that disconnected before the run started must not still cost a
+    // pin and its teardown restore - two remote calls a dead tunnel can stall.
+    const cancelled = new AbortController();
+    cancelled.abort();
+
+    for (const device of [IOS_SIMULATOR, IOS_REMOTE_SIMULATOR, ANDROID_DEVICE]) {
+      await expect(pinStatusBar(device, cancelled.signal)).resolves.toBe(false);
+    }
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("still pins when the signal was never aborted", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR, new AbortController().signal)).resolves.toBe(
+      true
+    );
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("pinStatusBar (android)", () => {

@@ -35,11 +35,23 @@ const IOS_STATUS_BAR_OVERRIDE = [
 ];
 
 /**
+ * Bound on one remote `status_bar` call. A healthy call returns in 0.15-0.25s
+ * on a cloud simulator, and the slowest remote round trip measured there, a
+ * cold screen capture, took 1.5s. The CLI's 30s default instead let one
+ * unresponsive tunnel hold a two-step run for 90s: the override, its undo and
+ * the teardown restore each waited it out, and none of them may be skipped.
+ */
+const REMOTE_STATUS_BAR_TIMEOUT_MS = 5_000;
+
+/**
  * Returns whether the caller must schedule a run-end {@link restoreStatusBar}:
  * true when the override applied, and also when a partial override could not be
  * undone here, so the teardown restore gets another chance.
+ *
+ * A run cancelled before this is reached pins nothing, so it owes no restore.
  */
-export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
+export async function pinStatusBar(device: DeviceInfo, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false;
   // `simctl status_bar` speaks the simulator namespace only; it cannot address
   // a hardware UDID, so the bar stays live; its diff noise is already absorbed
   // by the settle's top-band mask (`statusBarMaskFraction` in flow-pixels).
@@ -56,7 +68,9 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
     // needs the same pin — without it the clock ticks through a run and drives
     // any diff whose region overlaps the bar (a `cropOn` there is not masked).
     if (device.platform === "ios-remote") {
-      await simctlStatusBar(device.id, IOS_STATUS_BAR_OVERRIDE);
+      await simctlStatusBar(device.id, IOS_STATUS_BAR_OVERRIDE, {
+        timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS,
+      });
       return true;
     }
     if (device.platform === "android") {
@@ -98,7 +112,7 @@ export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
         await simctlArgsForUdid(device.id, ["status_bar", device.id, "clear"])
       );
     } else if (device.platform === "ios-remote") {
-      await simctlStatusBar(device.id, ["clear"]);
+      await simctlStatusBar(device.id, ["clear"], { timeoutMs: REMOTE_STATUS_BAR_TIMEOUT_MS });
     } else if (device.platform === "android") {
       try {
         await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
