@@ -400,10 +400,11 @@ describe("statusBarMaskFraction", () => {
   });
 
   it("masks the band on a remote iOS simulator too", async () => {
-    // sim-remote drives an ordinary iOS simulator, so its status bar ticks
-    // like a local one — and the run-level `pinStatusBar` does not cover the
-    // platform either. The tvOS probe reads the local simulator list, which
-    // cannot see another machine's device, so it is not asked.
+    // sim-remote drives an ordinary iOS simulator, so it has the same status
+    // bar to mask. The run-level `pinStatusBar` covers it too, but the mask is
+    // what a snapshot outside a flow run leans on. The tvOS probe reads the
+    // local simulator list, which cannot see another machine's device, so it
+    // is not asked.
     await expect(
       statusBarMaskFraction({ platform: "ios-remote", kind: "simulator", id: "remote:ios-udid" })
     ).resolves.toBe(0.06);
