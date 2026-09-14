@@ -133,7 +133,7 @@ function hasRunnerTree(udid: unknown): boolean {
 /**
  * Fallback for a platform the clauses below do not name. Unreachable today: a
  * determinate verdict needs `fetchFlowTree`, which answers only on ios,
- * android, chromium and vega.
+ * ios-remote, android, chromium and vega, and the clauses read ios-remote as ios.
  */
 const UNSUPPORTED_PLATFORM = {
   divergence: "The recorder and the runner read different projections of the screen.",
