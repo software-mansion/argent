@@ -59,6 +59,17 @@ describe("ensureAndroidDevtoolsInstalled", () => {
     expect(installs()).toHaveLength(0);
   });
 
+  // API levels without `cmd package` answer through `pm list packages`, which
+  // reports presence only; installing on every probe would replace a working
+  // helper each time.
+  it("treats a present package with no readable versionCode as current", async () => {
+    vi.mocked(adbShell).mockResolvedValueOnce("package:com.argent.androiddevtools\n");
+
+    await ensureAndroidDevtoolsInstalled(SERIAL);
+
+    expect(installs()).toHaveLength(0);
+  });
+
   it("installs when the device has no helper", async () => {
     vi.mocked(adbShell).mockResolvedValueOnce("");
 

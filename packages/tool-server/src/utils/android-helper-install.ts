@@ -67,10 +67,14 @@ export async function ensureAndroidDevtoolsInstalled(
 
   if (!options.force) {
     const probe = await probeInstalledVersion(serial, manifest.packageName);
+    // A null versionCode means the `pm list packages` fallback answered (API
+    // levels without `cmd package`), which reports presence only. Treat a
+    // present package as current there: installing on every instantiation
+    // would replace a working helper each time, and a stale one is caught by
+    // the forced reinstall once `am instrument` refuses it.
     if (
       probe.installed &&
-      probe.versionCode !== null &&
-      probe.versionCode >= manifest.versionCode
+      (probe.versionCode === null || probe.versionCode >= manifest.versionCode)
     ) {
       return;
     }

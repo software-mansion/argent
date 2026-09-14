@@ -207,7 +207,7 @@ export async function queryAndroidFullHierarchy(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `the argent android helper is unavailable (${msg}) — flows resolve testID selectors against the full hierarchy it serves; argent reinstalls the helper once by itself, so if this persists run the command the error names on the device`,
+      `the argent android helper is unavailable (${msg}) — flows resolve testID selectors against the full hierarchy it serves; argent reinstalls the helper once by itself, so if this persists run the adb command the error names from the host`,
       { cause: err }
     );
   }

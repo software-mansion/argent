@@ -29,7 +29,7 @@ const HELPER_UNAVAILABLE =
   "becoming ready (code=1 signal=null): INSTRUMENTATION_STATUS: Error=Unable to find instrumentation " +
   "info. Run `adb -s emulator-5554 shell am instrument -w com.argent.androiddevtools/.SnapshotInstrumentation` " +
   "to see the device's own error) — flows resolve testID selectors against the full hierarchy it serves; " +
-  "argent reinstalls the helper once by itself, so if this persists run the command the error names on the device";
+  "argent reinstalls the helper once by itself, so if this persists run the adb command the error names from the host";
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
