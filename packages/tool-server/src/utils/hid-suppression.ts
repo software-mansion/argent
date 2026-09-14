@@ -44,6 +44,14 @@
  *  - **Detect** a simulator whose services are already dead, so tools can say so
  *    instead of silently no-oping.
  *
+ * Self-heal is deliberately absent. Clearing the notification and restarting
+ * `backboardd` does revive the services, but it kills the foreground app and
+ * bounces SpringBoard, so it belongs behind an explicit user action rather than
+ * in an attach path. The two `notifyutil` calls it needs are
+ * `-s com.apple.coredevice.dtuhidd.active 0 -p …` inside the guest, followed by
+ * `launchctl kill SIGTERM system/com.apple.backboardd`; clear the flag first or
+ * the fresh services are torn down again immediately.
+ *
  * # Why the warm-up is invisible
  *
  * Each event is a *release without a press* — a touch `Up` with no `Down`, a
@@ -75,7 +83,7 @@ import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 const execFileAsync = promisify(execFile);
 
 /** The notification `backboardd` watches to decide whether CoreDevice owns HID. */
-export const DTUHIDD_ACTIVE_KEY = "com.apple.coredevice.dtuhidd.active";
+const DTUHIDD_ACTIVE_KEY = "com.apple.coredevice.dtuhidd.active";
 
 /**
  * Mid-screen, in the normalized 0..1 space `gesture-tap` uses. Irrelevant for a
@@ -132,29 +140,6 @@ async function simctlSpawn(udid: string, args: string[]): Promise<string> {
 }
 
 /**
- * Read the suppression flag from inside the guest.
- *
- * Must be read in the guest: the simulator runs its own `notifyd`, so a
- * host-side read of the same key is a silent false negative (host reports 0
- * while the guest reports 1).
- *
- * **This is diagnostic only — never treat it as a fault signal.** A set flag is
- * the normal state of a perfectly healthy simulator whenever a CoreDevice client
- * is running; if the services were exempted before it was raised, everything
- * works with the flag at 1. Only {@link probeHidServices} says whether input
- * actually lands.
- *
- * @returns `true`/`false`, or `null` if the flag could not be read.
- */
-export async function readSuppressionFlag(udid: string): Promise<boolean | null> {
-  // `simctl spawn` needs a bare binary name; an absolute path fails with
-  // SimXPCErrorDomain 111.
-  const out = await simctlSpawn(udid, ["notifyutil", "-g", DTUHIDD_ACTIVE_KEY]);
-  const match = out.match(/\s(\d+)\s*$/m);
-  return match ? match[1] !== "0" : null;
-}
-
-/**
  * Identifier for the simulator's current boot.
  *
  * CoreSimulator regenerates the per-device CoreDevice launchd plists on every
@@ -164,7 +149,7 @@ export async function readSuppressionFlag(udid: string): Promise<boolean | null>
  *
  * @returns epoch milliseconds, or `null` if the plist is missing.
  */
-export async function readBootId(udid: string): Promise<number | null> {
+async function readBootId(udid: string): Promise<number | null> {
   const plist = path.join(
     os.homedir(),
     "Library/Developer/CoreSimulator/Devices",
@@ -189,7 +174,7 @@ export async function readBootId(udid: string): Promise<number | null> {
  * and the first Indigo event to arrive connects it healthy. The buttons and
  * keyboard are built by a path with no such check.
  */
-export interface HidHealth {
+interface HidHealth {
   /** Taps, swipes, and every gesture built out of them. */
   touch: boolean;
   /** Hardware buttons and typed text. */
@@ -229,10 +214,7 @@ function isLogPreamble(line: string): boolean {
  * @returns per-service liveness, or `null` if the log could not be read (treat
  *   as unknown, never as broken).
  */
-export async function probeHidServices(
-  udid: string,
-  api: SimulatorServerApi
-): Promise<HidHealth | null> {
+async function probeHidServices(udid: string, api: SimulatorServerApi): Promise<HidHealth | null> {
   sendHidWarmUp(api);
   await new Promise((r) => setTimeout(r, PROBE_SETTLE_MS));
 
@@ -288,7 +270,7 @@ const REBOOT_REMEDY =
  * Turn a probe result into something worth telling the agent, or `undefined`
  * when everything that matters works.
  */
-export function hidCaveat(health: HidHealth): string | undefined {
+function hidCaveat(health: HidHealth): string | undefined {
   if (health.touch && health.buttonsAndKeyboard) return undefined;
   const dead = !health.touch
     ? health.buttonsAndKeyboard
@@ -369,29 +351,4 @@ export async function hidCaveatForDevice(
   if (caveat === undefined) return undefined;
   cached.told = true;
   return caveat;
-}
-
-/**
- * Clear the suppression flag.
- *
- * `dtuhidd` only writes it at daemon start, so clearing it sticks even while the
- * daemon keeps running. Does nothing about services that are already terminated
- * — that needs {@link restartBackboardd}.
- */
-export async function clearSuppressionFlag(udid: string): Promise<void> {
-  await simctlSpawn(udid, ["notifyutil", "-s", DTUHIDD_ACTIVE_KEY, "0", "-p", DTUHIDD_ACTIVE_KEY]);
-}
-
-/**
- * Restart `backboardd` so it builds fresh HID services.
- *
- * This is the only known way to revive a simulator whose services have already
- * been terminated — the service objects cannot be resurrected, only replaced.
- *
- * **Disruptive**: the foreground app is killed and SpringBoard restarts. Clear
- * the flag first, or the new services are torn down again immediately and only
- * the digitizer survives.
- */
-export async function restartBackboardd(udid: string): Promise<void> {
-  await simctlSpawn(udid, ["launchctl", "kill", "SIGTERM", "system/com.apple.backboardd"]);
 }
