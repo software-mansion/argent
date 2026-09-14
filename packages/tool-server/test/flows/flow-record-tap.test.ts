@@ -21,11 +21,13 @@ import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/fl
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
 const ANDROID = "emulator-5554";
-// What the Android tree source raises: the registry's service tag inside the
-// tree source's own prefix, around the reason the author needs.
+// The real wrapped shape the Android tree source raises: the registry's service
+// tag inside the tree source's own prefix, around the reason the author needs.
 const HELPER_UNAVAILABLE =
-  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] " +
-  "the argent android helper could not start on emulator-5554 even after reinstalling it";
+  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] the argent android " +
+  "helper could not start on emulator-5554 even after reinstalling it: am instrument exited " +
+  "before becoming ready: INSTRUMENTATION_STATUS: Error=Unable to find instrumentation info for: " +
+  "ComponentInfo{com.argent.androiddevtools/.SnapshotInstrumentation}";
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
@@ -373,10 +375,14 @@ describe("flow-add-step tap selector capture", () => {
 
     const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
 
+    // The tag and the tree-source prefix are gone; the device's own reason is not.
     expect(result.message).toContain(
-      "selector capture failed (the argent android helper could not start on emulator-5554 " +
-        "even after reinstalling it); kept coordinates"
+      "selector capture failed (the argent android helper could not start on emulator-5554"
     );
+    expect(result.message).toContain("Error=Unable to find instrumentation info");
+    expect(result.message).toContain("); kept coordinates");
+    expect(result.message).not.toContain("[AndroidDevtools:");
+    expect(result.message).not.toContain("helper is unavailable");
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 

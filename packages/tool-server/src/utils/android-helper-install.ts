@@ -66,7 +66,9 @@ export async function ensureAndroidDevtoolsInstalled(
     // levels without `cmd package`), which reports presence only. Treat a
     // present package as current there: installing on every instantiation
     // would replace a working helper each time, and a stale one is caught by
-    // the forced reinstall once `am instrument` refuses it.
+    // the forced reinstall once `am instrument` refuses it. Only API 23 — the
+    // helper's minSdk — lacks `cmd package`, so the one device class that
+    // never upgrades a stale-but-present helper is also the oldest supported.
     if (
       probe.installed &&
       (probe.versionCode === null || probe.versionCode >= manifest.versionCode)

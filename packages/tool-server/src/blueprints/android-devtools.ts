@@ -68,11 +68,12 @@ const HELPER_PORT_MARKER = /^INSTRUMENTATION_STATUS:\s*port=(\d+)/;
 const ADB_FORWARD_PORT_MARKER = /^(\d+)\s*$/;
 
 /**
- * `am instrument` reports why it refused on STDOUT — the status block — and
- * writes nothing there but a stack, so a report built from the stderr tail
- * alone says `code=1` and nothing else.
+ * `am instrument` reports why it refused on STDOUT — the `Error=` line of its
+ * status block — and writes nothing to stderr but a stack, so a report built
+ * from the stderr tail alone says `code=1` and nothing else. The status code
+ * beside it is always -1 and names nothing.
  */
-const HELPER_STATUS_MARKER = /^INSTRUMENTATION_(?:STATUS:\s*Error=|STATUS_CODE:\s*-)/;
+const HELPER_STATUS_MARKER = /^INSTRUMENTATION_STATUS:\s*Error=/;
 const HELPER_STATUS_MAX_CHARS = 400;
 
 type HelperSpawnFault = "instrumentation-missing" | "unknown";
@@ -191,14 +192,16 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
     let exitSignal: NodeJS.Signals | null = null;
 
     const rejectExited = () => {
+      // The device's own reason where there is one; the exit status only where
+      // there is not, since `code=1` is what every refusal exits with.
       const detail = statusBuf
-        ? `: ${statusBuf}`
+        ? statusBuf
         : stderrBuf.trim()
-          ? `. stderr=${stderrBuf.trim().slice(0, 200)}`
-          : ".";
+          ? `code=${exitCode} signal=${exitSignal}. stderr=${stderrBuf.trim().slice(0, 200)}`
+          : `code=${exitCode} signal=${exitSignal}`;
       reject(
         new HelperSpawnError(
-          `am instrument exited before becoming ready (code=${exitCode} signal=${exitSignal})${detail}`,
+          `am instrument exited before becoming ready: ${detail}`,
           {
             error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_EXITED_BEFORE_READY,
             failure_stage: "android_devtools_helper_ready",
@@ -215,7 +218,7 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
               ? { failure_signal: exitSignal }
               : {}),
           },
-          classifyHelperSpawnFault(statusBuf || stderrBuf)
+          classifyHelperSpawnFault(statusBuf)
         )
       );
     };
@@ -277,8 +280,15 @@ async function installHelper(serial: string, options: { force?: boolean }): Prom
     await ensureAndroidDevtoolsInstalled(serial, options);
   } catch (err) {
     const cause = err instanceof Error ? err : new Error(String(err));
-    // adb keeps its refusal on one line; the cap is for anything that does not.
-    const reason = cause.message.replace(/\s+/g, " ").trim().slice(0, 200);
+    // runAdb prefixes the whole argv — including the bundled APK's absolute
+    // path — so capping the raw message cuts the `Failure [INSTALL_FAILED_…]`
+    // code off the end. Drop the prefix first; the cap is for a device that
+    // answers with more than adb's usual one line.
+    const reason = cause.message
+      .replace(/^.*? failed: /s, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
     throw new FailureError(
       `the argent android helper is not installed on ${serial} and could not be installed: ${reason}`,
       {
@@ -318,8 +328,7 @@ async function spawnHelperWithRepair(serial: string): Promise<SpawnedHelper> {
     } catch (repairErr) {
       if (!(repairErr instanceof HelperSpawnError)) throw repairErr;
       throw new FailureError(
-        `the argent android helper could not start on ${serial} even after reinstalling it: ${repairErr.message}. ` +
-          `Run \`adb -s ${serial} shell am instrument -w ${helperManifest().instrumentationRunner}\` for the device's own error.`,
+        `the argent android helper could not start on ${serial} even after reinstalling it: ${repairErr.message}`,
         {
           error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_REPAIR_FAILED,
           failure_stage: "android_devtools_helper_repair",

@@ -2405,6 +2405,41 @@ describe("flow composition (run:)", () => {
     expect(resolveService).toHaveBeenCalled();
   });
 
+  it("errors the launch step with the helper's own reason on Android", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => {
+        throw new Error(
+          "the argent android helper could not start on emulator-5554 even after reinstalling it: " +
+            "am instrument exited before becoming ready: INSTRUMENTATION_STATUS: Error=Unable to find instrumentation info"
+        );
+      }),
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: "emulator-5554" }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    // The factory's reason, not a boolean turned back into generic advice.
+    expect(result.steps[0].reason).toContain("the argent android helper is unavailable:");
+    expect(result.steps[0].reason).toContain("Error=Unable to find instrumentation info");
+    expect(result.ok).toBe(false);
+  });
+
   it("waits out the gate for a com.apple.* launch, then withholds the verdict", async () => {
     // The gate ties the launched bundle to the app a later selector step
     // auto-targets, so the wait runs for every bundle (see `treeSourceGate`).

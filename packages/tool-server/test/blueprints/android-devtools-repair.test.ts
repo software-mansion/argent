@@ -137,7 +137,7 @@ describe("classifyHelperSpawnFault", () => {
 
   it("classifies anything else as unknown, so it is never reinstalled over", () => {
     expect(classifyHelperSpawnFault("")).toBe("unknown");
-    expect(classifyHelperSpawnFault("INSTRUMENTATION_STATUS_CODE: -1")).toBe("unknown");
+    expect(classifyHelperSpawnFault("Error=Permission Denial")).toBe("unknown");
     // The stderr stack of EVERY refusal opens with this line.
     expect(classifyHelperSpawnFault("android.util.AndroidException: INSTRUMENTATION_FAILED:")).toBe(
       "unknown"
@@ -170,10 +170,12 @@ describe("android-devtools helper repair", () => {
       FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_REPAIR_FAILED
     );
     expect((err as Error).message).toContain("Error=Unable to find instrumentation info");
+    // Neither the stack, nor the status code and exit code that name nothing,
+    // nor a command telling the reader to go and fetch the reason just quoted.
     expect((err as Error).message).not.toContain("Instrument.java:521");
-    expect((err as Error).message).toContain(
-      "adb -s emulator-5554 shell am instrument -w com.argent.androiddevtools/.SnapshotInstrumentation"
-    );
+    expect((err as Error).message).not.toContain("STATUS_CODE");
+    expect((err as Error).message).not.toContain("code=1");
+    expect((err as Error).message).not.toContain("adb -s emulator-5554 shell am instrument");
     expect(installs()).toHaveLength(1);
   });
 
@@ -182,7 +184,7 @@ describe("android-devtools helper repair", () => {
   // waiting out the 30 s ready timeout and rejecting as an unclassified one.
   it("settles from the exit, with the status intact, when the pipes stay open", async () => {
     queued.push({
-      stdout: ["INSTRUMENTATION_STATUS_CODE: -1"],
+      stdout: ["INSTRUMENTATION_STATUS: Error=Permission Denial"],
       exit: { code: 1 },
       keepPipesOpen: true,
     });
@@ -191,12 +193,12 @@ describe("android-devtools helper repair", () => {
     const err = await start().catch((e: unknown) => e);
 
     expect(Date.now() - started).toBeLessThan(1_000);
-    expect((err as Error).message).toContain("INSTRUMENTATION_STATUS_CODE: -1");
+    expect((err as Error).message).toContain("Error=Permission Denial");
   });
 
   it("does not reinstall for a fault a reinstall cannot fix", async () => {
     queued.push({
-      stdout: ["INSTRUMENTATION_STATUS_CODE: -1"],
+      stdout: ["INSTRUMENTATION_STATUS: Error=Permission Denial"],
       stderr: "java.lang.SecurityException: not allowed",
       exit: { code: 1 },
     });
@@ -212,15 +214,21 @@ describe("android-devtools helper repair", () => {
 
   it("reports an install that fails, without spawning a second time", async () => {
     queued.push(MISSING);
+    // The shape runAdb throws: the whole argv, including the APK's absolute
+    // path, ahead of what adb actually said.
     installFails =
-      "adb: failed to install /tmp/argent-android-devtools.apk: Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]";
+      "adb -s emulator-5554 install -r -t /Users/dev/argent/packages/native-devtools-android/bin/" +
+      "argent-android-devtools-0.1.0.apk failed: adb: failed to install argent-android-devtools-0.1.0.apk: " +
+      "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]";
 
     const err = await start().catch((e: unknown) => e);
 
     expect(getFailureSignal(err)?.error_code).toBe(
       FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_INSTALL_FAILED
     );
-    expect((err as Error).message).toContain("INSTALL_FAILED_INSUFFICIENT_STORAGE");
+    // The failure code survives the cap, and the argv is gone.
+    expect((err as Error).message).toContain("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]");
+    expect((err as Error).message).not.toContain("/Users/dev/argent");
     expect(spawned).toHaveLength(1);
   });
 });
