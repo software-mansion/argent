@@ -82,9 +82,6 @@ import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
-/** The notification `backboardd` watches to decide whether CoreDevice owns HID. */
-const DTUHIDD_ACTIVE_KEY = "com.apple.coredevice.dtuhidd.active";
-
 /**
  * Mid-screen, in the normalized 0..1 space `gesture-tap` uses. Irrelevant for a
  * release with no press, but keeps the event inside any device's bounds.
