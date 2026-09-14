@@ -20,6 +20,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -568,6 +569,24 @@ async function bootIos(
   // prefs via `defaults write` — SB won't pick them up until next restart,
   // but describe surfaces a hint about it.
   await ensureAutomationEnabled(udid).catch(() => undefined);
+
+  // Bring up simulator-server now rather than lazily on the first gesture. Its
+  // factory warms up the legacy HID services, and everything between here and
+  // that first gesture is otherwise an unprotected window in which opening
+  // DeviceHub would silently kill input for the rest of the boot (#932). The
+  // process would be spawned by the first interactive tool call anyway; this
+  // only moves it earlier. Never fatal — a boot that works without input is
+  // still better than no boot.
+  const ssRef = simulatorServerRef({ id: udid, platform: "ios", kind: "simulator" });
+  await registry
+    .resolveService<SimulatorServerApi>(ssRef.urn, ssRef.options)
+    .catch((err: unknown) => {
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] simulator-server warm-up skipped (${
+          err instanceof Error ? err.message : String(err)
+        }); HID suppression protection will apply from the first gesture instead.\n`
+      );
+    });
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

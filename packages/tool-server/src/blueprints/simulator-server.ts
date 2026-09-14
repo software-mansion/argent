@@ -18,6 +18,7 @@ import { isTvOsSimulator } from "../utils/ios-devices";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
 import { createMoqTransport } from "../utils/simulator-client";
+import { sendHidWarmUp } from "../utils/hid-suppression";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { encodeKey } from "../utils/datachannel-proto";
 
@@ -398,6 +399,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       },
       events,
     };
+
+    // Protect the simulator's legacy HID services from CoreDevice suppression
+    // (#932). This cannot win a cold-boot race — by the time the WebSocket is up,
+    // the window has long closed, which is why simulator-server does the same
+    // thing internally and much earlier — but it does cover a mid-session
+    // demand-start, i.e. someone opening DeviceHub while argent is attached.
+    // Invisible (releases with no press) and idempotent, so it is safe to send
+    // unconditionally on every attach.
+    sendHidWarmUp(instance.api);
 
     return instance;
   },
