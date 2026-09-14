@@ -23,9 +23,16 @@ import type { MoqClient } from "../src/utils/moq-client";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 
 vi.mock("../src/utils/moq-client", () => ({
-  openMoqClient: () => Promise.resolve(closedMoqClient()),
+  openMoqClient: vi.fn(() => Promise.resolve(closedMoqClient())),
 }));
 
+// The remote paste fills the pasteboard through the `sim-remote` CLI first.
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  simctlPbcopy: () => Promise.resolve(),
+}));
+
+import { openMoqClient } from "../src/utils/moq-client";
 import {
   simulatorServerBlueprint,
   type SimulatorServerApi,
@@ -243,6 +250,41 @@ describe("the remote instance routes its keys like every other input", () => {
       FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED
     );
     expect(String(err)).toContain("'key'");
+    await instance.dispose?.();
+  });
+});
+
+/**
+ * Paste is the one input that reaches MoQ without passing through
+ * `sendCommand`: the remote instance sends its own Cmd+V chord. Each of the
+ * four sends is refused in turn, because an await dropped from any one of them
+ * would resolve the paste and leave that send's rejection unhandled.
+ */
+describe("the remote paste chord", () => {
+  const CHORD = ["Cmd down", "V down", "V up", "Cmd up"].map((send, index) => ({ send, index }));
+
+  it.each(CHORD)("fails as a refused touch does when $send is refused", async ({ index }) => {
+    let sends = 0;
+    vi.mocked(openMoqClient).mockResolvedValueOnce({
+      ...closedMoqClient(),
+      sendControl: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
+    });
+    const instance = await simulatorServerBlueprint.factory(
+      {} as never,
+      undefined as never,
+      {
+        device: { id: UDID, platform: "ios-remote" },
+      } as never
+    );
+
+    const { outcome, unhandled } = await watchUnhandledRejections(async () => {
+      await (instance.api as SimulatorServerApi).transport!.paste("abc");
+    });
+
+    expect(getFailureSignal(outcome)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED
+    );
+    expect(unhandled).toEqual([]);
     await instance.dispose?.();
   });
 });
