@@ -723,6 +723,28 @@ describe("runSnapshot on a remote simulator", () => {
     expect(files).toEqual(["home__ios-390x844.png"]);
   });
 
+  it("rewrites the local baseline in place under updateBaselines, and says so", async () => {
+    // The fold works in the write direction too: a remote refresh replaces the
+    // file a local run seeded instead of writing a copy beside it, so the
+    // reason is the only place the report shows a cloud capture took over.
+    const local = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(local.reason).toBe("baseline written (home__ios-390x844.png)");
+    const seeded = await fs.readFile(baselinePath());
+
+    // Same IHDR, so the same key; the trailing bytes make the capture distinct.
+    await fs.writeFile(h.shotPath, Buffer.concat([seeded, Buffer.from("remote capture")]));
+    const remote = await runSnapshot(remoteEnv, opts({ updateBaselines: true }));
+
+    expect(remote.status).toBe("pass");
+    expect(remote.snapshotKey).toBe(local.snapshotKey);
+    expect(remote.reason).toBe("baseline updated from a remote simulator (home__ios-390x844.png)");
+    const rewritten = await fs.readFile(baselinePath());
+    expect(rewritten).not.toEqual(seeded);
+    expect(rewritten).toEqual(await fs.readFile(h.shotPath));
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual(["home__ios-390x844.png"]);
+  });
+
   it("keys a crop the same way a local run does", async () => {
     // The fold applies to the whole key, not just its uncropped spelling.
     await writeRealPng(h.shotPath, 100, 200);
