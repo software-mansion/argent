@@ -241,9 +241,9 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
   }, 15_000);
 
   it("charges one outage window for a run of gestures, not one per gesture", async () => {
-    // The shape this matters for: a source that serves no tree at all
-    // (`ios-remote`, an app the instrumentation cannot load) against a flow
-    // made of coordinate gestures, which is the only kind such a run can have.
+    // The shape this matters for: a source that serves no tree at all (an app
+    // the instrumentation cannot load) against a flow made of coordinate
+    // gestures, which is the only kind such a run can have.
     // Consecutive ones, at that: a foreground-changing `tool:` step between two
     // gestures re-arms the window for the second, which the arms below pin.
     currentTree = outage;

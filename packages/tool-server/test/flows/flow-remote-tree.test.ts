@@ -112,8 +112,8 @@ describe("a flow reads the full view hierarchy on a remote simulator", () => {
   it("asks native devtools for the full hierarchy, not the trimmed describe tree", async () => {
     const tree = await readTree(resolveDevice(REMOTE), queries);
 
-    // `fetchTree` - the fallthrough that used to serve this platform - would
-    // have thrown before issuing any query at all.
+    // Before this platform had a source of its own, every read threw before
+    // issuing any query at all.
     expect(queries).toEqual([[APP, "ViewHierarchy.getFullHierarchy", expect.any(Object)]]);
     expect(tree.source).toBe("native-devtools");
     expect(JSON.stringify(tree.tree)).toContain("Log In");

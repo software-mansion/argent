@@ -495,7 +495,7 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
-  // No try/catch: an id with no flow tree throws inside `fetchFlowTree`, which
+  // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
   // the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
   // Giving up must STOP the loop, not just stop waiting for it. `settleWithin`
