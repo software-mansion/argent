@@ -33,6 +33,12 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+### DeviceHub and simulator input
+
+Xcode 27 replaces Simulator.app with DeviceHub. DeviceHub connects to every simulator that starts. That connection moves the simulator input devices to CoreDevice. Taps, hardware buttons and typed text from Argent then stop reaching the simulator. Argent reports no error.
+
+Quit DeviceHub and start the simulator again to restore input.
+
 ### Physical iPhones
 
 Argent also drives a physical iPhone over a USB cable. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
