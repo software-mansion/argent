@@ -24,7 +24,7 @@ import {
   externalClaimForAnyId,
   type ExternalDevice,
 } from "../utils/external-devices";
-import { sendHidWarmUp, scheduleHidProbe } from "../utils/hid-suppression";
+import { scheduleHidProbe } from "../utils/hid-suppression";
 import { simctlPbcopy } from "../utils/sim-remote";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
@@ -125,16 +125,6 @@ async function buildRemoteInstance(
     pressKey: (direction, keyCode) => sendCommand(api, { cmd: "key", code: keyCode, direction }),
     transport,
   };
-
-  // Same HID-suppression insurance the spawned path gets (#932). A cloud host is
-  // unlikely to be running a CoreDevice client, so this will usually be a no-op —
-  // but the events are inert and the cost is three sends, so it is cheaper to
-  // cover the case than to reason about whether it can happen.
-  //
-  // Deliberately not done for `buildAttachedInstance`: that server belongs to an
-  // external provider, and injecting unsolicited input into someone else's device
-  // on attach is their call to make, not ours.
-  sendHidWarmUp(api);
 
   return {
     api,
@@ -492,21 +482,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       events,
     };
 
-    // Protect the simulator's legacy HID services from CoreDevice suppression
-    // (#932). This cannot win a cold-boot race — by the time the WebSocket is up,
-    // the window has long closed, which is why simulator-server does the same
-    // thing internally and much earlier — but it does cover a mid-session
-    // demand-start, i.e. someone opening DeviceHub while argent is attached.
-    // Invisible (releases with no press) and idempotent, so it is safe to send
-    // unconditionally on every attach.
-    // #932 is a CoreDevice/`backboardd` problem, so this is iOS-simulator only.
-    // The same spawned server drives Android emulators and tvOS, where these
-    // events mean nothing and the suppression does not exist.
+    // Detection only — protection happens in `boot-device`, which fires the
+    // one-shot warm-up before `simctl boot`; by the time a server is attached
+    // the window has been shut for seconds. This just finds out whether that
+    // was too late, so the interaction tools can say so instead of reporting
+    // success for events nothing receives. Background and best-effort; see
+    // `scheduleHidProbe` for why it must not run from a tool. iOS simulators
+    // only — the same spawned server drives Android and tvOS, where this
+    // suppression does not exist.
     if (device.platform === "ios" && device.kind === "simulator") {
-      sendHidWarmUp(instance.api);
-      // Find out whether that was too late, so the interaction tools can say so
-      // instead of reporting success for events nothing receives. Background and
-      // best-effort; see `scheduleHidProbe` for why it must not run from a tool.
       scheduleHidProbe(device.id, instance.api);
     }
 

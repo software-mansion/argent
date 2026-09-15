@@ -26,23 +26,32 @@
  * rest of `backboardd`'s lifetime — across later flag changes, app switches and
  * SpringBoard restarts.
  *
- * The qualifier matters: on roughly a fifth of cold boots on a fast host the flag
- * lands *before* the buttons and external keyboard connect, leaving no instant at
- * which they exist unprotected — they are dead for that `backboardd` lifetime and
- * no amount of warming up reaches them. The digitizer survives because its service
- * is created ~10-20 ms later and the teardown pass misses it. So touch is covered;
- * hardware buttons and typed text are narrowed, not fixed.
+ * The qualifier matters. On a fast host the flag often lands *before* the buttons
+ * and external keyboard connect, leaving no instant at which they exist
+ * unprotected — they are dead for that `backboardd` lifetime and no amount of
+ * warming up reaches them. On iOS 18.6 that is a race, and the warm-up wins it on
+ * 92-95% of the boots where it is winnable. On iOS 26.5 it was not a race at all:
+ * across 6 boots the services connected ~250ms later while the flag stayed put,
+ * so the window was negative every time and those two services were dead with and
+ * without the warm-up alike. That is one device on one host, but it means newer
+ * runtimes should not be assumed to behave like 18.6.
  *
- * The real fix lives in `simulator-server`, which is the only component that can
- * reach the window (it opens ~1.1s after boot and can close 166ms later, while
- * the WebSocket this file uses is not accepting commands until ~7s). What we do
- * here is complementary and still worth having:
+ * The digitizer survives regardless, because its service is created by a path
+ * that reads the suppression flag and skips the connect, so it is never
+ * terminated and the first event to arrive connects it healthy. So touch is
+ * covered; hardware buttons and typed text are narrowed, not fixed.
  *
- *  - **Warm up on every attach.** Cannot win a cold-boot race, but it *does*
- *    protect against a mid-session demand-start — someone opening DeviceHub
- *    while argent is already attached, which is otherwise an instant break.
- *  - **Detect** a simulator whose services are already dead, so tools can say so
- *    instead of silently no-oping.
+ * Protection and detection live in different places, because they have to:
+ *
+ *  - **Protection** is {@link startHidWarmUp}, which `boot-device` fires as a
+ *    subprocess *before* `simctl boot`. The window opens ~1.0s after boot and
+ *    can be shut by ~1.2s, so nothing that waits for a running simulator-server
+ *    can reach it — attaching one and standing up its transports takes ~3s, and
+ *    every measured cold boot lost all three services that way.
+ *  - **Detection** is the rest of this file: a probe, once per boot, that says
+ *    whether input is actually arriving, so tools can report a dead simulator
+ *    instead of silently no-oping. It runs long after the window and protects
+ *    nothing.
  *
  * Self-heal is deliberately absent. Clearing the notification and restarting
  * `backboardd` does revive the services, but it kills the foreground app and
@@ -62,9 +71,9 @@
  * The consequence for detection is that a warm-up cannot be verified by counting
  * touch contacts — by design it produces none. Note too that a contact count only
  * ever speaks for the digitizer, and will report a healthy simulator on a boot
- * whose keyboard and buttons are dead; {@link probeHidDelivery} inherits that
- * blind spot — which is why {@link probeHidServices} reports the digitizer and
- * the buttons/keyboard pair separately rather than returning one boolean. It does leave a distinct trace in
+ * whose keyboard and buttons are dead; {@link probeHidServices} inherits that
+ * blind spot — which is why {@link probeHidServices} reports all three services
+ * independently rather than returning one boolean. It does leave a distinct trace in
  * `backboardd` (an orphan release, logged as `downEvent:0`, plus
  * `missing a sequence` for the keyboard), and that trace is present exactly when
  * the services are alive. That is what {@link probeHidServices} looks for.
@@ -76,53 +85,70 @@ import * as fsAsync from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
+
+import type { DeviceSetPath } from "./ios-device-sets";
+
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { sendCommand } from "./simulator-client";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Mid-screen, in the normalized 0..1 space `gesture-tap` uses. Irrelevant for a
- * release with no press, but keeps the event inside any device's bounds.
- */
-const WARMUP_POINT = { x: 0.5, y: 0.5 } as const;
+/** Generous: the one-shot waits for the device, then warms for 6s. */
+const WARMUP_TIMEOUT_MS = 40_000;
+
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** Arbitrary keycode — only ever released, never pressed. */
-const WARMUP_KEY_CODE = 4;
+const PROBE_KEY_CODE = 4;
 
-/** How far back {@link probeHidDelivery} reads the log. */
+/** How far back {@link probeHidServices} reads the log. */
 const PROBE_WINDOW_SECONDS = 10;
 
 /**
- * Send one warm-up event to each of the three suppressible services.
+ * Start the simulator-server one-shot that protects the HID services.
  *
- * Fire-and-forget and idempotent: re-sending once the exemption flags are set is
- * a no-op, so callers can do this on every attach without tracking state.
+ * Call this *before* `simctl boot`, not after. The one-shot attaches in ~170ms
+ * and retries until the device is up, so starting it at T0 lands the first event
+ * around +300ms — before `simctl boot` itself returns, and well before the flag.
+ *
+ * Deliberately a subprocess and not a WebSocket command: by the time a
+ * simulator-server is up and accepting commands the window has been shut for
+ * seconds. Measured through the server, every cold boot lost all three services.
+ *
+ * Never rejects — a simulator we could not warm up is one whose HID we could not
+ * have protected either way, and that must not fail the boot that asked for it.
  */
-export function sendHidWarmUp(api: SimulatorServerApi): void {
-  // Deliberately not awaited and deliberately never rejecting. This is
-  // insurance, not a critical path: a transport that refuses a warm-up must not
-  // fail the attach that triggered it, and must not surface as an unhandled
-  // rejection either. `allSettled` gives us both. Order does not matter — each
-  // event exempts its own service independently.
-  void Promise.allSettled([
-    // Digitizer: a release with no matching press produces no contact.
-    sendCommand(api, {
-      cmd: "touch",
-      type: "Up",
-      x: WARMUP_POINT.x,
-      y: WARMUP_POINT.y,
-      second_x: null,
-      second_y: null,
-    }),
-    // Main-screen buttons: a Home release with no press does not navigate.
-    sendCommand(api, { cmd: "button", direction: "Up", button: "home" }),
-    // External keyboard. Note this makes backboardd log `missing a sequence for
-    // <senderID…>` each time — harmless, but it will show up in simulator logs
-    // and is not a symptom of anything.
-    api.pressKey("Up", WARMUP_KEY_CODE),
-  ]);
+export function startHidWarmUp(udid: string, deviceSet: DeviceSetPath): Promise<void> {
+  let binary: string;
+  try {
+    binary = simulatorServerBinaryPath();
+  } catch (err) {
+    process.stderr.write(
+      `[hid-warmup ${udid.slice(0, 8)}] simulator-server binary not found (${errText(err)}); ` +
+        `HID suppression protection is not active for this boot.\n`
+    );
+    return Promise.resolve();
+  }
+
+  const args = ["hid_warmup", "--id", udid];
+  if (deviceSet) args.push("--device-set", deviceSet);
+
+  return execFileAsync(binary, args, {
+    timeout: WARMUP_TIMEOUT_MS,
+    // It prints CoreSimulator noise on every failed attach attempt — ~80KB
+    // against a device that never comes up. Well under Node's 1MB default, but
+    // the default is the only headroom there is, so name one.
+    maxBuffer: 4 * 1024 * 1024,
+  })
+    .then(() => undefined)
+    .catch((err: unknown) => {
+      process.stderr.write(
+        `[hid-warmup ${udid.slice(0, 8)}] warm-up did not run (${errText(err)}); ` +
+          `input may be silently dropped on this simulator.\n`
+      );
+    });
 }
 
 /** Run a command inside the booted simulator, returning stdout ("" on failure). */
@@ -162,32 +188,59 @@ async function readBootId(udid: string): Promise<number | null> {
 /**
  * Which of the suppressible services are still delivering input.
  *
- * Buttons and the external keyboard are reported together because they share a
- * fate: `backboardd` connects them as a pair and every observed teardown takes
- * both in the same millisecond. The digitizer is tracked separately because it
- * survives boots that kill the other two —
+ * All three are tracked separately because they do not fail together. The
+ * buttons and keyboard are connected as a pair and torn down in the same
+ * millisecond, but the digitizer routinely survives boots that kill both:
  * `createDigitizerForTargetID:withDisplayUID:isBuiltIn:` reads the suppression
- * flag and *skips the connect* when it is set, so the object is never terminated
- * and the first Indigo event to arrive connects it healthy. The buttons and
- * keyboard are built by a path with no such check.
+ * flag and *skips the connect* when it is set, so its object is never terminated
+ * and the first event to arrive connects it healthy. Reporting one boolean for
+ * all three mislabels precisely the boots worth reporting.
  */
 interface HidHealth {
   /** Taps, swipes, and every gesture built out of them. */
   touch: boolean;
-  /** Hardware buttons and typed text. */
-  buttonsAndKeyboard: boolean;
+  /** Hardware buttons: home, volume, lock. */
+  buttons: boolean;
+  /** Typed text. */
+  keyboard: boolean;
 }
 
 /** How long to let `backboardd` log before reading back. */
 const PROBE_SETTLE_MS = 400;
 
 /**
+ * The trace each service leaves when a release-without-press reaches it.
+ *
+ * These are the traces for an *orphan release*, which is all the probe sends.
+ * They are deliberately not the traces a real press leaves, and picking the
+ * wrong one of the pair is the trap here — both mistakes have already shipped:
+ *
+ *  - `contact 1 presence: none` and `Keyboard receives keyEvent` only ever
+ *    appear for a real press. Keyed on those, `touch` could never be true and
+ *    `keyboard` was true only by accident, via the unrelated key-down frame kick
+ *    that `Ios::new` fires on attach. Every healthy simulator was told its taps
+ *    were broken.
+ *  - Bare `downEvent:0` appears on touch lines *and* button lines, so an
+ *    unscoped match reports a live digitizer whenever the buttons are alive.
+ *
+ * Hence both halves, and both must match on the same line. Verified against live
+ * simulators: 8/8 rounds on a healthy device, 0 on a suppressed one, for each of
+ * the three.
+ */
+const DELIVERY_TRACES: Record<keyof HidHealth, readonly [string, string]> = {
+  touch: ["[com.apple.BackBoard:TouchEvents]", "didn't see a previous touch down"],
+  buttons: ["[com.apple.BackBoard:Button]", "downEvent:0"],
+  keyboard: ["[com.apple.BackBoard:Keyboard]", "missing a sequence"],
+};
+
+/**
  * Lines `log show` prints about itself rather than about the guest.
  *
- * This matters more than it looks: the preamble echoes the predicate back
- * verbatim, so a naive `/downEvent:0/.test(stdout)` matches the filter text and
- * reports every simulator healthy — including the dead ones it was written to
- * catch.
+ * Kept even though the current predicate contains none of the trace strings:
+ * the preamble echoes the predicate back verbatim, so the moment someone matches
+ * on a substring that also appears in the filter, every simulator reports
+ * healthy — including the dead ones this was written to catch. That bug shipped
+ * here once already.
  */
 function isLogPreamble(line: string): boolean {
   return (
@@ -198,12 +251,30 @@ function isLogPreamble(line: string): boolean {
 }
 
 /**
- * Ask which injected HID events are actually reaching `backboardd`.
+ * Fire one release-without-press at each service, purely to produce a trace.
  *
- * Sends a warm-up (which also protects, if it is not already too late) and looks
- * for the orphan-release traces it leaves: `downEvent:0` for the digitizer,
- * `missing a sequence` for the keyboard. A trace is present exactly when that
- * service is alive.
+ * Unlike {@link startHidWarmUp} this is not protection — by the time a
+ * WebSocket is up the window is long shut. It exists only so the log read below
+ * has something to find. The events are invisible: a touch `Up` with no `Down`,
+ * a button `Up`, a key `Up` produce no contact, no press and no keystroke.
+ */
+function sendProbeEvents(api: SimulatorServerApi): void {
+  void Promise.allSettled([
+    sendCommand(api, {
+      cmd: "touch",
+      type: "Up",
+      x: 0.5,
+      y: 0.5,
+      second_x: null,
+      second_y: null,
+    }),
+    sendCommand(api, { cmd: "button", direction: "Up", button: "home" }),
+    api.pressKey("Up", PROBE_KEY_CODE),
+  ]);
+}
+
+/**
+ * Ask which injected HID events are actually reaching `backboardd`.
  *
  * Costs roughly a second. Prefer {@link hidCaveatForDevice}, which runs this at
  * most once per boot and never on the caller's critical path.
@@ -212,12 +283,9 @@ function isLogPreamble(line: string): boolean {
  *   as unknown, never as broken).
  */
 async function probeHidServices(udid: string, api: SimulatorServerApi): Promise<HidHealth | null> {
-  sendHidWarmUp(api);
+  sendProbeEvents(api);
   await new Promise((r) => setTimeout(r, PROBE_SETTLE_MS));
 
-  const predicate =
-    'process == "backboardd" AND ' +
-    '(eventMessage CONTAINS "downEvent:0" OR eventMessage CONTAINS "missing a sequence")';
   const out = await simctlSpawn(udid, [
     "log",
     "show",
@@ -226,16 +294,23 @@ async function probeHidServices(udid: string, api: SimulatorServerApi): Promise<
     "--style",
     "compact",
     "--predicate",
-    predicate,
+    // SpringBoard as well as backboardd: the keyboard's delivery trace is logged
+    // by UIKit inside whichever process owns the keyboard, not by backboardd.
+    'process == "backboardd" OR process == "SpringBoard"',
   ]);
 
   if (!out) return null;
 
-  const lines = out.split("\n").filter((l) => l.trim() !== "" && !isLogPreamble(l));
-  return {
-    touch: lines.some((l) => l.includes("downEvent:0")),
-    buttonsAndKeyboard: lines.some((l) => l.includes("missing a sequence")),
+  return matchTraces(out.split("\n").filter((l) => l.trim() !== "" && !isLogPreamble(l)));
+}
+
+/** Score already-filtered log lines against {@link DELIVERY_TRACES}. */
+function matchTraces(lines: readonly string[]): HidHealth {
+  const saw = (service: keyof HidHealth): boolean => {
+    const [scope, trace] = DELIVERY_TRACES[service];
+    return lines.some((l) => l.includes(scope) && l.includes(trace));
   };
+  return { touch: saw("touch"), buttons: saw("buttons"), keyboard: saw("keyboard") };
 }
 
 /** Probe result for the device's current boot, plus whether we have said so. */
@@ -260,35 +335,47 @@ const PROBE_DELAY_MS = 3_000;
 const REBOOT_REMEDY =
   "Call boot-device with force=true to reboot it through argent, which protects the input " +
   "services while the simulator starts. This restarts the simulator, so anything running on it " +
-  "is lost. If the reboot does not fix it, repeating it usually does — the failure depends on a " +
-  "race that is re-run on every boot";
+  "is lost. On most simulators one reboot fixes it and a second clears the rest, because the " +
+  "failure depends on a race re-run at every boot. If two reboots do not fix it, stop rebooting " +
+  "— on some runtimes the buttons and keyboard cannot be protected at all, and further reboots " +
+  "will only keep destroying the app state";
 
 /**
  * Turn a probe result into something worth telling the agent, or `undefined`
  * when everything that matters works.
  */
 function hidCaveat(health: HidHealth): string | undefined {
-  if (health.touch && health.buttonsAndKeyboard) return undefined;
-  const dead = !health.touch
-    ? health.buttonsAndKeyboard
-      ? "Taps and gestures are"
-      : "Taps, gestures, hardware buttons and typed text are"
-    : "Hardware buttons and typed text are";
+  // Each label carries its own verb: "typed text is", but "hardware buttons are".
+  const dead: [string, string][] = [
+    health.touch ? undefined : (["taps and gestures", "are"] as [string, string]),
+    health.buttons ? undefined : (["hardware buttons", "are"] as [string, string]),
+    health.keyboard ? undefined : (["typed text", "is"] as [string, string]),
+  ].filter((x): x is [string, string] => x !== undefined);
+  if (dead.length === 0) return undefined;
+
+  // "a, b and c" — the list is what makes this actionable, since a simulator
+  // that has lost only its buttons is still fully usable for tapping.
+  const names = dead.map(([name]) => name);
+  const subject =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const verb = dead.length === 1 ? dead[0]![1] : "are";
   return (
-    `${dead} not reaching this simulator. CoreDevice (usually DeviceHub) took over its input ` +
-    `devices after it booted, and the events are being discarded silently — the calls that send ` +
-    `them still report success. ${REBOOT_REMEDY}.`
+    `On this simulator ${subject} ${verb} not reaching the device. CoreDevice (usually DeviceHub) ` +
+    `took over its input after it booted, and those events are being discarded silently — the ` +
+    `calls that send them still report success. ${REBOOT_REMEDY}.`
   );
 }
 
 /**
  * Probe this device once for this boot, in the background.
  *
- * Call it from the attach path, never from a tool. The probe injects warm-up
- * events to produce the trace it reads, and an injection that lands in the
+ * Call it from the attach path, never from a tool. The probe injects events to
+ * produce the trace it reads, and an injection that lands in the
  * middle of a caller's gesture would corrupt it — a stray touch `Up` between a
- * drag's `Down` and its own `Up` ends the drag early. Attach is already sending
- * exactly these events, so nothing new is introduced there.
+ * drag's `Down` and its own `Up` ends the drag early. This is the only injection
+ * on the attach path, which is why it happens once and on a delay.
  *
  * Never throws and never blocks the caller.
  */
@@ -349,3 +436,12 @@ export async function hidCaveatForDevice(
   cached.told = true;
   return caveat;
 }
+
+/**
+ * Pure internals, exported for tests only.
+ *
+ * These are the parts worth pinning: which trace identifies each service, and
+ * how a result is worded. Both have shipped wrong, and neither needs a simulator
+ * to check.
+ */
+export const __testing = { DELIVERY_TRACES, hidCaveat, isLogPreamble, matchTraces };

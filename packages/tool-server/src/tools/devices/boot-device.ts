@@ -21,7 +21,6 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
-import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -47,6 +46,7 @@ import {
   simctlListDevices as simRemoteListDevices,
   simctlShutdown as simRemoteShutdown,
 } from "../../utils/sim-remote";
+import { startHidWarmUp } from "../../utils/hid-suppression";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -455,28 +455,27 @@ async function bootIos(
     });
   }
 
+  // Protect the simulator's HID services, started BEFORE `simctl boot` rather
+  // than after it (#932). A CoreDevice client — DeviceHub attaches to every
+  // simulator that boots — suppresses them ~1.2s in, and the only way to keep
+  // them is to have sent one event per service before that. The one-shot
+  // attaches in ~170ms and retries until the device is up, so firing it here
+  // lands the first event at ~300ms, before `simctl boot` even returns.
+  //
+  // Spawning the full simulator-server instead does not work: standing up the
+  // process and its transports takes ~3s, and every measured cold boot lost all
+  // three services that way.
+  // iOS only. `bootIos` also serves tvOS simulators, which have no main-screen
+  // digitizer — and an Indigo event naming a target that is not in the service
+  // table raises NSInternalInconsistencyException and takes `backboardd` down.
+  const hidWarmUp = isTvOs ? Promise.resolve() : startHidWarmUp(udid, deviceSet);
+
   await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  // Start simulator-server the moment the device is up, deliberately BEFORE
-  // `bootstatus` and without awaiting it. Its HID warm-up has to reach a window
-  // that opens ~1.0s after boot and can close ~1.1s in (#932), while `bootstatus`
-  // does not return for ~15s — so resolving after it would miss by an order of
-  // magnitude and protect nothing. The two run concurrently; this promise is
-  // awaited further down, once the boot itself has settled.
-  const ssRef = simulatorServerRef({ id: udid, platform: "ios", kind: "simulator" });
-  const simulatorServerReady = registry
-    .resolveService<SimulatorServerApi>(ssRef.urn, ssRef.options)
-    .catch((err: unknown) => {
-      process.stderr.write(
-        `[boot-device ${udid.slice(0, 8)}] simulator-server did not start during boot (${
-          err instanceof Error ? err.message : String(err)
-        }); HID suppression protection will apply from the first gesture instead.\n`
-      );
-    });
 
   await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
 
@@ -518,10 +517,12 @@ async function bootIos(
   // describe surfaces a degraded-quality hint.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
-  // Settle the simulator-server started above. It has been running alongside
-  // `bootstatus` this whole time; awaiting here keeps the rest of boot-device
-  // sequential without having delayed the warm-up.
-  await simulatorServerReady;
+  // Collect the warm-up. It ran alongside the boot and is normally long done, so
+  // this usually costs nothing; on a device that never becomes attachable it can
+  // add up to the one-shot's own attach timeout. It never rejects, and a throw
+  // between here and the spawn above simply abandons it — harmless, since it
+  // exits on its own.
+  await hidWarmUp;
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
