@@ -59,10 +59,8 @@
  * Self-heal is deliberately absent. Clearing the notification and restarting
  * `backboardd` does revive the services, but it kills the foreground app and
  * bounces SpringBoard, so it belongs behind an explicit user action rather than
- * in a boot path. The two `notifyutil` calls it needs are
- * `-s com.apple.coredevice.dtuhidd.active 0 -p …` inside the guest, followed by
- * `launchctl kill SIGTERM system/com.apple.backboardd`; clear the flag first or
- * the fresh services are torn down again immediately.
+ * in a boot path. The `notifyutil` recipe is in this branch's history if that
+ * ever changes.
  *
  * # Why the warm-up is invisible
  *

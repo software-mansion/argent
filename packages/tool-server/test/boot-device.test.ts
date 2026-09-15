@@ -157,13 +157,6 @@ describe("boot-device — iOS path", () => {
     // Both of these are ordering facts, so look calls up by what they are
     // rather than by position — an added spawn must not silently re-point a
     // fixed index at the wrong call.
-    const orderOf = (prefix: string): number => {
-      const i = resolveService.mock.calls.findIndex(
-        (call: unknown[]) => typeof call[0] === "string" && call[0].startsWith(prefix)
-      );
-      expect(i, `no resolveService call for ${prefix}`).toBeGreaterThanOrEqual(0);
-      return resolveService.mock.invocationCallOrder[i]!;
-    };
     const execOrderOf = (label: string, match: (args: string[]) => boolean): number => {
       const i = mockExecFile.mock.calls.findIndex(
         ([, args]) => Array.isArray(args) && match(args as string[])
@@ -179,8 +172,9 @@ describe("boot-device — iOS path", () => {
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
     // only reachable once the simulator is fully up) and BEFORE `open`, so
     // the UI reflects the injected state on first paint.
-    expect(orderOf("NativeDevtools:")).toBeGreaterThan(bootstatusAt);
-    expect(orderOf("NativeDevtools:")).toBeLessThan(openAt);
+    const nativeDevtoolsAt = resolveService.mock.invocationCallOrder[0]!;
+    expect(nativeDevtoolsAt).toBeGreaterThan(bootstatusAt);
+    expect(nativeDevtoolsAt).toBeLessThan(openAt);
     // The HID warm-up is the opposite: it has to start BEFORE `simctl boot`,
     // because the window it protects opens ~1.0s after boot and the one-shot
     // needs to already be retrying its attach by then (#932). Starting it after
