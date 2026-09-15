@@ -2,6 +2,7 @@
 // two scopes merge. `argent config`, the merged reader (config-access.ts) and
 // validation all read this registry.
 
+import { isAbsolute } from "node:path";
 import type { FlagScope } from "./flags.js";
 import type { MergePolicy } from "./merge.js";
 
@@ -161,7 +162,13 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
       "to the tool-server and to the simulator-server it starts. `adb` on PATH still wins, " +
       "as it does with the environment variable.",
     scopes: ["project", "global"],
-    parse: asString,
+    parse: (raw) => {
+      const value = asString(raw);
+      return value !== undefined && (value.startsWith("~") || isAbsolute(value))
+        ? value
+        : undefined;
+    },
+    expected: "an absolute or `~`-prefixed path",
     merge: "prioritize-local",
     example: "~/Library/Android/sdk",
   },

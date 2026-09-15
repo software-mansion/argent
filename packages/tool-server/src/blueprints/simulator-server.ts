@@ -235,6 +235,8 @@ async function spawnSimulatorServerProcess(
     // The binary finds adb through ANDROID_HOME, so a configured SDK root
     // reaches it as that variable.
     const sdkRoot = subcommand === "ios" ? null : getAndroidSdkRoot();
+    if (sdkRoot)
+      process.stderr.write(`[sim ${udid.slice(0, 8)}] android.sdkRoot → ANDROID_HOME=${sdkRoot}\n`);
     const proc = spawn(BINARY_PATH, args, {
       cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
