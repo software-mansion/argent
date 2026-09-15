@@ -30,15 +30,22 @@
  * and external keyboard connect, leaving no instant at which they exist
  * unprotected — they are dead for that `backboardd` lifetime and no amount of
  * warming up reaches them. On iOS 18.6 that is a race, and the warm-up wins it on
- * 92-95% of the boots where it is winnable. On iOS 26.5 it was not a race at all:
- * across 6 boots the services connected ~250ms later while the flag stayed put,
- * so the window was negative every time and those two services were dead with and
- * without the warm-up alike. That is one device on one host, but it means newer
- * runtimes should not be assumed to behave like 18.6.
+ * 92-95% of the boots where it is winnable.
+ *
+ * On iOS 26.5 (23F77) it is not a race at all. Over 12 boots of a device warmed
+ * past first-run setup the window ran -289ms to +23ms (median -196ms), and the
+ * buttons and keyboard were torn down on 12 of 12 — including the nominally
+ * positive boot, whose +23ms is narrower than a single warm-up round. The
+ * services connect when they always did; it is the flag that arrives early, at a
+ * median 1.119s against 18.6's 1.24-2.53s, because `dtuhidd` is demand-started
+ * sooner. One device, one host, n=12, 26.3 and 27.0 untested — but newer runtimes
+ * should not be assumed to behave like 18.6.
  *
  * The digitizer survives regardless, because its service is created by a path
  * that reads the suppression flag and skips the connect, so it is never
- * terminated and the first event to arrive connects it healthy. So touch is
+ * terminated and the first event to arrive connects it healthy. On 26.5 that is
+ * the *only* reason it survives: in 11 of those 12 boots it was never registered
+ * at all. So touch is
  * covered; hardware buttons and typed text are narrowed, not fixed.
  *
  * Protection and detection live in different places, because they have to:
