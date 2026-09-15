@@ -15,6 +15,8 @@ import {
   normalizeToolName,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
+  renderAutoDescribe,
+  AUTO_DESCRIBE_HEADER,
 } from "../src/auto-capture.js";
 
 // ---------------------------------------------------------------------------
@@ -331,5 +333,50 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderAutoDescribe
+// ---------------------------------------------------------------------------
+describe("renderAutoDescribe", () => {
+  // What `describe` returns for an iOS screen it could not read: the tree is
+  // empty, but formatDescribeTree still emits its 380-character preamble, so a
+  // length check on `description` alone never sees the failure.
+  const EMPTY_TREE_RENDER =
+    "Source: native-devtools\nMode: flat\n" +
+    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.\n" +
+    "\nROOT  AXApplication (0.000, 0.000, 0.000, 0.000)\n";
+  const HINT =
+    "com.example.app has no running process on this simulator, so there is no injected " +
+    "process to read. Call launch-app (or restart-app) then retry.";
+
+  it("carries the hint that diagnoses an empty tree", () => {
+    const block = renderAutoDescribe({
+      description: EMPTY_TREE_RENDER,
+      source: "native-devtools",
+      hint: HINT,
+      should_restart: true,
+    });
+    expect(block).toBe(`${AUTO_DESCRIBE_HEADER}\n${EMPTY_TREE_RENDER}\n\n${HINT}`);
+  });
+
+  it("emits the block for a hint that arrives with no tree at all", () => {
+    expect(renderAutoDescribe({ description: "", hint: HINT })).toBe(
+      `${AUTO_DESCRIBE_HEADER}\n${HINT}`
+    );
+  });
+
+  it("renders a readable tree on its own", () => {
+    expect(renderAutoDescribe({ description: "ROOT  AXApplication", source: "ax-service" })).toBe(
+      `${AUTO_DESCRIBE_HEADER}\nROOT  AXApplication`
+    );
+  });
+
+  it("returns null when there is nothing to show", () => {
+    expect(renderAutoDescribe({ description: "", hint: "   " })).toBeNull();
+    expect(renderAutoDescribe({})).toBeNull();
+    expect(renderAutoDescribe(null)).toBeNull();
+    expect(renderAutoDescribe("not an object")).toBeNull();
   });
 });
