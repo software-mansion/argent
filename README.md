@@ -19,7 +19,7 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 - **Flows** - record a path once, replay it deterministically as a repro or smoke test.
 - **Visual regression** - diff a baseline against a live capture, OCR- and font-aware.
 - **Profiling** - Hermes, React DevTools, Xcode Instruments, Perfetto: renders, CPU hotspots, hangs.
-- **Debugging** - logs, network (`fetch` and native), JS evaluation, native and React trees.
+- **Debugging** - logs, network (`fetch`, `XMLHttpRequest` incl. axios, and native), JS evaluation, native and React trees.
 - **React Native** - build, launch and iterate, no extra setup.
 
 Ask your assistant _"What can Argent do?"_ to list every tool.

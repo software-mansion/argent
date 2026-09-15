@@ -125,7 +125,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() and XMLHttpRequest calls, axios included. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
@@ -155,7 +155,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     const { total } = JSON.parse(countRaw as string) as { total: number };
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() calls.";
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() and XMLHttpRequest calls, axios included.";
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
