@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { hidCaveatForDevice } from "../../utils/hid-suppression";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { pressButton, type RunnerButton } from "../../utils/ios-device/runner-commands";
 import { RunnerCommandError } from "../../utils/ios-device/runner-client";
@@ -24,11 +23,6 @@ type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   pressed: string;
-  /**
-   * iOS simulator only: the hardware buttons are not reaching this simulator,
-   * so the press above did nothing. Said once per boot.
-   */
-  hint?: string;
 }
 
 /**
@@ -78,7 +72,7 @@ export const buttonTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
-  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event. On an iOS simulator a 'hint' field in the result means the press did NOT reach the device and says how to fix it.
+  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event.
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
@@ -155,7 +149,6 @@ Fails if the device backend is not reachable: the simulator-server for iOS, or \
     });
     await sleep(50);
     await sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
-    const hint = await hidCaveatForDevice(device.id, api);
-    return { pressed: params.button, ...(hint ? { hint } : {}) };
+    return { pressed: params.button };
   },
 };

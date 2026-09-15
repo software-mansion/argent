@@ -24,7 +24,6 @@ import {
   externalClaimForAnyId,
   type ExternalDevice,
 } from "../utils/external-devices";
-import { scheduleHidProbe } from "../utils/hid-suppression";
 import { simctlPbcopy } from "../utils/sim-remote";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
@@ -481,18 +480,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       },
       events,
     };
-
-    // Detection only — protection happens in `boot-device`, which fires the
-    // one-shot warm-up before `simctl boot`; by the time a server is attached
-    // the window has been shut for seconds. This just finds out whether that
-    // was too late, so the interaction tools can say so instead of reporting
-    // success for events nothing receives. Background and best-effort; see
-    // `scheduleHidProbe` for why it must not run from a tool. iOS simulators
-    // only — the same spawned server drives Android and tvOS, where this
-    // suppression does not exist.
-    if (device.platform === "ios" && device.kind === "simulator") {
-      scheduleHidProbe(device.id, instance.api);
-    }
 
     return instance;
   },

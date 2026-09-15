@@ -8,7 +8,6 @@ import { getViewport, tapAt, toPoints } from "../../utils/ios-device/runner-comm
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
-import { hidCaveatForDevice } from "../../utils/hid-suppression";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -43,11 +42,6 @@ interface Result {
    * effect. Set only when true.
    */
   reactivated?: true;
-  /**
-   * iOS simulator only: this device is silently discarding injected input, so
-   * the tap above did nothing. Said once per boot — see `hidCaveatForDevice`.
-   */
-  hint?: string;
 }
 
 function tapDescription(params: Params, tense: "present" | "past"): string {
@@ -109,7 +103,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator a 'hint' field means the tap did NOT reach the device and says how to fix it — act on it rather than retrying the tap. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
 On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
 Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
@@ -171,10 +165,6 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         second_y: null,
       });
     }
-    // `tapped: true` only ever meant "the events were handed to the transport".
-    // When the digitizer has been torn down that is still true and the tap still
-    // did nothing, so say so rather than letting the agent act on a false ack.
-    const hint = await hidCaveatForDevice(device.id, api);
-    return { tapped: true, timestampMs, ...(hint ? { hint } : {}) };
+    return { tapped: true, timestampMs };
   },
 };

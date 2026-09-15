@@ -4,7 +4,6 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
 import { InvalidToolInputError } from "../../utils/capability";
 import type { KeyboardParams, KeyboardResult } from "./types";
-import { hidCaveatForDevice } from "../../utils/hid-suppression";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -73,10 +72,5 @@ export async function typeSimulatorServer(
     await pressKeyCode(namedKeyCode);
   }
 
-  const hint = await hidCaveatForDevice(device.id, api);
-  return {
-    typed: params.text ?? params.key ?? "",
-    keys: keysPressed,
-    ...(hint ? { hint } : {}),
-  };
+  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }

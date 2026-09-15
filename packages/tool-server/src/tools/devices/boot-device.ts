@@ -465,10 +465,15 @@ async function bootIos(
   // Spawning the full simulator-server instead does not work: standing up the
   // process and its transports takes ~3s, and every measured cold boot lost all
   // three services that way.
+  //
+  // Only for a boot that is about to happen. On a simulator that is already
+  // running the window closed seconds ago, so the one-shot would protect nothing
+  // and only spend its warm-up duration firing events at whatever is on screen,
+  // with this call waiting on it below.
   // iOS only. `bootIos` also serves tvOS simulators, which have no main-screen
   // digitizer — and an Indigo event naming a target that is not in the service
   // table raises NSInternalInconsistencyException and takes `backboardd` down.
-  const hidWarmUp = isTvOs ? Promise.resolve() : startHidWarmUp(udid, deviceSet);
+  const hidWarmUp = needsPreBoot && !isTvOs ? startHidWarmUp(udid, deviceSet) : Promise.resolve();
 
   await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);

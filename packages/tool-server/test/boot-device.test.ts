@@ -59,6 +59,11 @@ const bootSequenceCalls = (): [string, string[]][] =>
   mockExecFile.mock.calls.filter(
     ([, args]) => !(Array.isArray(args) && args[0] === "hid_warmup")
   ) as [string, string[]][];
+const warmUpCalls = (): [string, string[]][] =>
+  mockExecFile.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "hid_warmup") as [
+    string,
+    string[],
+  ][];
 
 describe("boot-device — iOS path", () => {
   // The iOS path is only reachable on darwin (boot-device now refuses iOS
@@ -402,6 +407,11 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "22222222-2222-2222-2222-222222222222"
     );
+    // A forced reboot is a real boot, so the HID window is winnable again and
+    // the warm-up must run for it.
+    expect(warmUpCalls().map(([, args]) => args)).toEqual([
+      ["hid_warmup", "--id", "22222222-2222-2222-2222-222222222222"],
+    ]);
     const execCalls = bootSequenceCalls().map(([file, args]) => [file, args]);
     expect(execCalls[0]).toEqual([
       "xcrun",
@@ -429,6 +439,10 @@ describe("boot-device — iOS path", () => {
       (args: unknown[]) => Array.isArray(args) && args[1] === "shutdown"
     );
     expect(hasShutdown).toBe(false);
+    // No boot is happening, so there is no HID window to win: the warm-up
+    // one-shot would only fire release events at a live app for its whole
+    // duration while boot-device waits on it.
+    expect(warmUpCalls()).toHaveLength(0);
   });
 
   // A tvOS reboot orphans the host-side tvos-hid-daemon (it holds a

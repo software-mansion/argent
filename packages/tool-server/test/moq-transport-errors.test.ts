@@ -268,15 +268,9 @@ describe("the remote paste chord", () => {
 
   it.each(CHORD)("fails as a refused touch does when $send is refused", async ({ index }) => {
     let sends = 0;
-    // Attaching also fires the #932 HID warm-up, which rides `sendControl` too.
-    // Those sends are not part of the chord, so counting starts once they have
-    // flushed — otherwise the refusal lands on a warm-up event and the paste
-    // under test succeeds.
-    let countingChord = false;
     vi.mocked(openMoqClient).mockResolvedValueOnce({
       ...closedMoqClient(),
-      sendControl: () =>
-        countingChord && sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve(),
+      sendControl: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
     });
     const instance = await simulatorServerBlueprint.factory(
       {} as never,
@@ -285,8 +279,6 @@ describe("the remote paste chord", () => {
         device: { id: UDID, platform: "ios-remote" },
       } as never
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    countingChord = true;
 
     const { outcome, unhandled } = await watchUnhandledRejections(async () => {
       await (instance.api as SimulatorServerApi).transport!.paste("abc");
