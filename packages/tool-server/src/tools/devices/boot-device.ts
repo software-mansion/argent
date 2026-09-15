@@ -466,14 +466,28 @@ async function bootIos(
   // process and its transports takes ~3s, and every measured cold boot lost all
   // three services that way.
   //
-  // Only for a boot that is about to happen. On a simulator that is already
-  // running the window closed seconds ago, so the one-shot would protect nothing
-  // and only spend its warm-up duration firing events at whatever is on screen,
-  // with this call waiting on it below.
-  // iOS only. `bootIos` also serves tvOS simulators, which have no main-screen
-  // digitizer — and an Indigo event naming a target that is not in the service
-  // table raises NSInternalInconsistencyException and takes `backboardd` down.
-  const hidWarmUp = needsPreBoot && !isTvOs ? startHidWarmUp(udid, deviceSet) : Promise.resolve();
+  // Only when a boot is actually about to happen. On a simulator already up the
+  // window closed seconds ago, so the one-shot would protect nothing and merely
+  // fire release events at whatever is on screen while this call waits on it.
+  //
+  // That is keyed on the one state which is provably pointless, rather than on
+  // `needsPreBoot` — which is narrower than it looks. `needsPreBoot` is false
+  // for a simulator already `Booting`, whose window may well still be open, and
+  // false when `listIosSimulators` failed and `simState` is undefined, where the
+  // `simctl boot` below may still be a real cold boot. Both would go
+  // unprotected, and an unnecessary warm-up only costs a detached subprocess
+  // where a missing one costs the input services for that `backboardd` life.
+  //
+  // By state and not by boot age, so a simulator someone else started a moment
+  // ago reads as `Booted` while its window is still open, and loses a warm-up it
+  // might have won. That is already the documented "argent did not start it"
+  // case, and not worth a stat on every boot to narrow.
+  //
+  // Skipped for tvOS too. `bootIos` serves those, and they have no main-screen
+  // digitizer — an Indigo event naming a target that is not in the service table
+  // raises NSInternalInconsistencyException and takes `backboardd` down.
+  const alreadyUp = simState === "Booted" && !force;
+  const hidWarmUp = alreadyUp || isTvOs ? Promise.resolve() : startHidWarmUp(udid, deviceSet);
 
   await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);

@@ -445,6 +445,27 @@ describe("boot-device — iOS path", () => {
     expect(warmUpCalls()).toHaveLength(0);
   });
 
+  // `Booted` is the only state that is provably too late. Both of these reach
+  // the `simctl boot` below with a window that may still be open, and gating on
+  // `needsPreBoot` instead would skip the warm-up on both.
+  it.each([
+    ["Booting", [{ udid: "44444444-4444-4444-4444-444444444444", state: "Booting" }]],
+    ["unknown, because the state probe returned nothing", []],
+  ])("still warms up a sim whose state is %s", async (_label, sims) => {
+    listIosSimulatorsMock.mockResolvedValue(sims);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const tool = createBootDeviceTool({ resolveService } as unknown as Registry);
+
+    await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
+
+    expect(warmUpCalls().map(([, args]) => args)).toEqual([
+      ["hid_warmup", "--id", "44444444-4444-4444-4444-444444444444"],
+    ]);
+  });
+
   // A tvOS reboot orphans the host-side tvos-hid-daemon (it holds a
   // SimDeviceLegacyClient bound to the prior boot for its whole lifetime, so a
   // TV `button` press silently no-ops afterward). boot-device must drop the
