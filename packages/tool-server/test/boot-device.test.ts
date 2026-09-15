@@ -468,6 +468,30 @@ describe("boot-device — iOS path", () => {
   // sim and the reboot kills it), so it doesn't need this.
   const TV_UDID = "77777777-7777-7777-7777-777777777777";
 
+  // The one case where spawning the warm-up is not merely wasted but actively
+  // dangerous: a tvOS sim has no main-screen digitizer, and an Indigo event
+  // naming a target that is not in the service table raises
+  // NSInternalInconsistencyException and takes `backboardd` down with it.
+  // `Shutdown` is used deliberately — every other gate would let this through,
+  // so the tvOS guard is the only thing under test.
+  it("never spawns the HID warm-up for a tvOS sim, even booting from Shutdown", async () => {
+    listIosSimulatorsMock.mockResolvedValue([
+      { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const tool = createBootDeviceTool({
+      resolveService,
+      disposeService: vi.fn(async () => undefined),
+    } as unknown as Registry);
+
+    await tool.execute!({}, { udid: TV_UDID });
+
+    expect(warmUpCalls()).toEqual([]);
+  });
+
   it("disposes the cached TvControl service when a tvOS sim is booted from Shutdown", async () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
