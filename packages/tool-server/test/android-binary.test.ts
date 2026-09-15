@@ -30,6 +30,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
   };
 });
+// `android.sdkRoot` is read through configuration-core; stub it so the dev's
+// own config.json cannot steer the probe, and flip it per test.
+const androidSdkRootMock = vi.fn((): string | null => null);
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, getAndroidSdkRoot: () => androidSdkRootMock() };
+});
 import {
   __resetAndroidBinaryCacheForTesting,
   resolveAndroidBinary,
@@ -73,6 +82,7 @@ describe.skipIf(process.platform === "win32")("resolveAndroidBinary", () => {
     for (const k of ENV_KEYS) originalEnv[k] = process.env[k];
     __resetAndroidBinaryCacheForTesting();
     __resetDepCacheForTests();
+    androidSdkRootMock.mockReturnValue(null);
     tmpRoot = await mkdtemp(join(tmpdir(), "argent-android-binary-"));
   });
 
@@ -104,6 +114,19 @@ describe.skipIf(process.platform === "win32")("resolveAndroidBinary", () => {
     process.env.PATH = tmpRoot; // empty: keep PATH-installed adb/emulator on dev boxes from short-circuiting the probe
     process.env.ANDROID_HOME = sdk;
     delete process.env.ANDROID_SDK_ROOT;
+
+    const path = await resolveAndroidBinary("adb");
+    expect(path).toBe(expected);
+  });
+
+  it("prefers the configured android.sdkRoot over $ANDROID_HOME", async () => {
+    const configured = join(tmpRoot, "configured-sdk");
+    const expected = await fakeSdk(configured, "adb");
+    const envSdk = join(tmpRoot, "env-sdk");
+    await fakeSdk(envSdk, "adb");
+    process.env.PATH = tmpRoot; // empty: keep PATH-installed adb/emulator on dev boxes from short-circuiting the probe
+    process.env.ANDROID_HOME = envSdk;
+    androidSdkRootMock.mockReturnValue(configured);
 
     const path = await resolveAndroidBinary("adb");
     expect(path).toBe(expected);

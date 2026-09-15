@@ -154,6 +154,18 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     example: '["~/DeviceSets/ci"]',
   },
   {
+    key: "android.sdkRoot",
+    description:
+      "Android SDK root argent uses instead of `ANDROID_HOME`, for hosts whose SDK is not " +
+      "where the environment says (Nix, custom layouts). Absolute or `~`-prefixed. Applies " +
+      "to the tool-server and to the simulator-server it starts. `adb` on PATH still wins, " +
+      "as it does with the environment variable.",
+    scopes: ["project", "global"],
+    parse: asString,
+    merge: "prioritize-local",
+    example: "~/Library/Android/sdk",
+  },
+  {
     key: "recordings.directory",
     description:
       "Directory where finished screen recordings (mp4) are saved on the client host. " +

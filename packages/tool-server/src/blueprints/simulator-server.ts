@@ -12,6 +12,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
+import { getAndroidSdkRoot } from "@argent/configuration-core";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
@@ -231,9 +232,13 @@ async function spawnSimulatorServerProcess(
     const args = [subcommand, "--id", udid];
     if (deviceSet) args.push("--device-set", deviceSet);
 
+    // The binary finds adb through ANDROID_HOME, so a configured SDK root
+    // reaches it as that variable.
+    const sdkRoot = subcommand === "ios" ? null : getAndroidSdkRoot();
     const proc = spawn(BINARY_PATH, args, {
       cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(sdkRoot ? { env: { ...process.env, ANDROID_HOME: sdkRoot } } : {}),
     });
 
     let apiUrl: string | null = null;
