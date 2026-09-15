@@ -12,13 +12,15 @@ Use the comparison after a change to the layout, the spacing, the colors, the ty
 
 ## How a comparison works
 
-1. The agent brings the app to a known state and captures a baseline screenshot.
+1. The agent brings the app to a known state. Argent captures a baseline screenshot of the device.
 2. You make the change, or the agent makes the interaction.
-3. The agent captures the screen again and compares the two screenshots.
+3. The agent captures the screen again. Argent compares the new screenshot to the baseline.
 4. The agent reads the summary. The agent opens the diff image if the summary is not sufficient.
 5. The agent reports the result to you. The agent also reports a change that you did not ask for.
 
-The agent can compare two saved screenshots, or one saved screenshot and a live capture of the device. The agent can also capture both sides live, before and after an interaction.
+Argent captures the baseline and keeps it for the device. The agent does not save a file or hold a file path. Each comparison reports the capture time of the baseline and its age, so a baseline that no longer matches the state under test is visible in the result. Argent keeps one baseline for each device, until the agent captures a new baseline for that device or the Argent server stops.
+
+The agent can also compare two screenshot files from an earlier capture. The agent can also compare one saved file to a live capture of the device.
 
 ## What the comparison reports
 
