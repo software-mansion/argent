@@ -192,7 +192,8 @@ function matchNodeWithRegex(
   }
   if (
     selector.identifier !== undefined &&
-    !identifierMatches(node.identifier, selector.identifier)
+    !identifierMatches(node.identifier, selector.identifier) &&
+    !identifierMatches(node.nativeID, selector.identifier)
   ) {
     return false;
   }
@@ -548,7 +549,7 @@ export function treeFingerprint(
       const f = node.frame;
       parts.push(
         `${node.role}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}` +
-          `|${node.label ?? ""}|${node.value ?? ""}|${node.identifier ?? ""}`
+          `|${node.label ?? ""}|${node.value ?? ""}|${node.identifier ?? ""}|${node.nativeID ?? ""}`
       );
     }
     for (const child of node.children) walk(child);
@@ -616,7 +617,12 @@ function exactFieldCount(
   ) {
     count++;
   }
-  if (selector.identifier !== undefined && equalsCI(node.identifier, selector.identifier)) count++;
+  if (
+    selector.identifier !== undefined &&
+    (equalsCI(node.identifier, selector.identifier) || equalsCI(node.nativeID, selector.identifier))
+  ) {
+    count++;
+  }
   if (selector.role !== undefined && equalsCI(node.role, selector.role)) count++;
   return count;
 }
@@ -694,7 +700,9 @@ const GENERIC_ROLES = new Set([
  * on — the caller then keeps coordinates.
  */
 export function deriveSelector(node: DescribeNode): Selector | null {
-  if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
+  // Derive from the testID, else the nativeID. `id:` matches either field.
+  const id = [node.identifier, node.nativeID].find((v) => v && v.trim());
+  if (id) return { identifier: id };
   // Label OR value individually — never nodeText's joined form: matchNode
   // compares a text selector against label and value separately, so a joined
   // "Volume 50%" would match nothing, not even the node it came from. Label

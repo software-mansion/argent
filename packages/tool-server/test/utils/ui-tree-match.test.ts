@@ -497,6 +497,131 @@ describe("identifier matching", () => {
   });
 });
 
+describe("nativeID as an identifier source", () => {
+  // The iOS simulator flow tree carries React Native `nativeID` next to the
+  // testID (`identifier`), and flow YAML's `id:` matches either.
+  const screen = (...children: DescribeNode[]): DescribeNode =>
+    node({ role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+
+  it("an identifier selector matches a nativeID exactly, case-insensitively - never as a substring", () => {
+    const banner = node({
+      nativeID: "autosave-banner",
+      frame: { x: 0, y: 0.1, width: 1, height: 0.1 },
+    });
+    const row = node({ nativeID: "save-row", frame: { x: 0, y: 0.3, width: 1, height: 0.1 } });
+    const label = node({ label: "Save", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } });
+    const tree = screen(banner, row, label);
+
+    expect(findAll(tree, { identifier: "save-row" })).toEqual([row]);
+    expect(findAll(tree, { identifier: "SAVE-Row" })).toEqual([row]);
+    expect(findAll(tree, { identifier: "autosave-banner" })).toEqual([banner]);
+    // A short needle cannot hijack either nativeID...
+    expect(findAll(tree, { identifier: "save" })).toEqual([]);
+    expect(findAll(tree, { identifier: "autosave" })).toEqual([]);
+    // ...and a nativeID is not visible text, so `text:` never reads it.
+    expect(findAll(tree, { text: "save-row" })).toEqual([]);
+  });
+
+  it("a node carrying both a testID and a nativeID matches a selector naming either", () => {
+    const both = node({
+      identifier: "tid-both",
+      nativeID: "nid-both",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+    });
+    const other = node({
+      identifier: "tid-other",
+      frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.1 },
+    });
+    const tree = screen(both, other);
+
+    expect(findAll(tree, { identifier: "tid-both" })).toEqual([both]);
+    expect(findAll(tree, { identifier: "nid-both" })).toEqual([both]);
+    expect(matchNode(both, { identifier: "NID-BOTH" })).toBe(true);
+    expect(findAll(tree, { identifier: "both" })).toEqual([]);
+  });
+
+  it("deriveSelector prefers the testID, then falls back to the nativeID before text", () => {
+    const frame = { x: 0.1, y: 0.1, width: 0.5, height: 0.1 };
+    expect(
+      deriveSelector(node({ identifier: "tid", nativeID: "nid", label: "Hi", frame }))
+    ).toEqual({ identifier: "tid" });
+    expect(deriveSelector(node({ nativeID: "nid", label: "Hi", frame }))).toEqual({
+      identifier: "nid",
+    });
+    // A blank testID is no id at all - the nativeID behind it is used.
+    expect(deriveSelector(node({ identifier: "", nativeID: "nid", label: "Hi", frame }))).toEqual({
+      identifier: "nid",
+    });
+    expect(deriveSelector(node({ identifier: "  ", nativeID: "nid", label: "Hi", frame }))).toEqual(
+      { identifier: "nid" }
+    );
+    // A blank nativeID is no id either: text wins, as it would with no id.
+    expect(deriveSelector(node({ nativeID: "  ", label: "Hi", frame }))).toEqual({ text: "Hi" });
+
+    // The recorder re-resolves what it derived: a nativeID selector must find
+    // exactly the node it came from, not a same-text sibling.
+    const tapped = node({ nativeID: "nid", label: "Hi", frame });
+    const tree = screen(
+      tapped,
+      node({ label: "Hi", frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.1 } })
+    );
+    expect(findAll(tree, deriveSelector(tapped)!)).toEqual([tapped]);
+  });
+
+  it("selectorToFrame ranks an exact nativeID match as exact, as it does an exact testID", () => {
+    // Both nodes answer `{ id: save, text: Save }`. The larger one is exact on
+    // BOTH fields; the smaller one only contains "Save". Exactness outranks
+    // area, so the larger wins - whichever id field carries its "save".
+    const resolve = (id: Partial<DescribeNode>) =>
+      selectorToFrame(
+        screen(
+          node({ ...id, label: "Save", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 } }),
+          node({
+            identifier: "save",
+            label: "Save draft",
+            frame: { x: 0.1, y: 0.5, width: 0.3, height: 0.05 },
+          })
+        ),
+        { identifier: "save", text: "Save" }
+      );
+    expect(resolve({ identifier: "save" })).toMatchObject({ y: 0.1 });
+    expect(resolve({ nativeID: "save" })).toMatchObject({ y: 0.1 });
+  });
+
+  it("selectorToFrame scores an id once when a node carries it as both testID and nativeID", () => {
+    // Otherwise the doubly-tagged node would outrank an equally exact, smaller
+    // match - and the smaller frame is the one every other tie resolves to.
+    const frame = selectorToFrame(
+      screen(
+        node({
+          identifier: "go",
+          nativeID: "go",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 },
+        }),
+        node({ identifier: "go", frame: { x: 0.1, y: 0.5, width: 0.3, height: 0.05 } })
+      ),
+      { identifier: "go" }
+    );
+    expect(frame).toMatchObject({ y: 0.5 });
+  });
+
+  it("treeFingerprint changes when only a nativeID changes", () => {
+    // `settleTree` reads two equal fingerprints as a settled screen, so a change
+    // to a field `id:` matches on must not hide behind unchanged frames and text.
+    const tree = (nativeID?: string): DescribeNode =>
+      screen(
+        node({
+          label: "Row",
+          ...(nativeID ? { nativeID } : {}),
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.1 },
+        })
+      );
+    expect(treeFingerprint(tree("row-1"))).toBe(treeFingerprint(tree("row-1")));
+    expect(treeFingerprint(tree("row-1"))).not.toBe(treeFingerprint(tree("row-2")));
+    expect(treeFingerprint(tree())).not.toBe(treeFingerprint(tree("row-1")));
+  });
+});
+
 describe("within (descendant) scoping", () => {
   // Two cards each containing a "Delete" button, plus an unscoped one at the
   // top level — the classic "same label everywhere" screen `within` exists for.

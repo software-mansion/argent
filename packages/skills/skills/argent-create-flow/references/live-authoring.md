@@ -112,7 +112,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order — `id`, then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
+`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order — `id` (the test id or accessibility id; on an iOS simulator, a React Native `nativeID` when the view has no `testID`), then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
 
 1. **`tap: { id: ... }` or `tap: { text: ... }`** — the good case.
 2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
@@ -151,6 +151,8 @@ Record `await-ui-element` through `flow-add-step`. The recorder writes the step 
 - `cancelled`: The caller stopped the wait. Record the check again. Keep the failed step: the condition is unknown, not false.
 
 Only `unmet` disproves the condition. Never delete a step during the recording.
+
+A live check cannot find a React Native `nativeID`: `await-ui-element` reads the accessibility tree, and that tree has no `nativeID`. On an iOS simulator, record the check on the element's text or `testID`. Then change the selector of the converted `await:` or `assert:` to `{ id: <nativeID> }`. The runner tree resolves it.
 
 A stale `hidden` whose selector matches nothing replays as a silent pass — the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed. See the `await-ui-element` section of `argent-device-interact` for the full live condition and selector reference.
 

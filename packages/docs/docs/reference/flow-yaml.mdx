@@ -56,14 +56,16 @@ A selector finds an element on the screen. Write a selector as an explicit map:
 { text: { matches: '^Order #\d+$' } }
 ```
 
-| Field  | Match                                                           |
-| ------ | --------------------------------------------------------------- |
-| `id`   | Exact, case-insensitive. The test id or accessibility id        |
-| `text` | Case-insensitive substring, or `{ matches: <regex> }`           |
-| `role` | Case-insensitive substring of the element role                  |
-| `any`  | Any element. Takes only `true`. Pair it with a relational scope |
+| Field  | Match                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `id`   | Exact, case-insensitive. The test id or the accessibility id. On an iOS simulator, `id` also matches the React Native `nativeID` |
+| `text` | Case-insensitive substring, or `{ matches: <regex> }`                                                                            |
+| `role` | Case-insensitive substring of the element role                                                                                   |
+| `any`  | Any element. Takes only `true`. Pair it with a relational scope                                                                  |
 
 All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
+
+On a physical iPhone, Android and Vega, the runner tree does not contain the React Native `nativeID`. Use a test id for a flow that runs on more than one platform.
 
 A bare string, for example `tap: Save`, is a loose selector. It tries `id` first, then `text`. Prefer the map form.
 
@@ -104,7 +106,7 @@ The runner resolves a selector against a different tree than the `describe` tool
 | Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
 | Vega            | Toolkit page source                           | Same source                |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On an iOS simulator, the runner tree contains the React Native `nativeID`. The `describe` tree does not contain the `nativeID`. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
 ## Directives
 
