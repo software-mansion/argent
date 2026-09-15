@@ -615,6 +615,16 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 }
 
 /**
+ * The reason without the layers wrapped around it: the registry tags a service
+ * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
+ * sentence, neither of which tells the author anything the reason does not.
+ */
+function innermostTreeReason(message: string): string {
+  const unwrapped = /helper is unavailable:\s*(.+)/s.exec(message)?.[1] ?? message;
+  return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -678,8 +688,11 @@ async function captureTapSelector(
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // The bare reason: a remedy belongs to the error that knows one, and every
+    // tap of a recording taken without a tree repeats whatever is said here.
     return {
-      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
+      warning: `selector capture failed (${innermostTreeReason(message)}); kept coordinates`,
     };
   }
 }

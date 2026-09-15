@@ -498,13 +498,18 @@ async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): 
  * handshake in the factory) or it can't run on this device. Hence a one-shot
  * probe, not a poll.
  */
-async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Promise<boolean> {
+async function androidDevtoolsReady(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<{ ready: boolean; reason?: string }> {
   try {
     const ref = androidDevtoolsRef(device);
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-    return api.isReady();
-  } catch {
-    return false;
+    return { ready: api.isReady() };
+  } catch (err) {
+    // The factory's own message says whether the helper is missing, could not
+    // be installed or refused to start; a boolean throws all three away.
+    return { ready: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -563,12 +568,11 @@ async function treeSourceGate(
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
-    const ready = await androidDevtoolsReady(registry, device);
+    const { ready, reason } = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return (
-        `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-        `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
-      );
+      return reason
+        ? `the argent android helper is unavailable: ${reason}`
+        : `the argent android helper is unavailable (full-hierarchy source for testID selectors).`;
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
