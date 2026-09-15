@@ -35,14 +35,34 @@
  *
  * The qualifier "before the flag is raised" is load-bearing. On a fast host the
  * flag often lands *before* the buttons and external keyboard connect, leaving
- * no instant at which they exist unprotected. On iOS 18.6 that is a race, and
- * the warm-up wins it on 92-95% of the boots where it is winnable. On iOS 26.5
- * the window was negative on 6 of 6 boots, so those two services were dead with
- * and without the warm-up alike. The digitizer survives regardless, because its
- * service is created by a path that reads the suppression flag and skips the
- * connect, so it is never terminated and the first event to arrive connects it
- * healthy. So touch is covered; hardware buttons and typed text are narrowed,
- * not fixed.
+ * no instant at which they exist unprotected — they are dead for that
+ * `backboardd` lifetime and no amount of warming up reaches them. On iOS 18.6
+ * that is a race, and the warm-up wins it on 92-95% of the boots where it is
+ * winnable.
+ *
+ * On iOS 26.5 (23F77) it is not a race at all. Over 12 boots of a device warmed
+ * past first-run setup the window ran -289ms to +23ms (median -196ms), and the
+ * buttons and keyboard were torn down on 12 of 12 — including the nominally
+ * positive boot, whose +23ms is narrower than a single warm-up round. The
+ * services connect when they always did; it is the flag that arrives early, at a
+ * median 1.119s against 18.6's 1.24-2.53s, because `dtuhidd` is demand-started
+ * sooner. One device, one host, n=12, 26.3 and 27.0 untested — but newer runtimes
+ * should not be assumed to behave like 18.6.
+ *
+ * The digitizer survives regardless, because its service is created by a path
+ * that reads the suppression flag and skips the connect, so it is never
+ * terminated and the first event to arrive connects it healthy. On 26.5 that is
+ * the *only* reason it survives: in 11 of those 12 boots it was never registered
+ * at all. So touch is covered; hardware buttons and typed text are narrowed, not
+ * fixed.
+ *
+ * Self-heal is deliberately absent. Clearing the notification and restarting
+ * `backboardd` does revive the services, but it kills the foreground app and
+ * bounces SpringBoard, so it belongs behind an explicit user action rather than
+ * in a boot path. The two `notifyutil` calls it needs are
+ * `-s com.apple.coredevice.dtuhidd.active 0 -p …` inside the guest, followed by
+ * `launchctl kill SIGTERM system/com.apple.backboardd`; clear the flag first or
+ * the fresh services are torn down again immediately.
  *
  * # Why the warm-up is invisible
  *
