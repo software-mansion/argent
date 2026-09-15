@@ -158,17 +158,17 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     key: "android.sdkRoot",
     description:
       "Android SDK root argent uses instead of `ANDROID_HOME`, for hosts whose SDK is not " +
-      "where the environment says (Nix, custom layouts). Absolute or `~`-prefixed. Applies " +
+      "where the environment says (Nix, custom layouts). Absolute or `~/`-prefixed. Applies " +
       "to the tool-server and to the simulator-server it starts. `adb` on PATH still wins, " +
       "as it does with the environment variable.",
     scopes: ["project", "global"],
     parse: (raw) => {
       const value = asString(raw);
-      return value !== undefined && (value.startsWith("~") || isAbsolute(value))
+      return value !== undefined && (value === "~" || value.startsWith("~/") || isAbsolute(value))
         ? value
         : undefined;
     },
-    expected: "an absolute or `~`-prefixed path",
+    expected: "an absolute path, or one starting with `~/`",
     merge: "prioritize-local",
     example: "~/Library/Android/sdk",
   },

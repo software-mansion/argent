@@ -257,9 +257,11 @@ describe("coerceCliValue", () => {
 describe("android.sdkRoot — project wins, ~ expands", () => {
   it("reads as null when unset and rejects a relative path", () => {
     expect(getAndroidSdkRoot(opts())).toBeNull();
-    expect(() => setConfigValue("android.sdkRoot", "sdk", "global", opts())).toThrow(
-      ConfigValidationError
-    );
+    for (const relative of ["sdk", "~sdk", "./sdk"]) {
+      expect(() => setConfigValue("android.sdkRoot", relative, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
   });
 
   it("returns the project value over the global one, with ~ expanded to home", () => {
