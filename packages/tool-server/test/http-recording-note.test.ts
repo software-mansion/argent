@@ -123,6 +123,24 @@ describe("HTTP screen-recording reminder note", () => {
     expect(res.body.note).toContain("screen-recording-stop");
   });
 
+  it("does not claim a server-side finalized video exists when the server may be gone", async () => {
+    // The server path cannot see whether its simulator-server is still up, so
+    // the cap reminder must not affirm a retrievable video (the host path may:
+    // its file is local and finalized). It points at the copy-out, hedged on the
+    // server still running, rather than "get the file".
+    registerActiveScreenRecording(UDID, Date.now(), 180, /* serverSide */ true);
+    markScreenRecordingFinalized(UDID, "it hit its 180s time limit");
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+
+    expect(res.body.note).toContain("already ended");
+    expect(res.body.note).toContain("inside simulator-server");
+    expect(res.body.note).toContain("while that server is still up");
+    // Not the host path's outright promise that the file is waiting.
+    expect(res.body.note).not.toContain("to get the file");
+  });
+
   it("drops the note once the recording is cleared", async () => {
     registerActiveScreenRecording(UDID, Date.now(), 180);
     handle = createHttpApp(stubRegistry());

@@ -9,8 +9,15 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import { startCapture, type PointerControl } from "./capture";
+import {
+  setPointerTrail,
+  setPointerVisible,
+  startServerRecording,
+  stopServerRecording,
+} from "../../utils/simulator-client";
+import { startCapture } from "./capture";
+import type { PointerControl } from "./pointer-control";
+import type { ServerRecordingControl } from "./server-capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -19,6 +26,20 @@ const MAX_TIME_LIMIT_SECONDS = 600;
 const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
+/**
+ * Bound the recording commands for the same reason, but far more generously:
+ * unlike a pointer toggle these are the tool's whole payload, and `stop` also
+ * finalizes the mp4 container before it answers. Without a signal they fall to
+ * undici's 300s header timeout, which would hold `startPending`/`stopPending`
+ * — and so every other recording call on the device — for five minutes per
+ * command against a sim-server that accepts the connection and never replies.
+ *
+ * Starting is a bare "begin encoding" command, so it gets the smaller budget;
+ * finalizing scales with the video, which frames-already-encoded muxing still
+ * keeps far inside a minute.
+ */
+const RECORDING_START_TIMEOUT_MS = 10_000;
+const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
 const zodSchema = z.object({
   udid: z
@@ -77,7 +98,7 @@ By default every tap, swipe, drag, pinch and rotate is drawn into the video as a
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses — immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior — for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile } — the video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
+Fails if a recording is already running on the device, the device is not booted, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported). Where simulator-server cannot record for itself the video is encoded locally instead, which needs \`ffmpeg\` on the host; that build's start fails with a message naming it, so it only has to be provided when a recording actually asks for it rather than up front.`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
@@ -143,6 +164,7 @@ Fails if a recording is already running on the device, the device is not booted,
         watermark: isFeatureEnabled("video-watermark"),
         trimStatic: params.trimStatic ?? true,
         pointer,
+        server: makeServerRecordingControl(simulator),
       });
     },
   };
@@ -181,6 +203,27 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
       const pending = enabling;
       if (pending) await pending.catch(() => {});
       await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+    },
+  };
+}
+
+/**
+ * Bind simulator-server's recording endpoints to the resolved server. `start`
+ * reports whether this build has them at all — `startCapture` records host-side
+ * when it does not — and otherwise hands back the finalizer for the recording it
+ * just began, which carries the id simulator-server requires at stop.
+ */
+export function makeServerRecordingControl(simulator: SimulatorServerApi): ServerRecordingControl {
+  return {
+    async start(opts) {
+      const id = await startServerRecording(
+        simulator,
+        opts,
+        AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
+      );
+      if (id === null) return null;
+      return () =>
+        stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
     },
   };
 }
