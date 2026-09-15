@@ -661,3 +661,13 @@ if (fs.existsSync(apkSrc)) {
       `or: bash packages/native-devtools-android/scripts/build.sh`
   );
 }
+
+const NETWORK_INSPECTOR_SRC = path.join(ANDROID_APK_SRC_DIR, "network-inspector");
+if (fs.existsSync(NETWORK_INSPECTOR_SRC)) {
+  fs.cpSync(NETWORK_INSPECTOR_SRC, path.join(BIN_DIR, "network-inspector"), { recursive: true });
+  console.log(
+    `✓ Copied network inspector agent → ${path.relative(process.cwd(), BIN_DIR)}/network-inspector`
+  );
+} else {
+  console.warn(`⚠ network inspector agent not found at ${NETWORK_INSPECTOR_SRC} — skipping`);
+}

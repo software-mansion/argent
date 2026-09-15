@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { attachAndroidNetworkInspectorToLaunch } from "../../../blueprints/android-network-inspector";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner, so a positive match on
@@ -116,6 +117,7 @@ export const androidImpl: PlatformImpl<
       timeoutMs: 30_000,
     });
     assertAmStartOk(out);
+    await attachAndroidNetworkInspectorToLaunch(params.udid, params.bundleId);
     return { launched: true, bundleId: params.bundleId };
   },
 };

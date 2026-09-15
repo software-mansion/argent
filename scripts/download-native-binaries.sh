@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Downloads signed native binaries from argent-private-releases: the iOS, tvOS
-# and TCP dylibs, the ax-service daemons, and the Android helper APK consumed by
-# packages/native-devtools-android.
+# and TCP dylibs, the ax-service daemons, and the Android helper APK and network
+# inspector consumed by packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
@@ -155,6 +155,51 @@ ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versio
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
 trap - EXIT
+
+# Tags cut before the agent was released carry no such asset, so a missing one
+# is skipped with a warning: the service then reports the agent binaries as
+# absent and names the JS layer as the fallback.
+NETWORK_INSPECTOR_ASSET="network-inspector.tar.gz"
+NETWORK_INSPECTOR_DIR="${ANDROID_BIN_DIR}/network-inspector"
+NETWORK_INSPECTOR_TMP="$(mktemp -d)"
+echo "  Downloading ${NETWORK_INSPECTOR_ASSET} (Android network inspector)..."
+GH_STDERR="$(mktemp)"
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "${NETWORK_INSPECTOR_ASSET}" \
+  --dir "${NETWORK_INSPECTOR_TMP}" \
+  --clobber 2>"${GH_STDERR}"; then
+  rm -f "${GH_STDERR}"
+  NETWORK_INSPECTOR_EXTRACTED="${NETWORK_INSPECTOR_TMP}/extracted"
+  mkdir -p "${NETWORK_INSPECTOR_EXTRACTED}"
+  tar -xzf "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" -C "${NETWORK_INSPECTOR_EXTRACTED}"
+
+  # The jar's Implementation-Version must equal versionName in
+  # assets/manifest.json. A mismatch fails here, before the agent reaches bin/.
+  NETWORK_INSPECTOR_VERSION="$(
+    (unzip -p "${NETWORK_INSPECTOR_EXTRACTED}/network-inspector.jar" META-INF/MANIFEST.MF \
+      | tr -d '\r' | sed -n 's/^Implementation-Version: //p') || true
+  )"
+  if [[ "${NETWORK_INSPECTOR_VERSION}" != "${ANDROID_VERSION_NAME}" ]]; then
+    rm -rf "${NETWORK_INSPECTOR_TMP}"
+    echo "Error: network-inspector.jar on '${TAG}' is version '${NETWORK_INSPECTOR_VERSION:-<none>}'," >&2
+    echo "       but versionName in ${ANDROID_MANIFEST_FILE} is '${ANDROID_VERSION_NAME}'." >&2
+    echo "       Release a network inspector at version ${ANDROID_VERSION_NAME}, or fix versionName, then retry." >&2
+    exit 1
+  fi
+  rm -rf "${NETWORK_INSPECTOR_DIR}"
+  mv "${NETWORK_INSPECTOR_EXTRACTED}" "${NETWORK_INSPECTOR_DIR}"
+  rm -rf "${NETWORK_INSPECTOR_TMP}"
+  echo "  ✓ network inspector ${NETWORK_INSPECTOR_VERSION} → ${NETWORK_INSPECTOR_DIR}"
+else
+  GH_MSG=$(<"${GH_STDERR}")
+  rm -f "${GH_STDERR}"
+  rm -rf "${NETWORK_INSPECTOR_TMP}"
+  echo "  ⚠ ${NETWORK_INSPECTOR_ASSET} not downloaded — the Android native network layer will be unavailable"
+  if [[ -n "${GH_MSG}" ]]; then
+    printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
+  fi
+fi
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 

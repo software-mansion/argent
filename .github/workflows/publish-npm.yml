@@ -116,7 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK, network inspector agent)
         run: bash scripts/download-native-binaries.sh "$BINARIES_TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -212,6 +212,20 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      # Conditional until the argent-main release carries
+      # network-inspector.tar.gz: until then the download step only warns and
+      # bundle-tools.cjs skips the tree. The first PR after that release makes
+      # the three checks unconditional.
+      - name: Verify the network inspector agent (conditional until released)
+        run: |
+          d=packages/argent/bin/network-inspector
+          if [ -d "$d" ]; then
+            test -f "$d/network-inspector.jar"
+            test -f "$d/x86_64/libjvmti_network_inspector.so"
+            test -f "$d/arm64-v8a/libjvmti_network_inspector.so"
+          else
+            echo "::warning::$d is missing: the release carries no network-inspector.tar.gz yet"
+          fi
       # Flow `script` runner + watchdogs, flat in dist/ beside tool-server.cjs.
       # flow-script-executor.ts resolves the runner there via __dirname, and the
       # runner resolves both watchdogs against its own import.meta.url.
