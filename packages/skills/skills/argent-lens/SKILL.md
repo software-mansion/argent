@@ -18,7 +18,7 @@ You implement several candidate designs, capture each one running on the device,
 | `propose_variant`      | No        | Stage ONE variant for ONE element. Call once per variant. Keep working. |
 | `await_user_selection` | Yes       | Call ONCE after every variant is staged. Parks until the human is done. |
 
-`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device id you captured the variants on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
+`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device id you captured the variants on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards. The `element` label is the identity — matching ignores case and surrounding whitespace, and `match` never affects the grouping, so give genuinely different elements different labels. `match` is a locator only: the first one you supply for an element sticks, and a later conflicting one is reported back in the response rather than silently applied.
 
 **Always pass `udid`** (the same simulator/emulator id you screenshotted and described with). The preview window then streams _that_ device directly — the human never has to pick a simulator. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins).
 
