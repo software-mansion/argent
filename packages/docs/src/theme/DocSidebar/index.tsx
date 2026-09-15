@@ -5,6 +5,7 @@ import type { WrapperProps } from "@docusaurus/types";
 import type { PropSidebarItem } from "@docusaurus/plugin-content-docs";
 
 import SidebarIcon from "@site/src/theme/SidebarIcon";
+import useProductSwitcherItem from "@site/src/theme/ProductSwitcher";
 
 type Props = WrapperProps<typeof DocSidebarType>;
 
@@ -12,6 +13,8 @@ type Props = WrapperProps<typeof DocSidebarType>;
  * The shared theme (@swmansion/t-rex-ui) renders sidebar items from its own
  * bundle, so swizzling DocSidebarItem has no effect; an item's label is
  * rendered as the link's children, so the icon has to ride along in there.
+ * The product switcher rides along the same way, as an `html` item prepended
+ * to the list.
  */
 function withIcons(items: readonly PropSidebarItem[]): PropSidebarItem[] {
   return items.map((item) => {
@@ -37,5 +40,6 @@ function withIcons(items: readonly PropSidebarItem[]): PropSidebarItem[] {
 }
 
 export default function DocSidebarWrapper(props: Props): React.ReactElement {
-  return <DocSidebar {...props} sidebar={withIcons(props.sidebar)} />;
+  const productSwitcher = useProductSwitcherItem();
+  return <DocSidebar {...props} sidebar={[productSwitcher, ...withIcons(props.sidebar)]} />;
 }

@@ -1,0 +1,67 @@
+---
+sidebar_position: 1
+sidebar_label: Getting started
+title: Getting started with Argent Cloud
+sidebar_custom_props:
+  icon: rocket
+---
+
+Argent Cloud runs iOS simulators on macOS machines that Software Mansion hosts. You control the simulators from your own computer with the `sim-remote` command line tool. Your computer does not need Xcode, and it does not need to be a Mac.
+
+## What Argent Cloud is
+
+[Argent](/docs/fundamentals/getting-started) gives your AI assistant access to the simulators, emulators and devices on your own computer. Argent Cloud moves the iOS simulators to a hosted machine. Argent drives a hosted simulator with the same tools that it uses on a local simulator.
+
+`sim-remote` is the client of Argent Cloud. It logs you in, reserves a machine for you, and sends your commands to the simulators on that machine. The `sim-remote simctl` command accepts the same arguments as `xcrun simctl`. A script that uses `xcrun simctl` works on a hosted simulator when you add the `sim-remote` prefix.
+
+## Who Argent Cloud is for
+
+- Developers on Linux or on a Mac without Xcode who want to test an iOS app.
+- Teams that want the same simulator setup on every computer.
+- Pipelines that run Maestro or Appium tests without a macOS runner. See [GitHub Actions](/docs/cloud/integrations/github-actions).
+- AI agents that need an iOS simulator when the local computer has none.
+
+## Your first session
+
+1. [Install](/docs/cloud/fundamentals/installation) `sim-remote` and put your API key in the `SIM_ROUTER_API_KEY` variable.
+2. Log in. The command reserves a machine for you and prints its name.
+
+   ```bash
+   sim-remote login
+   ```
+
+3. List the simulators on your machine and copy the UDID of one of them.
+
+   ```bash
+   sim-remote simctl list devices available
+   ```
+
+4. Boot the simulator and wait until the boot completes.
+
+   ```bash
+   sim-remote simctl boot 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413
+   sim-remote simctl bootstatus 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 -b
+   ```
+
+5. Install and launch your app. The path is a path on your computer. `sim-remote` uploads the bundle for you.
+
+   ```bash
+   sim-remote simctl install 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 ./build/MyApp.app
+   sim-remote simctl launch 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 com.example.MyApp
+   ```
+
+6. Log out when you are done. The command returns the machine to your team.
+
+   ```bash
+   sim-remote logout
+   ```
+
+## Isolation and data
+
+Software Mansion assigns each physical machine to one customer. Each session runs in its own operating system account on its own disk volume. When a session ends, Argent Cloud destroys the volume and rebuilds it from a clean image. Your app binaries, simulator state and files do not survive the session. Argent Cloud does not record the screen video, the keystrokes or the app content. Argent Cloud keeps the operational logs of the machine for 14 days.
+
+## Next steps
+
+- [Features](/docs/cloud/features/overview) describes what Argent Cloud can do.
+- [Integrations](/docs/cloud/integrations/argent) explains how Argent, Maestro, Appium and GitHub Actions use the hosted simulators.
+- [CLI reference](/docs/cloud/reference/cli) lists every `sim-remote` command.

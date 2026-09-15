@@ -1,0 +1,147 @@
+---
+sidebar_position: 4
+sidebar_label: GitHub Actions
+title: GitHub Actions
+sidebar_custom_props:
+  icon: workflow
+---
+
+Argent Cloud provides GitHub Actions that install `sim-remote`, reserve a machine for the job, and put the Maestro stand-ins on `PATH`. A job on `ubuntu-latest` can install an app, drive a hosted simulator and run Maestro flows. The job needs no macOS runner and no Xcode. The build of the `.app` still needs a Mac.
+
+The actions live in the [argent-cloud-actions](https://github.com/software-mansion-labs/argent-cloud-actions) repository. Pin them to the moving `v1` tag. Releases are tagged `vN.N.N`.
+
+| Action          | Reference                                                     | What it does                                                                   |
+| --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `install`       | `software-mansion-labs/argent-cloud-actions/install@v1`       | Downloads the latest `sim-remote` release for the runner and adds it to `PATH` |
+| `acquire`       | `software-mansion-labs/argent-cloud-actions/acquire@v1`       | Logs in, reserves a machine, and releases it when the job ends                 |
+| `maestro-shims` | `software-mansion-labs/argent-cloud-actions/maestro-shims@v1` | Writes the Maestro stand-ins and adds them to `PATH` for the rest of the job   |
+
+## A test job
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: software-mansion-labs/argent-cloud-actions/install@v1
+
+      - uses: software-mansion-labs/argent-cloud-actions/acquire@v1
+        with:
+          api-key: ${{ secrets.SIM_ROUTER_API_KEY }}
+
+      - uses: software-mansion-labs/argent-cloud-actions/maestro-shims@v1
+
+      - run: sim-remote simctl install "$UDID" path/to/My.app
+      - run: maestro --udid "$UDID" test .maestro/flow.yaml
+```
+
+After the acquire step, `sim-remote` is on `PATH` and the job holds a machine. Every later step uses the session of the daemon and needs no credential.
+
+## The API key
+
+Store the API key as a GitHub Actions secret and pass it from `secrets.*`. The runner prints the `with:` block of a step in the log, and only a registered secret is masked there. A key from `vars.*` or a literal appears in the log in plain text.
+
+The key stays in the job:
+
+- The action passes the key to `sim-remote` as an environment variable, never as an argument.
+- The action does not write the key to `GITHUB_ENV`, `GITHUB_OUTPUT` or `GITHUB_STATE`.
+- `sim-remote` keeps the session token in the memory of the daemon. Nothing reaches the disk.
+
+## `install`
+
+The action needs no credential and reserves no machine.
+
+| Input          | Default                                                            | Description                                                                                   |
+| -------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `releases-url` | `https://github.com/software-mansion/sim-remote-releases/releases` | The releases page. The binary comes from `<releases-url>/latest/download/sim-remote-<target>` |
+
+| Output            | Description                            |
+| ----------------- | -------------------------------------- |
+| `sim-remote-path` | The absolute path of the installed CLI |
+| `install-dir`     | The directory added to `PATH`          |
+
+## `acquire`
+
+The action expects `sim-remote` on `PATH`, so it goes after `install`. A post step logs out and releases the machine. The post step runs also when the job fails or is cancelled.
+
+| Input             | Default | Description                                                                                                    |
+| ----------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `api-key`         | None    | The API key. Required. Pass it from `secrets.*`                                                                |
+| `acquire`         | `true`  | Reserve a machine after the login. `false` logs in only, for a job that attaches to a machine it already holds |
+| `timeout`         | `300`   | Seconds that one acquire attempt waits for a free machine. The server caps this value                          |
+| `retries`         | `8`     | The number of acquire attempts before the action gives up                                                      |
+| `retry-delay`     | `30`    | Seconds between two attempts                                                                                   |
+| `release`         | `true`  | Release the machine in the post step. Set `false` only when a later job in the same run inherits the session   |
+| `sim-remote-path` | Empty   | The path of the CLI. The default is `sim-remote` from `PATH`                                                   |
+
+Your team has a fixed number of machines, so a matrix of jobs waits in a queue. A bad API key fails at once. With the defaults, the action waits about 40 minutes for a machine. To wait longer, increase `retries`. The server caps one attempt, so a larger `timeout` does not help.
+
+The action does not forward `SIM_ROUTER_URL` from the job environment. The server URL comes from the binary.
+
+## `maestro-shims`
+
+The action writes the stand-ins with `sim-remote install-shims` and expects `sim-remote` on `PATH`. The action also exports `SIM_REMOTE_SHIM_DIR` and `SIM_REMOTE_BIN` for the later steps.
+
+| Input               | Default                               | Description                                                                                                                        |
+| ------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `dir`               | `${{ runner.temp }}/sim-remote-shims` | The directory for the stand-ins                                                                                                    |
+| `install-plistutil` | `true`                                | On Linux, install `libplist-utils` with apt. The `plutil` stand-in needs it                                                        |
+| `add-to-path`       | `true`                                | Add the directory to `PATH` for every later step. Set `false` on a macOS runner that needs the real `xcrun` and `xcodebuild` later |
+
+| Output     | Description                            |
+| ---------- | -------------------------------------- |
+| `shim-dir` | The directory that holds the stand-ins |
+
+On a macOS runner, the stand-ins shadow `xcrun`, `xcodebuild` and `open` for every later step. With `add-to-path: false`, add the output to `PATH` around the Maestro step only:
+
+```yaml
+- uses: software-mansion-labs/argent-cloud-actions/maestro-shims@v1
+  id: shims
+  with:
+    add-to-path: false
+
+- run: PATH="${{ steps.shims.outputs.shim-dir }}:$PATH" maestro --udid "$UDID" test .maestro/flow.yaml
+```
+
+## Metro
+
+A Debug build that loads the JavaScript bundle from a Metro server on the runner needs a reverse tunnel:
+
+```yaml
+- run: sim-remote reverse start "$UDID" 8081
+```
+
+See [Tunnels](/docs/cloud/features/tunnels).
+
+## Runners
+
+| Runner                          | Supported                                    |
+| ------------------------------- | -------------------------------------------- |
+| `ubuntu-latest`, `ubuntu-*-arm` | Yes                                          |
+| `macos-latest` (Apple Silicon)  | Yes                                          |
+| Intel macOS (`macos-13`)        | No. There is no `x86_64-apple-darwin` binary |
+| Windows                         | No                                           |
+
+## Use from another organization
+
+The repository is private. GitHub resolves a `uses:` reference to a private action only from a repository in the same organization. From another organization, check the actions out with a token that has read access and reference them by path:
+
+```yaml
+- name: Check out the Argent Cloud actions
+  uses: actions/checkout@v5
+  with:
+    repository: software-mansion-labs/argent-cloud-actions
+    ref: v1
+    path: .argent-cloud-actions
+    token: ${{ secrets.ARGENT_ACTIONS_TOKEN }}
+
+- uses: ./.argent-cloud-actions/install
+
+- uses: ./.argent-cloud-actions/acquire
+  with:
+    api-key: ${{ secrets.SIM_ROUTER_API_KEY }}
+```
+
+[Maestro](/docs/cloud/integrations/maestro) describes the flows that the job runs. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.

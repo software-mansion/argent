@@ -1,0 +1,38 @@
+---
+sidebar_position: 3
+sidebar_label: Supported platforms
+title: Supported platforms
+sidebar_custom_props:
+  icon: layers
+---
+
+## Client computers
+
+`sim-remote` runs on these platforms:
+
+| Platform | Architecture  | Notes                                       |
+| -------- | ------------- | ------------------------------------------- |
+| macOS    | Apple Silicon | Signed and notarized binary                 |
+| Linux    | x86_64        | glibc from Ubuntu 22.04, Debian 12 or newer |
+| Linux    | arm64         | glibc from Ubuntu 22.04, Debian 12 or newer |
+
+There is no binary for Intel Macs or for Windows.
+
+## Hosted devices
+
+Argent Cloud hosts these devices:
+
+| Device           | Status                                                                            |
+| ---------------- | --------------------------------------------------------------------------------- |
+| iOS simulator    | Supported                                                                         |
+| tvOS simulator   | Available when the machine has the tvOS runtime. Argent lists it as a tvOS device |
+| Android emulator | Not available                                                                     |
+| Physical device  | Not available                                                                     |
+
+The device types and the iOS versions are the ones that Xcode on the hosted machine provides. Run this command to see them:
+
+```bash
+sim-remote simctl list devices available
+```
+
+A machine can have one pre-booted iPhone simulator, so the first boot of that device is fast. You can create more simulators with `sim-remote simctl create`.

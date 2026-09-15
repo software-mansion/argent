@@ -1,0 +1,39 @@
+---
+sidebar_position: 4
+sidebar_label: Tunnels
+title: Tunnels
+sidebar_custom_props:
+  icon: arrow-left-right
+---
+
+Your computer and the hosted simulator are on different networks. Neither side can reach the `localhost` of the other. `sim-remote` provides two tunnel commands, one for each direction.
+
+## Reverse tunnels
+
+A reverse tunnel lets the simulator reach a server on your computer. The app in the simulator connects to `localhost:8081`, and the traffic arrives at port 8081 on your computer. A local Metro bundler, a mock API or a staging proxy works with a hosted simulator in this way.
+
+```bash
+sim-remote reverse start 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 8081
+```
+
+Argent opens a reverse tunnel for Metro and for the debugger on its own. See [Argent](/docs/cloud/integrations/argent).
+
+## Forward tunnels
+
+A forward tunnel lets your computer reach a server on the hosted machine. `sim-remote` binds a local port and sends the traffic to a port on the machine. A local tool can talk to a test runner that runs next to the simulator in this way. Only servers that your own session started are reachable.
+
+```bash
+sim-remote forward start 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 9000:8000
+```
+
+## Lifetime
+
+The background daemon owns the tunnels. A tunnel stays open between commands and closes when the session ends or when the session moves to another machine.
+
+## Example instructions
+
+- "Expose my Metro server on port 8081 to the hosted simulator."
+- "Show the tunnels that are open now."
+- "Close the tunnel on port 8081."
+
+The [CLI reference](/docs/cloud/reference/cli) lists the `reverse` and `forward` commands.

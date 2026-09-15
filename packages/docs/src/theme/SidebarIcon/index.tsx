@@ -1,11 +1,16 @@
 import React from "react";
 import {
+  ArrowLeftRight,
+  Bot,
   Bug,
   Download,
   FileCode,
+  FlaskConical,
   Gauge,
   Images,
+  KeyRound,
   Layers,
+  LifeBuoy,
   MousePointerClick,
   Network,
   Plug,
@@ -15,9 +20,12 @@ import {
   Settings2,
   ShieldCheck,
   Smartphone,
+  SquareTerminal,
   SwatchBook,
   Terminal,
+  Timer,
   Video,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -29,12 +37,17 @@ import styles from "./styles.module.css";
  * Keys come from a page's `sidebar_custom_props: { icon: "rocket" }`.
  */
 const ICONS: Record<string, LucideIcon> = {
+  "arrow-left-right": ArrowLeftRight,
+  "bot": Bot,
   "bug": Bug,
   "download": Download,
   "file-code": FileCode,
+  "flask-conical": FlaskConical,
   "gauge": Gauge,
   "images": Images,
+  "key-round": KeyRound,
   "layers": Layers,
+  "life-buoy": LifeBuoy,
   "mouse-pointer-click": MousePointerClick,
   "network": Network,
   "plug": Plug,
@@ -44,9 +57,12 @@ const ICONS: Record<string, LucideIcon> = {
   "settings-2": Settings2,
   "shield-check": ShieldCheck,
   "smartphone": Smartphone,
+  "square-terminal": SquareTerminal,
   "swatch-book": SwatchBook,
   "terminal": Terminal,
+  "timer": Timer,
   "video": Video,
+  "workflow": Workflow,
   "wrench": Wrench,
 };
 
