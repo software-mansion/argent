@@ -1,12 +1,13 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
+  resolveOutPath,
+  writeOutFile,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
+  type OutWriteResult,
 } from "@argent/tools-client";
 import { init as telemetryInit, shutdown as telemetryShutdown, track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureCode, type FailureKind } from "@argent/registry";
@@ -34,9 +35,17 @@ interface RunOptions {
   argvForFlags: string[];
 }
 
+// Global flags that already do what a tool property of the same name asks — the
+// `--out` below writes an image result wherever it is pointed. Listing such a
+// property in the per-tool Flags block would print the same flag twice in one
+// help screen (e.g. `screenshot`'s `out`).
+const GLOBAL_FLAG_NAMES = new Set(["json", "out"]);
+
 function splitOptions(argv: string[]): RunOptions {
   // Consumed here rather than by the schema-driven flag parser, so a tool with its
-  // own "json" or "out" property can't capture them.
+  // own "json" or "out" property can't capture the bare `--out`/`--json` spellings.
+  // Others (`--out-json`, `--args`) still reach the payload, where `outFromPayload`
+  // picks the property up.
   let json = false;
   let outPath: string | null = null;
   const rest: string[] = [];
@@ -47,15 +56,20 @@ function splitOptions(argv: string[]): RunOptions {
       json = true;
       continue;
     }
+    // Trimmed, and empty refused: an empty `--out=` outranks a payload `out` on
+    // precedence and would write neither, and a stray space makes `path.resolve`
+    // read the value as relative, burying the PNG under a directory named " ".
     if (tok === "--out") {
-      const v = argv[i + 1];
+      const v = argv[i + 1]?.trim();
       if (!v) throw new FlagParseException("--out requires a path");
       outPath = v;
       i += 1;
       continue;
     }
     if (tok.startsWith("--out=")) {
-      outPath = tok.slice("--out=".length);
+      const v = tok.slice("--out=".length).trim();
+      if (!v) throw new FlagParseException("--out requires a path");
+      outPath = v;
       continue;
     }
     rest.push(tok);
@@ -85,7 +99,7 @@ function printToolHelp(meta: ToolMeta): void {
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
   console.log("Flags:");
-  console.log(formatSchemaUsage(schema));
+  console.log(formatSchemaUsage(withoutGlobalFlagProps(schema)));
   console.log("\nGlobal flags:");
   if (!hasOwnArgsField) {
     console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
@@ -97,19 +111,71 @@ function printToolHelp(meta: ToolMeta): void {
   console.log("  --help, -h             Show this help");
 }
 
-async function fetchImageToFile(
-  result: { url?: string; path?: string },
-  outPath: string
-): Promise<void> {
-  const url = result.url;
-  if (!url) {
-    throw new Error("Tool result did not include a `url`; cannot save image");
-  }
+/** Drop schema properties a global flag already covers, so the per-tool Flags block
+ *  never prints a second row for a flag the Global flags block lists below it. */
+function withoutGlobalFlagProps(schema: JsonSchema | undefined): JsonSchema | undefined {
+  if (!schema?.properties) return schema;
+  const kept = Object.entries(schema.properties).filter(([name]) => !GLOBAL_FLAG_NAMES.has(name));
+  if (kept.length === Object.keys(schema.properties).length) return schema;
+  return { ...schema, properties: Object.fromEntries(kept) };
+}
+
+/** A tool's own `out` property, when it named a path. */
+function outFromPayload(payload: Record<string, unknown>): string | null {
+  const out = payload.out;
+  return typeof out === "string" && out.trim() ? out.trim() : null;
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** The legacy `{ url }` bytes for an older tool-server that emits no artifact handle. */
+async function fetchLegacyImage(result: unknown): Promise<Buffer | null> {
+  const url =
+    result && typeof result === "object" && typeof (result as { url?: unknown }).url === "string"
+      ? (result as { url: string }).url
+      : null;
+  if (!url) return null;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-  fs.writeFileSync(outPath, buf);
+  // A legacy server's media URL is a plain HTTP endpoint, so a proxy or an error
+  // page answers 200 with HTML just as readily as it answers PNG bytes. Writing
+  // that to `out` and reporting a `Wrote:` puts a file that is not an image where
+  // the caller will hand it to `screenshot-diff` as a baseline. argent-mcp's
+  // fetchPngBytes screens the same bytes the same way.
+  if (!buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error(`${url} answered ${buf.length} bytes that are not a PNG`);
+  }
+  return buf;
+}
+
+/**
+ * Write an image result where the caller asked, and say where it landed. Shares
+ * {@link resolveOutPath} with argent-mcp's writer so `out` cannot mean two things
+ * depending on which client reads it, and reports the absolute path because that
+ * is the spelling `screenshot-diff` can be handed. A failure is returned rather
+ * than thrown: the capture already succeeded and its own path still has to print.
+ */
+async function saveImageTo(
+  out: string,
+  images: MaterializedImage[],
+  result: unknown
+): Promise<OutWriteResult> {
+  const resolved = resolveOutPath(out);
+  if ("refusal" in resolved) return { failure: `Could not save to ${out}: ${resolved.refusal}` };
+  try {
+    const bytes = images[0]?.data ?? (await fetchLegacyImage(result));
+    if (!bytes) {
+      return {
+        failure: `Could not save to ${resolved.path}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
+      };
+    }
+    return await writeOutFile(out, bytes);
+  } catch (err) {
+    return {
+      failure: `Could not save to ${resolved.path}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 function renderResult(
@@ -368,32 +434,42 @@ Examples:
     process.exit(1);
   }
 
-  // Prefer the bytes the materializer already resolved; fall back to fetching the
-  // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (outPath && meta.outputHint === "image") {
-    try {
-      if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-        fs.writeFileSync(outPath, images[0]!.data);
-      } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
-      }
-    } catch (err) {
-      console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
-      await trackRunFailure(toolName, startedAt, {
-        error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
-        failure_stage: "cli_run_save_image",
-        failure_area: "cli",
-        error_kind: "unknown",
-      });
-      process.exit(1);
-    }
-  }
+  // `--out` wins; without it a tool's own `out` property names the destination, so
+  // the spellings that reach the payload (`--args`, `--out-json`) do what the
+  // schema advertises rather than passing a path nothing on this side reads.
+  const imageOut = outPath ?? outFromPayload(payload);
+
+  const saved =
+    imageOut && meta.outputHint === "image" ? await saveImageTo(imageOut, images, result) : null;
 
   if (note) console.error(note);
+
+  if (saved && "failure" in saved) {
+    // Nothing on stdout, matching failInvocation: `--json | jq` on a failed run
+    // reads an empty stream and a non-zero status. The capture still succeeded,
+    // so the result goes to stderr instead - it is the only thing naming the PNG
+    // the run did leave on disk.
+    if (json) {
+      console.error(JSON.stringify({ error: saved.failure, result }, null, 2));
+    } else {
+      console.log(renderResult(result, meta.outputHint, images, json));
+      console.error(saved.failure);
+    }
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
+      failure_stage: "cli_run_save_image",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
+    process.exit(1);
+  }
+
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  if (outPath && meta.outputHint === "image" && !json) {
-    console.log(`Wrote: ${outPath}`);
+  // The absolute destination, which `out`'s own describe tells the caller to
+  // pass on to `screenshot-diff` rather than the relative spelling they typed.
+  // On stderr under `--json` so stdout stays one parseable object.
+  if (saved) {
+    (json ? console.error : console.log)(`Wrote: ${saved.wrote}`);
   }
 }
