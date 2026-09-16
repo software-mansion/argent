@@ -34,9 +34,11 @@ import styles from "./styles.module.css";
 
 /*
  * Explicit map so the bundle pulls only these icons from lucide.
- * Keys come from a page's `sidebar_custom_props: { icon: "rocket" }`.
+ * Keys come from a page's `sidebar_custom_props: { icon: "rocket" }`. The
+ * Card component reads the same map, so a card and the sidebar entry of the
+ * page it links to share one icon.
  */
-const ICONS: Record<string, LucideIcon> = {
+export const ICONS: Record<string, LucideIcon> = {
   "arrow-left-right": ArrowLeftRight,
   "bot": Bot,
   "bug": Bug,
