@@ -3,7 +3,7 @@ sidebar_position: 4
 sidebar_label: GitHub Actions
 title: GitHub Actions
 sidebar_custom_props:
-  icon: workflow
+  icon: brand-github
 ---
 
 Argent Cloud provides [GitHub Actions](https://docs.github.com/actions) that install `sim-remote`, reserve a machine for the job, and put the Maestro stand-ins on `PATH`. A job on `ubuntu-latest` can install an app, drive a hosted simulator and run Maestro flows. The job needs no macOS runner and no Xcode. The build of the `.app` still needs a Mac.
@@ -113,7 +113,7 @@ A Debug build that loads the JavaScript bundle from a Metro server on the runner
 - run: sim-remote reverse start "$UDID" 8081
 ```
 
-See [Tunnels](/docs/cloud/features/tunnels).
+See [Connect to local servers](/docs/cloud/guides/local-servers).
 
 ## Runners
 

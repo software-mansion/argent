@@ -3,7 +3,7 @@ sidebar_position: 1
 sidebar_label: Argent
 title: Argent
 sidebar_custom_props:
-  icon: bot
+  icon: brand-argent
 ---
 
 Argent, the toolkit for AI agents, uses `sim-remote` to drive the hosted simulators. You install Argent as usual, log in with `sim-remote`, and the agent sees the hosted simulators next to your local devices.
@@ -31,7 +31,7 @@ The screen and the input go through a live video stream between Argent and the m
 
 ## Metro and the debugger
 
-When the agent connects the debugger or starts Metro, Argent opens a reverse tunnel for the port on its own. The hosted simulator loads the bundle from the Metro server on your computer. See [Tunnels](/docs/cloud/features/tunnels).
+When the agent connects the debugger or starts Metro, Argent opens a reverse tunnel for the port on its own. The hosted simulator loads the bundle from the Metro server on your computer. See [Connect to local servers](/docs/cloud/guides/local-servers).
 
 ## Example instructions
 
@@ -44,6 +44,6 @@ When the agent connects the debugger or starts Metro, Argent opens a reverse tun
 
 - Argent supports iOS and tvOS simulators on Argent Cloud. There are no hosted Android devices.
 - Argent shares your `sim-remote` session. If you run `sim-remote logout` or `sim-remote daemon stop`, the agent loses the machine.
-- The idle release of the machine also applies to the agent. See [Sessions and machines](/docs/cloud/features/sessions).
+- The idle release of the machine also applies to the agent. See [Manage machines](/docs/cloud/guides/machines).
 
 The [tools reference](/docs/reference/tools) lists the Argent tools. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.

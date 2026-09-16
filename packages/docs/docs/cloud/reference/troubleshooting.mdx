@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 sidebar_label: Troubleshooting
 title: Troubleshooting
 sidebar_custom_props:
@@ -35,7 +35,7 @@ sidebar_custom_props:
 
 **A simulator that you booted earlier is gone.** Your session is attached to another machine, or the machine was released and rebuilt. Run `sim-remote list-machines` to see the current machine and `sim-remote attach <MACHINE_ID>` to switch back. After a release, boot the simulator again.
 
-**The app in the simulator cannot reach your local server.** The simulator has no route to your `localhost`. Run `sim-remote reverse start <UDID> <PORT>` and confirm the tunnel with `sim-remote reverse status`. See [Tunnels](/docs/cloud/features/tunnels).
+**The app in the simulator cannot reach your local server.** The simulator has no route to your `localhost`. Run `sim-remote reverse start <UDID> <PORT>` and confirm the tunnel with `sim-remote reverse status`. See [Connect to local servers](/docs/cloud/guides/local-servers).
 
 **Argent shows no hosted simulators.** Argent needs `sim-remote` on `PATH` and a session with a machine. Run `sim-remote login` and list the devices again.
 
