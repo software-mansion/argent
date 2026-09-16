@@ -30,15 +30,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { Appium, Argent, GitHub, Maestro, type BrandIcon } from "./brands";
 import styles from "./styles.module.css";
 
 /*
  * Explicit map so the bundle pulls only these icons from lucide.
  * Keys come from a page's `sidebar_custom_props: { icon: "rocket" }`. The
  * Card component reads the same map, so a card and the sidebar entry of the
- * page it links to share one icon.
+ * page it links to share one icon. The `brand-*` keys are the marks of the
+ * external tools on the integration pages, drawn in `./brands.tsx`.
  */
-export const ICONS: Record<string, LucideIcon> = {
+export const ICONS: Record<string, LucideIcon | BrandIcon> = {
   "arrow-left-right": ArrowLeftRight,
   "bot": Bot,
   "bug": Bug,
@@ -66,6 +68,10 @@ export const ICONS: Record<string, LucideIcon> = {
   "video": Video,
   "workflow": Workflow,
   "wrench": Wrench,
+  "brand-appium": Appium,
+  "brand-argent": Argent,
+  "brand-github": GitHub,
+  "brand-maestro": Maestro,
 };
 
 type Props = {
