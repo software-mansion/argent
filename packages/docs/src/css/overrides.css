@@ -237,6 +237,12 @@ td code {
     background-color: var(--swm-sidebar-background);
     background-clip: padding-box;
     padding: 8px 24px;
+    /*
+     * The shared theme reserves a stable scrollbar gutter on the right, which
+     * pushes the menu off centre. The thin scrollbar overlays the right padding
+     * instead, so both sides stay at 24px.
+     */
+    scrollbar-gutter: auto;
   }
 
   .theme-doc-sidebar-container nav.menu > ul.menu__list {
