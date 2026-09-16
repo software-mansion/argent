@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 2
 sidebar_label: Sessions and machines
 title: Sessions and machines
 sidebar_custom_props:
@@ -33,6 +33,10 @@ When a machine is returned, Argent Cloud erases every simulator on it and rebuil
 A background daemon on your computer keeps the session alive. If you send no command for 15 minutes, the daemon releases the machine on its own. Every `sim-remote` command that talks to the machine resets this clock. During a long test run that does not go through `sim-remote`, run `sim-remote keepalive 30m` to keep the machine for 30 minutes.
 
 A session holds a machine for at most 24 hours.
+
+## Isolation and data
+
+Software Mansion assigns each physical machine to one customer. Each session runs in its own operating system account on its own disk volume. When a session ends, Argent Cloud destroys the volume and rebuilds it from a clean image. Your app binaries, simulator state and files do not survive the session. Argent Cloud does not record the screen video, the keystrokes or the app content. Argent Cloud keeps the operational logs of the machine for 14 days.
 
 ## Example instructions
 
