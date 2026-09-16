@@ -13,6 +13,15 @@ function getCallback(args: unknown[]): ExecFileCallback {
   return callback as ExecFileCallback;
 }
 
+// Without this the real `simulatorServerBinaryPath()` runs, and it throws when
+// packages/native-devtools-ios/bin/<platform>/simulator-server is absent — which
+// it is on a clean checkout, since the downloaded binaries are gitignored. The
+// warm-up would then silently not spawn and the ordering assertion below would
+// fail in CI while passing on a developer machine.
+vi.mock("@argent/native-devtools-ios", () => ({
+  simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
+}));
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -42,6 +51,19 @@ vi.mock("../src/blueprints/ax-service", () => ({
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+
+// boot-device also spawns the simulator-server `hid_warmup` one-shot (#932).
+// These assertions are about the boot sequence, so drop just that one spawn
+// rather than letting it shift every fixed index.
+const bootSequenceCalls = (): [string, string[]][] =>
+  mockExecFile.mock.calls.filter(
+    ([, args]) => !(Array.isArray(args) && args[0] === "hid_warmup")
+  ) as [string, string[]][];
+const warmUpCalls = (): [string, string[]][] =>
+  mockExecFile.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "hid_warmup") as [
+    string,
+    string[],
+  ][];
 
 describe("boot-device — iOS path", () => {
   // The iOS path is only reachable on darwin (boot-device now refuses iOS
@@ -111,7 +133,7 @@ describe("boot-device — iOS path", () => {
       "11111111-1111-1111-1111-111111111111"
     );
 
-    expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
+    expect(bootSequenceCalls().map(([file, args]) => [file, args])).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
       ["xcrun", ["simctl", "bootstatus", "11111111-1111-1111-1111-111111111111", "-b"]],
       [
@@ -132,15 +154,38 @@ describe("boot-device — iOS path", () => {
         transport: "unix",
       }
     );
+    // Both of these are ordering facts, so look calls up by what they are
+    // rather than by position — an added spawn must not silently re-point a
+    // fixed index at the wrong call.
+    const execOrderOf = (label: string, match: (args: string[]) => boolean): number => {
+      const i = mockExecFile.mock.calls.findIndex(
+        ([, args]) => Array.isArray(args) && match(args as string[])
+      );
+      expect(i, `no exec call for ${label}`).toBeGreaterThanOrEqual(0);
+      return mockExecFile.mock.invocationCallOrder[i]!;
+    };
+    const bootstatusAt = execOrderOf("bootstatus", (a) => a.includes("bootstatus"));
+    const openAt = execOrderOf("open Simulator.app", (a) => a.includes("Simulator.app"));
+    const bootAt = execOrderOf("simctl boot", (a) => a.includes("simctl") && a.includes("boot"));
+    const warmUpAt = execOrderOf("hid_warmup", (a) => a[0] === "hid_warmup");
+
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
     // only reachable once the simulator is fully up) and BEFORE `open`, so
     // the UI reflects the injected state on first paint.
-    expect(resolveService.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mockExecFile.mock.invocationCallOrder[1]
-    );
-    expect(resolveService.mock.invocationCallOrder[0]).toBeLessThan(
-      mockExecFile.mock.invocationCallOrder[2]
-    );
+    const nativeDevtoolsAt = resolveService.mock.invocationCallOrder[0]!;
+    expect(nativeDevtoolsAt).toBeGreaterThan(bootstatusAt);
+    expect(nativeDevtoolsAt).toBeLessThan(openAt);
+    // The HID warm-up is the opposite: it has to start BEFORE `simctl boot`,
+    // because the window it protects opens ~1.0s after boot and the one-shot
+    // needs to already be retrying its attach by then (#932). Starting it after
+    // the boot returns loses the race on a fast host.
+    expect(warmUpAt).toBeLessThan(bootAt);
+    // The one-shot needs the device it is protecting and the set that owns it;
+    // a warm-up pointed at the wrong device silently protects nothing.
+    const warmUpArgs = mockExecFile.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args[0] === "hid_warmup"
+    )?.[1];
+    expect(warmUpArgs).toEqual(["hid_warmup", "--id", "11111111-1111-1111-1111-111111111111"]);
     // The (re)boot wipes launchd's DYLD_INSERT_LIBRARIES; boot-device must
     // force a re-apply so a cached/latched native-devtools service can't leave
     // the env unset (which would make the next launch uninjected).
@@ -163,7 +208,7 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    const calls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    const calls = bootSequenceCalls().map(([file, args]) => [file, args]);
     // The core still boots (simctl boot + bootstatus) and the default device is
     // set, but `open -a Simulator.app` is skipped — the GUI window never opens.
     expect(calls).toEqual([
@@ -207,7 +252,7 @@ describe("boot-device — iOS path", () => {
       else process.env.ARGENT_SIMULATOR_NO_WINDOW = prev;
     }
 
-    const calls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    const calls = bootSequenceCalls().map(([file, args]) => [file, args]);
     expect(calls).not.toContainEqual(["open", ["-a", "Simulator.app"]]);
   });
 
@@ -293,7 +338,7 @@ describe("boot-device — iOS path", () => {
       expect(result.message).toContain("simctl spawn timed out");
     }
     // Opening Simulator.app would imply success — must not happen.
-    const calls = mockExecFile.mock.calls.map(([file]) => file);
+    const calls = bootSequenceCalls().map(([file]) => file);
     expect(calls).not.toContain("open");
   });
 
@@ -324,7 +369,7 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
+    expect(bootSequenceCalls()[1]?.slice(0, 2)).toEqual([
       "xcrun",
       ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
     ]);
@@ -356,7 +401,12 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "22222222-2222-2222-2222-222222222222"
     );
-    const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    // A forced reboot is a real boot, so the HID window is winnable again and
+    // the warm-up must run for it.
+    expect(warmUpCalls().map(([, args]) => args)).toEqual([
+      ["hid_warmup", "--id", "22222222-2222-2222-2222-222222222222"],
+    ]);
+    const execCalls = bootSequenceCalls().map(([file, args]) => [file, args]);
     expect(execCalls[0]).toEqual([
       "xcrun",
       ["simctl", "shutdown", "22222222-2222-2222-2222-222222222222"],
@@ -378,11 +428,36 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
 
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    const execCalls = mockExecFile.mock.calls.map(([, args]) => args);
+    const execCalls = bootSequenceCalls().map(([, args]) => args);
     const hasShutdown = execCalls.some(
       (args: unknown[]) => Array.isArray(args) && args[1] === "shutdown"
     );
     expect(hasShutdown).toBe(false);
+    // No boot is happening, so there is no HID window to win: the warm-up
+    // one-shot would only fire release events at a live app for its whole
+    // duration while boot-device waits on it.
+    expect(warmUpCalls()).toHaveLength(0);
+  });
+
+  // `Booted` is the only state that is provably too late. Both of these reach
+  // the `simctl boot` below with a window that may still be open, and gating on
+  // `needsPreBoot` instead would skip the warm-up on both.
+  it.each([
+    ["Booting", [{ udid: "44444444-4444-4444-4444-444444444444", state: "Booting" }]],
+    ["unknown, because the state probe returned nothing", []],
+  ])("still warms up a sim whose state is %s", async (_label, sims) => {
+    listIosSimulatorsMock.mockResolvedValue(sims);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const tool = createBootDeviceTool({ resolveService } as unknown as Registry);
+
+    await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
+
+    expect(warmUpCalls().map(([, args]) => args)).toEqual([
+      ["hid_warmup", "--id", "44444444-4444-4444-4444-444444444444"],
+    ]);
   });
 
   // A tvOS reboot orphans the host-side tvos-hid-daemon (it holds a
@@ -392,6 +467,30 @@ describe("boot-device — iOS path", () => {
   // it against the fresh boot. The ax-service self-heals (it runs inside the
   // sim and the reboot kills it), so it doesn't need this.
   const TV_UDID = "77777777-7777-7777-7777-777777777777";
+
+  // The one case where spawning the warm-up is not merely wasted but actively
+  // dangerous: a tvOS sim has no main-screen digitizer, and an Indigo event
+  // naming a target that is not in the service table raises
+  // NSInternalInconsistencyException and takes `backboardd` down with it.
+  // `Shutdown` is used deliberately — every other gate would let this through,
+  // so the tvOS guard is the only thing under test.
+  it("never spawns the HID warm-up for a tvOS sim, even booting from Shutdown", async () => {
+    listIosSimulatorsMock.mockResolvedValue([
+      { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const tool = createBootDeviceTool({
+      resolveService,
+      disposeService: vi.fn(async () => undefined),
+    } as unknown as Registry);
+
+    await tool.execute!({}, { udid: TV_UDID });
+
+    expect(warmUpCalls()).toEqual([]);
+  });
 
   it("disposes the cached TvControl service when a tvOS sim is booted from Shutdown", async () => {
     listIosSimulatorsMock.mockResolvedValueOnce([

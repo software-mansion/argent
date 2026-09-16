@@ -20,6 +20,14 @@ import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
+const ANDROID = "emulator-5554";
+// The real wrapped shape the Android tree source raises: the registry's service
+// tag inside the tree source's own prefix, around the reason the author needs.
+const HELPER_UNAVAILABLE =
+  "the argent android helper is unavailable: [AndroidDevtools:emulator-5554] the argent android " +
+  "helper could not start on emulator-5554 even after reinstalling it: am instrument exited " +
+  "before becoming ready: INSTRUMENTATION_STATUS: Error=Unable to find instrumentation info for: " +
+  "ComponentInfo{com.argent.androiddevtools/.SnapshotInstrumentation}";
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
@@ -47,7 +55,7 @@ function mockRegistry(): Registry {
   } as unknown as Registry;
 }
 
-async function recordTap(point: { x: number; y: number }) {
+async function recordTapOn(udid: string, point: { x: number; y: number }) {
   const tool = createFlowAddStepTool(mockRegistry());
   return tool.execute(
     {},
@@ -55,9 +63,13 @@ async function recordTap(point: { x: number; y: number }) {
       name: FLOW,
       project_root: tmpDir,
       command: "gesture-tap",
-      args: JSON.stringify({ udid: DEVICE, ...point }),
+      args: JSON.stringify({ udid, ...point }),
     }
   );
+}
+
+async function recordTap(point: { x: number; y: number }) {
+  return recordTapOn(DEVICE, point);
 }
 
 async function recordedSteps() {
@@ -350,6 +362,27 @@ describe("flow-add-step tap selector capture", () => {
     const result = await recordTap({ x: 0.5, y: 0.52 });
 
     expect(result.message).toContain("selector capture failed");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
+  });
+
+  // The reason, and nothing wrapped around it: neither the service tag nor the
+  // tree source's prefix tells the author anything the reason does not, and
+  // every tap of a tree-less recording repeats whatever is said here.
+  it("warns with the bare helper reason on an android tap", async () => {
+    currentTreeData = () => {
+      throw new Error(HELPER_UNAVAILABLE);
+    };
+
+    const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
+
+    // The tag and the tree-source prefix are gone; the device's own reason is not.
+    expect(result.message).toContain(
+      "selector capture failed (the argent android helper could not start on emulator-5554"
+    );
+    expect(result.message).toContain("Error=Unable to find instrumentation info");
+    expect(result.message).toContain("); kept coordinates");
+    expect(result.message).not.toContain("[AndroidDevtools:");
+    expect(result.message).not.toContain("helper is unavailable");
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });
 

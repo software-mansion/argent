@@ -90,6 +90,13 @@ const env = {
   ctx: { artifacts: new ArtifactStore() },
 } as unknown as ActionEnv;
 
+/** The same simulator model, reached over sim-remote instead of locally. */
+const remoteEnv = {
+  device: { platform: "ios-remote", id: "remote:SIM" },
+  signal: undefined,
+  ctx: { artifacts: new ArtifactStore() },
+} as unknown as ActionEnv;
+
 let tmpDir = "";
 let osTmpdir: string;
 let restoreTmpdir: () => void = () => {};
@@ -694,5 +701,63 @@ describe("runSnapshot cropOn", () => {
     expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
     const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
     expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+});
+
+describe("runSnapshot on a remote simulator", () => {
+  it("matches the baseline a local run of the same device class committed", async () => {
+    // The key names a device class, not a host: a cloud run must compare
+    // against the committed baseline instead of failing as if none existed,
+    // which would force every baseline to be captured and reviewed twice.
+    const seeded = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(seeded.snapshotKey).toBe("home__ios-390x844");
+
+    const r = await runSnapshot(remoteEnv, opts());
+
+    expect(r.status).toBe("pass");
+    // A clean pass carries no key or artifacts, so the reason names the file
+    // that was actually compared: the one the local run wrote.
+    expect(r.reason).toContain("home__ios-390x844.png");
+    // One file: the remote run neither wrote nor demanded an `ios-remote` copy.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual(["home__ios-390x844.png"]);
+  });
+
+  it("rewrites the local baseline in place under updateBaselines, and says so", async () => {
+    // The fold works in the write direction too: a remote refresh replaces the
+    // file a local run seeded instead of writing a copy beside it, so the
+    // reason is the only place the report shows a cloud capture took over.
+    const local = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(local.reason).toBe("baseline written (home__ios-390x844.png)");
+    const seeded = await fs.readFile(baselinePath());
+
+    // Same IHDR, so the same key; the trailing bytes make the capture distinct.
+    await fs.writeFile(h.shotPath, Buffer.concat([seeded, Buffer.from("remote capture")]));
+    const remote = await runSnapshot(remoteEnv, opts({ updateBaselines: true }));
+
+    expect(remote.status).toBe("pass");
+    expect(remote.snapshotKey).toBe(local.snapshotKey);
+    expect(remote.reason).toBe("baseline updated from a remote simulator (home__ios-390x844.png)");
+    const rewritten = await fs.readFile(baselinePath());
+    expect(rewritten).not.toEqual(seeded);
+    expect(rewritten).toEqual(await fs.readFile(h.shotPath));
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual(["home__ios-390x844.png"]);
+  });
+
+  it("keys a crop the same way a local run does", async () => {
+    // The fold applies to the whole key, not just its uncropped spelling.
+    await writeRealPng(h.shotPath, 100, 200);
+    h.cropFrame = { x: 0.25, y: 0.25, width: 0.5, height: 0.25 };
+    const cropOn = { text: "Header", loose: true };
+
+    const local = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+    const remote = await runSnapshot(remoteEnv, opts({ cropOn }));
+
+    expect(local.snapshotKey).toContain("__ios-100x200-crop-");
+    expect(remote.status).toBe("pass");
+    expect(remote.reason).toContain(`${local.snapshotKey}.png`);
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual([`${local.snapshotKey}.png`]);
   });
 });

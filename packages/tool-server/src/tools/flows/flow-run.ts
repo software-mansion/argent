@@ -21,6 +21,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
   blockSteps,
@@ -232,6 +233,13 @@ export interface StepReport {
    * exporting them (the CLI's `--output`) name files by it.
    */
   snapshotKey?: string;
+  /**
+   * Set beside `snapshotKey` when a remote simulator took the capture. The key
+   * names a device class, not a host, so a local run of the same class reports
+   * the same one, and a client naming files by it needs this to keep the two
+   * runs' files apart.
+   */
+  snapshotRemote?: true;
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
   scriptLog?: string;
@@ -490,13 +498,18 @@ async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): 
  * handshake in the factory) or it can't run on this device. Hence a one-shot
  * probe, not a poll.
  */
-async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Promise<boolean> {
+async function androidDevtoolsReady(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<{ ready: boolean; reason?: string }> {
   try {
     const ref = androidDevtoolsRef(device);
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-    return api.isReady();
-  } catch {
-    return false;
+    return { ready: api.isReady() };
+  } catch (err) {
+    // The factory's own message says whether the helper is missing, could not
+    // be installed or refused to start; a boolean throws all three away.
+    return { ready: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -543,7 +556,10 @@ async function treeSourceGate(
       );
     }
   }
-  if (device.platform === "ios" && !signal?.aborted) {
+  // Both iOS simulator platforms gate the same way: `waitForNativeDevtools`
+  // resolves the service through `nativeDevtoolsRef(device)`, which the
+  // blueprint serves over TCP for a remote sim.
+  if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {
       // Every reason names the bundle id, so the prefix must not: doubled, it
@@ -552,12 +568,11 @@ async function treeSourceGate(
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
-    const ready = await androidDevtoolsReady(registry, device);
+    const { ready, reason } = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return (
-        `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-        `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
-      );
+      return reason
+        ? `the argent android helper is unavailable: ${reason}`
+        : `the argent android helper is unavailable (full-hierarchy source for testID selectors).`;
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
@@ -596,9 +611,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
+    // Name the platform the AUTHOR can write: "ios-remote" is not a launch-map
+    // key, so quoting it would send the reader to a key the parser rejects.
     return {
       ok: false,
-      reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+      reason: `no app id declared for platform "${authoringPlatform(device.platform)}" — add a launch entry for it`,
     };
   }
   // The previous app is terminating and the new one has not started, so a
@@ -1348,8 +1365,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
       // override independent of the app, so an e2e flow's leading launch step
       // (relaunch + settle) doubles as propagation headroom. No-op (returns
-      // false) on chromium/vega; restored on teardown.
-      const statusBarPinned = device !== null && (await pinStatusBar(device));
+      // false) on chromium/vega and on a run already cancelled; restored on
+      // teardown.
+      const statusBarPinned = device !== null && (await pinStatusBar(device, signal));
 
       // The chromium equivalent: front the page so a backgrounded window doesn't
       // throttle rendering — wheel-event acks (scroll steps) stall on a throttled
@@ -2050,11 +2068,11 @@ async function execWhenStep(
 
   let met: boolean;
   if (step.condition.kind === "platform") {
-    // "ios-remote" is an iOS simulator driven through sim-remote — for a
-    // platform guard it IS ios. The parser rejects "ios-remote" as a guard
-    // spelling, so without this fold iOS-only blocks would silently skip there.
+    // A guard names an authoring platform ({@link authoringPlatform}): the
+    // parser rejects "ios-remote" as a guard spelling, so without the fold
+    // every iOS-only block would silently skip on a remote simulator.
     const guardEnv = deviceEnv(state);
-    const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
+    const platform = authoringPlatform(guardEnv.device.platform);
     met = platform === step.condition.platform;
   } else {
     const probe = await probeWhenCondition(deviceEnv(state), step.condition);
@@ -2379,6 +2397,9 @@ async function execLeafStep(
           status: r.status,
           reason: r.reason,
           snapshotKey: r.snapshotKey,
+          ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
+            ? { snapshotRemote: true as const }
+            : {}),
           artifacts: r.artifacts,
         };
       } catch (err) {

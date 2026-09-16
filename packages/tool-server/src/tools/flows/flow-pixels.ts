@@ -174,6 +174,12 @@ export const PIXEL_CAPTURE_TIMEOUT_MS = 2_000;
 const IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
 
 /**
+ * Ceiling for a warm capture on a remote simulator. Every capture is a MoQ
+ * round trip to another machine, where a local one reads a stream on this one.
+ */
+const REMOTE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
+
+/**
  * Per-capture bound — a ceiling, not a wait, so granting more than a route needs
  * costs nothing until it is actually spent.
  *
@@ -186,6 +192,15 @@ const IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
 export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture: boolean): number {
   if (isIosPhysicalDevice(device)) {
     return IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS;
+  }
+  // Every remote capture is a MoQ round trip to another machine, which the
+  // localhost warm bound does not allow for. `waitForIdle` needs two
+  // comparable captures per interval, so one timed-out read costs a whole
+  // settle round. The first capture keeps the wider first-capture ceiling as
+  // unused headroom, like a tvOS simulator: the MoQ request never enters the
+  // first-frame poll that ceiling is sized for.
+  if (device.platform === "ios-remote" && !firstCapture) {
+    return REMOTE_PIXEL_CAPTURE_TIMEOUT_MS;
   }
   const warmFromTheStart = device.platform === "chromium" || device.platform === "vega";
   return firstCapture && !warmFromTheStart

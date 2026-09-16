@@ -15,6 +15,7 @@ import {
   appendStepToFlow,
   holdsOutputReference,
   appIdForPlatform,
+  authoringPlatform,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -102,20 +103,25 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
 }
 
 function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
-  const expected = REPLAY_TREE_SOURCES[platform];
+  // Keyed by authoring platform: a remote simulator reads the same iOS full
+  // hierarchy a local one does, so it earns the same caveat.
+  const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 
 // `resolveDevice` classifies the id by shape and never throws, so no guard.
+// The clauses below name the tree an author reads, so this is the AUTHORING
+// platform: a remote simulator is an iOS simulator reached over a tunnel, and
+// both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
-  return typeof udid === "string" ? resolveDevice(udid).platform : undefined;
+  return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
 }
 
 /**
  * Fallback for a platform the clauses below do not name. Unreachable today: a
  * determinate verdict needs `fetchFlowTree`, which answers only on ios,
- * android, chromium and vega.
+ * ios-remote, android, chromium and vega, and the clauses read ios-remote as ios.
  */
 const UNSUPPORTED_PLATFORM = {
   divergence: "The recorder and the runner read different projections of the screen.",
@@ -391,6 +397,10 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 // would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
+  // This caveat rides on a reason whose remedy repairs a source that is DOWN,
+  // which is the only kind of silence there is: every machine this clause
+  // covers - a local simulator, a remote one, a physical device - has a tree
+  // source, so a relaunch can always bring the tree back.
   return (
     ". One thing that reason cannot see is this step: the probe predicts an `await:`/`assert:` " +
     "directive, and no directive takes a bundleId, so neither this probe nor the runner accepts " +
@@ -485,7 +495,7 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
-  // No try/catch: an id with no flow tree throws inside `fetchFlowTree`, which
+  // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
   // the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
   // Giving up must STOP the loop, not just stop waiting for it. `settleWithin`
@@ -605,6 +615,16 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 }
 
 /**
+ * The reason without the layers wrapped around it: the registry tags a service
+ * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
+ * sentence, neither of which tells the author anything the reason does not.
+ */
+function innermostTreeReason(message: string): string {
+  const unwrapped = /helper is unavailable:\s*(.+)/s.exec(message)?.[1] ?? message;
+  return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -668,8 +688,11 @@ async function captureTapSelector(
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // The bare reason: a remedy belongs to the error that knows one, and every
+    // tap of a recording taken without a tree repeats whatever is said here.
     return {
-      warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,
+      warning: `selector capture failed (${innermostTreeReason(message)}); kept coordinates`,
     };
   }
 }

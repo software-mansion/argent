@@ -8,6 +8,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
+import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import { nodeText } from "../../utils/ui-tree-match";
 import { describeIosDevice } from "../describe/platforms/ios-device";
@@ -690,9 +691,14 @@ async function explainTargetingFailure(
 }
 
 /**
- * The `xcrun simctl terminate` command an agent can run against this device, or
+ * The simctl terminate command an agent can run against this device, or
  * undefined when it must not be offered. Two targeting reasons quote it to clear
  * a competing connected app, because argent has no terminate tool.
+ *
+ * A remote simulator is in no local device set, so `xcrun simctl` cannot reach
+ * it and the command goes through `sim-remote simctl` instead. That one spells
+ * out the udid: sim-remote takes it without the `remote:` prefix, and the prefixed
+ * id is the one the agent knows the device by.
  *
  * simctl scopes each operation to one device set, so a UDID from a configured
  * `ios.additionalDeviceSets` set (Radon IDE's, for example) needs `--set` to
@@ -714,6 +720,9 @@ async function explainTargetingFailure(
  * failing `await:` rebuilds its reason once per poll.
  */
 async function terminateCommand(device: DeviceInfo): Promise<string | undefined> {
+  if (device.platform === "ios-remote") {
+    return `sim-remote simctl terminate ${stripRemotePrefix(device.id)} <bundleId>`;
+  }
   try {
     const { prefix } = await simctlTargetForUdid(device.id);
     return `xcrun ${prefix.join(" ")} terminate <udid> <bundleId>`;
@@ -752,9 +761,10 @@ export const MAX_LISTED_APPS = 2;
  * path must fit, enforced by `keeps every targeting reason short enough to
  * repeat per step`.
  *
- * Measured on the raw message, before the prefix a caller adds, and without the
- * `--set <dir>` that an `ios.additionalDeviceSets` device adds to its terminate
- * command (see {@link terminateCommand}).
+ * Measured on the raw message, before the prefix a caller adds, and without what
+ * a terminate command adds beyond the plain one: the `--set <dir>` of an
+ * `ios.additionalDeviceSets` device, or the udid a remote simulator's command
+ * spells out (see {@link terminateCommand}).
  *
  * The guard covers {@link unreadableHierarchyReason} too, which the recorder
  * repeats once per captured tap and which sets the ceiling: 775 characters for

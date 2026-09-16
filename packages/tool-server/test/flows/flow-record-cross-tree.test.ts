@@ -32,7 +32,9 @@ vi.mock("../../src/tools/flows/flow-actions", async () => {
   };
 });
 
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+// Spread the original: only the fetch is stubbed.
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => {
     fetchCount += 1;
     return fetchRunnerTree();
@@ -71,6 +73,7 @@ const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
 const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
 const VEGA = "amazon-4a27df03c9777152"; // amazon- prefix → classifies vega
+const IOS_REMOTE = `remote:${IOS}`; // remote: prefix → classifies ios-remote
 
 const FULL: DescribeNode["frame"] = { x: 0, y: 0, width: 1, height: 1 };
 const ROW: DescribeNode["frame"] = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
@@ -752,6 +755,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
+  it("iOS: a remote simulator reads as iOS, not as an unnamed platform", async () => {
+    // A cloud sim resolves as platform "ios-remote", but both its trees are the
+    // iOS ones — so the prose is the iOS prose. Read raw, "ios-remote" matches
+    // no clause and the author gets UNSUPPORTED_PLATFORM, which says no tool on
+    // this platform is known.
+    serveTree(iosRunnerTree(IOS_ACCESSIBLE_CONTAINER));
+    await startRecording("iosremote");
+
+    const result = await recordWait("iosremote", {
+      udid: IOS_REMOTE,
+      condition: "visible",
+      selector: { text: "Total $5.00" },
+    });
+    const warning = warningOf(result, "iosremote");
+
+    expect(warning).toContain(
+      "The recorder reads the accessibility tree and the runner reads the full native view " +
+        "hierarchy; they overlap but neither contains the other."
+    );
+    expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
+    expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
+    // The fallback the fold exists to keep the author out of.
+    expect(warning).not.toContain("No read-only tool is known to report");
+  });
+
   // Whether the AX tree reports an `alpha: 0` view is a device question; this is not.
   it("iOS: the runner's projection drops a transparent view", () => {
     expect(findAll(iosRunnerTree([iosLabel("Continue")]), { text: "Continue" })).toHaveLength(1);
@@ -1210,16 +1238,16 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
    * build that reason with the real function. A hand-copied one is what let the
    * caveat go on describing a message production had stopped emitting.
    */
-  async function realIosTargetingFailure(): Promise<Error> {
+  async function realIosTargetingFailure(udid = IOS): Promise<Error> {
     // Seed the device set so `terminateCommand` answers from the memo instead of
     // probing simctl.
-    rememberDeviceSet(IOS, null);
+    rememberDeviceSet(udid, null);
     const api = {
       listConnectedBundleIds: () => [] as string[],
       getAppState: vi.fn(),
     } as unknown as NativeDevtoolsApi;
     const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
-    return (await queryFullHierarchyTree(registry, resolveDevice(IOS)).catch(
+    return (await queryFullHierarchyTree(registry, resolveDevice(udid)).catch(
       (err: unknown) => err
     )) as Error;
   }
@@ -1283,6 +1311,35 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warningOf(result, "iosblindbundle")).toContain(
       "the `bundleId` on this step reached the live wait only"
     );
+  });
+
+  it("offers the iOS repair on a remote simulator, whose source is real", async () => {
+    // `ios-remote` folds to iOS for the PROSE above, and the repair is a machine
+    // question — but the machine reads the iOS full hierarchy too, over the
+    // sim-remote tunnel. So a silent read there is an outage like any other, and
+    // the iOS remedy is the one that repairs it.
+    const failure = await realIosTargetingFailure(IOS_REMOTE);
+    fetchRunnerTree = async () => {
+      throw failure;
+    };
+    await startRecording("remoteblind");
+
+    const result = await recordWait("remoteblind", {
+      udid: IOS_REMOTE,
+      condition: "visible",
+      selector: { text: "General" },
+    });
+    const warning = warningOf(result, "remoteblind");
+
+    // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice,
+    // which the iOS source writes into the reason it throws.
+    expect(warning).toContain("is UNKNOWN, not known-bad");
+    // An outage, so the author is told to wait for the source to come back.
+    expect(warning).toContain("re-probe once that tree source is back");
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
+    expect(warning).toContain("no directive takes a bundleId");
+    expect(await recordedSteps("remoteblind")).toHaveLength(1);
   });
 
   // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
@@ -2083,15 +2140,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // The wait tool itself now accepts a remote sim: it polls the same AX tree
-  // through describeIos, which the ax-service blueprint routes over the
-  // sim-remote tunnel. The recorder's tables still have no `ios-remote` arm
-  // (FLOW_TREE_SOURCES in flow-tree.ts, REPLAY_TREE_SOURCES in flow-add-step.ts),
-  // so the re-probe now REACHES them — the flow tools declare no capability at
-  // all, so nothing gates a remote udid out. `fetchTree` throws its
-  // not-supported error there, the recorder catches it, and the step records
-  // with the UNKNOWN-verdict warning rather than a known-bad one. Giving both
-  // tables an `ios-remote` arm is what would let the re-probe actually verify.
+  // The wait tool itself accepts a remote sim: it polls the same AX tree through
+  // describeIos, which the ax-service blueprint routes over the sim-remote
+  // tunnel. The re-probe reaches the recorder's tables too — the flow tools
+  // declare no capability at all, so nothing gates a remote udid out — and both
+  // tables answer for one: REPLAY_TREE_SOURCES through the authoring fold, and
+  // FLOW_TREE_SOURCES with its own `ios-remote` arm onto the iOS full
+  // hierarchy. This file stubs that fetch, so the determinate verdict the arm
+  // buys is pinned in flow-remote-tree.test.ts, which reads the real table.
   it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toEqual({ simulator: true });

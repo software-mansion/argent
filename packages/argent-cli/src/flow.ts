@@ -39,6 +39,8 @@ export interface StepReport {
   depth?: number;
   /** Baseline key stem, on artifact-bearing snapshot steps. */
   snapshotKey?: string;
+  /** Set beside `snapshotKey` when a remote simulator took the capture; a local run shares that key. */
+  snapshotRemote?: boolean;
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). Arrives as
    * artifact handles; by render time each is a string — a durable local copy
@@ -590,7 +592,9 @@ async function claimExportDirName(
  * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
  * stem (derived from the CLI-resolved `flowPath`, never from the wire report)
  * and `<key>` is the snapshot's baseline key, so a run that hits several
- * flows/snapshots can't clobber itself. Stems are unique only per directory, so
+ * flows/snapshots can't clobber itself. A remote simulator's capture lands at
+ * `<key>-remote-<role>.png`, because its key is the one a local run of the same
+ * device class reports. Stems are unique only per directory, so
  * when a different flow file already owns `<flow>/` (see EXPORT_SOURCE_MARKER)
  * this run lands in the deterministic `<flow>-<pathhash>/` instead, and when
  * nothing at all can be claimed the export is skipped with a warning rather
@@ -654,7 +658,13 @@ export async function exportFailureArtifacts(
         // next run to redirect away from.
         dir = path.join(outputDir, dirName);
       }
-      const dest = path.join(dir, `${key}-${role}.png`);
+      // A remote simulator reports the key a local run of the same device class
+      // does, so its files carry a marker. Without it, a local run and a remote
+      // run exported into one --output overwrite each other's evidence.
+      const dest = path.join(
+        dir,
+        `${key}${s.snapshotRemote === true ? "-remote" : ""}-${role}.png`
+      );
       // Even if the key and stem patterns are ever weakened, the copy stays
       // inside --output. Also covers `role`, the remaining server-supplied piece
       // of the destination. It judges the real destination, so it can only run

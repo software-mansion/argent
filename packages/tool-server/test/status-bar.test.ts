@@ -41,12 +41,22 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// The tvOS probe lists the orchestrator's devices through the same CLI, so it is
+// replaced to keep the spawn counts below about `status_bar` alone. Only the
+// probe: `simctlStatusBar` still reaches the execFile mock above.
+vi.mock("../src/utils/sim-remote", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/utils/sim-remote")>("../src/utils/sim-remote");
+  return { ...actual, isRemoteTvOsSimulator: vi.fn(async () => false) };
+});
+
 // The suite-wide setup file (test/setup/stub-status-bar.ts) replaces this module
 // so other tests never shell out; this file is the one place that tests the real
 // implementation (against the execFile mock above), so opt back in.
 vi.unmock("../src/utils/status-bar");
 
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
+import { isRemoteTvOsSimulator } from "../src/utils/sim-remote";
 
 const ANDROID_DEVICE: DeviceInfo = {
   id: "emulator-5554",
@@ -65,6 +75,15 @@ const IOS_PHYSICAL_DEVICE: DeviceInfo = {
   platform: "ios",
   kind: "device",
 };
+
+const IOS_REMOTE_SIMULATOR: DeviceInfo = {
+  id: "remote:1B48C3B4-8E17-4E92-A4A4-4B1AC3F0BD7B",
+  platform: "ios-remote",
+  kind: "simulator",
+};
+
+/** The udid the `sim-remote` CLI sees: the `remote:` prefix is stripped first. */
+const REMOTE_UDID = "1B48C3B4-8E17-4E92-A4A4-4B1AC3F0BD7B";
 
 /** Shell payloads of every `adb -s <serial> shell <cmd>` call, in order. */
 function shellCalls(): string[] {
@@ -114,6 +133,138 @@ describe("pinStatusBar (ios)", () => {
   });
 });
 
+describe("pinStatusBar (ios-remote)", () => {
+  it("pins a remote simulator through the sim-remote CLI and returns true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await pinStatusBar(IOS_REMOTE_SIMULATOR)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const [cmd, args] = execFileMock.mock.calls[0]!;
+    expect(cmd).toBe("sim-remote");
+    // The `remote:` prefix is the tool-server's, not the orchestrator's.
+    expect(args.slice(0, 3)).toEqual(["simctl", "status_bar", REMOTE_UDID]);
+  });
+
+  it("overrides a remote simulator to the same values as a local one", async () => {
+    // A remote run compares against the baseline a local run of the same
+    // capture geometry committed, so the two must pin the bar to identical
+    // pixels. A clock that drifted between the arms would fail a `cropOn`
+    // snapshot that includes the bar; the differ masks the band only for a
+    // full-screen one. Compared against the local argv rather than a restated
+    // literal, so moving either arm's values without the other fails here.
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await pinStatusBar(IOS_SIMULATOR);
+    const local = (execFileMock.mock.calls[0]![1] as string[]).slice(3);
+    execFileMock.mockClear();
+
+    await pinStatusBar(IOS_REMOTE_SIMULATOR);
+    const remote = (execFileMock.mock.calls[0]![1] as string[]).slice(3);
+
+    expect(remote).toEqual(local);
+    // Both really carry the override, so an empty-vs-empty comparison cannot pass.
+    expect(local).toContain("--time");
+  });
+
+  it("reports pinned when the undo fails too, so the run-end restore fires", async () => {
+    // One dead tunnel fails both calls. Unlike a local `xcrun`, the override
+    // crossed a network: the CLI can fail on a response whose request the far
+    // host already applied, and a cloud simulator is shared, so a stuck pin
+    // outlives this run. Report `true` so the caller's teardown retries.
+    execFileMock.mockReturnValue(new Error("sim-remote: connection closed"));
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+  });
+
+  it("undoes a partially applied remote pin and reports unpinned", async () => {
+    // A cloud hiccup must not fail the run, and the caller schedules no
+    // run-end restore after a `false` — so the undo has to happen here or the
+    // bar stays overridden.
+    execFileMock.mockImplementation((_cmd: string, args: string[]) =>
+      args.includes("override") ? new Error("sim-remote: request timed out") : { stdout: "" }
+    );
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+    const argvs = execFileMock.mock.calls.map(([, args]) => args as string[]);
+    expect(argvs.some((a) => a.includes("clear"))).toBe(true);
+  });
+
+  it("bounds every remote call well under the CLI's 30s default", async () => {
+    // One unresponsive tunnel fails the override, its undo and the teardown
+    // restore in turn. Under the default each waited 30s, holding a two-step
+    // run for 90s; a healthy call takes 0.15-0.25s on a cloud simulator.
+    execFileMock.mockReturnValue(new Error("sim-remote: timed out"));
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+
+    const timeouts = execFileMock.mock.calls.map(
+      ([, , options]) => (options as { timeout?: number }).timeout
+    );
+    expect(timeouts).toEqual([5_000, 5_000, 5_000]);
+  });
+});
+
+describe("pinStatusBar (cancelled run)", () => {
+  it("pins nothing once the run is cancelled, so no restore is owed", async () => {
+    // A client that disconnected before the run started must not still cost a
+    // pin and its teardown restore - two remote calls a dead tunnel can stall.
+    const cancelled = new AbortController();
+    cancelled.abort();
+
+    for (const device of [IOS_SIMULATOR, IOS_REMOTE_SIMULATOR, ANDROID_DEVICE]) {
+      await expect(pinStatusBar(device, cancelled.signal)).resolves.toBe(false);
+    }
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("still pins when the signal was never aborted", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR, new AbortController().signal)).resolves.toBe(
+      true
+    );
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("remote tvOS simulator", () => {
+  beforeEach(() => {
+    vi.mocked(isRemoteTvOsSimulator).mockClear();
+  });
+
+  it("skips the pin without a status_bar call, so no restore is owed", async () => {
+    // tvOS has no status bar: `simctl status_bar` exits 45 "Operation not
+    // supported" there. Attempting it cost three failing round trips (the
+    // override, its undo, the teardown clear), because the double failure
+    // reports the pin as held.
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValueOnce(true);
+
+    await expect(pinStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+    // The probe shares the status_bar bound, so a dead tunnel cannot stall it for 30s.
+    expect(isRemoteTvOsSimulator).toHaveBeenCalledWith(IOS_REMOTE_SIMULATOR.id, {
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("clears nothing on a remote tvOS simulator and reports it clear", async () => {
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValueOnce(true);
+
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(true);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("never asks the remote probe about a local simulator", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    await pinStatusBar(IOS_SIMULATOR);
+    await restoreStatusBar(IOS_SIMULATOR);
+
+    expect(isRemoteTvOsSimulator).not.toHaveBeenCalled();
+  });
+});
+
 describe("pinStatusBar (android)", () => {
   it("returns true when every demo-mode command succeeds", async () => {
     execFileMock.mockReturnValue({ stdout: "", stderr: "" });
@@ -150,6 +301,26 @@ describe("pinStatusBar (android)", () => {
     });
 
     await expect(pinStatusBar(ANDROID_DEVICE)).resolves.toBe(true);
+  });
+});
+
+describe("restoreStatusBar (ios-remote)", () => {
+  it("clears the override through the sim-remote CLI", async () => {
+    // Without this arm the pin above is never undone: the caller only calls
+    // restore, and a run would leave the cloud simulator frozen at 9:37.
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+
+    expect(await restoreStatusBar(IOS_REMOTE_SIMULATOR)).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const [cmd, args] = execFileMock.mock.calls[0]!;
+    expect(cmd).toBe("sim-remote");
+    expect(args).toEqual(["simctl", "status_bar", REMOTE_UDID, "clear"]);
+  });
+
+  it("reports failure instead of throwing when the CLI fails", async () => {
+    execFileMock.mockReturnValue(new Error("sim-remote: not logged in"));
+
+    await expect(restoreStatusBar(IOS_REMOTE_SIMULATOR)).resolves.toBe(false);
   });
 });
 

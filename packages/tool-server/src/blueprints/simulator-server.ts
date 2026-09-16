@@ -12,6 +12,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
+import { getAndroidSdkRoot } from "@argent/configuration-core";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
@@ -25,7 +26,6 @@ import {
   type ExternalDevice,
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
-import { encodeKey } from "../utils/datachannel-proto";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -64,10 +64,10 @@ export interface SimulatorServerApi {
    *
    * Awaitable because the transports differ in what they can promise. On a
    * provider's server the key rides the WebSocket, which acknowledges it, so
-   * the returned promise rejects on a lost or refused press. The spawned and
-   * MoQ paths have no ack to wait for and resolve as soon as the write is
-   * handed off. The callers await uniformly and each transport reports what it
-   * actually knows.
+   * the returned promise rejects on a lost or refused press. MoQ has no ack,
+   * but a write the session refuses still rejects. The spawned path has
+   * neither and resolves as soon as the write is handed off. The callers await
+   * uniformly and each transport reports what it actually knows.
    */
   pressKey(direction: "Down" | "Up", keyCode: number): Promise<void>;
   /**
@@ -100,13 +100,14 @@ async function buildRemoteInstance(
     pasteText: async (text: string) => {
       await simctlPbcopy(device.id, text);
       // USB HID usage ids: 0xE3 = Left GUI (Cmd), 0x19 = V. Cmd+V on the
-      // remote sim is what actually fires the paste.
+      // remote sim is what actually fires the paste. Pressed through
+      // `api.pressKey`, so a refused key fails like any other refused input.
       const CMD = 0xe3;
       const V = 0x19;
-      await moq.sendControl(encodeKey({ action: "Down", code: CMD }));
-      await moq.sendControl(encodeKey({ action: "Down", code: V }));
-      await moq.sendControl(encodeKey({ action: "Up", code: V }));
-      await moq.sendControl(encodeKey({ action: "Up", code: CMD }));
+      await api.pressKey("Down", CMD);
+      await api.pressKey("Down", V);
+      await api.pressKey("Up", V);
+      await api.pressKey("Up", CMD);
     },
   });
 
@@ -118,8 +119,10 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
-    pressKey: (direction, keyCode) =>
-      moq.sendControl(encodeKey({ action: direction, code: keyCode })),
+    // Through `sendCommand`, as the attached instance below does, so a key the
+    // session refuses reports the same failure as a refused touch instead of a
+    // bare SDK error the caller cannot classify.
+    pressKey: (direction, keyCode) => sendCommand(api, { cmd: "key", code: keyCode, direction }),
     transport,
   };
 
@@ -229,9 +232,15 @@ async function spawnSimulatorServerProcess(
     const args = [subcommand, "--id", udid];
     if (deviceSet) args.push("--device-set", deviceSet);
 
+    // The binary finds adb through ANDROID_HOME, so a configured SDK root
+    // reaches it as that variable.
+    const sdkRoot = subcommand === "ios" ? null : getAndroidSdkRoot();
+    if (sdkRoot)
+      process.stderr.write(`[sim ${udid.slice(0, 8)}] android.sdkRoot → ANDROID_HOME=${sdkRoot}\n`);
     const proc = spawn(BINARY_PATH, args, {
       cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(sdkRoot ? { env: { ...process.env, ANDROID_HOME: sdkRoot } } : {}),
     });
 
     let apiUrl: string | null = null;
