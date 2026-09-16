@@ -29,50 +29,78 @@ Do not run sim-remote logout. I want to keep the machine.
 
 </Prompt>
 
-## Your first session
+## Quick start
 
-1. [Install](/docs/cloud/fundamentals/installation) `sim-remote` and put your API key in the `SIM_ROUTER_API_KEY` variable.
-2. Log in. The command reserves a machine for you and prints its name.
+### Step 1: Install the `sim-remote` CLI
 
-   ```bash
-   sim-remote login
-   ```
+<InstallCommand />
 
-3. List the simulators on your machine and copy the UDID of one of them.
+If `~/.local/bin` is not on your `PATH`, add this line to your shell profile:
 
-   ```bash
-   sim-remote simctl list devices available
-   ```
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
-4. Boot the simulator.
+Confirm the installation:
 
-   ```bash
-   sim-remote simctl boot <UDID>
-   ```
+```bash
+sim-remote --help
+```
 
-5. Wait until the boot completes.
+See [Installation](/docs/cloud/fundamentals/installation) for the prerequisites and the list of release assets.
 
-   ```bash
-   sim-remote simctl bootstatus <UDID> -b
-   ```
+### Step 2: Acquire an API key
 
-6. Install your app. The path is a path on your computer. `sim-remote` uploads the bundle for you.
+We issue one API key per user and send it to you directly. If you do not have a key yet, [contact us](https://argent.swmansion.com/cloud#contact) and we will send you one. Treat the key like a password and do not commit it to a repository.
 
-   ```bash
-   sim-remote simctl install <UDID> ./build/MyApp.app
-   ```
+### Step 3: Authenticate
 
-7. Launch your app.
+Put your API key in the `SIM_ROUTER_API_KEY` variable and log in. The command reserves a machine for you and prints its name.
 
-   ```bash
-   sim-remote simctl launch <UDID> com.example.MyApp
-   ```
+```bash
+export SIM_ROUTER_API_KEY=<your key>
 
-8. Log out when you are done. The command returns the machine to your team.
+sim-remote login
+```
 
-   ```bash
-   sim-remote logout
-   ```
+`sim-remote` keeps the session in memory only and does not write the key to disk.
+
+### Step 4: Boot a simulator
+
+List the simulators on your machine and copy the UDID of one of them.
+
+```bash
+sim-remote simctl list devices available
+```
+
+Boot the simulator and wait until the boot completes.
+
+```bash
+sim-remote simctl boot <UDID>
+sim-remote simctl bootstatus <UDID> -b
+```
+
+### Step 5: Install and launch your app
+
+Install your app. The path is a path on your computer. `sim-remote` uploads the bundle for you.
+
+```bash
+sim-remote simctl install <UDID> ./build/MyApp.app
+```
+
+Launch your app.
+
+```bash
+sim-remote simctl launch <UDID> com.example.MyApp
+```
+
+### Step 6: Log out
+
+Log out when you are done. The command returns the machine to your team.
+
+```bash
+sim-remote logout
+```
 
 ## Next steps
 
