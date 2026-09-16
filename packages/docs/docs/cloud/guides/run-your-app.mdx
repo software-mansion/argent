@@ -6,11 +6,11 @@ sidebar_custom_props:
   icon: smartphone
 ---
 
-You control a hosted simulator with `sim-remote simctl`. The command is a stand-in for `xcrun simctl`. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide runs an app from a local build.
+You control a hosted simulator with `sim-remote simctl`. The command runs `xcrun simctl` on the hosted machine with the same arguments. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide runs an app from a local build.
 
 ## Boot a simulator
 
-List the simulators on your machine and copy the UDID of one of them. Boot it and wait until the boot completes.
+List the simulators on your machine. Copy the UDID of one of them. Boot the simulator. Wait until the boot completes.
 
 ```bash
 sim-remote simctl list devices available

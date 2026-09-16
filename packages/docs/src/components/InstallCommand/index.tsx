@@ -1,5 +1,7 @@
 import React from "react";
+import Link from "@docusaurus/Link";
 import useIsBrowser from "@docusaurus/useIsBrowser";
+import Admonition from "@theme/Admonition";
 import CodeBlock from "@theme/CodeBlock";
 import TabItem from "@theme/TabItem";
 import Tabs from "@theme/Tabs";
@@ -17,9 +19,19 @@ chmod +x sim-remote
 mkdir -p ~/.local/bin && mv sim-remote ~/.local/bin/`,
 };
 
-/* Reads the platform from the browser. Anything that is not a Mac gets the Linux command. */
-function detectPlatform(): Platform {
-  return /Mac/i.test(navigator.userAgent) ? "macos" : "linux";
+/*
+ * Reads the platform from the browser. Windows, Android, iOS and the rest have no
+ * sim-remote binary, so they get a warning above the tabs instead of a guess.
+ */
+function detectPlatform(): Platform | "unsupported" {
+  const agent = navigator.userAgent;
+  if (/Macintosh|Mac OS X/i.test(agent) && !/iPhone|iPad|iPod/i.test(agent)) {
+    return "macos";
+  }
+  if (/Linux/i.test(agent) && !/Android/i.test(agent)) {
+    return "linux";
+  }
+  return "unsupported";
 }
 
 /*
@@ -30,17 +42,27 @@ function detectPlatform(): Platform {
 export default function InstallCommand(): React.ReactElement {
   /* False on the server and during hydration, so both renders agree. */
   const isBrowser = useIsBrowser();
-  const value: Platform = isBrowser ? detectPlatform() : "macos";
+  const detected = isBrowser ? detectPlatform() : "macos";
+  const value: Platform = detected === "unsupported" ? "macos" : detected;
 
   /* The key remounts the tabs so the detected platform becomes the default. */
   return (
-    <Tabs key={value} groupId="platform" defaultValue={value}>
-      <TabItem value="macos" label="macOS (Apple Silicon)">
-        <CodeBlock language="bash">{COMMANDS.macos}</CodeBlock>
-      </TabItem>
-      <TabItem value="linux" label="Linux (x86_64 or arm64)">
-        <CodeBlock language="bash">{COMMANDS.linux}</CodeBlock>
-      </TabItem>
-    </Tabs>
+    <>
+      {detected === "unsupported" ? (
+        <Admonition type="warning">
+          There is no <code>sim-remote</code> binary for this operating system. Run the commands on
+          macOS (Apple Silicon) or Linux. See{" "}
+          <Link to="/docs/cloud/fundamentals/supported-platforms">Supported platforms</Link>.
+        </Admonition>
+      ) : null}
+      <Tabs key={value} groupId="platform" defaultValue={value}>
+        <TabItem value="macos" label="macOS (Apple Silicon)">
+          <CodeBlock language="bash">{COMMANDS.macos}</CodeBlock>
+        </TabItem>
+        <TabItem value="linux" label="Linux (x86_64 or arm64)">
+          <CodeBlock language="bash">{COMMANDS.linux}</CodeBlock>
+        </TabItem>
+      </Tabs>
+    </>
   );
 }

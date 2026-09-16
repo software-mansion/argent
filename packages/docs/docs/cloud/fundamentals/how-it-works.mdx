@@ -18,7 +18,7 @@ A session is your authenticated connection to Argent Cloud. A machine is a hoste
 
 ## Simulator control
 
-`sim-remote simctl` is a stand-in for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. A file path from your computer means nothing on the hosted machine. For this reason, `sim-remote` runs the subcommands that name a file on its own. It uploads the file for `install`, `addmedia` and `push`, and downloads the result for `io screenshot`, `io recordVideo` and `get_app_container`. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
+`sim-remote simctl` runs `xcrun simctl` on the machine. The command has the same subcommands, the same arguments, the same output and the same exit codes. A file path from your computer means nothing on the hosted machine. For this reason, `sim-remote` runs the subcommands that name a file on its own. It uploads the file for `install`, `addmedia` and `push`, and downloads the result for `io screenshot`, `io recordVideo` and `get_app_container`. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
 
 ## Networking
 

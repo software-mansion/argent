@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: rocket
 ---
 
-Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, and CI/CD pipelines on Linux or cloud hosts use it to execute, inspect, debug and test iOS and React Native applications remotely.
+Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use it to run iOS and React Native applications remotely. CI/CD pipelines on Linux or cloud hosts use it in the same way. Both can execute, inspect, debug and test the applications.
 
 <Prompt>
 {`
@@ -35,7 +35,7 @@ Do not run sim-remote logout. I want to keep the machine.
 
 <InstallCommand />
 
-If `~/.local/bin` is not on your `PATH`, add this line to your shell profile:
+If `~/.local/bin` is not on your `PATH`, add this line to your shell profile. Run the same line in the current shell, so the next command finds the binary:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"

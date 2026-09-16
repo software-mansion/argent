@@ -43,7 +43,9 @@ export default function useProductSwitcherItem(): PropSidebarItemHtml {
       }
       // `path` is already prefixed with the site's baseUrl.
       const href = mainDoc.path.startsWith(baseUrl) ? mainDoc.path : `${baseUrl}${mainDoc.path}`;
-      const current = product.id === active.id ? ' aria-current="page"' : "";
+      // "true" and not "page": the link points at the main page of the product, and the
+      // reader may be on another page of the same product.
+      const current = product.id === active.id ? ' aria-current="true"' : "";
       return `<li><a href="${escapeHtml(href)}"${current}>${escapeHtml(product.label)}</a></li>`;
     })
     .join("");

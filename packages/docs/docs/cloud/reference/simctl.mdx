@@ -10,7 +10,7 @@ sidebar_custom_props:
 sim-remote simctl <SUBCOMMAND> [ARGS...]
 ```
 
-`sim-remote simctl` runs `xcrun simctl` on the machine. The subcommand names, the arguments, the options, the output and the exit codes are the ones of `simctl`. `sim-remote simctl help [SUBCOMMAND]` shows the usage of `simctl`.
+`sim-remote simctl` runs `xcrun simctl` on the machine. For a subcommand that `sim-remote` forwards without changes, the subcommand name, the arguments, the options, the output and the exit codes are the ones of `simctl`. The subcommands in the table below are different. `sim-remote` runs them on its own, accepts only the forms in the table, and can print an error of its own. `sim-remote simctl help [SUBCOMMAND]` shows the usage of `simctl`.
 
 ## Subcommands with local files
 

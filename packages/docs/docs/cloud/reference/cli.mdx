@@ -18,16 +18,27 @@ sim-remote [OPTIONS] <COMMAND>
 
 ## Session commands
 
-| Command                          | Description                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sim-remote login`               | Authenticate and reserve a machine. `--api-key <KEY>` gives the key, or set `SIM_ROUTER_API_KEY`. `--timeout <SECS>` is the maximum wait for a free machine (default `1800`; the server caps it at 3600). `--no-wait` fails at once when no machine is free. `--no-acquire` logs in without a machine. The three options exclude each other |
-| `sim-remote logout`              | Release the machine and end the session. Prints `Logged out.` and never fails                                                                                                                                                                                                                                                               |
-| `sim-remote acquire`             | Reserve a machine for the current session. Does nothing if the session already holds one. Accepts `--timeout <SECS>` and `--no-wait`                                                                                                                                                                                                        |
-| `sim-remote release`             | Release the machine and keep the session. Prints `Released.`                                                                                                                                                                                                                                                                                |
-| `sim-remote attach <MACHINE_ID>` | Point the session at a machine that you already hold. Prints `Attached to <MACHINE_ID>.`                                                                                                                                                                                                                                                    |
-| `sim-remote list-machines`       | Print one line per machine that you hold. `*` marks the current machine. Prints `No machines.` when you hold none                                                                                                                                                                                                                           |
-| `sim-remote keepalive [TIME]`    | Reset the idle clock of the daemon. Without `TIME`, ping one time and exit. With `TIME` (`90s`, `30m`, `2h`, or a number of seconds), ping every 5 seconds for that long. `0` and other units are rejected                                                                                                                                  |
-| `sim-remote daemon stop`         | Stop the background daemon. This releases the machine and ends the session. Prints `Daemon stopped.`                                                                                                                                                                                                                                        |
+| Command                          | Description                                                                                                                                                                                                |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sim-remote login`               | Authenticate and reserve a machine. See the options below                                                                                                                                                  |
+| `sim-remote logout`              | Release the machine and end the session. Prints `Logged out.` and never fails                                                                                                                              |
+| `sim-remote acquire`             | Reserve a machine for the current session. Does nothing if the session already holds one. Accepts `--timeout <SECS>` and `--no-wait`                                                                       |
+| `sim-remote release`             | Release the machine and keep the session. Prints `Released.`                                                                                                                                               |
+| `sim-remote attach <MACHINE_ID>` | Point the session at a machine that you already hold. Prints `Attached to <MACHINE_ID>.`                                                                                                                   |
+| `sim-remote list-machines`       | Print one line per machine that you hold. `*` marks the current machine. Prints `No machines.` when you hold none                                                                                          |
+| `sim-remote keepalive [TIME]`    | Reset the idle clock of the daemon. Without `TIME`, ping one time and exit. With `TIME` (`90s`, `30m`, `2h`, or a number of seconds), ping every 5 seconds for that long. `0` and other units are rejected |
+| `sim-remote daemon stop`         | Stop the background daemon. This releases the machine and ends the session. Prints `Daemon stopped.`                                                                                                       |
+
+`login` accepts these options:
+
+| Option             | Description                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `--api-key <KEY>`  | The API key. Without the option, `login` reads `SIM_ROUTER_API_KEY`                           |
+| `--timeout <SECS>` | The maximum wait for a free machine. The default is `1800`. The server caps the value at 3600 |
+| `--no-wait`        | Fail at once when no machine is free                                                          |
+| `--no-acquire`     | Log in without a machine                                                                      |
+
+`--timeout`, `--no-wait` and `--no-acquire` exclude each other.
 
 `login` and `acquire` print `Waiting for an available machine...` while they wait. `login` prints `Logged in. Acquired machine <MACHINE_ID>.` on success, or `Logged in.` with `--no-acquire`.
 

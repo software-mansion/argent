@@ -42,7 +42,7 @@ When a machine returns to your team, Argent Cloud revokes the credentials of the
 | Stop             | `sim-remote daemon stop`. This releases the machine and ends the session                              |
 | Version mismatch | After an update, the old daemon refuses the new client. Run `sim-remote daemon stop` and log in again |
 
-The daemon keeps nothing on disk. There is no configuration file, and the API key is never written to disk.
+The daemon keeps the session token in memory. `sim-remote` writes no session token, API key or configuration file to disk. The log files below are the only files that `sim-remote` writes.
 
 ## Log files
 

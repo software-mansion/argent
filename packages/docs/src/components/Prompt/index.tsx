@@ -1,8 +1,10 @@
 import React from "react";
 import clsx from "clsx";
-import { Check, ChevronDown, ChevronUp, Copy, Sparkles } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Sparkles, X } from "lucide-react";
 
 import styles from "./styles.module.css";
+
+const COPY_LABELS = { idle: "Copy", copied: "Copied", failed: "Copy failed" } as const;
 
 type Props = {
   /* The prompt text. Leading and trailing blank lines are removed. */
@@ -25,7 +27,7 @@ export default function Prompt({
 }: Props): React.ReactElement {
   const text = children.replace(/^\n+|\n+$/g, "");
   const [expanded, setExpanded] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
+  const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
   /* Short prompts fit in the collapsed panel, so they get no toggle. */
   const [overflows, setOverflows] = React.useState(true);
   const bodyRef = React.useRef<HTMLPreElement>(null);
@@ -39,15 +41,21 @@ export default function Prompt({
   }, [collapsedHeight, text]);
 
   React.useEffect(() => {
-    if (!copied) {
+    if (copyState === "idle") {
       return undefined;
     }
-    const timer = window.setTimeout(() => setCopied(false), 2000);
+    const timer = window.setTimeout(() => setCopyState("idle"), 2000);
     return () => window.clearTimeout(timer);
-  }, [copied]);
+  }, [copyState]);
 
-  const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => setCopied(true));
+  /* The Clipboard API is missing on an insecure origin and rejects without permission. */
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
   };
 
   const collapsed = overflows && !expanded;
@@ -59,13 +67,15 @@ export default function Prompt({
           <Sparkles size={16} strokeWidth={2} aria-hidden="true" />
           {label}
         </span>
-        <button type="button" className={styles.button} onClick={copy}>
-          {copied ? (
+        <button type="button" className={styles.button} onClick={() => void copy()}>
+          {copyState === "copied" ? (
             <Check size={14} strokeWidth={2.25} aria-hidden="true" />
+          ) : copyState === "failed" ? (
+            <X size={14} strokeWidth={2.25} aria-hidden="true" />
           ) : (
             <Copy size={14} strokeWidth={2.25} aria-hidden="true" />
           )}
-          {copied ? "Copied" : "Copy"}
+          {COPY_LABELS[copyState]}
         </button>
       </div>
       <div
