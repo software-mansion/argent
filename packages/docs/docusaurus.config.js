@@ -98,13 +98,12 @@ const config = {
         links: [],
         copyright: "All trademarks and copyrights belong to their respective owners.",
       },
-      // The shared theme always renders a DocSearch bar, so an Algolia block must be
-      // present. The placeholders stand in until Argent has its own DocSearch application;
-      // the bar stays hidden meanwhile, see src/css/overrides.css.
+      // Algolia DocSearch, see https://docusaurus.io/docs/search. The search API key
+      // is public and only allows read access to the index.
       algolia: {
-        appId: process.env.ALGOLIA_APP_ID ?? "ARGENT_DOCSEARCH_APP_ID",
-        apiKey: process.env.ALGOLIA_API_KEY ?? "ARGENT_DOCSEARCH_API_KEY",
-        indexName: process.env.ALGOLIA_INDEX_NAME ?? "argent",
+        appId: "N28DSA2NIP",
+        apiKey: "e9212e51c8bec13db36c7ba303a4139b",
+        indexName: "argent",
         // Unversioned site: no version facets to filter by.
         contextualSearch: false,
       },
