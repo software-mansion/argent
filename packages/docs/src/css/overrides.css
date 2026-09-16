@@ -382,7 +382,7 @@ article [class*="llmDropdownItem"]:hover {
 }
 
 .product-switcher {
-  width: 217px;
+  flex: 1;
   max-width: 100%;
 }
 
@@ -397,9 +397,7 @@ article [class*="llmDropdownItem"]:hover {
   width: 100%;
   padding: 8px 12px;
   font-family: var(--swm-body-font);
-  font-size: 14px;
   font-weight: 600;
-  line-height: 1.25;
   color: var(--ifm-font-color-base);
   background-color: var(--swm-background);
   border: 1px solid var(--swm-border);
