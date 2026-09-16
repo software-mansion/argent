@@ -18,8 +18,8 @@ Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundame
    https://github.com/software-mansion/sim-remote-releases/releases/latest,
    make it executable and put it in ~/.local/bin. Add ~/.local/bin to PATH if it is missing.
 2. Confirm the installation with sim-remote --help.
-3. Run sim-remote login --api-key <my api key> and wait until it prints the acquired machine.
-   Do not write the key to any file.
+3. Run export SIM_ROUTER_API_KEY=<my api key>, then run sim-remote login and wait until
+   it prints the acquired machine. Do not write the key to any file.
 4. Run sim-remote simctl list devices available and pick an iPhone.
 5. Boot it with sim-remote simctl boot <UDID> and wait with sim-remote simctl bootstatus <UDID> -b.
 6. Report the machine name, the UDID and the state of the simulator.
@@ -55,17 +55,19 @@ We issue one API key per user and send it to you directly. If you do not have a 
 
 ### Step 3: Authenticate
 
-Log in with your API key. The command reserves a machine for you and prints its name.
-
-```bash
-sim-remote login --api-key <API_KEY>
-```
-
-You can also put the key in the `SIM_ROUTER_API_KEY` environment variable and run `sim-remote login` without the flag. This is useful in CI, where the key comes from a secret.
+Put your API key in the `SIM_ROUTER_API_KEY` environment variable and log in. The command reserves a machine for you and prints its name.
 
 ```bash
 export SIM_ROUTER_API_KEY=<API_KEY>
 sim-remote login
+```
+
+We recommend the environment variable. Set it once in your shell profile, and `sim-remote login` needs no arguments. In CI, supply the same variable as a secret.
+
+You can also give the key with the `--api-key` option:
+
+```bash
+sim-remote login --api-key <API_KEY>
 ```
 
 `sim-remote` keeps the session in memory only and does not write the key to disk.
