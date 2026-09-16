@@ -18,6 +18,8 @@ const config = {
   // GitHub Pages deployment.
   organizationName: "software-mansion",
   projectName: "argent",
+  // GitHub Pages redirects `<route>` to `<route>/`, so the canonical URLs must carry the slash.
+  trailingSlash: true,
 
   markdown: {
     hooks: {
@@ -65,6 +67,10 @@ const config = {
           customCss: require.resolve("./src/css/index.css"),
         },
         blog: false,
+        sitemap: {
+          // The search page carries `noindex`, so listing it only adds a warning in Search Console.
+          ignorePatterns: ["/argent/search/"],
+        },
       }),
     ],
     require.resolve("@swmansion/t-rex-ui/preset"),
