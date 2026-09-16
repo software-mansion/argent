@@ -49,8 +49,6 @@ sim-remote [OPTIONS] <COMMAND>
 | `sim-remote forward stop <LOCAL_PORT>`           | Close the forward tunnel that is bound to the local port. Prints `Forward tunnel on local port <LOCAL_PORT> closed.`                                                                                        |
 | `sim-remote forward status`                      | Print a table with the columns `UDID`, `LOCAL PORT` and `REMOTE PORT`, or `No active forward tunnels.`                                                                                                      |
 
-`sim-remote proxy` is a deprecated alias for `sim-remote reverse`. It works and prints a warning on stderr. Update your scripts to `reverse`.
-
 A forward tunnel reaches only the servers that your own session started on the machine. Both tunnel types close when the session moves to another machine through `attach`, `acquire`, `release` or a new `login`.
 
 ## Test driver commands

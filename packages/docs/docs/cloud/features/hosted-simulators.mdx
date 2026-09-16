@@ -14,7 +14,7 @@ Argent Cloud runs the iOS simulators on a hosted macOS machine. You control them
 
 ```bash
 sim-remote simctl list devices --json | jq '.devices'
-sim-remote simctl launch --console 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 com.example.MyApp
+sim-remote simctl launch --console <UDID> com.example.MyApp
 ```
 
 The `simctl help` command shows the documentation of Apple for each subcommand:

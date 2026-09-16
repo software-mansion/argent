@@ -37,8 +37,6 @@ sidebar_custom_props:
 
 **The app in the simulator cannot reach your local server.** The simulator has no route to your `localhost`. Run `sim-remote reverse start <UDID> <PORT>` and confirm the tunnel with `sim-remote reverse status`. See [Tunnels](/docs/cloud/features/tunnels).
 
-**`sim-remote` prints `warning: sim-remote proxy is deprecated`.** A script or Argent uses the old alias. The tunnel works. Update the script to `sim-remote reverse`.
-
 **Argent shows no hosted simulators.** Argent needs `sim-remote` on `PATH` and a session with a machine. Run `sim-remote login` and list the devices again.
 
 **The machine was released while a test ran.** The idle timeout expired because no `sim-remote` command ran for 15 minutes. Run `sim-remote keepalive <TIME>` next to the test, or increase `SIM_REMOTE_IDLE_TIMEOUT_SECS`. See [Sessions and limits](/docs/cloud/reference/sessions).

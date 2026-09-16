@@ -13,7 +13,7 @@ Your computer and the hosted simulator are on different networks. Neither side c
 A reverse tunnel lets the simulator reach a server on your computer. The app in the simulator connects to `localhost:8081`, and the traffic arrives at port 8081 on your computer. A local Metro bundler, a mock API or a staging proxy works with a hosted simulator in this way.
 
 ```bash
-sim-remote reverse start 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 8081
+sim-remote reverse start <UDID> 8081
 ```
 
 Argent opens a reverse tunnel for Metro and for the debugger on its own. See [Argent](/docs/cloud/integrations/argent).
@@ -23,7 +23,7 @@ Argent opens a reverse tunnel for Metro and for the debugger on its own. See [Ar
 A forward tunnel lets your computer reach a server on the hosted machine. `sim-remote` binds a local port and sends the traffic to a port on the machine. A local tool can talk to a test runner that runs next to the simulator in this way. Only servers that your own session started are reachable.
 
 ```bash
-sim-remote forward start 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 9000:8000
+sim-remote forward start <UDID> 9000:8000
 ```
 
 ## Lifetime

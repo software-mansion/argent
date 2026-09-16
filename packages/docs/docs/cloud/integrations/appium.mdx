@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: flask-conical
 ---
 
-The XCUITest driver of Appium runs its sessions through the Apple tools `xcrun`, `xcodebuild` and `xcode-select`. `sim-remote` provides stand-ins for these tools. With the stand-ins on your `PATH`, the stock Appium server drives a hosted simulator. This also works on Linux without Xcode.
+The XCUITest driver of [Appium](https://appium.io) runs its sessions through the Apple tools `xcrun`, `xcodebuild` and `xcode-select`. `sim-remote` provides stand-ins for these tools. With the stand-ins on your `PATH`, the stock Appium server drives a hosted simulator. This also works on Linux without Xcode.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ A session needs these capabilities:
 {
   "platformName": "iOS",
   "appium:automationName": "XCUITest",
-  "appium:udid": "6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413",
+  "appium:udid": "<UDID>",
   "appium:isHeadless": true
 }
 ```

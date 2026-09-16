@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: flask-conical
 ---
 
-Maestro runs its iOS flows through the Apple tools `xcrun`, `xcodebuild`, `plutil`, `applesimutils`, `xcode-select` and `open`. `sim-remote` provides stand-ins for these tools. With the stand-ins on your `PATH`, the stock `maestro` CLI runs its flows on a hosted simulator. This also works on Linux without Xcode.
+[Maestro](https://maestro.dev) runs its iOS flows through the Apple tools `xcrun`, `xcodebuild`, `plutil`, `applesimutils`, `xcode-select` and `open`. `sim-remote` provides stand-ins for these tools. With the stand-ins on your `PATH`, the stock `maestro` CLI runs its flows on a hosted simulator. This also works on Linux without Xcode.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ Log in, install the stand-ins, and run Maestro with the UDID of a hosted simulat
 ```bash
 sim-remote login
 eval "$(sim-remote install-shims)"
-maestro --udid 6C3F1B2A-9D4E-4A77-B1F0-2E8C5D9A0413 test flow.yaml
+maestro --udid <UDID> test flow.yaml
 ```
 
 In fish, pipe the output of `install-shims` to `source`:
