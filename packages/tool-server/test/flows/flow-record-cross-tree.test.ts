@@ -686,7 +686,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       expectedText: "$5.00",
       textMatch: "equals",
     });
-    expect(warningOf(exact, "textequals")).toContain('its text was "Total: $5.00"');
+    expect(warningOf(exact, "textequals")).toContain('actual: "Total: $5.00"');
   });
 
   // ── Per-platform divergences, each produced by that platform's adapter ────
@@ -1414,7 +1414,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("could not be re-verified");
   }, 20_000);
 
-  // A `text` reason quotes the matched element's content, and on the flow tree
+  // A `text` verdict quotes the matched element's content, and on the flow tree
   // that content is HOISTED. Unbounded, one check pastes a whole log pane.
   it("caps the screen text it echoes back", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
@@ -1441,8 +1441,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap bounds what is EMITTED, not what is kept. Budgeting the kept content
   // let a 201-character reason come out at 218, announcing "(1 more chars)".
   it("never emits a reason over the cap, or longer than the reason itself", async () => {
-    // The fixed prose around the label is 76 characters.
-    const FIXED = 76;
+    // The fixed prose around the label is 77 characters.
+    const FIXED = 77;
     for (const reasonLength of [199, 200, 201, 205, 220, 260]) {
       const label = `Total ${"z".repeat(reasonLength - FIXED - "Total ".length)}`;
       serveTree(iosRunnerTree([iosLabel(label)]));

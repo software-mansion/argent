@@ -247,9 +247,11 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].indeterminate).toBe(true);
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
+    expect(result.steps[0].hint).toMatch(/not a verdict on the app/);
   });
 
   it("await exists: the same dark tail under an await window surfaces the fetch error", async () => {
@@ -279,8 +281,8 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
   });
 
   it("assert text: does not quote stale element text from before the reads went dark", async () => {
-    // Read 1 sees the banner saying "Loading"; then the source dies. Quoting
-    // `its text was "Loading"` at the deadline would present a first-poll
+    // Read 1 sees the banner saying "Loading"; then the source dies. Reporting
+    // `actual: "Loading"` at the deadline would present a first-poll
     // snapshot as the state of a screen that was unreadable for essentially
     // the whole window.
     let reads = 0;
@@ -320,15 +322,16 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/Loading/);
+    expect(result.steps[0].actual).toBeUndefined();
   });
 
-  it("keeps the determinate verdict — with the error appended — when only the final polls throw", async () => {
+  it("keeps the determinate verdict and reports the error as a hint when only the final polls throw", async () => {
     // The deliberate trailing tolerance: trusted reads showed "Done" absent
     // until ~one poll before the 1s assert deadline, so a fetch error on the
     // trailing polls is a blip, not doubt — the determinate reason stands.
-    // The failed final read is appended rather than silently dropped (main
-    // surfaced `could not read the UI tree: <err>` here; losing it was a
-    // report-quality regression).
+    // The failed final read goes to the hint rather than being silently
+    // dropped (main surfaced `could not read the UI tree: <err>` here; losing
+    // it was a report-quality regression).
     let firstReadAt: number | undefined;
     currentFetch = () => {
       firstReadAt ??= Date.now();
@@ -348,9 +351,10 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toMatch(/no element matched/);
-    expect(result.steps[0].reason).toMatch(
-      /final poll could not read the UI tree: native devtools disconnected/
+    expect(result.steps[0].reason).toBe('no element matched selector text="Done"');
+    expect(result.steps[0].hint).toBe(
+      "the final poll could not read the UI tree: native devtools disconnected"
     );
+    expect(result.steps[0].indeterminate).toBeUndefined();
   });
 });

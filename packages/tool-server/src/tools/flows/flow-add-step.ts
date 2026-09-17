@@ -435,7 +435,7 @@ const PROBE_ASSERT_GRACE_MS = 1000; // DEFAULT_ASSERT_TIMEOUT_MS, the loop's own
 const PROBE_BUDGET_MS = PROBE_ASSERT_GRACE_MS + 2 * PROBE_MAX_TREE_READ_MS;
 
 /**
- * Length cap on a DETERMINATE reason before it is quoted back. That reason
+ * Length cap on a DETERMINATE verdict before it is quoted back. The verdict
  * quotes the matched element's text, and the flow tree hoists text from every
  * descendant, so one failed `text` check can carry a whole card.
  *
@@ -445,14 +445,29 @@ const PROBE_BUDGET_MS = PROBE_ASSERT_GRACE_MS + 2 * PROBE_MAX_TREE_READ_MS;
 const MAX_PROBE_REASON_CHARS = 200;
 
 /**
- * How much of the cap goes to the END. `waitForCondition` closes a determinate
- * reason with the note that its final poll went dark. That note qualifies the
- * verdict, so elide the middle rather than the tail.
+ * How much of the cap goes to the END. {@link probeVerdict} closes a verdict
+ * with the outcome's hint, which carries the note that the final poll went
+ * dark. That note qualifies the verdict, so elide the middle rather than the
+ * tail.
  */
 const PROBE_REASON_TAIL_CHARS = 60;
 
 function elisionMarker(dropped: number): string {
   return `… (${dropped} more chars) …`;
+}
+
+/**
+ * A determinate outcome as one line: the reason, then the text the check saw,
+ * then the hint.
+ */
+function probeVerdict(outcome: DirectiveOutcome): string {
+  return [
+    outcome.reason ?? "no match",
+    outcome.actual !== undefined ? `actual: "${outcome.actual}"` : undefined,
+    outcome.hint,
+  ]
+    .filter((part) => part !== undefined)
+    .join("; ");
 }
 
 /**
@@ -573,7 +588,7 @@ async function probeAgainstRunnerTree(
   return {
     warning:
       `recorded, but this condition does NOT hold against the tree the runner resolves ` +
-      `directives against (${cappedReason(outcome.reason ?? "no match")}). As the raw ` +
+      `directives against (${cappedReason(probeVerdict(outcome))}). As the raw ` +
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
       `just passed against. What conversion costs you depends on WHY the two disagree: if the ` +
       `trees really do differ over this element, an \`assert:\` conversion fails the same way ` +

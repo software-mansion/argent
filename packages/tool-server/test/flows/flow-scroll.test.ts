@@ -594,7 +594,13 @@ describe("scroll-to directive", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toContain("reached the end of the scroll");
+    expect(result.steps[0].reason).toBe(
+      'reached the end of the scroll without finding text="Never There"'
+    );
+    expect(result.steps[0].hint).toBe(
+      "the target is not in this scroll direction or not inside this scroll container; " +
+        "check the direction:, the within: scope and the selector"
+    );
     // One increment was attempted before the no-progress check stopped it.
     expect(swipes).toHaveLength(1);
   });

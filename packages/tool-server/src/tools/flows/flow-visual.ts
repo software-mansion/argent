@@ -8,8 +8,9 @@ import {
   settleTree,
   invokeOnDevice,
   waitForFrame,
-  offscreenHint,
+  selectorMiss,
   type ActionEnv,
+  type DirectiveOutcome,
 } from "./flow-actions";
 import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
@@ -31,7 +32,7 @@ export interface SnapshotArtifacts {
   diff?: ArtifactHandle;
 }
 
-interface VisualOutcome {
+interface VisualOutcome extends Pick<DirectiveOutcome, "hint" | "expected" | "actual"> {
   status: "pass" | "fail" | "skip";
   reason?: string;
   /**
@@ -189,9 +190,7 @@ export async function runSnapshot(
     if (frame === "aborted") {
       return { status: "skip", reason: "run aborted while resolving cropOn" };
     }
-    if (frame === undefined) {
-      return { status: "fail", reason: offscreenHint(opts.cropOn) };
-    }
+    if ("unresolved" in frame) return { status: "fail", ...selectorMiss(frame) };
     cropFrame = frame;
   }
 
@@ -319,8 +318,10 @@ export async function runSnapshot(
         status: "fail",
         reason:
           `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
-          `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
-          `current screen, then review and commit it`,
+          `nothing was compared`,
+        hint:
+          "run with updateBaselines (--update-baselines) to adopt the current screen, then " +
+          "review and commit it",
         snapshotKey,
         artifacts: { current: await currentArtifact() },
       };
@@ -361,11 +362,14 @@ export async function runSnapshot(
           reason:
             `baseline is ${expected.width}x${expected.height} but the ` +
             `${opts.cropOn ? "cropOn region" : "capture"} is ` +
-            `${actual.width}x${actual.height} (${key}) — nothing was compared` +
-            (opts.cropOn
-              ? `. The element's size drifted — crop a fixed-size container, or re-adopt ` +
-                `with updateBaselines`
-              : ""),
+            `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+          expected: `${expected.width}x${expected.height}`,
+          actual: `${actual.width}x${actual.height}`,
+          ...(opts.cropOn && {
+            hint:
+              "the element's size drifted; crop a fixed-size container, or re-adopt with " +
+              "updateBaselines",
+          }),
           snapshotKey,
           artifacts: {
             baseline: await store.register({
@@ -379,7 +383,8 @@ export async function runSnapshot(
       }
 
       const within = result.mismatchPercentage <= opts.maxMismatch;
-      const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
+      const measured = `${result.mismatchPercentage.toFixed(2)}%`;
+      const reason = `diff ${measured} ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason };
       }
@@ -403,7 +408,14 @@ export async function runSnapshot(
         });
         keepInOutputDir = result.contextDiffPath;
       }
-      return { status: "fail", reason, snapshotKey, artifacts };
+      return {
+        status: "fail",
+        reason,
+        expected: `≤ ${opts.maxMismatch}%`,
+        actual: measured,
+        snapshotKey,
+        artifacts,
+      };
     } finally {
       await cleanupDiffDir(outputDir, keepInOutputDir);
     }

@@ -202,6 +202,17 @@ export interface StepReport {
    * from one that waited.
    */
   warning?: string;
+  /** What to try first about a step that did not pass. Never restates `reason`. */
+  hint?: string;
+  /** The value the check wanted, raw: a text check's text, a snapshot's tolerance or size. */
+  expected?: string;
+  /** The value the check saw, raw; a text value is capped at 300 characters. */
+  actual?: string;
+  /**
+   * The check could not be evaluated because the UI tree could not be read.
+   * Not a verdict on the app: re-run before editing the flow.
+   */
+  indeterminate?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -2113,6 +2124,7 @@ async function execWhenStep(
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        ...outcomeDetails(probe),
         durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
@@ -2343,6 +2355,27 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
+const INDETERMINATE_HINT =
+  "argent could not read the screen, so this is not a verdict on the app; re-run, or fix the " +
+  "device and tree source, before editing the flow";
+
+/**
+ * The optional report fields a failed check carries beside its `reason`. An
+ * indeterminate outcome is flagged, and gets the shared hint when its site
+ * has no more specific one.
+ */
+function outcomeDetails(
+  r: Pick<DirectiveOutcome, "indeterminate" | "hint" | "expected" | "actual">
+): Pick<StepReport, "hint" | "expected" | "actual" | "indeterminate"> {
+  const hint = r.hint ?? (r.indeterminate ? INDETERMINATE_HINT : undefined);
+  return {
+    ...(hint !== undefined && { hint }),
+    ...(r.expected !== undefined && { expected: r.expected }),
+    ...(r.actual !== undefined && { actual: r.actual }),
+    ...(r.indeterminate && { indeterminate: true as const }),
+  };
+}
+
 async function execLeafStep(
   state: ExecState,
   step: LeafStep,
@@ -2396,14 +2429,16 @@ async function execLeafStep(
         // as a regression. `error` keeps the run non-ok while saying plainly
         // that the app was never judged. Scoped to `idle`, whose whole verdict
         // rests on being able to observe the screen.
+        const details = outcomeDetails(r);
         if (!r.ok && r.indeterminate && step.kind === "idle") {
-          return { ...base, status: "error", reason: r.reason };
+          return { ...base, status: "error", reason: r.reason, ...details };
         }
         return {
           ...base,
           status: r.ok ? "pass" : "fail",
           reason: r.reason,
           ...(r.warning !== undefined ? { warning: r.warning } : {}),
+          ...details,
         };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
@@ -2433,6 +2468,7 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          ...outcomeDetails(r),
           snapshotKey: r.snapshotKey,
           ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
             ? { snapshotRemote: true as const }

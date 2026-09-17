@@ -196,6 +196,12 @@ export type FlowStepResult = {
    * "⚠" suffix (see StepReport.warning in the tool-server's flow-run).
    */
   warning?: string;
+  /** What to try first about a step that did not pass. */
+  hint?: string;
+  /** The value the check wanted, raw. */
+  expected?: string;
+  /** The value the check saw, raw. */
+  actual?: string;
   tool?: string;
   message?: string;
   result?: unknown;
@@ -265,6 +271,23 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
+/**
+ * The `expected:`, `actual:` and `hint:` lines under a step, as one block, or
+ * undefined for a step with none of them. The values are wire data, so a
+ * control character in one becomes a space. A snapshot's values are
+ * measurements and print bare; every other step's are text and print quoted.
+ */
+function stepDetailText(step: FlowStepResult): string | undefined {
+  const oneLine = (v: string): string => v.replace(/\p{Cc}/gu, " ");
+  const value = (v: string): string => (step.kind === "snapshot" ? oneLine(v) : `"${oneLine(v)}"`);
+  const indent = `  ${stepIndent(step.depth)}`;
+  const lines: string[] = [];
+  if (typeof step.expected === "string") lines.push(`${indent}expected: ${value(step.expected)}`);
+  if (typeof step.actual === "string") lines.push(`${indent}actual:   ${value(step.actual)}`);
+  if (typeof step.hint === "string") lines.push(`${indent}hint: ${oneLine(step.hint)}`);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.tool) return step.tool;
@@ -311,6 +334,8 @@ export async function flowRunToMcpContent(
       type: "text",
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
+    const details = stepDetailText(step);
+    if (details !== undefined) blocks.push({ type: "text", text: details });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
     const scriptLogTruncated = step.scriptLogTruncated === true;

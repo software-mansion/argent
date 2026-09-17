@@ -27,6 +27,12 @@ export interface StepReport {
   reason?: string;
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
+  /** What to try first about a step that did not pass. */
+  hint?: string;
+  /** The value the check wanted, raw. */
+  expected?: string;
+  /** The value the check saw, raw. */
+  actual?: string;
   tool?: string;
   flow?: string;
   message?: string;
@@ -262,6 +268,26 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
+/**
+ * The `expected:`, `actual:` and `hint:` lines under a step that has them.
+ * The values are wire data, so a control character in one becomes a space
+ * and cannot break the line. A snapshot's values are measurements and print
+ * bare; every other step's are text and print quoted.
+ */
+export function renderStepDetailLines(s: StepReport, n: number): string[] {
+  const oneLine = (v: string): string => v.replace(/\p{Cc}/gu, " ");
+  const value = (v: string): string => (s.kind === "snapshot" ? oneLine(v) : `"${oneLine(v)}"`);
+  const lines: string[] = [];
+  if (typeof s.expected === "string") {
+    lines.push(renderUnderStepLine(s, n, `expected: ${value(s.expected)}`));
+  }
+  if (typeof s.actual === "string") {
+    lines.push(renderUnderStepLine(s, n, `actual:   ${value(s.actual)}`));
+  }
+  if (typeof s.hint === "string") lines.push(renderUnderStepLine(s, n, `hint: ${oneLine(s.hint)}`));
+  return lines;
+}
+
 export function renderScriptLogLines(s: StepReport, n: number): string[] {
   const log = typeof s.scriptLog === "string" ? s.scriptLog : "";
   const lines: string[] = [];
@@ -352,6 +378,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
     }
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderStepDetailLines(s, n));
     lines.push(...scriptLog);
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
@@ -767,6 +794,7 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderStepDetailLines(s, n));
     lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
@@ -1500,6 +1528,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
+    for (const line of renderStepDetailLines(s, liveIndex)) console.log(line);
     for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
   };
 

@@ -542,6 +542,133 @@ describe("flowRunToMcpContent", () => {
     expect(artifactText?.text).toBe("    baseline: /tmp/b.png");
   });
 
+  it("puts a step's expected, actual and hint in one block between its line and the next step's", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          target: 'text "Total"',
+          reason: "text did not match",
+          expected: "$12.00",
+          actual: "$10.00",
+          hint: "the cart may still be loading",
+        },
+        { index: 1, kind: "tap", status: "skip", target: '"Pay"' },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      { type: "text", text: 'Running flow "checkout" (2 steps)' },
+      { type: "text", text: '[1] ✗ assert text "Total" — text did not match' },
+      {
+        type: "text",
+        text: [
+          '  expected: "$12.00"',
+          '  actual:   "$10.00"',
+          "  hint: the cart may still be loading",
+        ].join("\n"),
+      },
+      { type: "text", text: '[2] · tap "Pay"' },
+      { type: "text", text: 'Flow "checkout" complete.' },
+    ]);
+  });
+
+  it("indents a nested step's detail block and prints a snapshot's values bare, before its artifacts", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "when", status: "pass", target: 'visible "Promo"' },
+        {
+          index: 1,
+          kind: "snapshot",
+          status: "fail",
+          target: '"home"',
+          reason: "diff 3.10% > 0.5%",
+          depth: 1,
+          expected: "≤ 0.5%",
+          actual: "3.10%",
+          hint: "an animation may still be running",
+          artifacts: { diff: "/tmp/d.png" },
+        },
+      ],
+    });
+
+    expect(blocks.slice(1)).toEqual([
+      { type: "text", text: '[1] ✓ when visible "Promo"' },
+      { type: "text", text: '[2] ✗   snapshot "home" — diff 3.10% > 0.5%' },
+      {
+        type: "text",
+        text: [
+          "    expected: ≤ 0.5%",
+          "    actual:   3.10%",
+          "    hint: an animation may still be running",
+        ].join("\n"),
+      },
+      { type: "text", text: "    diff: /tmp/d.png" },
+      { type: "text", text: 'Flow "f" complete.' },
+    ]);
+  });
+
+  it("adds no detail block for detail values that are not strings", async () => {
+    const hostile = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          expected: 12,
+          actual: null,
+          hint: { text: "x" },
+        } as unknown as FlowExecuteResult["steps"][number],
+      ],
+    });
+    expect(hostile).toEqual([
+      { type: "text", text: 'Running flow "f" (1 steps)' },
+      { type: "text", text: "[1] ✗ assert" },
+      { type: "text", text: 'Flow "f" complete.' },
+    ]);
+  });
+
+  it("turns control characters in a step's values and hint into spaces", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          expected: "line one\nline two",
+          actual: "tab\there[31m",
+          hint: "wait\r\nthen\tretry",
+        },
+        {
+          index: 1,
+          kind: "snapshot",
+          status: "fail",
+          expected: "≤\n0.5%",
+          actual: "3\t10%",
+        },
+      ],
+    });
+
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: [
+        '  expected: "line one line two"',
+        '  actual:   "tab here [31m"',
+        "  hint: wait  then retry",
+      ].join("\n"),
+    });
+    expect(blocks[4]).toEqual({
+      type: "text",
+      text: "  expected: ≤ 0.5%\n  actual:   3 10%",
+    });
+  });
+
   it("renders the new report shape: status glyphs, reasons, directive kinds, and summary", async () => {
     const input: FlowExecuteResult = {
       flow: "checkout",
