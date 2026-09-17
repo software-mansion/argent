@@ -60,7 +60,6 @@ const flow = (steps: FlowStep[]) => ({ executionPrerequisite: "", steps });
 const failingTree = () => {
   throw new Error("tree source down");
 };
-/** `kind:status:durationMs`, with `-` where the report carries no duration. */
 const lines = (result: FlowRunResult) =>
   result.steps.map((s) => `${s.kind}:${s.status}:${s.durationMs ?? "-"}`);
 
@@ -132,7 +131,6 @@ describe("flow step timing", () => {
     const durations = result.steps.map((s) => s.durationMs ?? 0);
     const sum = durations.reduce((a, b) => a + b, 0);
 
-    // Taken before the flow file read, which already moves the clock.
     expect(result.startedAt).toBe(T0);
     expect(durations).toEqual([250, 500]);
     expect(result.durationMs).toBe(FILE_MS + sum);

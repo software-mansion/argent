@@ -1200,7 +1200,6 @@ describe("when: run cancellation", () => {
     ]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(result.steps[0].reason).not.toMatch(/condition not met/);
-    // A cancelled guard, like a leaf step that skips, gets no time.
     expect(result.steps[0].durationMs).toBeUndefined();
     expect(result.steps[1].reason).toBe("run aborted");
     expect(result.taps).toHaveLength(0);

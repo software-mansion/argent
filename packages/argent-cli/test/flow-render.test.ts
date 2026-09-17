@@ -332,11 +332,9 @@ describe("flow report rendering", () => {
     expect(line(0)).toBe("  ✓  1 tap (0.0s)");
     expect(line(440)).toBe("  ✓  1 tap (0.4s)");
     expect(line(12_345)).toBe("  ✓  1 tap (12.3s)");
-    // No "(60.0s)": a value that rounds to a minute moves to the minute form.
     expect(line(59_940)).toBe("  ✓  1 tap (59.9s)");
     expect(line(59_950)).toBe("  ✓  1 tap (1m 0s)");
     expect(line(92_400)).toBe("  ✓  1 tap (1m 32s)");
-    // A duration is wire data: anything but a finite non-negative number shows nothing.
     for (const bad of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
       expect(line(bad)).toBe("  ✓  1 tap");
     }

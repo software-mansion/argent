@@ -597,7 +597,6 @@ describe("flowRunToMcpContent", () => {
           durationMs: 5002,
         },
         { index: 3, kind: "await", status: "skip", target: 'visible "Done"' },
-        // Wire data: an invalid duration shows nothing.
         { index: 4, kind: "tap", status: "pass", durationMs: -1 },
       ],
     };
@@ -606,7 +605,6 @@ describe("flowRunToMcpContent", () => {
       .map((b) => b.text);
 
     expect(texts.slice(1)).toEqual([
-      // Echo is narration, so it shows no time.
       "[1] ✓ opening",
       "[2] ✓ launch com.acme.shop (3.1s)",
       '[3] ✗   tap "Checkout" (5.0s) — no match ⚠ moving',

@@ -274,9 +274,7 @@ export interface FlowRunResult {
   skipped: number;
   errored: number;
   steps: StepReport[];
-  /** Epoch milliseconds when the run started, before the flow file was read. */
   startedAt: number;
-  /** Wall-clock milliseconds of the whole run, device resolution and teardown included. */
   durationMs: number;
 }
 
@@ -1996,9 +1994,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
-    // Timed here, not in pushReport, which only sees the finished report. A
-    // leaf reports skip only when the run was cancelled mid-step; it gets no
-    // time.
     const startedAt = Date.now();
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
@@ -2085,9 +2080,6 @@ async function execWhenStep(
     ...depthOf(scope),
   } as const;
   const inner = childScope(scope);
-  // The marker is pushed before its guarded steps run, so its time is the
-  // guard alone: an unmet UI condition spends the whole assert grace here. A
-  // guard cancelled mid-probe gets no time, like a leaf step that skips.
   const guardStartedAt = Date.now();
 
   let met: boolean;
@@ -2185,8 +2177,6 @@ async function execRunStep(
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
   const display = runDisplayName(target, scope);
-  // The marker's own cost: resolving, reading and parsing the fragment. The
-  // fragment's steps time themselves.
   const startedAt = Date.now();
 
   const fail = (reason: string): void => {

@@ -1883,7 +1883,6 @@ describe("argent flow run <dir>", () => {
 
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
-    // Per-flow time from the report; batch time from the CLI's clock.
     expect(logs).toContain(
       "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped (44.0s)"
     );
@@ -2324,7 +2323,6 @@ describe("argent flow run <dir>", () => {
       passed: 1,
       failed: 1,
       skipped: 1,
-      // The CLI's own clock around the whole batch, failed calls included.
       durationMs: 5500,
       flows: [
         { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },

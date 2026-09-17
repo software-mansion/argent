@@ -217,7 +217,6 @@ export type FlowStepResult = {
   artifacts?: Record<string, unknown>;
   scriptLog?: string;
   scriptLogTruncated?: boolean;
-  /** Wall-clock milliseconds the step took; absent on a skip, unless an unmet `when` guard. */
   durationMs?: number;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
@@ -233,9 +232,7 @@ export type FlowExecuteResult = {
   skipped?: number;
   errored?: number;
   steps: FlowStepResult[];
-  /** Epoch milliseconds when the run started. Absent from older tool-servers. */
   startedAt?: number;
-  /** Wall-clock milliseconds of the whole run. Absent from older tool-servers. */
   durationMs?: number;
 };
 
@@ -260,11 +257,6 @@ function stepIndent(depth: unknown): string {
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
-/**
- * ` (0.4s)` under a minute, ` (1m 32s)` from one, the CLI's format. A duration
- * is untrusted wire data, so anything but a finite non-negative number renders
- * nothing.
- */
 function durationSuffix(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
   const tenths = Math.round(ms / 100);
@@ -314,7 +306,6 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
-    // Echo is narration: its time is always near zero, so it shows none.
     const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({
       type: "text",

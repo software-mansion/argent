@@ -50,7 +50,6 @@ export interface StepReport {
   artifacts?: Record<string, unknown>;
   scriptLog?: string;
   scriptLogTruncated?: boolean;
-  /** Wall-clock milliseconds the step took; absent on a skip, unless an unmet `when` guard. */
   durationMs?: number;
 }
 
@@ -64,9 +63,7 @@ export interface FlowReport {
   skipped: number;
   errored: number;
   steps: StepReport[];
-  /** Epoch milliseconds when the run started. Absent from older tool-servers. */
   startedAt?: number;
-  /** Wall-clock milliseconds of the whole run. Absent from older tool-servers. */
   durationMs?: number;
 }
 
@@ -92,10 +89,6 @@ function stepIndent(depth: number | undefined): string {
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
-/**
- * ` (0.4s)` under a minute, ` (1m 32s)` from one. A duration arrives over the
- * wire, so anything but a finite non-negative number renders nothing.
- */
 function durationSuffix(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
   const tenths = Math.round(ms / 100);
@@ -1120,8 +1113,6 @@ async function runFlowDirectory(
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
-  // The CLI's own clock, so the batch time also covers transport and artifact
-  // export, which no per-flow report includes.
   const batchStartedAt = Date.now();
   // A validation rejection is scoped to the one call, so the batch keeps
   // going. Anything the server does not mark that way — another kind, or none
