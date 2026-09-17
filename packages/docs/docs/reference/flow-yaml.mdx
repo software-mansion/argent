@@ -313,7 +313,7 @@ The split holds only when the `timeout` is generous. Argent needs about a second
 
 Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node process before the script runs, and that start alone costs tens of milliseconds. A smaller limit ends the step at the time limit, or makes the result depend on the load of the host.
 
-`timeout` bounds the run of the script, not the duration of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The step reports the wait in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
+`timeout` bounds the run of the script, not the time of the step. The tool-server runs a limited number of scripts at the same time, and it takes the number from the CPU count of the host. A step waits for a free slot before the script starts. The time that Argent reports for the step includes this wait. The step reports a wait of more than 5 seconds in its reason, and the wait can be longer than the `timeout` of the step. A step that finds the queue full is an errored step. Every project on the host shares one queue, because every project shares one tool-server.
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
@@ -352,11 +352,23 @@ argent flow run .argent/flows --recursive
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
+Argent adds a time to the output lines in this table. On a step line, the time comes before the reason. On the other lines, the time comes last. Argent rounds a time to 0.1 seconds. A result below one minute shows as `(1.2s)`. Other times show in whole minutes and seconds, as `(1m 32s)`.
+
+| Line                       | Time                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Step line                  | The time of the step. A skipped step shows no time. An `echo` line shows no time                                          |
+| `when` step line           | The time of the guard only. The line of an unmet guard also shows the time. An unmet UI guard uses the full 1000 ms grace |
+| `run` step line            | The time to load the fragment only                                                                                        |
+| Last line of a flow run    | The time of the run. This time includes the read of the flow file, the device resolution and the teardown                 |
+| Summary of a directory run | The time of the directory run. The CLI measures this time. It also includes the transport and the artifact export         |
+
+The steps in a `when` block or in a fragment show their own times. The time of the run includes the time of each step. The result of the `flow-execute` tool shows the same times.
+
 A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
 
 A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
 
-The outcome line of a flow that produced a report gives the result and the step counts of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
+The outcome line of a flow that produced a report gives the result, the step counts and the time of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
 
 | Outcome line                     | Meaning                                                         |
 | -------------------------------- | --------------------------------------------------------------- |
@@ -369,9 +381,9 @@ The outcome line of a flow that produced a report gives the result and the step 
 
 `--json` and `--json-stream` print no header, no outcome line and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped` and a `flows` array. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
-A single flow run with `--json` writes the report of that flow. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
+A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step holds its own `durationMs`, except a skipped step. The entry of an unmet `when` guard also holds `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 

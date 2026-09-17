@@ -274,4 +274,6 @@ Manual rescue invalidates the pass. An `errored` step was never evaluated: an `i
 
 A [selector-less gesture](flow-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source, usually by relaunching the app so the instrumentation loads. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).
 
+A replay step line of a step that ran shows the time of the step after its label, for example `(1.2s)`. A slow `tap` points at a screen that was still moving or a target that showed late: the runner waits for both before it acts. A slow `type` can also mean the field never reported focus: the runner waits up to 3 seconds for it.
+
 One uninterrupted full pass completes a normal flow. `argent-qa-flows` requires two consecutive passes of unchanged YAML. For CI, use `argent flow run <name> [--platform ...]`; it exits non-zero on failure.

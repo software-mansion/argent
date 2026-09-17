@@ -1843,6 +1843,7 @@ describe("argent flow run <dir>", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     exitSpy.mockRestore();
     logSpy.mockRestore();
     errSpy.mockRestore();
@@ -1871,6 +1872,22 @@ describe("argent flow run <dir>", () => {
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("ends each flow verdict with its run time and the batch verdict with the batch time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    toolsClientMock.callTool.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 45_000);
+      return { data: report({ durationMs: 44_000 }) };
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    // Per-flow time from the report; batch time from the CLI's clock.
+    expect(logs).toContain(
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped (44.0s)"
+    );
+    expect(logs.at(-1)).toBe("\nPASS — 2 flows: 2 passed, 0 failed, 0 skipped (1m 30s)");
   });
 
   it("prints a passing script's output, the only record a green batch run leaves", async () => {
@@ -2285,9 +2302,17 @@ describe("argent flow run <dir>", () => {
   });
 
   it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
     toolsClientMock.callTool
-      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
-      .mockRejectedValueOnce(new Error("boom"));
+      .mockImplementationOnce(async () => {
+        advance(4000);
+        return { data: report({ flow: "a-login" }) };
+      })
+      .mockImplementationOnce(async () => {
+        advance(1500);
+        throw new Error("boom");
+      });
 
     await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
 
@@ -2299,6 +2324,8 @@ describe("argent flow run <dir>", () => {
       passed: 1,
       failed: 1,
       skipped: 1,
+      // The CLI's own clock around the whole batch, failed calls included.
+      durationMs: 5500,
       flows: [
         { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
         { path: "b-checkout.yaml", status: "fail", error: "boom" },

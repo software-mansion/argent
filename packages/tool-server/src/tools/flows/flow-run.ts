@@ -250,6 +250,13 @@ export interface StepReport {
    * so renderers cannot reconstruct depth downstream.
    */
   depth?: number;
+  /**
+   * Wall-clock milliseconds the runner spent on this step. Absent on a step
+   * that reports `skip`, except an unmet `when:` marker. A `when:` marker times
+   * only its guard and a `run:` marker only the fragment load; the steps they
+   * expand time themselves.
+   */
+  durationMs?: number;
 }
 
 export interface FlowRunResult {
@@ -267,6 +274,10 @@ export interface FlowRunResult {
   skipped: number;
   errored: number;
   steps: StepReport[];
+  /** Epoch milliseconds when the run started, before the flow file was read. */
+  startedAt: number;
+  /** Wall-clock milliseconds of the whole run, device resolution and teardown included. */
+  durationMs: number;
 }
 
 export interface FlowPrerequisiteNotice {
@@ -1261,6 +1272,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
+      const runStartedAt = Date.now();
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
@@ -1438,7 +1450,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
         device?.id ?? "",
         flow.executionPrerequisite,
         state.reports,
-        aborted
+        aborted,
+        { startedAt: runStartedAt, durationMs: Date.now() - runStartedAt }
       );
     },
   };
@@ -1763,7 +1776,8 @@ function summarize(
   deviceId: string,
   executionPrerequisite: string,
   steps: StepReport[],
-  aborted: boolean
+  aborted: boolean,
+  timing: { startedAt: number; durationMs: number }
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
@@ -1793,6 +1807,7 @@ function summarize(
     skipped,
     errored,
     steps,
+    ...timing,
   };
 }
 
@@ -1981,7 +1996,12 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
+    // Timed here, not in pushReport, which only sees the finished report. A
+    // leaf reports skip only when the run was cancelled mid-step; it gets no
+    // time.
+    const startedAt = Date.now();
     const report = await execLeafStep(state, step, index, scope);
+    if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
@@ -2065,6 +2085,10 @@ async function execWhenStep(
     ...depthOf(scope),
   } as const;
   const inner = childScope(scope);
+  // The marker is pushed before its guarded steps run, so its time is the
+  // guard alone: an unmet UI condition spends the whole assert grace here. A
+  // guard cancelled mid-probe gets no time, like a leaf step that skips.
+  const guardStartedAt = Date.now();
 
   let met: boolean;
   if (step.condition.kind === "platform") {
@@ -2086,6 +2110,7 @@ async function execWhenStep(
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
@@ -2100,6 +2125,7 @@ async function execWhenStep(
       ...marker,
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
+      durationMs: Date.now() - guardStartedAt,
     });
     reportBlockSkipped(state, step.steps, inner, "when block skipped");
     return;
@@ -2107,7 +2133,12 @@ async function execWhenStep(
 
   // Marker for the block, then the guarded steps inline — same fragment
   // attribution, one level deeper, failures hard-stop as anywhere else.
-  pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  pushReport(state, {
+    ...marker,
+    status: "pass",
+    reason: `condition met (${label})`,
+    durationMs: Date.now() - guardStartedAt,
+  });
   await execSteps(state, step.steps, inner);
 }
 
@@ -2154,6 +2185,9 @@ async function execRunStep(
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
   const display = runDisplayName(target, scope);
+  // The marker's own cost: resolving, reading and parsing the fragment. The
+  // fragment's steps time themselves.
+  const startedAt = Date.now();
 
   const fail = (reason: string): void => {
     pushReport(state, {
@@ -2164,6 +2198,7 @@ async function execRunStep(
       target,
       reason,
       ...depthOf(scope),
+      durationMs: Date.now() - startedAt,
     });
     state.stopped = true;
   };
@@ -2248,6 +2283,7 @@ async function execRunStep(
     flow: display,
     target,
     ...depthOf(scope),
+    durationMs: Date.now() - startedAt,
   });
   await execSteps(
     state,

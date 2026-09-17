@@ -311,6 +311,52 @@ describe("flow report rendering", () => {
     expect(renderSummary(report)).toContain("1 warning");
   });
 
+  it("renderStepLine puts the step time between the label and the reason", () => {
+    const step: StepReport = {
+      index: 0,
+      kind: "tap",
+      status: "fail",
+      target: '"Pay"',
+      flow: "login",
+      reason: "no match",
+    };
+    expect(renderStepLine(step, 1, "checkout")).toBe('  ✗  1 tap "Pay" [login] — no match');
+    expect(renderStepLine({ ...step, durationMs: 5002 }, 1, "checkout")).toBe(
+      '  ✗  1 tap "Pay" [login] (5.0s) — no match'
+    );
+  });
+
+  it("formats a duration as tenths under a minute and minutes plus seconds from one", () => {
+    const line = (durationMs: unknown) =>
+      renderStepLine({ index: 0, kind: "tap", status: "pass", durationMs } as StepReport, 1, "f");
+    expect(line(0)).toBe("  ✓  1 tap (0.0s)");
+    expect(line(440)).toBe("  ✓  1 tap (0.4s)");
+    expect(line(12_345)).toBe("  ✓  1 tap (12.3s)");
+    // No "(60.0s)": a value that rounds to a minute moves to the minute form.
+    expect(line(59_940)).toBe("  ✓  1 tap (59.9s)");
+    expect(line(59_950)).toBe("  ✓  1 tap (1m 0s)");
+    expect(line(92_400)).toBe("  ✓  1 tap (1m 32s)");
+    // A duration is wire data: anything but a finite non-negative number shows nothing.
+    for (const bad of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
+      expect(line(bad)).toBe("  ✓  1 tap");
+    }
+  });
+
+  it("renderSummary ends with the run time, after the warning and no-steps notes", () => {
+    expect(renderSummary(mkReport(STEPS, { durationMs: 9912 }))).toBe(
+      "FAIL — 2 passed, 1 failed, 0 errored, 1 skipped (9.9s)"
+    );
+    const warned = mkReport([{ index: 0, kind: "idle", status: "pass", warning: "moving" }], {
+      durationMs: 1200,
+    });
+    expect(renderSummary(warned)).toBe(
+      "PASS — 1 passed, 0 failed, 0 errored, 0 skipped, 1 warning (1.2s)"
+    );
+    expect(renderSummary(mkReport([], { durationMs: 50 }))).toBe(
+      "PASS — 0 passed, 0 failed, 0 errored, 0 skipped (no test steps) (0.1s)"
+    );
+  });
+
   it("renderBatchSummary mirrors the step summary's verdict shape", () => {
     expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 })).toBe(
       "FAIL — 3 flows: 2 passed, 1 failed, 0 skipped"
@@ -321,6 +367,9 @@ describe("flow report rendering", () => {
     // Skips only ever follow a failure, so they never turn the verdict alone.
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
       "PASS — 2 flows: 1 passed, 0 failed, 1 skipped"
+    );
+    expect(renderBatchSummary({ total: 2, passed: 1, failed: 1, skipped: 0 }, 92_400)).toBe(
+      "FAIL — 2 flows: 1 passed, 1 failed, 0 skipped (1m 32s)"
     );
   });
 });
