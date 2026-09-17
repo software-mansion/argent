@@ -369,14 +369,14 @@ The outcome line of a flow that produced a report gives the result, the step cou
 | `did not finish (no run report)` | The tool-server answered without a run report                   |
 | `not run (batch stopped)`        | An earlier failure ended the directory run. Directory runs only |
 
-The `Failed flows` section has one entry for each flow that failed. The entries are in the sequence of the run. Each entry holds these items:
+The `Failed flows` section has one entry for each flow that failed. Each entry holds these items:
 
-- The flow path, relative to the directory of the run.
-- The first step that failed or errored, with its number. A flow without a report gives its outcome line instead. A report without such a step gives `failed with no failing step`.
-- The reason of that step, or the error message of a flow without a report. The reason can use more than one line.
+- The flow path.
+- The first step that failed or errored, with its number. A flow without a report gives its outcome line instead.
+- The reason of that step, or the error message of a flow without a report.
 - A `re-run:` command that runs only that flow. The command uses the same `--device` and `--platform` values as the directory run.
 
-The path in the `re-run:` command is relative to the current directory. For a flow outside the current directory, the command uses the absolute path. The section does not include the flows that Argent skipped.
+The section does not include the flows that Argent skipped.
 
 This is the end of the output of `argent flow run ./flows --recursive --platform chromium`:
 
