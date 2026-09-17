@@ -213,6 +213,7 @@ describe("argent config — usage", () => {
     expect(out).toContain("Recognized keys:");
     expect(out).toContain("\n  telemetry.enabled\n      Whether anonymous");
     for (const line of out.split("\n")) {
+      // eslint-disable-next-line no-control-regex
       expect(line.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(80);
     }
   });
