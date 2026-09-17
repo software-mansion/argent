@@ -14,11 +14,11 @@ A session is your authenticated connection to Argent Cloud. A machine is a hoste
 
 ## The daemon
 
-`sim-remote` runs a small background daemon on your computer. The daemon holds the session token in memory, sends a heartbeat to the server, and owns the tunnels. Any command that needs a session starts the daemon. If you send no command for 15 minutes, the daemon releases the machine on its own. The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts.
+`sim-remote` runs a small background daemon on your computer. The daemon holds the session token in memory, sends a heartbeat to the server, and tunnels the network to the simulators. Any command that needs a session starts the daemon. If you send no command for 15 minutes, the daemon releases the machine on its own. The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts.
 
 ## Simulator control
 
-`sim-remote simctl` runs `xcrun simctl` on the machine. The command has the same subcommands, the same arguments, the same output and the same exit codes. A file path from your computer means nothing on the hosted machine. For this reason, `sim-remote` runs the subcommands that name a file on its own. It uploads the file for `install`, `addmedia` and `push`, and downloads the result for `io screenshot`, `io recordVideo` and `get_app_container`. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
+`sim-remote simctl` is a drop-in replacement for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. For commands that need access to files on your computer (such as `install`, `addmedia` or `push`) it uploads them to the runner for you. For commands that produce files (`io screenshot`, `io recordVideo`, `get_app_container`) it handles the download. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
 
 ## Networking
 
