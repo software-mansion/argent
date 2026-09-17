@@ -10,11 +10,10 @@ You control a hosted simulator with `sim-remote simctl`. The command runs `xcrun
 
 ## Boot a simulator
 
-List the simulators on your machine. Copy the UDID of one of them. Boot the simulator. Wait until the boot completes.
+List the simulators on your machine. Copy the UDID of one of them. Boot the simulator and wait until the boot completes. The `-b` option boots the simulator if it is not booted yet.
 
 ```bash
 sim-remote simctl list devices available
-sim-remote simctl boot <UDID>
 sim-remote simctl bootstatus <UDID> -b
 ```
 

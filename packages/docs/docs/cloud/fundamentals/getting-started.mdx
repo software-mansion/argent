@@ -21,7 +21,7 @@ Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundame
 3. Run export SIM_ROUTER_API_KEY=<my api key>, then run sim-remote login and wait until
    it prints the acquired machine. Do not write the key to any file.
 4. Run sim-remote simctl list devices available and pick an iPhone.
-5. Boot it with sim-remote simctl boot <UDID> and wait with sim-remote simctl bootstatus <UDID> -b.
+5. Boot it and wait until the boot completes with sim-remote simctl bootstatus <UDID> -b.
 6. Report the machine name, the UDID and the state of the simulator.
 
 Do not run sim-remote logout. I want to keep the machine.
@@ -80,10 +80,9 @@ List the simulators on your machine and copy the UDID of one of them.
 sim-remote simctl list devices available
 ```
 
-Boot the simulator and wait until the boot completes.
+Boot the simulator and wait until the boot completes. The `-b` option boots the simulator if it is not booted yet.
 
 ```bash
-sim-remote simctl boot <UDID>
 sim-remote simctl bootstatus <UDID> -b
 ```
 
