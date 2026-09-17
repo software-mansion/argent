@@ -8,6 +8,9 @@ import {
   renderUnderStepLine,
   renderFailedSteps,
   renderBatchSummary,
+  renderFailedFlows,
+  renderSingleFailure,
+  summarizeFailure,
   type FlowReport,
   type StepReport,
 } from "../src/flow.js";
@@ -48,7 +51,7 @@ const STEPS: StepReport[] = [
 ];
 
 describe("flow report rendering", () => {
-  it("buffered renderReport keeps its historical shape", () => {
+  it("buffered renderReport prints every step, then the failure recap and the summary", () => {
     const out = renderReport(mkReport(STEPS));
     expect(out).toBe(
       [
@@ -60,6 +63,9 @@ describe("flow report rendering", () => {
         "       baseline: /tmp/b.png",
         "       diff: /tmp/d.png",
         '  ·  4 await visible "Done"',
+        "",
+        '  ✗ step 3 snapshot "home"',
+        "    diff 2.10% > 1%",
         "",
         "FAIL — 2 passed, 1 failed, 0 errored, 1 skipped",
       ].join("\n")
@@ -369,5 +375,91 @@ describe("flow report rendering", () => {
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 1, skipped: 0 }, 92_400)).toBe(
       "FAIL — 2 flows: 1 passed, 1 failed, 0 skipped (1m 32s)"
     );
+  });
+});
+
+describe("failure recap", () => {
+  it("numbers the failing step as the per-flow block does, skipping echo narration", () => {
+    expect(summarizeFailure(mkReport(STEPS))).toEqual({
+      headline: 'step 3 snapshot "home"',
+      detail: "diff 2.10% > 1%",
+    });
+  });
+
+  it("names the first failing step, errors included, with its fragment", () => {
+    const report = mkReport([
+      { index: 0, kind: "echo", status: "pass", message: "go" },
+      { index: 1, kind: "tap", status: "pass" },
+      { index: 2, kind: "tool", status: "error", tool: "screenshot", flow: "login" },
+      { index: 3, kind: "assert", status: "fail", reason: "later" },
+    ]);
+    expect(summarizeFailure(report)).toEqual({
+      headline: "step 2 tool screenshot [login]",
+      detail: undefined,
+    });
+  });
+
+  it("renders a non-string wire reason the way the step line does, instead of throwing", () => {
+    const step = { index: 0, kind: "tap", status: "fail", reason: 42 } as unknown as StepReport;
+    const report = mkReport([step]);
+    expect(renderStepLine(step, 1, "checkout")).toBe("  ✗  1 tap — 42");
+    expect(renderSingleFailure(report)).toEqual(["", "  ✗ step 1 tap", "    42"]);
+  });
+
+  it("says so when a failed report has no failing step", () => {
+    const report = mkReport([{ index: 0, kind: "tap", status: "skip" }], { ok: false });
+    expect(summarizeFailure(report)).toEqual({ headline: "failed with no failing step" });
+  });
+
+  it("prints nothing when no flow failed", () => {
+    expect(renderFailedFlows([])).toEqual([]);
+  });
+
+  it("lists each failed flow in the order given, with its detail and re-run command", () => {
+    expect(
+      renderFailedFlows([
+        {
+          path: "a-login.yaml",
+          headline: 'step 2 assert visible "Home"',
+          detail: 'no element matched selector text="Home"',
+          rerun: "argent flow run flows/a-login.yaml --platform ios",
+        },
+        {
+          path: "sub/c-search.yaml",
+          headline: "not run (invalid flow)",
+          detail: "flow file is not valid YAML\n\n  at line 4",
+          rerun: "argent flow run flows/sub/c-search.yaml --platform ios",
+        },
+        {
+          path: "b-checkout.yaml",
+          headline: "failed with no failing step",
+          rerun: "argent flow run flows/b-checkout.yaml --platform ios",
+        },
+      ])
+    ).toEqual([
+      "",
+      "Failed flows (3)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      "    re-run: argent flow run flows/a-login.yaml --platform ios",
+      "",
+      "  ✗ sub/c-search.yaml › not run (invalid flow)",
+      "    flow file is not valid YAML",
+      "      at line 4",
+      "    re-run: argent flow run flows/sub/c-search.yaml --platform ios",
+      "",
+      "  ✗ b-checkout.yaml › failed with no failing step",
+      "    re-run: argent flow run flows/b-checkout.yaml --platform ios",
+    ]);
+  });
+
+  it("recaps a single failed run without a flow name or a re-run command", () => {
+    expect(renderSingleFailure(mkReport(STEPS))).toEqual([
+      "",
+      '  ✗ step 3 snapshot "home"',
+      "    diff 2.10% > 1%",
+    ]);
+    expect(renderSingleFailure(mkReport([{ index: 0, kind: "tap", status: "pass" }]))).toEqual([]);
   });
 });
