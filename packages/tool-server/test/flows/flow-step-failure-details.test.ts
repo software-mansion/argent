@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// Serve the flow tree directly: flows resolve selectors against the platform's
-// full-hierarchy source and hard-fail rather than degrade to the AX tree, so
-// these unit tests stub the tree fetch itself. A `currentTree` that throws is a
-// failed tree read.
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(
@@ -59,7 +55,6 @@ describe("tap-family selector misses", () => {
       steps: [{ kind: "tap", selector: { text: "Buy" } }],
     });
 
-    // Both flows read the same tree, so they share one auto-wait.
     const [one, two] = await Promise.all([run("one-zero-area"), run("two-zero-area")]);
 
     expect(one.steps[0]).toMatchObject({
@@ -97,7 +92,6 @@ describe("text check failures", () => {
   });
 
   it("caps a long actual text at 300 characters and keeps it out of the reason", async () => {
-    // An emoji across the cut: the cap drops its first half rather than split it.
     const screenText = "Home Cart Checkout Pay Total $41.50 Apply coupon "
       .repeat(50)
       .slice(0, 299)

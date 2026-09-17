@@ -266,7 +266,6 @@ describe("runSnapshot baselines", () => {
     expect(r.reason).toContain("390x844");
     expect(r.reason).toContain("nothing was compared");
     expect(r).toMatchObject({ expected: "844x390", actual: "390x844" });
-    // The element-size advice is for cropOn only.
     expect(r.hint).toBeUndefined();
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });

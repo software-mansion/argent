@@ -148,7 +148,6 @@ describe("text matches: execution", () => {
         expected: testCase.expectedText,
         actual: "Actual",
       });
-      // The label is both the own text and the text the check read: no own-text hint.
       expect(result.steps[0]?.hint).toBeUndefined();
     }
   }, 10_000);

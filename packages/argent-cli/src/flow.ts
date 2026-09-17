@@ -27,11 +27,8 @@ export interface StepReport {
   reason?: string;
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
-  /** What to try first about a step that did not pass. */
   hint?: string;
-  /** The value the check wanted, raw. */
   expected?: string;
-  /** The value the check saw, raw. */
   actual?: string;
   tool?: string;
   flow?: string;
@@ -268,12 +265,6 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
-/**
- * The `expected:`, `actual:` and `hint:` lines under a step that has them.
- * The values are wire data, so a control character in one becomes a space
- * and cannot break the line. A snapshot's values are measurements and print
- * bare; every other step's are text and print quoted.
- */
 export function renderStepDetailLines(s: StepReport, n: number): string[] {
   const oneLine = (v: string): string => v.replace(/\p{Cc}/gu, " ");
   const value = (v: string): string => (s.kind === "snapshot" ? oneLine(v) : `"${oneLine(v)}"`);

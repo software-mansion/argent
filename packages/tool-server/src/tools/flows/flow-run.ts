@@ -204,14 +204,8 @@ export interface StepReport {
   warning?: string;
   /** What to try first about a step that did not pass. Never restates `reason`. */
   hint?: string;
-  /** The value the check wanted, raw: a text check's text, a snapshot's tolerance or size. */
   expected?: string;
-  /** The value the check saw, raw; a text value is capped at 300 characters. */
   actual?: string;
-  /**
-   * The check could not be evaluated because the UI tree could not be read.
-   * Not a verdict on the app: re-run before editing the flow.
-   */
   indeterminate?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
@@ -2359,11 +2353,6 @@ const INDETERMINATE_HINT =
   "argent could not read the screen, so this is not a verdict on the app; re-run, or fix the " +
   "device and tree source, before editing the flow";
 
-/**
- * The optional report fields a failed check carries beside its `reason`. An
- * indeterminate outcome is flagged, and gets the shared hint when its site
- * has no more specific one.
- */
 function outcomeDetails(
   r: Pick<DirectiveOutcome, "indeterminate" | "hint" | "expected" | "actual">
 ): Pick<StepReport, "hint" | "expected" | "actual" | "indeterminate"> {

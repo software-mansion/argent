@@ -165,18 +165,11 @@ export interface DirectiveOutcome {
    * the step report.
    */
   warning?: string;
-  /** What to try first. Never restates `reason`. */
   hint?: string;
-  /** The value the check wanted, raw. */
   expected?: string;
-  /** The value the check saw, raw and capped at {@link MAX_ACTUAL_CHARS}. */
   actual?: string;
 }
 
-/**
- * Cap on `actual`: a container-sized selector hoists the text of a whole
- * screen, and a reader who needs all of it runs `describe`.
- */
 const MAX_ACTUAL_CHARS = 300;
 
 function capActual(text: string): string {
@@ -699,7 +692,6 @@ interface ScrollResolve {
   frame?: DescribeFrame;
   /** Why the scroll stopped without finding the target. */
   reason?: string;
-  /** What to check when it did. */
   hint?: string;
   /** The run was cancelled mid-scroll. */
   aborted?: boolean;
@@ -853,8 +845,8 @@ async function scrollToVisible(
 // `tap`/`type` auto-wait but deliberately do NOT auto-scroll: an implicit
 // scroll would widen a loose selector's match scope from the viewport to the
 // whole page, mutate scroll state even when the step fails, and stretch a
-// failure to the scroll search's worst case. So the hint names the scroll-to
-// step. A zero-area match gets a wider hint: a tree source can keep an
+// failure to the scroll search's worst case.
+// A zero-area match gets a wider hint: a tree source can keep an
 // off-screen node at zero area, and the same frame also means an element that
 // is hidden or not laid out.
 export function selectorMiss({ unresolved, matched }: FrameMiss): {

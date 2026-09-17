@@ -456,10 +456,6 @@ function elisionMarker(dropped: number): string {
   return `… (${dropped} more chars) …`;
 }
 
-/**
- * A determinate outcome as one line: the reason, then the text the check saw,
- * then the hint.
- */
 function probeVerdict(outcome: DirectiveOutcome): string {
   return [
     outcome.reason ?? "no match",

@@ -302,7 +302,6 @@ describe("flow report rendering", () => {
     expect(
       renderStepDetailLines({ index: 0, kind: "assert", status: "fail", actual: "Pending" }, 1)
     ).toEqual(['       actual:   "Pending"']);
-    // Wire data: a value that is not a string prints nothing.
     const hostile = {
       index: 0,
       kind: "assert",
