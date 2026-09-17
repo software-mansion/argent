@@ -59,6 +59,11 @@ All prose in `docs/` is written in **Simplified Technical English (ASD-STE100)**
 
 `docs/features/network.mdx` is the reference for the target style.
 
+## Verify claims
+
+Check every factual claim against the code or the repository before writing it. Do not cite
+the check in the prose.
+
 ## Adding a page
 
 Every doc page needs front matter with a **lucide sidebar icon**:

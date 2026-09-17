@@ -140,24 +140,4 @@ See [Connect to local servers](/docs/cloud/guides/local-servers).
 | Intel macOS (`macos-13`)        | No. There is no `x86_64-apple-darwin` binary |
 | Windows                         | No                                           |
 
-## Use from another organization
-
-The repository is private. GitHub resolves a `uses:` reference to a private action only from a repository in the same organization. From another organization, check the actions out with a token that has read access and reference them by path:
-
-```yaml
-- name: Check out the Argent Cloud actions
-  uses: actions/checkout@v5
-  with:
-    repository: software-mansion-labs/argent-cloud-actions
-    ref: v1
-    path: .argent-cloud-actions
-    token: ${{ secrets.ARGENT_ACTIONS_TOKEN }}
-
-- uses: ./.argent-cloud-actions/install
-
-- uses: ./.argent-cloud-actions/acquire
-  with:
-    api-key: ${{ secrets.SIM_ROUTER_API_KEY }}
-```
-
 [Maestro](/docs/cloud/integrations/maestro) describes the flows that the job runs. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.
