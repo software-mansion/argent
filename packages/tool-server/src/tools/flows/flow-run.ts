@@ -974,6 +974,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
+  /**
+   * Time the hoisted boot took before step 1. The first `launch` step settles
+   * that instance, so it adds this time to its own.
+   */
+  hoistedBootMs?: number;
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
   /**
@@ -1358,6 +1363,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // Resolve the run device (a run whose leading launch — direct, or reached
       // through a leading run: chain — is chromium boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
+      const resolveStartedAt = Date.now();
       const resolved = await resolveRunDevice(
         registry,
         ctx,
@@ -1410,6 +1416,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         stopped: false,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
+        ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
         projectRoot: params.project_root,
@@ -1994,7 +2001,11 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
-    const startedAt = Date.now();
+    let startedAt = Date.now();
+    if (step.kind === "launch" && state.hoistedBootMs !== undefined) {
+      startedAt -= state.hoistedBootMs;
+      state.hoistedBootMs = undefined;
+    }
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     pushReport(state, report);
