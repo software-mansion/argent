@@ -13,10 +13,12 @@ import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
 
-// Session for the `screen-recording-*` tools, one shape for both platforms:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
-// up. Mirrors the native-profiler session.
+// Session for the `screen-recording-*` tools, one shape for every platform.
+// Local iOS/Android captures pace simulator-server's MJPEG stream into an
+// ffmpeg child that writes the mp4 host-side, so there is nothing device-side
+// to clean up; remote (`remote:`) simulators record on the runner instead and
+// leave a buffer there that a teardown has to release (`remoteRelease`).
+// Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -30,7 +32,7 @@ export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
 
 export interface ScreenRecordingSessionApi {
   deviceId: string;
-  platform: "ios" | "android";
+  platform: "ios" | "android" | "ios-remote";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
   /**
@@ -80,6 +82,22 @@ export interface ScreenRecordingSessionApi {
   pumpTimer: NodeJS.Timeout | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
+  /** Whether this capture asked for the corner watermark. Remote only — the
+   * local path bakes it into the encode instead of carrying it on the session. */
+  watermark: boolean;
+  /**
+   * Remote only: the in-flight (or finished) download the time-limit cap
+   * started, so a stop arriving afterwards waits for it instead of asking the
+   * runner to stop a recording that already ended.
+   */
+  remoteFetch: Promise<void> | null;
+  /** Remote only: why that cap-time download failed, surfaced by stop. */
+  remoteFetchError: Error | null;
+  /**
+   * Remote only: releases the runner-side recording, for a teardown that
+   * abandons the capture. Null once stop has ended it.
+   */
+  remoteRelease: (() => Promise<void>) | null;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
   framesWritten: number;
   /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
@@ -120,6 +138,9 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.lastFrameStreamError = null;
   state.pointerDisable = null;
   state.pointerFailed = false;
+  state.remoteFetch = null;
+  state.remoteFetchError = null;
+  state.remoteRelease = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -150,7 +171,11 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    if (device.platform !== "ios" && device.platform !== "android") {
+    if (
+      device.platform !== "ios" &&
+      device.platform !== "android" &&
+      device.platform !== "ios-remote"
+    ) {
       throw new FailureError(
         `${SCREEN_RECORDING_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
         {
@@ -178,6 +203,10 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       lastFrameStreamError: null,
       pumpTimer: null,
       trimStatic: true,
+      watermark: false,
+      remoteFetch: null,
+      remoteFetchError: null,
+      remoteRelease: null,
       framesWritten: 0,
       trimmedAnyFrames: false,
       pointerDisable: null,
@@ -216,6 +245,15 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           state.pumpTimer = null;
         }
         state.frameStream?.close();
+
+        // A remote capture keeps recording on the runner until someone tells
+        // it to stop; abandoning it here would leave simulator-server
+        // buffering frames for a video nobody will ever collect.
+        if (state.remoteRelease) {
+          const release = state.remoteRelease;
+          state.remoteRelease = null;
+          await release().catch(() => {});
+        }
 
         // The overlay is sim-server global state that must not outlive the
         // capture.
@@ -269,7 +307,11 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
               "screen-recording",
               state.deviceId,
               abandonedOutput
-                ? `ffmpeg was given a moment to finalize the container first, so the video ` +
+                ? state.platform === "ios-remote"
+                  ? `The runner-side recording was ended and downloaded first, so the video ` +
+                    `captured up to that point is usually playable at ${abandonedOutput} — ` +
+                    `check it before re-recording.`
+                  : `ffmpeg was given a moment to finalize the container first, so the video ` +
                     `captured up to that point is usually playable at ${abandonedOutput} — ` +
                     `check it before re-recording.`
                 : undefined

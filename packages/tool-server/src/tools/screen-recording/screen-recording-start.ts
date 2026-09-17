@@ -8,9 +8,11 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
 import { startCapture, type PointerControl } from "./capture";
+import { startRemoteCapture } from "./capture-remote";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -50,12 +52,15 @@ const zodSchema = z.object({
     .describe(
       "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
         "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
-        "the video makes clear where every interaction landed. Set false to record the raw screen with no overlay."
+        "the video makes clear where every interaction landed. On remote (`remote:`) simulators the overlay " +
+        "is drawn on the runner and is also visible in the live stream until the recording stops. " +
+        "Set false to record the raw screen with no overlay."
     ),
 });
 
 const capability = {
   apple: { simulator: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -77,7 +82,8 @@ By default every tap, swipe, drag, pinch and rotate is drawn into the video as a
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses — immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior — for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile } — the video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
+On a remote (\`remote:\`) simulator the recording is made on the runner and downloaded by \`screen-recording-stop\`; trimming and the watermark are applied locally afterwards, and are skipped with a warning if ffmpeg is not installed rather than failing the recording.
+Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium and Vega are unsupported).`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
@@ -93,7 +99,11 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // Distinguish tvOS from iOS by runtime — shape alone can't. tvOS has no
       // simulator-server backend, so say so here instead of failing deeper in.
-      if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
+      const isTvOs =
+        device.platform === "ios-remote"
+          ? await isRemoteTvOsSimulator(params.udid)
+          : device.platform === "ios" && (await isTvOsSimulator(params.udid));
+      if (isTvOs) {
         throw new FailureError(
           `Screen recording is not supported on tvOS simulators (device ${params.udid}).`,
           {
@@ -106,6 +116,23 @@ Fails if a recording is already running on the device, the device is not booted,
       }
 
       const timeLimitSeconds = params.timeLimitSeconds ?? DEFAULT_TIME_LIMIT_SECONDS;
+      // Read the watermark flag live per call so `argent enable/disable
+      // video-watermark` takes effect without restarting the long-lived
+      // tool-server.
+      const watermark = isFeatureEnabled("video-watermark");
+      const showTouches = params.showTouches ?? true;
+
+      if (device.platform === "ios-remote") {
+        // Nothing local to encode: simulator-server records on the runner and
+        // the mp4 is fetched at stop. The touch visualizer is drawn there too,
+        // into the frames before they are encoded.
+        return startRemoteCapture(api, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches,
+        });
+      }
 
       // The same simulator-server instance `screenshot` and the input tools use;
       // resolving here attaches to it, or starts it if nothing else needed it yet.
@@ -115,8 +142,7 @@ Fails if a recording is already running on the device, the device is not booted,
       if (!streamUrl || !/^https?:\/\//.test(streamUrl)) {
         throw new FailureError(
           `simulator-server is not exposing a frame stream for device ${device.id}, so there is ` +
-            `nothing to record. Remote (\`remote:\`) simulators stream over a transport this tool ` +
-            `cannot read; otherwise the bundled simulator-server build predates streaming support.`,
+            `nothing to record — the bundled simulator-server build predates streaming support.`,
           {
             error_code: FAILURE_CODES.SCREEN_RECORDING_STREAM_UNAVAILABLE,
             failure_stage: "screen_recording_resolve_stream",
@@ -130,17 +156,14 @@ Fails if a recording is already running on the device, the device is not booted,
       // capture.ts arms the visualizer once the encoder is live and restores it
       // to off when the recording ends. The toggles are best-effort: a failure
       // only costs the overlay, surfaced as a warning at stop.
-      const showTouches = params.showTouches ?? true;
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
         : undefined;
 
-      // Read the flag live per call so `argent enable/disable video-watermark`
-      // takes effect without restarting the long-lived tool-server.
       return startCapture(api, {
         streamUrl,
         timeLimitSeconds,
-        watermark: isFeatureEnabled("video-watermark"),
+        watermark,
         trimStatic: params.trimStatic ?? true,
         pointer,
       });
