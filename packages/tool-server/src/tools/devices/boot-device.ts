@@ -46,7 +46,6 @@ import {
   simctlListDevices as simRemoteListDevices,
   simctlShutdown as simRemoteShutdown,
 } from "../../utils/sim-remote";
-import { startHidWarmUp } from "../../utils/hid-suppression";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -455,47 +454,12 @@ async function bootIos(
     });
   }
 
-  // Protect the simulator's HID services, started BEFORE `simctl boot` rather
-  // than after it (#932). A CoreDevice client — DeviceHub attaches to every
-  // simulator that boots — suppresses them ~1.2s in, and the only way to keep
-  // them is to have sent one event per service before that. The one-shot
-  // attaches in ~170ms and retries until the device is up, so firing it here
-  // lands the first event at ~300ms, before `simctl boot` even returns.
-  //
-  // Spawning the full simulator-server instead does not work: standing up the
-  // process and its transports takes ~3s, and every measured cold boot lost all
-  // three services that way.
-  //
-  // Only when a boot is actually about to happen. On a simulator already up the
-  // window closed seconds ago, so the one-shot would protect nothing and merely
-  // fire release events at whatever is on screen while this call waits on it.
-  //
-  // That is keyed on the one state which is provably pointless, rather than on
-  // `needsPreBoot` — which is narrower than it looks. `needsPreBoot` is false
-  // for a simulator already `Booting`, whose window may well still be open, and
-  // false when `listIosSimulators` failed and `simState` is undefined, where the
-  // `simctl boot` below may still be a real cold boot. Both would go
-  // unprotected, and an unnecessary warm-up only costs a detached subprocess
-  // where a missing one costs the input services for that `backboardd` life.
-  //
-  // By state and not by boot age, so a simulator someone else started a moment
-  // ago reads as `Booted` while its window is still open, and loses a warm-up it
-  // might have won. That is already the documented "argent did not start it"
-  // case, and not worth a stat on every boot to narrow.
-  //
-  // Skipped for tvOS too. `bootIos` serves those, and they have no main-screen
-  // digitizer — an Indigo event naming a target that is not in the service table
-  // raises NSInternalInconsistencyException and takes `backboardd` down.
-  const alreadyUp = simState === "Booted" && !force;
-  const hidWarmUp = alreadyUp || isTvOs ? Promise.resolve() : startHidWarmUp(udid, deviceSet);
-
   await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-
   await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
 
   // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
@@ -535,13 +499,6 @@ async function bootIos(
   // write happened: SB won't pick these prefs up until the next restart, but
   // describe surfaces a degraded-quality hint.
   await ensureAutomationEnabled(udid).catch(() => undefined);
-
-  // Collect the warm-up. It ran alongside the boot and is normally long done, so
-  // this usually costs nothing; on a device that never becomes attachable it can
-  // add up to the one-shot's own attach timeout. It never rejects, and a throw
-  // between here and the spawn above simply abandons it — harmless, since it
-  // exits on its own.
-  await hidWarmUp;
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
