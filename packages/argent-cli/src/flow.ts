@@ -463,21 +463,27 @@ function shellQuoteArg(arg: string): string {
 
 /**
  * The command that runs one flow of a directory run alone, from the same
- * working directory, on the same --device and --platform. A flow outside that
- * directory keeps its absolute path, since `run` refuses ".." segments, and a
- * leading "-" gets "./" so the parser does not read the path as an option.
+ * working directory, with the same --device, --platform and --update-baselines,
+ * and an --output that exports to the directory the batch exported that flow
+ * to. A flow outside that directory keeps its absolute path, since `run`
+ * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
+ * does not read it as an option.
  */
 function rerunCommand(
   flowPath: string,
+  rel: string,
   projectRoot: string,
-  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform">
+  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
 ): string {
-  const rel = path.relative(projectRoot, flowPath);
-  let shown = path.isAbsolute(rel) || rel.split(/[\\/]+/).includes("..") ? flowPath : rel;
-  if (shown.startsWith("-")) shown = `.${path.sep}${shown}`;
-  const parts = ["argent flow run", shellQuoteArg(shown)];
+  const pathArg = (p: string) => shellQuoteArg(p.startsWith("-") ? `.${path.sep}${p}` : p);
+  const fromCwd = path.relative(projectRoot, flowPath);
+  const shown =
+    path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
+  const parts = ["argent flow run", pathArg(shown)];
   if (args.device) parts.push("--device", shellQuoteArg(args.device));
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
+  if (args.updateBaselines) parts.push("--update-baselines");
+  if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
   return parts.join(" ");
 }
 
@@ -1200,7 +1206,7 @@ async function runFlowDirectory(
       continue;
     }
     const flowPath = path.join(dir, rel);
-    const rerun = rerunCommand(flowPath, projectRoot, args);
+    const rerun = rerunCommand(flowPath, rel, projectRoot, args);
     let report: FlowReport | undefined;
     try {
       // No onProgress: batch output is failures-only, never live step lines.
