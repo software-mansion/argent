@@ -46,6 +46,17 @@ npm install -g @swmansion/argent
 argent init
 ```
 
+## Install from a GitHub release
+
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.25.1.tgz`. It is the same file npm serves. Download it and install it globally:
+
+```bash
+npm install -g ./swmansion-argent-0.25.1.tgz
+argent init
+```
+
+Argent's own dependencies still come from your configured npm registry.
+
 ## Share Argent with your team
 
 By default Argent installs **globally**. To version Argent with your repo, so every teammate gets the same setup on `npm install`, choose the local mode:
