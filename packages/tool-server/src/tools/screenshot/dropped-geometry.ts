@@ -51,17 +51,9 @@ export function chromiumDropNote(
 ): string | undefined {
   if (dropped.length === 0) return undefined;
   if (reason === "png-header-unreadable") {
-    return (
-      `${subject(dropped)} not applied — the captured PNG's header could not be read, so the ` +
-      `resize could not be sized. A rotation requested on the same call was still applied. ` +
-      `\`sharp\` is already installed; retrying the same call will likely lose the scale again.`
-    );
+    return `${subject(dropped)} not applied: the PNG header could not be read. Any rotation was applied.`;
   }
-  return (
-    `${subject(dropped)} not applied — this is the unmodified capture. Chromium image ` +
-    `post-processing needs the optional \`sharp\` package: run \`npm install sharp\` in the ` +
-    `tool-server's environment and retry, or work with the full-size image.`
-  );
+  return `${subject(dropped)} not applied: install the optional \`sharp\` package in the tool-server environment.`;
 }
 
 /**
@@ -75,9 +67,5 @@ export function unsupportedDropNote(
   target: string
 ): string | undefined {
   if (dropped.length === 0) return undefined;
-  return (
-    `${subject(dropped)} not applied — ${target} screenshots cannot be transformed that way, ` +
-    `so retrying with the same parameter will not change the result. The image is returned ` +
-    `unrotated.`
-  );
+  return `${subject(dropped)} not applied: ${target} screenshots cannot be rotated.`;
 }

@@ -38,14 +38,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override. Rarely needed: on Android the capture already follows the device's " +
-        "current rotation, so it is upright without this. Setting it replaces that with a fixed " +
-        "rotation, which on a rotated device produces an image whose geometry no longer matches " +
-        "`describe` frames or gesture coordinates. On Chromium it rotates the captured image after " +
-        "Page.captureScreenshot, which requires the optional `sharp` dependency. Apple TV, Vega " +
-        "and physical iPhone captures cannot be rotated at all. When a rotation is requested but " +
-        "not applied, the response carries a note saying so — the image is returned unrotated " +
-        "either way."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones."
     ),
   scale: z
     .number()

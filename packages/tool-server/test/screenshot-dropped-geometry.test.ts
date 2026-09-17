@@ -42,8 +42,7 @@ describe("drop notes", () => {
   it("tells a Chromium caller how to make it work", () => {
     const note = chromiumDropNote(["scale", "rotation"]);
     expect(note).toContain("scale and rotation were not applied");
-    expect(note).toContain("npm install sharp");
-    expect(note).toContain("unmodified capture");
+    expect(note).toContain("`sharp`");
   });
 
   it("names the single dropped parameter", () => {
@@ -52,24 +51,22 @@ describe("drop notes", () => {
 
   it("does not blame a missing sharp when the PNG header was the problem", () => {
     // sharp is installed in this case and a requested rotation still ran, so
-    // neither "unmodified capture" nor "npm install sharp" would be true.
+    // telling the caller to install sharp would be wrong.
     const note = chromiumDropNote(["scale"], "png-header-unreadable")!;
     expect(note).toContain("scale was not applied");
-    expect(note).toContain("rotation requested on the same call was still applied");
-    expect(note).not.toContain("npm install");
-    expect(note).not.toContain("unmodified capture");
+    expect(note).toContain("Any rotation was applied");
+    expect(note).not.toContain("install");
   });
 
   it("does not invite a pointless retry on a target that cannot transform", () => {
     const note = unsupportedDropNote(["rotation"], "Apple TV");
     expect(note).toContain("Apple TV");
-    expect(note).toContain("will not change the result");
+    expect(note).toContain("cannot be rotated");
     // A scale on the same call is still applied server-side, so the note must
     // not claim the whole image is untransformed.
-    expect(note).toContain("returned unrotated");
     expect(note).not.toContain("untransformed");
     // The Chromium remedy must not leak into a case where it cannot help.
-    expect(note).not.toContain("npm install");
+    expect(note).not.toContain("install");
   });
 
   it("keeps the reserved key stable", () => {
