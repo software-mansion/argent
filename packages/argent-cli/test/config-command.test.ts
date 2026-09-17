@@ -206,6 +206,18 @@ describe("argent config — validation & errors", () => {
   });
 });
 
+describe("argent config — usage", () => {
+  it("wraps every recognized key's description within 80 columns", () => {
+    config(["--help"]);
+    const out = output();
+    expect(out).toContain("Recognized keys:");
+    expect(out).toContain("\n  telemetry.enabled\n      Whether anonymous");
+    for (const line of out.split("\n")) {
+      expect(line.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(80);
+    }
+  });
+});
+
 describe("argent config — list & json", () => {
   it("list --json reports every schema entry with per-scope values", () => {
     config(["set", "lens.agent", "codex", "--scope", "project"]);
