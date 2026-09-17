@@ -73,7 +73,7 @@ async function startEmptyMetro(): Promise<MockMetro> {
     res.statusCode = 404;
     res.end();
   });
-  await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as AddressInfo).port;
   return {
     port,

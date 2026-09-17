@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import { InvalidToolInputError } from "../../../utils/capability";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { simctlPrivacy as remoteSimctlPrivacy } from "../../../utils/sim-remote";
@@ -113,7 +114,7 @@ function buildIosHandler(
 
     const services = IOS_SERVICES[permission];
     if (services.length === 0) {
-      throw new FailureError(
+      throw new InvalidToolInputError(
         `Permission '${permission}' cannot be changed on the iOS simulator — ` +
           `\`xcrun simctl privacy\` has no service for it. ` +
           `Interact with the notification permission dialog in the app instead.`,

@@ -2,11 +2,14 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
+import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
 
-// The flows directory's one platform set — LAUNCH_PLATFORMS in flow-utils,
-// reached through WhenPlatform.
-export type FlowPlatform = WhenPlatform;
+/**
+ * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
+ * Wider than the authoring set by `ios-remote`: a remote simulator is a device
+ * a run can select, never something a flow file names.
+ */
+export type FlowPlatform = SelectablePlatform;
 
 /**
  * Arg names that mean "the device to act on". Stripped from every recorded step
@@ -59,10 +62,13 @@ interface RawDevice {
   udid?: string;
   serial?: string;
   id?: string;
+  /** Physical iPhone when kind is "device". */
+  kind?: string;
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
+  // A remote row carries `udid` too (the `remote:`-prefixed id), not `serial`.
+  if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }
@@ -70,6 +76,16 @@ function deviceEntryId(d: RawDevice): string | undefined {
 function isBooted(d: RawDevice): boolean {
   switch (d.platform) {
     case "ios":
+      // Simulators only. A physical iPhone reports `connected` and is never
+      // auto-bound: a flow written for a simulator must not run on real
+      // hardware because a phone happens to be on the cable, and a cabled
+      // phone must not turn a lone booted simulator into an ambiguity. Name
+      // the phone with `device` to run on it.
+      return d.state === "Booted";
+    case "ios-remote":
+      // A remote simulator reports the same simctl states as a local one, and
+      // carries none of the physical-device ambiguity above: `ios-remote` is
+      // always kind "simulator" (utils/device-info.ts).
       return d.state === "Booted";
     case "android":
       return d.state === "device";
@@ -80,6 +96,24 @@ function isBooted(d: RawDevice): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * A connected physical iPhone is listed but never auto-bound, so when nothing
+ * qualifies the error says how to run on it. Silent when the run was scoped to
+ * another platform.
+ */
+function connectedIosDeviceHint(devices: RawDevice[], platform?: FlowPlatform): string {
+  if (platform && platform !== "ios") return "";
+  const ids = devices
+    .filter((d) => d.platform === "ios" && d.kind === "device" && d.state === "connected")
+    .map((d) => d.udid)
+    .filter((id): id is string => Boolean(id));
+  if (ids.length === 0) return "";
+  return (
+    ` A physical iPhone is connected (${ids.join(", ")}); hardware is never picked ` +
+    `automatically, pass device <udid> (--device on the CLI) to run on it.`
+  );
 }
 
 function describeDevice(d: RawDevice): string {
@@ -99,7 +133,8 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
 /**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device of `platform` → the single booted device overall →
- * throw, enumerating what is available.
+ * throw, enumerating what is available. A physical iPhone is reachable only
+ * through the explicit id; see {@link isBooted}.
  */
 export async function resolveFlowDevice(
   registry: Registry,
@@ -122,7 +157,10 @@ export async function resolveFlowDevice(
     const what = opts.platform
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
-    throw deviceResolutionError(`${what} Pass a device id or platform explicitly.`, devices);
+    throw deviceResolutionError(
+      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}`,
+      devices
+    );
   }
   throw deviceResolutionError(
     `${scoped.length} booted devices matched — pass --device or --platform to disambiguate.`,
@@ -170,6 +208,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
   switch (step.kind) {
     case "echo":
     case "wait":
+    case "script":
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);

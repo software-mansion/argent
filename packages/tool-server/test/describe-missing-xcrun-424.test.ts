@@ -25,7 +25,7 @@ vi.mock("node:child_process", async () => {
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/bootstrap.dylib",
   simulatorServerBinaryPath: () => "/fake/sim-server",
-  simulatorServerBinaryDir: () => "/fake",
+  simulatorServerRunDir: () => "/fake",
   axServiceBinaryPath: () => "/fake/ax-service",
 }));
 

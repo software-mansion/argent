@@ -59,7 +59,7 @@ done
 
 # A misspelled phase would otherwise select nothing, and a run that executes no
 # phase records no failure: "pass:0 fail:0" and exit 0 for an untested release.
-ALL_PHASES="install introspection validation android chromium rn"
+ALL_PHASES="install introspection validation android chromium rn device-provider"
 for _p in ${PHASES//,/ }; do
   case " $ALL_PHASES " in
     *" $_p "*) ;;
@@ -186,8 +186,8 @@ export TGZ_VERSION
 
 if [ -z "$PHASES" ]; then
   case "$E2E_OS" in
-    linux)  PHASES="install,introspection,validation,android,chromium,rn";;
-    darwin) PHASES="install,introspection,validation,android,chromium,rn";;
+    linux)  PHASES="install,introspection,validation,android,chromium,rn,device-provider";;
+    darwin) PHASES="install,introspection,validation,android,chromium,rn,device-provider";;
     *)      PHASES="install,introspection,validation";;
   esac
 fi
@@ -256,11 +256,12 @@ run_one() { # phase-name file
 }
 
 if [ "$SKIP_INSTALL" -eq 0 ] && selected install;      then run_one install       "$E2E_ROOT/phases/00-install.sh"; fi
-if selected introspection; then run_one introspection "$E2E_ROOT/phases/10-introspection.sh"; fi
-if selected validation;    then run_one validation    "$E2E_ROOT/phases/20-validation.sh"; fi
-if selected android;       then run_one android       "$E2E_ROOT/phases/30-android.sh"; fi
-if selected chromium;      then run_one chromium      "$E2E_ROOT/phases/40-chromium.sh"; fi
-if selected rn;            then run_one rn            "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
+if selected introspection;   then run_one introspection   "$E2E_ROOT/phases/10-introspection.sh"; fi
+if selected validation;      then run_one validation      "$E2E_ROOT/phases/20-validation.sh"; fi
+if selected android;         then run_one android         "$E2E_ROOT/phases/30-android.sh"; fi
+if selected chromium;        then run_one chromium        "$E2E_ROOT/phases/40-chromium.sh"; fi
+if selected rn;              then run_one rn              "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
+if selected device-provider; then run_one device-provider "$E2E_ROOT/phases/60-device-provider.sh"; fi
 
 # Every selected phase ran. The EXIT trap does cleanup, report and exit code —
 # the same path an aborted run takes, so teardown cannot depend on getting here.

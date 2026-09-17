@@ -171,11 +171,12 @@ npm run test:watch -w @argent/tool-server
    npm run build
    ```
 4. **Ensure tests pass** for the packages you touched.
-5. **Check for dead code**, in a tree with no build output:
+5. **Check for dead code**, in a tree with no compiled output:
    ```bash
    npx tsc --build --clean
    npm run knip
    ```
+   `--clean` removes what `tsc` emitted; the few non-TypeScript assets `npm run build` copies into `packages/tool-server/dist` are left behind. Knip does not look at them, so the report is the same either way.
    Run it this way round, not straight after step 3. The gate is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds fewer issues, so a built-tree run carries phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite. The gate runs at `--max-issues 0`, so the report must come back empty and there is no ceiling to raise: when knip names an export, type or class member you added, drop the `export` keyword if the symbol is still used inside its own file, or delete it if nothing uses it. A class member has no `export` keyword to drop, so it is delete or tag. When the only caller is somewhere knip cannot see — another workspace, because the unbuilt tree breaks cross-workspace edges, or the `argent-private` submodule, which CI does not check out — tag the declaration `/** @public */` and name that caller in the comment. That last case is what `Unused exported class members` almost always is here: the three tagged members in `packages/registry` are each called from another workspace, and pass 2 reports all three the moment a tag comes off. Look for it before you delete. This gate stays green on a wrong delete either way, but the two cases differ after that: deleting a symbol another workspace calls turns `npm run build` and that workspace's tests red, so that mistake is caught, while deleting one only `argent-private` reaches breaks nothing here — it `require()`s the built `dist/*.js`, and CI never checks that submodule out.
 6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 7. **Open the PR** against `main` and fill in the description with context on what changed and why.

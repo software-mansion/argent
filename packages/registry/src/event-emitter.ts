@@ -27,7 +27,11 @@ export class TypedEventEmitter<
   }
 
   emit<K extends keyof T>(event: K, ...args: Parameters<T[K]>): void {
-    this.listeners.get(event)?.forEach((fn) => {
+    const fns = this.listeners.get(event);
+    if (!fns) return;
+    // Snapshot, as Node's EventEmitter does: a listener detached by an earlier
+    // one still runs, and one attached by an earlier one waits for the next emit.
+    for (const fn of [...fns]) {
       try {
         fn(...args);
       } catch (err) {
@@ -35,7 +39,7 @@ export class TypedEventEmitter<
           `[registry] Event listener error (${String(event)}): ${err instanceof Error ? err.message : err}\n`
         );
       }
-    });
+    }
   }
 
   removeAllListeners(): void {

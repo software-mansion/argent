@@ -70,7 +70,7 @@ async function startMetroWithDeadCdp(deadWsPort: number): Promise<MockServer> {
     res.statusCode = 404;
     res.end();
   });
-  await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   return {
     port: (server.address() as AddressInfo).port,
     close: () => new Promise((resolve) => server.close(() => resolve())),

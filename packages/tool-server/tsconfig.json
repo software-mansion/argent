@@ -10,6 +10,7 @@
   "references": [
     { "path": "../archive" },
     { "path": "../configuration-core" },
+    { "path": "../device-providers" },
     { "path": "../registry" },
     { "path": "../update-core" },
     { "path": "../native-devtools-ios" },

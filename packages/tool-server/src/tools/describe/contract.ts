@@ -73,7 +73,9 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
-  | "tv-focus";
+  | "tv-focus"
+  // Physical iOS: the XCUITest runner accessibility snapshot.
+  | "xcuitest-runner";
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.
@@ -81,6 +83,8 @@ export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
+  // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
+  // Each path writes this hint once.
   hint?: string;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —

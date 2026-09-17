@@ -93,7 +93,7 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     const chromium = services.chromium as ChromiumCdpApi;
     // A drag's ~60fps mouse moves each wait on compositor hit-testing, which a
     // hidden window services at ~5s per event — minutes per drag.
-    await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
+    await assertChromiumWindowVisible(chromium, "drag");
     const vp = chromium.getViewport();
     // Normalized 1.0 maps one past the last addressable pixel, where a release
     // was observed delivering pointerdown and moves but no pointerup. Clamping

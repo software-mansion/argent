@@ -5,6 +5,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import {
@@ -88,6 +89,16 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         error_kind: "validation",
       });
     }
+
+    /**
+     * The React profiler rides the same CDP session as the JS debugger, so it
+     * is gated by the same mechanism. `JsRuntimeDebugger` is a declared
+     * dependency and has already checked this. Repeating it here keeps the
+     * gate visible at the blueprint that owns the tools rather than relying on
+     * a dependency edge staying in place. A no-op for Argent's own devices.
+     */
+    await assertExternalCapability(REACT_PROFILER_SESSION_NAMESPACE, deviceId, "js-debugger");
+
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);

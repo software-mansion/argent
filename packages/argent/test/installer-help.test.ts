@@ -225,20 +225,23 @@ describe("INSTALLER_COMMAND_META", () => {
 describe("mcp is intercepted like the installers", () => {
   // `argent mcp --help` used to start the stdio server, which then blocked
   // reading JSON-RPC from stdin — the reason this command joined the set.
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], so the last two rows both read `treats "--foo"` — the opposite of
+  // what they assert.
   it.each([
-    ["--help"],
-    ["-h"],
-    ["-H"],
-    ["--HELP"],
-    ["-help"],
-    ["—help"],
-    ["–help"],
-    ["--help=x"],
-    ["help"],
-    ["HELP"],
-    ["--foo", "--help"],
-    ["--foo", "help"],
-  ])("treats %j as a help request", (...rest) => {
+    [["--help"]],
+    [["-h"]],
+    [["-H"]],
+    [["--HELP"]],
+    [["-help"]],
+    [["—help"]],
+    [["–help"]],
+    [["--help=x"]],
+    [["help"]],
+    [["HELP"]],
+    [["--foo", "--help"]],
+    [["--foo", "help"]],
+  ])("treats %j as a help request", (rest) => {
     expect(installerHelpRequested("mcp", rest)).toBe(true);
   });
 
@@ -247,9 +250,9 @@ describe("mcp is intercepted like the installers", () => {
     expect(installerHelpRequested("mcp", [])).toBe(false);
   });
 
-  it.each([["--helpme"], ["/help"], ["--metro-port", "8082"]])(
+  it.each([[["--helpme"]], [["/help"]], [["--metro-port", "8082"]]])(
     "does not treat %j as a help request",
-    (...rest) => {
+    (rest) => {
       expect(installerHelpRequested("mcp", rest)).toBe(false);
     }
   );

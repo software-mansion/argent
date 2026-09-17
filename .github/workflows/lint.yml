@@ -8,6 +8,12 @@ on:
     branches:
       - main
 
+# Supersede a PR's in-flight run rather than let it hold a runner for a verdict
+# nobody wants. A push to main keeps its run: that is the commit's only record.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: ESLint
@@ -22,6 +28,10 @@ jobs:
         with:
           # ESLint 10 requires Node ^20.19 || ^22.13 || >=24.
           node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/docs/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -37,7 +47,14 @@ jobs:
       # Type-aware rules need the referenced projects' declarations on disk so
       # cross-package imports resolve to real types instead of `any`.
       - name: Build workspace dependencies
-        run: npx tsc --build
+        run: npm run build
 
+      # Type-aware linting holds the whole program graph in memory, and the
+      # repo already peaks just under Node's default ~4 GiB old-space cap on a
+      # 16 GB runner - main itself needs more than 3584 MiB. Without headroom
+      # the job dies with "Ineffective mark-compacts near heap limit" (exit
+      # 134) the first time an ordinary PR adds a few files.
       - name: Lint
         run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192

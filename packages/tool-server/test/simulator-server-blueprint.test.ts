@@ -27,9 +27,19 @@ vi.mock("../src/blueprints/ax-service", () => ({
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
 }));
 
+// `android.sdkRoot` reaches the binary as ANDROID_HOME; stub the config read
+// so the dev's own config.json cannot leak into the spawn assertions.
+const androidSdkRootMock = vi.fn((): string | null => null);
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, getAndroidSdkRoot: () => androidSdkRootMock() };
+});
+
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
-  simulatorServerBinaryDir: () => "/fake/bin",
+  simulatorServerRunDir: () => "/fake/bin",
 }));
 
 // The factory now probes the runtime kind to reject tvOS sims. Mock it to the
@@ -92,6 +102,7 @@ function androidDevice(serial: string): DeviceInfo {
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
+    androidSdkRootMock.mockReturnValue(null);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
@@ -173,6 +184,25 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
+    // No configured SDK root: the child inherits the environment untouched.
+    expect(spawnMock.mock.calls[0]![2]).not.toHaveProperty("env");
+  });
+
+  it("passes a configured android.sdkRoot to the simulator-server as ANDROID_HOME", async () => {
+    androidSdkRootMock.mockReturnValue("/nix/store/android-sdk");
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55561);
+    await factoryPromise;
+
+    expect(spawnMock.mock.calls[0]![2]).toMatchObject({
+      env: expect.objectContaining({ ANDROID_HOME: "/nix/store/android-sdk" }),
+    });
   });
 
   it("spawns the `android_device` subcommand for a physical Android device", async () => {
@@ -192,6 +222,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android_device", "--id", serial]);
+    // The binary resolves resources/android relative to cwd — must be the run dir.
+    expect(spawnMock.mock.calls[0]![2]).toMatchObject({ cwd: "/fake/bin" });
   });
 
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
@@ -223,8 +255,8 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     signalReady(fakeProc, 55558);
     const instance = await factoryPromise;
 
-    instance.api.pressKey("Down", 0x29);
-    instance.api.pressKey("Up", 0x29);
+    await instance.api.pressKey("Down", 0x29);
+    await instance.api.pressKey("Up", 0x29);
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");

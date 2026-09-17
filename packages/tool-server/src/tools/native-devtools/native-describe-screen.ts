@@ -44,7 +44,7 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:

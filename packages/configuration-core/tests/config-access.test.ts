@@ -12,6 +12,7 @@ import {
   listConfig,
   coerceCliValue,
   getAdditionalIosDeviceSets,
+  getAndroidSdkRoot,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
@@ -20,6 +21,9 @@ import {
 import {
   CONFIG_SCHEMA,
   describeExpectedValue,
+  getConfigDefinition,
+  MIN_SCRIPT_HEAP_LIMIT_MB,
+  MIN_SCRIPT_TIMEOUT_MS,
   type ConfigDefinition,
 } from "../src/config-schema.js";
 
@@ -119,9 +123,11 @@ describe("setConfigValue — validation", () => {
   });
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
-    // A settable, global-only definition supplied through the registry param
-    // (no shipped key is global-only any more, so a synthetic one isolates the
-    // scope check).
+    // A settable, global-only definition supplied through the registry param,
+    // so this checks the scope rule alone: a shipped global-only key — today
+    // `scripts.maxTimeoutMs` and `scripts.heapLimitMb`, covered further down —
+    // brings its own value parsing along, and would decide the case here on
+    // whichever rule refused first.
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -182,6 +188,27 @@ describe("setConfigValue — return value", () => {
   });
 });
 
+describe("getConfigValue — allowlist.enabled (prioritize-restrictive, no default)", () => {
+  it("reads as unset when never decided", () => {
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBeUndefined();
+  });
+
+  it("false in either scope wins over true in the other", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    setConfigValue("allowlist.enabled", false, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+
+    setConfigValue("allowlist.enabled", false, "global", opts());
+    setConfigValue("allowlist.enabled", true, "project", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
+  });
+
+  it("a lone true opts in", () => {
+    setConfigValue("allowlist.enabled", true, "global", opts());
+    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(true);
+  });
+});
+
 describe("listConfig", () => {
   it("reports every schema entry with per-scope and effective values", () => {
     setConfigValue("lens.agent", "claude", "global", opts());
@@ -224,6 +251,24 @@ describe("coerceCliValue", () => {
     expect(coerceCliValue('["a","b"]')).toEqual(["a", "b"]);
     expect(coerceCliValue("/tmp/device-set")).toBe("/tmp/device-set");
     expect(coerceCliValue("claude")).toBe("claude");
+  });
+});
+
+describe("android.sdkRoot — project wins, ~ expands", () => {
+  it("reads as null when unset and rejects a relative path", () => {
+    expect(getAndroidSdkRoot(opts())).toBeNull();
+    for (const relative of ["sdk", "~sdk", "./sdk"]) {
+      expect(() => setConfigValue("android.sdkRoot", relative, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
+  });
+
+  it("returns the project value over the global one, with ~ expanded to home", () => {
+    setConfigValue("android.sdkRoot", "/opt/global-sdk", "global", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.resolve("/opt/global-sdk"));
+    setConfigValue("android.sdkRoot", "~/Android/Sdk", "project", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.join(homeDir, "Android/Sdk"));
   });
 });
 
@@ -380,4 +425,47 @@ describe("deleteAtPath prunes only what it emptied", () => {
     expect(deleteAtPath(obj, "nope.missing")).toBe(false);
     expect(obj).toEqual({ ios: { deviceSet: "x" } });
   });
+});
+
+describe("flow script host bounds", () => {
+  it("refuses a heap limit too small for a Node process to start", () => {
+    expect(() => setConfigValue("scripts.heapLimitMb", 2, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.heapLimitMb", 16, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB, "global", opts())).toBe(
+      MIN_SCRIPT_HEAP_LIMIT_MB
+    );
+  });
+
+  it("refuses a ceiling the step spends on starting its own process", () => {
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 30, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 99, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS, "global", opts())).toBe(
+      MIN_SCRIPT_TIMEOUT_MS
+    );
+  });
+
+  it.each([
+    ["scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB],
+    ["scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS],
+  ])("says what %s wants when it refuses one", (key, min) => {
+    const def = getConfigDefinition(key)!;
+    expect(describeExpectedValue(def)).toContain(`at least ${min}`);
+  });
+
+  it.each(["scripts.maxTimeoutMs", "scripts.heapLimitMb"])(
+    "keeps %s out of project scope, so repository content cannot raise its own ceiling",
+    (key) => {
+      const def = getConfigDefinition(key)!;
+      expect(def.scopes).toEqual(["global"]);
+      expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
+    }
+  );
 });

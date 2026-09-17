@@ -40,3 +40,27 @@ describe("advertised tool input schemas", () => {
     });
   }
 });
+
+// Zod validates a parameter's `pattern` before the platform dispatch runs, so
+// no platform is exempt from it. A description that calls such a value
+// free-form walks the agent into a rejection whose message names a rule the
+// description said did not apply — issue #901, where launch-app's `bundleId`
+// was an "arbitrary tag" on Chromium and a reverse-DNS identifier everywhere
+// else.
+describe("descriptions of pattern-constrained parameters", () => {
+  const definitions = definitionsById(createRegistry());
+  const UNCONSTRAINED = /arbitrary|free[- ]form|any (?:string|value|text)/i;
+
+  for (const [id, definition] of definitions) {
+    const properties = (advertisedSchema(definition)?.properties ?? {}) as Record<
+      string,
+      { pattern?: unknown; description?: unknown }
+    >;
+    for (const [name, property] of Object.entries(properties)) {
+      if (typeof property?.pattern !== "string") continue;
+      it(`${id}.${name}: states a constraint rather than promising an unconstrained value`, () => {
+        expect(String(property.description ?? "")).not.toMatch(UNCONSTRAINED);
+      });
+    }
+  }
+});

@@ -100,7 +100,7 @@ function iosRegistry(ax: AXServiceApi) {
 describe("await-ui-element tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
-    __primeDepCacheForTests(["xcrun", "adb"]);
+    __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
   });
 
   it("exposes the await-ui-element id", () => {
@@ -1352,6 +1352,84 @@ describe("await-ui-element tool", () => {
       expect(schema.safeParse({ condition: "visible", udid: IOS_UDID, selector }).success).toBe(
         true
       );
+    });
+  });
+
+  // ── ios-remote (a cloud sim reached through sim-remote) ──────────────────
+  // The AX service is the same one the local branch resolves; the blueprint
+  // puts it on a TCP transport across the tunnel. These pin that a remote udid
+  // actually EXECUTES, not merely that the capability gate lets it through.
+
+  describe("ios-remote", () => {
+    const IOS_REMOTE_UDID = `remote:${IOS_UDID}`;
+
+    it("polls the AX tree and succeeds when the element appears", async () => {
+      const { api, calls } = makeSequencedAXService([
+        axResponse([]),
+        axResponse([{ label: "Submit", frame: FRAME, traits: ["button"] }]),
+      ]);
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_REMOTE_UDID,
+          condition: "visible",
+          selector: { text: "Submit" },
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(calls()).toBeGreaterThan(1);
+    });
+
+    // The tree WAS read, so a miss is `unmet`. A failed read reports
+    // `unreadable`, which is what a wrong platform branch would produce.
+    it("reports `unmet`, not `unreadable`, when the selector misses", async () => {
+      const { api } = makeSequencedAXService([
+        axResponse([{ label: "Other", frame: FRAME, traits: ["button"] }]),
+      ]);
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_REMOTE_UDID,
+          condition: "visible",
+          selector: { text: "Submit" },
+          timeoutMs: 40,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.cause).toBe("unmet");
+    });
+
+    // The second poll is a real re-rendered screen without the Spinner. A wholly
+    // empty tree is the ambiguous transient-blank case and must not confirm
+    // `hidden` — that rule holds on a remote sim exactly as it does locally.
+    it("resolves `hidden` once the element goes away", async () => {
+      const { api } = makeSequencedAXService([
+        axResponse([{ label: "Spinner", frame: FRAME, traits: [] }]),
+        axResponse([{ label: "Content", frame: FRAME, traits: [] }]),
+      ]);
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_REMOTE_UDID,
+          condition: "hidden",
+          selector: { text: "Spinner" },
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(true);
     });
   });
 });

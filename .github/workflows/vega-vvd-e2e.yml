@@ -79,7 +79,7 @@ jobs:
       - name: Build tool-server
         run: |
           npm ci
-          npx tsc --build
+          npm run build
 
       - name: Enable KVM
         # The VVD's QEMU needs /dev/kvm; ubuntu runners expose it but the runner

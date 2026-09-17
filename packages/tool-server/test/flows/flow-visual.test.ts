@@ -90,7 +90,16 @@ const env = {
   ctx: { artifacts: new ArtifactStore() },
 } as unknown as ActionEnv;
 
-let tmpDir: string;
+/** The same simulator model, reached over sim-remote instead of locally. */
+const remoteEnv = {
+  device: { platform: "ios-remote", id: "remote:SIM" },
+  signal: undefined,
+  ctx: { artifacts: new ArtifactStore() },
+} as unknown as ActionEnv;
+
+let tmpDir = "";
+let osTmpdir: string;
+let restoreTmpdir: () => void = () => {};
 
 /** Minimal PNG stand-in: runSnapshot reads only the IHDR width/height bytes. */
 async function writeFakePng(file: string, w = 390, h_ = 844): Promise<void> {
@@ -155,6 +164,13 @@ const baselinePath = () => path.join(tmpDir, "__baselines__", "checkout", "home_
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-visual-"));
+  // runSnapshot mkdtemps its crop and diff scratch dirs under os.tmpdir() and
+  // deliberately leaves whichever file it registered as an artifact in place —
+  // from there the dir belongs to whoever consumes the artifact. Here that is
+  // the test, so os.tmpdir() points inside tmpDir and the sweep below takes it.
+  osTmpdir = path.join(tmpDir, "os-tmpdir");
+  await fs.mkdir(osTmpdir);
+  restoreTmpdir = redirectTmpdir(osTmpdir);
   h.shotPath = path.join(tmpDir, "shot.png");
   h.mismatchPercentage = 0;
   h.writeContextDiff = false;
@@ -169,6 +185,7 @@ beforeEach(async () => {
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
+  restoreTmpdir();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -586,32 +603,21 @@ describe("runSnapshot cropOn", () => {
 
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
     h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
-    // runSnapshot builds its crop scratch dir with
-    // mkdtemp(join(os.tmpdir(), "argent-flow-crop-")). Point the tmpdir at a
-    // dir only this test owns, so the leftover sweep below sees this run's crop
-    // dirs and nothing else — scanning the machine-wide tmpdir would also list
-    // the in-flight crop dir of any concurrent run.
-    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-scan-"));
-    const restoreTmpdir = redirectTmpdir(scratch);
+    const r = await runSnapshot(env, opts({ cropOn }));
 
-    try {
-      const r = await runSnapshot(env, opts({ cropOn }));
-
-      expect(r.status).toBe("fail");
-      expect(r.reason).toContain("empty at this resolution");
-      // The key still names the failure for an exporter (CLI --output), and the
-      // FULL capture is attached as `current` — no crop exists to show.
-      expect(r.snapshotKey).toBe(cropKey);
-      expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
-      // The crop scratch dir (which never received a file) was swept.
-      const leftoverCropDirs = (await fs.readdir(scratch)).filter((e) =>
-        e.startsWith("argent-flow-crop-")
-      );
-      expect(leftoverCropDirs).toEqual([]);
-    } finally {
-      restoreTmpdir();
-      await fs.rm(scratch, { recursive: true, force: true });
-    }
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("empty at this resolution");
+    // The key still names the failure for an exporter (CLI --output), and the
+    // FULL capture is attached as `current` — no crop exists to show.
+    expect(r.snapshotKey).toBe(cropKey);
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    // The crop scratch dir (which never received a file) was swept. os.tmpdir()
+    // is this test's own, so the listing shows this run's crop dirs and nothing
+    // a concurrent run left in flight.
+    const leftoverCropDirs = (await fs.readdir(osTmpdir)).filter((e) =>
+      e.startsWith("argent-flow-crop-")
+    );
+    expect(leftoverCropDirs).toEqual([]);
   });
 
   it("keys same-name snapshots with different cropOn selectors to distinct baselines", async () => {
@@ -695,5 +701,63 @@ describe("runSnapshot cropOn", () => {
     expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
     const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
     expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+});
+
+describe("runSnapshot on a remote simulator", () => {
+  it("matches the baseline a local run of the same device class committed", async () => {
+    // The key names a device class, not a host: a cloud run must compare
+    // against the committed baseline instead of failing as if none existed,
+    // which would force every baseline to be captured and reviewed twice.
+    const seeded = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(seeded.snapshotKey).toBe("home__ios-390x844");
+
+    const r = await runSnapshot(remoteEnv, opts());
+
+    expect(r.status).toBe("pass");
+    // A clean pass carries no key or artifacts, so the reason names the file
+    // that was actually compared: the one the local run wrote.
+    expect(r.reason).toContain("home__ios-390x844.png");
+    // One file: the remote run neither wrote nor demanded an `ios-remote` copy.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual(["home__ios-390x844.png"]);
+  });
+
+  it("rewrites the local baseline in place under updateBaselines, and says so", async () => {
+    // The fold works in the write direction too: a remote refresh replaces the
+    // file a local run seeded instead of writing a copy beside it, so the
+    // reason is the only place the report shows a cloud capture took over.
+    const local = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(local.reason).toBe("baseline written (home__ios-390x844.png)");
+    const seeded = await fs.readFile(baselinePath());
+
+    // Same IHDR, so the same key; the trailing bytes make the capture distinct.
+    await fs.writeFile(h.shotPath, Buffer.concat([seeded, Buffer.from("remote capture")]));
+    const remote = await runSnapshot(remoteEnv, opts({ updateBaselines: true }));
+
+    expect(remote.status).toBe("pass");
+    expect(remote.snapshotKey).toBe(local.snapshotKey);
+    expect(remote.reason).toBe("baseline updated from a remote simulator (home__ios-390x844.png)");
+    const rewritten = await fs.readFile(baselinePath());
+    expect(rewritten).not.toEqual(seeded);
+    expect(rewritten).toEqual(await fs.readFile(h.shotPath));
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual(["home__ios-390x844.png"]);
+  });
+
+  it("keys a crop the same way a local run does", async () => {
+    // The fold applies to the whole key, not just its uncropped spelling.
+    await writeRealPng(h.shotPath, 100, 200);
+    h.cropFrame = { x: 0.25, y: 0.25, width: 0.5, height: 0.25 };
+    const cropOn = { text: "Header", loose: true };
+
+    const local = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+    const remote = await runSnapshot(remoteEnv, opts({ cropOn }));
+
+    expect(local.snapshotKey).toContain("__ios-100x200-crop-");
+    expect(remote.status).toBe("pass");
+    expect(remote.reason).toContain(`${local.snapshotKey}.png`);
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual([`${local.snapshotKey}.png`]);
   });
 });

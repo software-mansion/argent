@@ -11,7 +11,7 @@ import {
   offscreenHint,
   type ActionEnv,
 } from "./flow-actions";
-import { describeSelector, type FlowSelector } from "./flow-utils";
+import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -125,8 +125,8 @@ async function cropPngFile(
 
 /**
  * Capture the current screen and compare it to a stored baseline keyed by
- * platform + resolution. A missing baseline FAILS the step — adopting one is
- * always an explicit `updateBaselines` gesture. The key is derived from the
+ * authoring platform + resolution. A missing baseline FAILS the step — adopting
+ * one is always an explicit `updateBaselines` gesture. The key is derived from the
  * capture, so any device-class drift (another simulator model, a rotation, an
  * auto-detected device) lands here too; passing instead would let a CI run go
  * green having compared nothing.
@@ -215,7 +215,12 @@ export async function runSnapshot(
     opts.cropOn === undefined
       ? ""
       : `-crop-${createHash("sha256").update(cropIdentity(opts.cropOn)).digest("hex").slice(0, 8)}`;
-  const snapshotKey = `${opts.name}__${env.device.platform}-${w}x${h}${cropSuffix}`;
+  // Keyed on the AUTHORING platform: the key names a device class, not a host.
+  // A remote simulator of the same model renders the same pixels at the same
+  // geometry, so it must reuse the baseline a local run committed rather than
+  // demand a second copy that can drift. `WxH` still separates genuinely
+  // different device classes, which is the check the key exists for.
+  const snapshotKey = `${opts.name}__${authoringPlatform(env.device.platform)}-${w}x${h}${cropSuffix}`;
   const key = `${snapshotKey}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
@@ -292,9 +297,15 @@ export async function runSnapshot(
         kind: "screenshot",
         mimeType: "image/png",
       });
+      // The folded key makes this the file a local run compares against, so a
+      // remote capture replacing it says so. Otherwise a cloud refresh of a
+      // committed baseline reads exactly like a local one.
+      const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
       return {
         status: "pass",
-        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+        reason: exists
+          ? `baseline updated${source} (${key})`
+          : `baseline written${source} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };

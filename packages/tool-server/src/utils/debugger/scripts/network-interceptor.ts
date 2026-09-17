@@ -75,15 +75,28 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
           mimeType: mimeType
         };
 
-        var cloned = response.clone();
-        cloned.text().then(function(body) {
+        // Read the cloned response as a Blob to preserve the decoded entity's
+        // byte length across text charsets and binary responses. Content-Length
+        // cannot be used here: HEAD/304 responses may advertise a body that was
+        // not sent, and compression headers describe a different measurement.
+        var sizeClone = response.clone();
+        var bodyClone = response.clone();
+        var sizePromise = typeof sizeClone.blob === 'function'
+          ? sizeClone.blob().then(function(blob) {
+              return blob && typeof blob.size === 'number' ? blob.size : undefined;
+            }).catch(function() { return undefined; })
+          : Promise.resolve(undefined);
+        var bodyPromise = bodyClone.text().catch(function() { return undefined; });
+
+        Promise.all([sizePromise, bodyPromise]).then(function(values) {
+          var byteLength = values[0];
+          var body = values[1];
           entry.state = 'finished';
-          entry.encodedDataLength = body.length;
+          if (typeof byteLength === 'number') entry.encodedDataLength = byteLength;
           entry.durationMs = Math.round((ts() - t) * 1000);
-          entry.responseBody = body;
+          if (typeof body === 'string') entry.responseBody = body;
         }).catch(function() {
           entry.state = 'finished';
-          entry.encodedDataLength = 0;
           entry.durationMs = Math.round((ts() - t) * 1000);
         });
 

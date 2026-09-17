@@ -119,22 +119,6 @@ details .tabs__item--active {
 }
 
 /*
- * The shared theme always mounts a DocSearch bar. Argent has no DocSearch
- * application yet, so keep it hidden until ALGOLIA_* credentials are wired up.
- */
-.navbar [class*="navbarSearchWrapper"] {
-  display: none;
-}
-
-/*
- * The hidden search bar was the flexible element in the left navbar group, so
- * the color mode toggle takes over pushing the trailing items to the right.
- */
-.navbar [class*="colorModeToggle"] {
-  margin-left: auto !important;
-}
-
-/*
  * Shape - every surface that reads as a card, pill or panel shares the 24px
  * radius; small inline chips keep the smaller one so they stay readable.
  */

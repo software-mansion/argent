@@ -2,22 +2,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The launcher captures STATE_DIR from `homedir()` at module load. Redirect
 // HOME to a per-file temp dir BEFORE the dynamic import runs so the entire
 // state-file API operates against an isolated sandbox.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 let STATE_DIR: string;
 let LEGACY_STATE_FILE: string;
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-state-test-"));
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   STATE_DIR = launcher.STATE_PATHS.STATE_DIR;
@@ -26,6 +24,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 

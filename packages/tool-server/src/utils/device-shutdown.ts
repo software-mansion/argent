@@ -6,6 +6,12 @@ import { simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
+// A wedged adb daemon or CoreSimulatorService never answers, and both ignore
+// execFile's default SIGTERM, so only timeout + SIGKILL keeps these awaits from
+// hanging forever (as ADB_KILL_SIGNAL in `adb.ts`, SIMCTL_KILL_SIGNAL in
+// `simctl-config.ts`); 30s is runAdb's ceiling.
+const SHUTDOWN_EXEC_OPTIONS = { timeout: 30_000, killSignal: "SIGKILL" } as const;
+
 /**
  * Shut down a device that Argent Lens booted itself (see
  * `VariantProposalStore.takeOwnedDevices`). Best-effort: a device that's
@@ -19,12 +25,16 @@ export async function shutdownOwnedDevice(id: string): Promise<void> {
     return;
   }
   if (platform === "ios") {
-    await execFileAsync("xcrun", await simctlArgsForUdid(id, ["shutdown", id])).catch(() => {});
+    await execFileAsync(
+      "xcrun",
+      await simctlArgsForUdid(id, ["shutdown", id]),
+      SHUTDOWN_EXEC_OPTIONS
+    ).catch(() => {});
   } else if (platform === "android") {
     // adb often isn't on PATH (notably on Windows); resolveAndroidBinary falls
     // back to the SDK roots.
     const adb = (await resolveAndroidBinary("adb")) ?? "adb";
-    await execFileAsync(adb, ["-s", id, "emu", "kill"]).catch(() => {});
+    await execFileAsync(adb, ["-s", id, "emu", "kill"], SHUTDOWN_EXEC_OPTIONS).catch(() => {});
   }
 }
 
@@ -53,12 +63,16 @@ export async function shutdownDevice(id: string): Promise<ShutdownResult> {
   }
   try {
     if (device.platform === "ios") {
-      await execFileAsync("xcrun", await simctlArgsForUdid(id, ["shutdown", id]));
+      await execFileAsync(
+        "xcrun",
+        await simctlArgsForUdid(id, ["shutdown", id]),
+        SHUTDOWN_EXEC_OPTIONS
+      );
       return { ok: true };
     }
     if (device.platform === "android" && device.kind === "emulator") {
       const adb = (await resolveAndroidBinary("adb")) ?? "adb";
-      await execFileAsync(adb, ["-s", id, "emu", "kill"]);
+      await execFileAsync(adb, ["-s", id, "emu", "kill"], SHUTDOWN_EXEC_OPTIONS);
       return { ok: true };
     }
     return {

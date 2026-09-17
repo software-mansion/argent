@@ -18,8 +18,8 @@ import { redirectTmpdir } from "../helpers/tmpdir-env";
 // those very names underneath us.
 const debugDir = () => join(tmpdir(), "argent-profiler-cwd");
 
-let restoreTmpdir: () => void;
-let scratch: string;
+let restoreTmpdir: () => void = () => {};
+let scratch = "";
 
 beforeEach(async () => {
   scratch = await fs.mkdtemp(join(tmpdir(), "argent-profiler-dump-test-"));

@@ -10,6 +10,7 @@ import {
 } from "../../utils/secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
+import { makeIosDeviceImpl } from "./platforms/ios-device";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
@@ -47,13 +48,13 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text` in one call: one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`."
     ),
   delayMs: z
     .number()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
+      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence), and on physical iOS."
     ),
 });
 
@@ -87,6 +88,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     toolId: "keyboard",
     capability,
     ios: makeIosImpl(registry),
+    iosDevice: makeIosDeviceImpl(registry),
     iosRemote: makeIosRemoteImpl(registry),
     android: makeAndroidImpl(registry),
     chromium: makeChromiumImpl(registry),
@@ -112,10 +114,10 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. Physical iOS: only \`enter\` and \`backspace\`.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,

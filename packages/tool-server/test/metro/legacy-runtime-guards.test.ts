@@ -65,7 +65,7 @@ beforeAll(async () => {
     });
     wss = new WebSocketServer({ server });
     wss.on("connection", (ws) => ws.on("message", (raw) => handleCDP(ws, raw.toString())));
-    server.listen(0, () => {
+    server.listen(0, "127.0.0.1", () => {
       port = (server.address() as { port: number }).port;
       resolve();
     });

@@ -5,6 +5,8 @@ description: Autonomously test an app UI (iOS or Android) by running interact-sc
 
 ## Platform-agnostic
 
+Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `launch-app` before anything; `describe` fails while the app is backgrounded.
+
 The interaction tool names are identical on iOS and Android — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, adb serial → Android).
 
 **Before testing, resolve which device to test on.** Call `list-devices` and follow `<device_selection_rule>`: prefer a running device on any platform;
@@ -127,5 +129,5 @@ Steps:
 | `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                  |
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                 |
+| `argent-metro-debugger`            | Console logs, JS evaluation, component inspection        |
 | `argent-create-flow`               | Record a test sequence as a replayable flow              |

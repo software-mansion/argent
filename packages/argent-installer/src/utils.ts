@@ -19,6 +19,7 @@ import { resolvePackageRoot } from "./package-root.js";
 // helpers moved into focused modules.
 export {
   formatShellCommand,
+  shellQuotePath,
   detectPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,

@@ -2,15 +2,21 @@
 
 Read this reference when polishing, composing, or manually reviewing a flow.
 
-- [File shape and flow type](#file-shape-and-flow-type)
-- [Selectors](#selectors)
-- [Directives](#directives)
-- [Verification conditions](#verification-conditions)
-- [Prove a navigation](#prove-a-navigation-identity-then-readiness)
-- [Optional divergences](#optional-divergences)
-- [Composition and platform limits](#composition-and-platform-limits)
-- [Snapshots and standalone runs](#snapshots-and-standalone-runs)
-- [YAML safety](#yaml-safety)
+- [Flow YAML](#flow-yaml)
+  - [File shape and flow type](#file-shape-and-flow-type)
+  - [Selectors](#selectors)
+    - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
+    - [Relational scopes](#relational-scopes)
+  - [Directives](#directives)
+    - [`swipe`](#swipe)
+  - [Verification conditions](#verification-conditions)
+  - [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
+    - [`idle` readiness](#idle-readiness)
+  - [Optional divergences](#optional-divergences)
+  - [Composition and platform limits](#composition-and-platform-limits)
+  - [Local scripts](#local-scripts)
+  - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
+  - [YAML safety](#yaml-safety)
 
 ## File shape and flow type
 
@@ -21,7 +27,7 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow has a literal `launch:` as its first non-echo step. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+An e2e flow has a literal `launch:` as its first step that is not `echo:` or `script:`. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
 
 A leading `run:` does not classify the outer flow as e2e, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A flow whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
 
@@ -103,9 +109,9 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
+Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
 
-Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
@@ -213,7 +219,7 @@ Use `when:` only for optional setup or an interstitial that reconverges:
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
 
 ## Composition and platform limits
 
@@ -223,15 +229,33 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
 
+## Local scripts
+
+Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
+
+```yaml
+- script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+```
+
+Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
+
+- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
+
+If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
+
+If a script fails, check its changes before you retry.
+
 ## Snapshots and standalone runs
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega|ios-remote] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
-Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. Seed from a known-good state with `--update-baselines`. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
+Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
 Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
 

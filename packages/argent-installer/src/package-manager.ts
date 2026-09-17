@@ -13,6 +13,13 @@ export function formatShellCommand(cmd: ShellCommand): string {
   return parts.join(" ");
 }
 
+// `dir` as one POSIX shell word, for a command the reader pastes. Single
+// quotes, because a discovered path can hold `$`, a backtick or `\`, which
+// double quotes leave live - retargeting the line.
+export function shellQuotePath(dir: string): string {
+  return "'" + dir.split("'").join("'\\''") + "'";
+}
+
 export function detectPackageManager(): PackageManager {
   const agent = process.env.npm_config_user_agent ?? "";
   if (agent.startsWith("yarn")) return "yarn";

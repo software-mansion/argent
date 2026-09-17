@@ -1,12 +1,15 @@
 import { FAILURE_CODES, getFailureSignalOrFallback, type Registry } from "@argent/registry";
 import { track } from "./index.js";
-import type { Platform } from "./events.js";
+import type { Platform, TelemetryDeviceKind } from "./events.js";
 import { aiTelemetryFromMeta, type AiTelemetryProps } from "./ai-identity.js";
 
 // Filled by the HTTP layer so registry lifecycle events carry platform and
 // coarse AI-client context without raw params.
 interface InvocationMeta extends AiTelemetryProps {
+  /** Vendor label of the external provider supplying the target device. */
+  device_provider?: string;
   platform?: Platform;
+  device_kind?: TelemetryDeviceKind;
 }
 
 interface AttachHandle {
@@ -33,7 +36,9 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:invoke", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
+      ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
       ...aiTelemetryFromMeta(meta),
     });
   };
@@ -43,7 +48,9 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:complete", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
+      ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
       duration_ms: durationMs,
       ...aiTelemetryFromMeta(meta),
     });
@@ -65,7 +72,9 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:fail", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
+      ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
       duration_ms: durationMs,
       ...signal,
       ...aiTelemetryFromMeta(meta),

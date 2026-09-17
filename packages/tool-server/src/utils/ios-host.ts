@@ -15,10 +15,10 @@ import {
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { PS_BIN } from "./vega-process";
 import {
-  cachedDeviceSetForUdid,
-  deviceSetForUdid,
   simctlArgsForUdid,
-  simctlPrefix,
+  simctlTargetForUdid,
+  simctlTargetForUdidSync,
+  simctlTargetForWithdrawal,
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
@@ -50,6 +50,12 @@ interface IosHost {
 
   // native-devtools steps
   setupNativeDevtoolsEnv(udid: string, endpoint: IosEndpoint): Promise<void>;
+  /**
+   * Give the simulator's injection environment back, removing only what still
+   * names us. Called when a device provider claims a simulator we had already
+   * armed; see the watcher.
+   */
+  withdrawNativeDevtoolsEnv(udid: string, endpoint: IosEndpoint): Promise<void>;
   listRunningBundleIds(udid: string): Promise<Set<string>>;
   /**
    * Whether `bundleId` is running and, where this host can reach the process,
@@ -74,9 +80,26 @@ interface IosHost {
   stopProxy(udid: string, port: number): Promise<void>;
 }
 
-/** `libInjectionBootstrap.dylib` is the legacy pre-rename name, still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
+/**
+ * Argent's own bootstrap basename, always stripped before the active path is
+ * re-appended. The legacy pre-rename name (`libInjectionBootstrap.dylib`) is
+ * deliberately not listed: it is generic, and a live file carrying it could be
+ * another tool's injection bootstrap, which stripping would silently disable for
+ * the rest of the simulator's session. Stale pre-rename Argent entries still age
+ * out via the exists-on-disk rule below.
+ */
+const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set(["libArgentInjectionBootstrap.dylib"]);
+
+/**
+ * The same basenames asked about read-only: which ones mean "some build of
+ * argent injected this process". Recognising one changes nothing, so the legacy
+ * pre-rename name belongs here even though stripping by it does not — and a
+ * process an older argent injected is exactly what this must see. A provider's
+ * own bootstrap sharing that generic name cannot be misread as ours: the caller
+ * also requires the process to carry this endpoint's address.
+ */
+const RECOGNISED_BOOTSTRAP_DYLIB_BASENAMES = new Set([
+  ...ARGENT_BOOTSTRAP_DYLIB_BASENAMES,
   "libInjectionBootstrap.dylib",
 ]);
 
@@ -113,7 +136,7 @@ interface RunningAppInspection {
  * the current launchd env re-points it.
  */
 export function processCarriesInjection(env: string, endpoint: IosEndpoint): boolean {
-  const inserted = [...ARGENT_BOOTSTRAP_DYLIB_BASENAMES].some((name) => env.includes(name));
+  const inserted = [...RECOGNISED_BOOTSTRAP_DYLIB_BASENAMES].some((name) => env.includes(name));
   if (!inserted) return false;
   const expected =
     endpoint.transport === "tcp"
@@ -147,10 +170,11 @@ function splitDyldInsertLibraries(value: string): string[] {
 }
 
 /**
- * Drops Argent bootstrap dylibs (by basename, including the legacy pre-rename
- * one) and entries absent from disk — truncated artifacts of the `simctl getenv`
- * 127-byte bug, stale paths from old installs. Entries starting with '@'
- * (loader-path references) are preserved regardless.
+ * Drops Argent's own bootstrap dylib (by basename, not the legacy pre-rename
+ * one — see above) and entries absent from disk: truncated artifacts of the
+ * `simctl getenv` 127-byte bug, stale paths from old installs. Entries starting
+ * with '@' (loader-path references) are preserved regardless, and third-party
+ * dylibs present on disk (e.g. SimCam) are kept verbatim.
  */
 function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
   if (entry === bootstrapPath) {
@@ -165,11 +189,33 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
   return fs.existsSync(entry);
 }
 
-export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
-  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
+/**
+ * Everything in `currentValue` that is not ours, in order. What both arming and
+ * withdrawing agree on. Arming appends our bootstrap to it, withdrawing keeps
+ * only it.
+ */
+function preservedDyldInsertLibraries(currentValue: string, bootstrapPath: string): string[] {
+  return splitDyldInsertLibraries(currentValue).filter((entry) =>
     shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
   );
-  return [...preserved, bootstrapPath].join(":");
+}
+
+export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
+  return [...preservedDyldInsertLibraries(currentValue, bootstrapPath), bootstrapPath].join(":");
+}
+
+/**
+ * What `DYLD_INSERT_LIBRARIES` should become once we hand the simulator back;
+ * the same preserved entries, with nothing of ours appended. `null` means the
+ * variable held only our own entries and should be unset outright rather than
+ * left as an empty string, which dyld treats as a malformed list.
+ */
+export function withdrawDyldInsertLibraries(
+  currentValue: string,
+  bootstrapPath: string
+): string | null {
+  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath);
+  return preserved.length === 0 ? null : preserved.join(":");
 }
 
 async function ensureAccessibilityEnabled(udid: string): Promise<void> {
@@ -177,7 +223,11 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   // the accessibility tree; without them UIAccessibility returns nil/0 for
   // SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  /**
+   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal}, so the
+   * native-devtools grant covers these spawns.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
     flags.map((flag) =>
       execFileAsync(
@@ -185,7 +235,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
         [
           ...prefix,
           "spawn",
-          udid,
+          nativeId,
           "defaults",
           "write",
           "com.apple.Accessibility",
@@ -202,20 +252,20 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
   // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
   // the IOSSIMULATOR slice and native injection never connects.
-  const bootstrapPath = (await isTvOsSimulator(udid))
-    ? bootstrapDylibPathTvos()
-    : endpoint.transport === "tcp"
-      ? bootstrapDylibPathTcp()
-      : bootstrapDylibPath();
+  const bootstrapPath = await bootstrapPathFor(udid, endpoint);
 
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  /**
+   * These spawns install the injection env, so the native-devtools grant
+   * covers them.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
 
   // Read launchctl inside the simulator rather than `simctl getenv`: the latter
   // silently truncates past 127 bytes, corrupting the colon-separated path list
   // and accumulating stale entries on every pass.
   const result = await execFileAsync(
     "xcrun",
-    [...prefix, "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    [...prefix, "spawn", nativeId, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
     { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
@@ -225,7 +275,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      [...prefix, "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
@@ -239,7 +289,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
@@ -253,7 +303,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
@@ -264,6 +314,70 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   }
 
   await ensureAccessibilityEnabled(udid);
+}
+
+/**
+ * The bootstrap this simulator's injection uses, whichever build applies to it.
+ * Arming and withdrawing must agree on it; withdrawing by a different path
+ * would leave the armed one in place.
+ */
+async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<string> {
+  if (await isTvOsSimulator(udid)) return bootstrapDylibPathTvos();
+  return endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
+}
+
+/**
+ * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap back out of
+ * `DYLD_INSERT_LIBRARIES` and drop the endpoint variable, leaving anything a
+ * third party put there untouched.
+ *
+ * Only ever removes what still names us. A provider that armed its own
+ * injection over ours already owns both variables and clearing its endpoint
+ * would break the very injection this is meant to get out of the way of.
+ */
+async function withdrawNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
+  const bootstrapPath = await bootstrapPathFor(udid, endpoint);
+
+  /**
+   * Not `simctlTargetForUdid`: the grant it would check is the one the claiming
+   * provider withheld, which is precisely why we are here.
+   * @see {@linkcode simctlTargetForWithdrawal}
+   */
+  const { nativeId, prefix } = await simctlTargetForWithdrawal(udid);
+
+  const getenv = async (name: string): Promise<string> => {
+    const result = await execFileAsync(
+      "xcrun",
+      [...prefix, "spawn", nativeId, "launchctl", "getenv", name],
+      { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
+
+    return (result.stdout ?? "").trim();
+  };
+
+  const setenv = (args: string[]): Promise<unknown> =>
+    execFileAsync("xcrun", [...prefix, "spawn", nativeId, "launchctl", ...args], {
+      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
+
+  const existing = await getenv("DYLD_INSERT_LIBRARIES");
+  const withdrawn = withdrawDyldInsertLibraries(existing, bootstrapPath);
+
+  if (withdrawn === null) {
+    await setenv(["unsetenv", "DYLD_INSERT_LIBRARIES"]);
+  } else if (withdrawn !== existing) {
+    await setenv(["setenv", "DYLD_INSERT_LIBRARIES", withdrawn]);
+  }
+
+  const [name, ours] =
+    endpoint.transport === "tcp"
+      ? (["NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port ?? "")] as const)
+      : (["NATIVE_DEVTOOLS_IOS_CDP_SOCKET", endpoint.socketPath] as const);
+
+  if (ours && (await getenv(name)) === ours) {
+    await setenv(["unsetenv", name]);
+  }
 }
 
 async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint): Promise<void> {
@@ -399,12 +513,15 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
 
   // Synchronous by contract (returns the ChildProcess), so use the cached
   // device-set verdict — `bootstrapAx` has always resolved it by this point.
+  // The ax-service grant covers the spawn that starts the daemon.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...axTarget.prefix,
       "spawn",
-      udid,
+      axTarget.nativeId,
       binaryPath,
       ...endpointArgs,
       "--timeout",
@@ -452,6 +569,7 @@ export const localIosHost: IosHost = {
   kind: "local",
   requiresTcp: false,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvLocal,
+  withdrawNativeDevtoolsEnv: withdrawNativeDevtoolsEnvLocal,
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
@@ -474,6 +592,11 @@ export const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvRemote,
+  /**
+   * Nothing to give back. A device provider publishes simulators on the machine
+   * it shares with argent, so a remote sim is never claimed out from under us.
+   */
+  async withdrawNativeDevtoolsEnv() {},
   async listRunningBundleIds(udid) {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return parseUIKitApplicationBundleIds(stdout);

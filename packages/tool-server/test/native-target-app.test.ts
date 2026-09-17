@@ -26,6 +26,8 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     socketPath: "/tmp/mock.sock",
     ensureEnvReady: async () => {},
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => null,
     isConnected: (bundleId) => byBundleId.has(bundleId),
     isAppRunning: async (bundleId) => byBundleId.has(bundleId),
