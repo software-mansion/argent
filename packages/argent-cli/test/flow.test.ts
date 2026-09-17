@@ -422,7 +422,6 @@ describe("argent flow run", () => {
       "    no match",
       "\nFAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
     ]);
-    // No re-run line: the user just typed the command.
     expect(logs.join("\n")).not.toContain("re-run:");
   });
 
@@ -2053,8 +2052,7 @@ describe("argent flow run <dir>", () => {
     // Only the flow that earned a verdict carries one, so the completeness
     // above is not met by verdicting everything. The count discriminates only
     // because the other flow passes cleanly: renderStepLine gives a failed step
-    // the same `  ✗ ` prefix, which no count tells apart from a verdict. The
-    // failure recap repeats the verdict, so it is left out of the count.
+    // the same `  ✗ ` prefix, which no count tells apart from a verdict.
     const perFlow = lines.slice(0, lines.indexOf("Failed flows (1)"));
     expect(perFlow.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
   });
@@ -2317,8 +2315,6 @@ describe("argent flow run <dir>", () => {
       "process.exit:1"
     );
 
-    // `run` refuses ".." segments, so the path relative to the working
-    // directory would be a command that fails.
     expect(logs.join("\n")).toContain(
       `    re-run: argent flow run '${path.join(suiteDir, "one.yaml")}' --device SIM-1`
     );
