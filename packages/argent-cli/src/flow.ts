@@ -122,13 +122,14 @@ multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
-warning, and each script step's output), then its outcome, then a final flow
-summary; --recursive walks subdirectories too (dot-directories and node_modules
-are skipped). A flow that fails its steps keeps the batch running, as does one
-the server rejects up front — an invalid file, or a device it cannot resolve. A
-transport failure, a rejection the server does not mark as validation, or a
-reply that is not a report stops the batch and counts the remaining flows
-skipped.
+warning, and each script step's output), then its outcome. After the last flow
+it lists every failed flow with its reason and a command that re-runs that flow
+alone, then a final flow summary; --recursive walks subdirectories too
+(dot-directories and node_modules are skipped). A flow that fails its steps
+keeps the batch running, as does one the server rejects up front — an invalid
+file, or a device it cannot resolve. A transport failure, a rejection the server
+does not mark as validation, or a reply that is not a report stops the batch and
+counts the remaining flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -244,13 +245,17 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+/** A step's kind and target, plus the fragment it came from when that is not the top flow. */
+function stepLabel(s: StepReport, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
-  const label = what ? `${s.kind} ${what}` : s.kind;
+  return `${what ? `${s.kind} ${what}` : s.kind}${where}`;
+}
+
+export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${durationSuffix(s.durationMs)}${reason}`;
+  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${stepLabel(s, topFlow)}${durationSuffix(s.durationMs)}${reason}`;
 }
 
 /**
@@ -376,6 +381,62 @@ export function renderBatchSummary(
 }
 
 /**
+ * One failed flow in the recap printed above the verdict. `path` and `rerun`
+ * are for a directory run; a single run names its flow in its header and was
+ * just typed by the user.
+ */
+interface FailedFlow {
+  path?: string;
+  headline: string;
+  detail?: string;
+  rerun?: string;
+}
+
+/**
+ * Why a report failed: its first failing step, numbered as renderFailedSteps
+ * numbers it so the recap, the per-flow block, and a single rerun agree. The
+ * reason is wire data, so it is stringified the way renderStepLine's template
+ * does rather than trusted to be a string.
+ */
+export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
+  let n = 0;
+  for (const s of report.steps) {
+    if (s.kind === "echo") continue;
+    n++;
+    if (s.status === "fail" || s.status === "error") {
+      const detail = s.reason ? String(s.reason) : undefined;
+      return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
+    }
+  }
+  return { headline: "failed with no failing step" };
+}
+
+function renderFailedFlow(f: FailedFlow): string[] {
+  const lines = [`  ${STATUS_GLYPH.fail} ${f.path ? `${f.path} › ` : ""}${f.headline}`];
+  for (const line of f.detail?.split("\n") ?? []) if (line) lines.push(`    ${line}`);
+  if (f.rerun) lines.push(`    re-run: ${f.rerun}`);
+  return lines;
+}
+
+/**
+ * A single run's recap of its failure, so a long flow that failed early still
+ * shows why at the bottom. Empty when the run passed.
+ */
+export function renderSingleFailure(report: FlowReport): string[] {
+  return report.ok ? [] : ["", ...renderFailedFlow(summarizeFailure(report))];
+}
+
+/** The section that ends a directory run with failures; empty when nothing failed. */
+export function renderFailedFlows(failed: readonly FailedFlow[]): string[] {
+  if (failed.length === 0) return [];
+  return [
+    "",
+    `Failed flows (${failed.length})`,
+    ...failed.flatMap((f) => ["", ...renderFailedFlow(f)]),
+  ];
+}
+
+/**
  * Names spliced into artifact-export destinations. Re-checked here because the
  * destination root is an operator-chosen filesystem path (`--output`): the
  * snapshot key arrives over the wire, so a buggy or malicious server must not
@@ -400,14 +461,35 @@ const FLOWS_DIR = path.join(".argent", "flows");
 const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
- * Quote a path for splicing into a "Did you mean: argent flow run …" hint,
- * whose whole value is being copy-pasteable. Single quotes are the one POSIX
- * form with no further escapes inside; an all-safe path stays bare so the hint
- * reads like what the user typed.
+ * Quote an argument for splicing into a printed `argent flow run …` command —
+ * a "Did you mean" hint or a batch `re-run:` line — whose whole value is being
+ * copy-pasteable. Single quotes are the one POSIX form with no further escapes
+ * inside; an all-safe argument stays bare so the command reads like what the
+ * user typed.
  */
 function shellQuoteArg(arg: string): string {
   if (SHELL_SAFE_ARG.test(arg)) return arg;
   return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The command that runs one flow of a directory run alone, from the same
+ * working directory, on the same --device and --platform. A flow outside that
+ * directory keeps its absolute path, since `run` refuses ".." segments, and a
+ * leading "-" gets "./" so the parser does not read the path as an option.
+ */
+function rerunCommand(
+  flowPath: string,
+  projectRoot: string,
+  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform">
+): string {
+  const rel = path.relative(projectRoot, flowPath);
+  let shown = path.isAbsolute(rel) || rel.split(/[\\/]+/).includes("..") ? flowPath : rel;
+  if (shown.startsWith("-")) shown = `.${path.sep}${shown}`;
+  const parts = ["argent flow run", shellQuoteArg(shown)];
+  if (args.device) parts.push("--device", shellQuoteArg(args.device));
+  if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
+  return parts.join(" ");
 }
 
 /**
@@ -774,6 +856,7 @@ export function renderReport(report: FlowReport): string {
       }
     }
   }
+  lines.push(...renderSingleFailure(report));
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
 }
@@ -1078,12 +1161,13 @@ interface BatchFlowResult {
 
 /**
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
- * steps and warnings, then its outcome (no live step lines), then a flow-level
- * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
+ * steps and warnings, then its outcome (no live step lines), then the failed
+ * flows with a re-run command each, then a flow-level summary; a flow failing
+ * its steps — or one the tool-server rejects up front (a bad YAML, an
+ * unparseable step, a device it cannot resolve) — lets the batch continue,
+ * while a transport throw, a rejection the server does not mark as validation,
+ * or a reply that is not a report stops it and counts the remaining flows
+ * skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1113,6 +1197,7 @@ async function runFlowDirectory(
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
+  const failures: FailedFlow[] = [];
   const batchStartedAt = Date.now();
   // A validation rejection is scoped to the one call, so the batch keeps
   // going. Anything the server does not mark that way — another kind, or none
@@ -1126,42 +1211,40 @@ async function runFlowDirectory(
       if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
       continue;
     }
+    const flowPath = path.join(dir, rel);
+    const rerun = rerunCommand(flowPath, projectRoot, args);
     let report: FlowReport | undefined;
     try {
       // No onProgress: batch output is failures-only, never live step lines.
-      const resp = await callTool(
-        "flow-execute",
-        buildRunPayload(path.join(dir, rel), projectRoot, args)
-      );
+      const resp = await callTool("flow-execute", buildRunPayload(flowPath, projectRoot, args));
       if (isFlowReport(resp.data)) report = resp.data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
+      const verdict = rejectedThisFlowOnly
+        ? rejectionVerdict(toolErr?.errorCode)
+        : "did not finish (run error)";
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
       // already carries. The detail goes to stderr, so without this line a
       // redirected stdout log shows this flow's header followed by the next
       // flow's — an entry that reads as if it never ran, while the final tally
       // still counts it failed and names nothing. Verdict before detail, as the
       // single-flow runner prints them, so a merged log reads the same way.
-      if (!args.json) {
-        console.log(
-          `  ${STATUS_GLYPH.error} ` +
-            (rejectedThisFlowOnly
-              ? rejectionVerdict(toolErr?.errorCode)
-              : "did not finish (run error)")
-        );
-      }
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
       console.error(message);
       results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
+      failures.push({ path: rel, headline: verdict, detail: message, rerun });
       if (!rejectedThisFlowOnly) stopped = true;
       continue;
     }
     if (!report) {
       const message = `"${rel}" did not produce a run report.`;
-      if (!args.json) console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
+      const verdict = "did not finish (no run report)";
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
       console.error(message);
       results.push({ path: rel, status: "fail", error: message });
+      failures.push({ path: rel, headline: verdict, detail: message, rerun });
       stopped = true;
       continue;
     }
@@ -1170,10 +1253,11 @@ async function runFlowDirectory(
     await exportAndResolveArtifacts(
       report,
       outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
-      path.join(dir, rel),
+      flowPath,
       baseUrl
     );
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
+    if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1192,6 +1276,7 @@ async function runFlowDirectory(
       JSON.stringify({ ok: counts.failed === 0, ...counts, durationMs, flows: results }, null, 2)
     );
   } else {
+    for (const line of renderFailedFlows(failures)) console.log(line);
     console.log(`\n${renderBatchSummary(counts, durationMs)}`);
   }
   return exitAfterFlush(counts.failed === 0 ? 0 : 1);
@@ -1563,6 +1648,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // prerequisite note, materialized artifact paths, and the summary.
     if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
     for (const line of renderArtifactLines(report)) console.log(line);
+    for (const line of renderSingleFailure(report)) console.log(line);
     console.log(`\n${renderSummary(report, { withDevice: true })}`);
   } else {
     console.log(renderReport(report));
