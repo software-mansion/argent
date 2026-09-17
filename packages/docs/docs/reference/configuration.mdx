@@ -107,6 +107,8 @@ argent enable argent-lens --scope project    # this project only
 | `microinteractions`       | Off     | Animate the host window to match device actions. Cosmetic only, macOS only                                                    |
 | `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                             |
 
+Some flags work on macOS only: `argent-lens` and `microinteractions`. `argent flags` marks these flags with `[macOS only]`. On a different platform, `argent enable` stores the flag and exits with code 0. It also prints a note to stderr that the flag has no effect on this host. `argent flags --json` gives the supported platforms in the `platforms` field, or `null` for a flag that works on all platforms.
+
 The tool-server writes the event log to `~/.argent/tool-server-events.jsonl`. Set the `ARGENT_EVENT_LOG` environment variable to select a different path.
 
 ### Storage

@@ -197,6 +197,9 @@ export function createRegistry(): Registry {
   // Argent Lens is macOS-only, so these are not registered off-darwin at all —
   // unknown there rather than hidden. On darwin their `featureFlag:
   // "argent-lens"` gates exposure in http.ts, re-checked per request.
+  // `platforms` on the flag states the same fact for `argent enable`/`flags`; it
+  // is not read here because a flag entry removed on graduation would then
+  // register these everywhere. lens-tools-platform-gate.test.ts pins the two.
   if (process.platform === "darwin") {
     registry.registerTool(createProposeVariantTool(registry));
     registry.registerTool(awaitUserSelectionTool);
