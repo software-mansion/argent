@@ -42,9 +42,10 @@ const zodSchema = z.object({
         "current rotation, so it is upright without this. Setting it replaces that with a fixed " +
         "rotation, which on a rotated device produces an image whose geometry no longer matches " +
         "`describe` frames or gesture coordinates. On Chromium it rotates the captured image after " +
-        "Page.captureScreenshot, which requires the optional `sharp` dependency. Apple TV and Vega " +
-        "captures cannot be rotated at all. When a rotation is requested but not applied, the " +
-        "response carries a note saying so — the image is returned unrotated either way."
+        "Page.captureScreenshot, which requires the optional `sharp` dependency. Apple TV, Vega " +
+        "and physical iPhone captures cannot be rotated at all. When a rotation is requested but " +
+        "not applied, the response carries a note saying so — the image is returned unrotated " +
+        "either way."
     ),
   scale: z
     .number()
@@ -250,7 +251,12 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           kind: "screenshot",
           mimeType: "image/png",
         });
-        return { image };
+        // The runner capture is downscaled but never rotated.
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "physical iPhone"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Shape alone can't tell tvOS from iOS, and tvOS has no simulator-server

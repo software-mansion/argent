@@ -3,10 +3,10 @@
  *
  * `screenshot` takes `scale` and `rotation` on every target, but several
  * backends cannot honour them: Chromium needs the optional `sharp` package,
- * and the Apple TV and Vega captures have no rotation step at all. Without a
- * note the caller gets a full-size, un-rotated PNG that looks like a successful
- * transform, and the only existing signal — a stderr line — is written once per
- * process and never reaches whoever asked.
+ * and the Apple TV, Vega and physical-iPhone captures have no rotation step
+ * at all. Without a note the caller gets a full-size, un-rotated PNG that
+ * looks like a successful transform, and the only existing signal — a stderr
+ * line — is written once per process and never reaches whoever asked.
  */
 type DroppedGeometry = "rotation" | "scale";
 
@@ -65,10 +65,10 @@ export function chromiumDropNote(
 }
 
 /**
- * The TV backends have no rotation step. Worded so it does not read as
- * retryable — the same call will always come back the same way. It says
- * "unrotated" rather than "untransformed" because a `scale` on the same call
- * IS applied (server-side); only the rotation is missing.
+ * The Apple TV, Vega and physical-iPhone backends have no rotation step.
+ * Worded so it does not read as retryable — the same call will always come
+ * back the same way. It says "unrotated" rather than "untransformed" because
+ * a `scale` on the same call IS applied; only the rotation is missing.
  */
 export function unsupportedDropNote(
   dropped: DroppedGeometry[],
