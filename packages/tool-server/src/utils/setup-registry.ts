@@ -73,6 +73,7 @@ import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
 import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-combined-report";
 import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
+import { createReviveSimulatorHidTool } from "../tools/simulator/revive-simulator-hid";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
@@ -179,6 +180,7 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeViewAtPointTool);
   registry.registerTool(nativeUserInteractableViewAtPointTool);
 
+  registry.registerTool(createReviveSimulatorHidTool());
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);

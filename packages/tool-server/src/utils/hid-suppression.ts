@@ -74,7 +74,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
+
+import { simctlSpawn } from "./sim-remote";
 
 import type { DeviceSetPath } from "./ios-device-sets";
 
@@ -131,4 +134,124 @@ export function startHidWarmUp(udid: string, deviceSet: DeviceSetPath): Promise<
           `input may be silently dropped on this simulator.\n`
       );
     });
+}
+
+/**
+ * The Darwin notification `dtuhidd` raises inside the guest when a CoreDevice
+ * client attaches. `backboardd` reads it and tears down the HID services.
+ */
+export const DTUHIDD_ACTIVE_KEY = "com.apple.coredevice.dtuhidd.active";
+
+/**
+ * Run one guest command and require it to succeed.
+ *
+ * `simctlSpawn` reports a failed guest command through `exitCode`, not by
+ * throwing, so a `notifyutil` or `launchctl` that fails would otherwise let
+ * {@link reviveHidServices} resolve and the tool claim `revived: true` over a
+ * simulator it never touched — the exact silent success this repair exists to
+ * end. `stderr` goes into the message because it is the only diagnostic the
+ * guest gives.
+ */
+async function guestCommand(udid: string, args: string[], stage: string): Promise<string> {
+  const { exitCode, stdout, stderr } = await simctlSpawn(udid, { args });
+  // Strict `=== 0`: a missing exit code is no confirmation either. `simctlSpawn`
+  // maps a null `exit_code` to `undefined`, and letting that through would let a
+  // command whose outcome is unknown count as a success.
+  if (exitCode !== 0) {
+    throw new FailureError(
+      `\`${args.join(" ")}\` failed inside ${udid} (exit ${exitCode ?? "unknown"})` +
+        (stderr.trim() ? `: ${stderr.trim()}` : ""),
+      {
+        error_code: FAILURE_CODES.IOS_HID_REVIVE_FAILED,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "xcrun_simctl",
+        ...(exitCode !== undefined ? { failure_exit_code: exitCode } : {}),
+      }
+    );
+  }
+  return stdout;
+}
+
+/**
+ * Read the suppression flag from inside the guest.
+ *
+ * Must be read in the guest: the simulator runs its own `notifyd`, so a
+ * host-side read of the same key is a silent false negative.
+ *
+ * **Diagnostic only.** A set flag is the normal state of a healthy simulator
+ * whenever a CoreDevice client is running; if the services were exempted before
+ * it was raised, everything works with the flag at 1.
+ *
+ * @returns `true`/`false`, or `null` if the flag could not be read.
+ */
+export async function readSuppressionFlag(udid: string): Promise<boolean | null> {
+  // `simctl spawn` needs a bare binary name; an absolute path fails with
+  // SimXPCErrorDomain 111.
+  const stdout = await guestCommand(
+    udid,
+    ["notifyutil", "-g", DTUHIDD_ACTIVE_KEY],
+    "hid_revive_read_flag"
+  );
+  const match = stdout.match(/\s(\d+)\s*$/m);
+  return match ? match[1] !== "0" : null;
+}
+
+/**
+ * Clear the suppression flag.
+ *
+ * `dtuhidd` only writes it at daemon start, so clearing it sticks even while the
+ * daemon keeps running. Does nothing about services that are already terminated
+ * — that needs {@link restartBackboardd}.
+ */
+async function clearSuppressionFlag(udid: string): Promise<void> {
+  await guestCommand(
+    udid,
+    ["notifyutil", "-s", DTUHIDD_ACTIVE_KEY, "0", "-p", DTUHIDD_ACTIVE_KEY],
+    "hid_revive_clear_flag"
+  );
+}
+
+/**
+ * Restart `backboardd` so it builds fresh HID services.
+ *
+ * This is the only known way to revive a simulator whose services have already
+ * been terminated — the service objects cannot be resurrected, only replaced.
+ *
+ * **Disruptive**: the foreground app is killed and SpringBoard restarts. Clear
+ * the flag first, or the new services are torn down again immediately and only
+ * the digitizer survives.
+ */
+async function restartBackboardd(udid: string): Promise<void> {
+  await guestCommand(
+    udid,
+    ["launchctl", "kill", "SIGTERM", "system/com.apple.backboardd"],
+    "hid_revive_restart_backboardd"
+  );
+}
+
+/**
+ * Revive a simulator whose HID services were already torn down.
+ *
+ * The boot-time warm-up in {@link startHidWarmUp} is a race, and on runtimes
+ * newer than 18.6 it is one the host frequently loses: on 26.5 the flag lands
+ * before the buttons and external keyboard even connect, and measurements on
+ * **26.4 with Xcode 27.0** show the same shape — 3 of 3 boots with buttons and
+ * keyboard dead while the digitizer stayed healthy. There is no boot-path fix
+ * for a window that has already closed; the services have to be rebuilt.
+ *
+ * Deliberately NOT called from `boot-device`. It kills the foreground app and
+ * bounces SpringBoard, which is unacceptable as an implicit side effect of a
+ * boot but perfectly reasonable when an agent or a human asks for it after the
+ * probe reports that input is not landing.
+ *
+ * Clearing the flag first is load-bearing: without it `backboardd` tears the new
+ * services down as soon as it rebuilds them, and only the digitizer survives.
+ */
+export async function reviveHidServices(udid: string): Promise<{ flagWasSet: boolean | null }> {
+  const flagWasSet = await readSuppressionFlag(udid);
+  await clearSuppressionFlag(udid);
+  await restartBackboardd(udid);
+  return { flagWasSet };
 }

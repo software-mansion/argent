@@ -1,0 +1,42 @@
+---
+sidebar_position: 10
+sidebar_label: Simulator input recovery
+title: Simulator input recovery
+sidebar_custom_props:
+  icon: heart-pulse
+---
+
+Argent can rebuild the input devices of an iOS simulator after the simulator stops receiving input. The agent runs this repair when taps, hardware buttons or typed text do not reach the app.
+
+## When input stops
+
+Xcode 27 replaces Simulator.app with DeviceHub. DeviceHub connects to every simulator that starts. That connection moves the simulator input devices to CoreDevice. The simulator then removes three input devices: the touch screen, the hardware buttons, and the keyboard.
+
+Argent still sends the events. The tools still report success. The events do not reach the app.
+
+Argent protects a simulator during startup. See [Supported platforms](/docs/fundamentals/supported-platforms#devicehub-and-simulator-input). On iOS 26 and later, the protection is often too late for the hardware buttons and the keyboard.
+
+## How the agent recognizes the condition
+
+| Symptom                                                      | Meaning                                       |
+| ------------------------------------------------------------ | --------------------------------------------- |
+| `keyboard` reports the typed keys, the field does not change | The keyboard device is not connected          |
+| `button` reports the press, the app stays in the foreground  | The hardware button device is not connected   |
+| `gesture-tap` works                                          | The touch screen device survived the teardown |
+
+The agent confirms the symptom with `describe`. The field shows the same value as before the tool call.
+
+## The repair
+
+The agent runs the `revive-simulator-hid` tool. The tool rebuilds the three input devices. The tool then restores taps, hardware buttons and typed text.
+
+The repair has two effects that you must know:
+
+- The tool closes the app in the foreground.
+- The tool restarts the home screen of the simulator.
+
+Start your app again after the tool completes. Argent does not run this tool when a simulator starts, because the tool closes the app.
+
+The repair applies to iOS simulators only. A physical iPhone, an Android device and a Chromium app do not have this condition.
+
+Argent does this with the `revive-simulator-hid` tool. The [tools reference](/docs/reference/tools) contains all tools.
