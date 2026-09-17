@@ -245,7 +245,6 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-/** A step's kind and target, plus the fragment it came from when that is not the top flow. */
 function stepLabel(s: StepReport, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
@@ -380,11 +379,6 @@ export function renderBatchSummary(
   return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
 }
 
-/**
- * One failed flow in the recap printed above the verdict. `path` and `rerun`
- * are for a directory run; a single run names its flow in its header and was
- * just typed by the user.
- */
 interface FailedFlow {
   path?: string;
   headline: string;
@@ -418,15 +412,10 @@ function renderFailedFlow(f: FailedFlow): string[] {
   return lines;
 }
 
-/**
- * A single run's recap of its failure, so a long flow that failed early still
- * shows why at the bottom. Empty when the run passed.
- */
 export function renderSingleFailure(report: FlowReport): string[] {
   return report.ok ? [] : ["", ...renderFailedFlow(summarizeFailure(report))];
 }
 
-/** The section that ends a directory run with failures; empty when nothing failed. */
 export function renderFailedFlows(failed: readonly FailedFlow[]): string[] {
   if (failed.length === 0) return [];
   return [
@@ -1161,13 +1150,12 @@ interface BatchFlowResult {
 
 /**
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
- * steps and warnings, then its outcome (no live step lines), then the failed
- * flows with a re-run command each, then a flow-level summary; a flow failing
- * its steps — or one the tool-server rejects up front (a bad YAML, an
- * unparseable step, a device it cannot resolve) — lets the batch continue,
- * while a transport throw, a rejection the server does not mark as validation,
- * or a reply that is not a report stops it and counts the remaining flows
- * skipped.
+ * steps and warnings, then its outcome (no live step lines), then a flow-level
+ * summary; a flow failing its steps — or one the tool-server rejects up front
+ * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
+ * batch continue, while a transport throw, a rejection the server does not mark
+ * as validation, or a reply that is not a report stops it and counts the
+ * remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
