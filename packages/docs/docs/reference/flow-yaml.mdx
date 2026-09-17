@@ -374,7 +374,7 @@ The `Failed flows` section has one entry for each flow that failed. Each entry h
 - The flow path.
 - The first step that failed or errored, with its number. A flow without a report gives its outcome line instead.
 - The reason of that step, or the error message of a flow without a report.
-- A `re-run:` command that runs only that flow. The command uses the same `--device` and `--platform` values as the directory run.
+- A `re-run:` command that runs only that flow. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that flow to the same directory as the directory run.
 
 The section does not include the flows that Argent skipped.
 

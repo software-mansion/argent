@@ -2342,6 +2342,44 @@ describe("argent flow run <dir>", () => {
     expect(parseRunArgs([shown]).flowRef).toBe(shown);
   });
 
+  it("re-runs with the batch's --update-baselines, exporting where the batch exported", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login", ok: false, steps: [] }) })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({ data: report({ flow: "c-search", ok: false, steps: [] }) });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "./flows", "-r", "--update-baselines", "--output", "out"], opts)
+      ).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain(
+      `    re-run: argent flow run ${path.join("flows", "a-login.yaml")} --update-baselines --output out`
+    );
+    expect(lines).toContain(
+      `    re-run: argent flow run ${path.join("flows", "sub", "c-search.yaml")} --update-baselines --output ${path.join("out", "sub")}`
+    );
+  });
+
+  it("re-runs with an --output that starts with a dash through ./, not as an option", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "a-login", ok: false, steps: [] }),
+    });
+
+    await expect(flow(["run", flowsDir, "--output=-out"], opts)).rejects.toThrow("process.exit:1");
+
+    const shown = `.${path.sep}-out`;
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent flow run ${path.join(flowsDir, "a-login.yaml")} --output ${shown}`
+    );
+    expect(parseRunArgs(["a-login.yaml", "--output", shown]).output).toBe(shown);
+  });
+
   it("repeats a rejected flow's server message in the recap, as it went to stderr", async () => {
     toolsClientMock.callTool
       .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
