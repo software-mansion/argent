@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 4
 sidebar_label: Test driver shims
 title: Test driver shims
 sidebar_custom_props:
@@ -56,13 +56,12 @@ The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the bin
 
 ## Environment variables
 
-| Variable                          | Default                                     | Purpose                                                           |
-| --------------------------------- | ------------------------------------------- | ----------------------------------------------------------------- |
-| `SIM_REMOTE_SHIM_DIR`             | See `--dir`                                 | The shim directory. The printed code also exports it              |
-| `SIM_REMOTE_BIN`                  | Set by the printed code                     | The absolute path of the `sim-remote` binary that the shims call  |
-| `SIM_REMOTE_SHIM_XCODE_VERSION`   | `26.0`                                      | The Xcode version that the stand-in `Xcode.app` reports to Appium |
-| `SIM_REMOTE_XCODE_SIM_DEV`        | The Xcode in `/Applications` on the machine | The Xcode location on the machine, used for the XCTest runtime    |
-| `SIM_REMOTE_FORCE_RUNNER_INSTALL` | Unset                                       | Set to `1` to install the test runner on every run                |
+| Variable                          | Default                 | Purpose                                                           |
+| --------------------------------- | ----------------------- | ----------------------------------------------------------------- |
+| `SIM_REMOTE_SHIM_DIR`             | See `--dir`             | The shim directory. The printed code also exports it              |
+| `SIM_REMOTE_BIN`                  | Set by the printed code | The absolute path of the `sim-remote` binary that the shims call  |
+| `SIM_REMOTE_SHIM_XCODE_VERSION`   | `26.0`                  | The Xcode version that the stand-in `Xcode.app` reports to Appium |
+| `SIM_REMOTE_FORCE_RUNNER_INSTALL` | Unset                   | Set to `1` to install the test runner on every run                |
 
 ## Known limits
 
