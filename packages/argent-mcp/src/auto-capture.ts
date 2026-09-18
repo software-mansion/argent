@@ -94,6 +94,25 @@ export function shouldAutoDescribe(toolName: string): boolean {
 }
 
 /**
+ * The text block appended after an action, or null when the describe result
+ * carries nothing to show. `hint` is describe's only prose channel, and a read
+ * that failed still renders a few hundred characters of tree preamble with no
+ * elements under it - so without the hint the block reads as an empty screen
+ * rather than as a failed read.
+ */
+export function renderAutoDescribe(result: unknown): string | null {
+  const data = result as { description?: unknown; hint?: unknown } | null | undefined;
+  const parts: string[] = [];
+  if (typeof data?.description === "string" && data.description.length > 0) {
+    parts.push(data.description);
+  }
+  if (typeof data?.hint === "string" && data.hint.trim().length > 0) {
+    parts.push(data.hint.trim());
+  }
+  return parts.length === 0 ? null : `${AUTO_DESCRIBE_HEADER}\n${parts.join("\n\n")}`;
+}
+
+/**
  * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
  * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
  * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
