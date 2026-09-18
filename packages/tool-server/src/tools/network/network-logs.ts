@@ -20,6 +20,20 @@ function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
 
+/**
+ * How long capture has been running, phrased so the magnitude does the talking:
+ * "0.04 s" reads as "you have learned nothing yet", "14 min" reads as "this
+ * empty result means something". That is why the empty message quotes a number
+ * instead of picking a threshold and claiming "just started" on one side of it.
+ */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes} min ${Math.round((ms % 60_000) / 1000)} s`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
 interface LogEntry {
   id: number;
   requestId: string;
@@ -152,10 +166,31 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
 
     // Zero-length slice: reuses the read script's Metro filtering just to get the total.
     const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
-    const { total } = JSON.parse(countRaw as string) as { total: number };
+    const {
+      total,
+      interceptorInstalled: countInterceptorInstalled,
+      capturedForMs,
+    } = JSON.parse(countRaw as string) as {
+      total: number;
+      interceptorInstalled?: boolean;
+      capturedForMs?: number | null;
+    };
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() calls.";
+      // An empty log is only meaningful if you know capture was running, and for
+      // how long. Reporting "interception is active" without that made a window
+      // of a few milliseconds indistinguishable from a genuine "no requests".
+      if (countInterceptorInstalled === false) {
+        return "No network traffic captured: fetch() interception is NOT installed (the JS runtime likely reloaded), so this says nothing about whether the app made requests; call view-network-logs again.";
+      }
+      if (capturedForMs == null) {
+        return "No network traffic captured; the capture start time is unknown (installed by an earlier session), so re-run the flow and call view-network-logs again.";
+      }
+      return (
+        `No network traffic captured in the ${formatElapsed(capturedForMs)} since fetch() capture started ` +
+        `(earlier requests, XMLHttpRequest/axios, WebSockets, native HTTP and Metro requests are not recorded); ` +
+        `re-run the flow and call view-network-logs again.`
+      );
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
@@ -175,7 +210,10 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     };
 
     if (!data.interceptorInstalled) {
-      return "Network interceptor not installed. Try reconnecting with network-inspector-connect.";
+      // Reachable when the runtime reloads between the count read above and this
+      // page read: the reload drops the interceptor and everything it captured.
+      // (The old text pointed at `network-inspector-connect`, which does not exist.)
+      return `Network capture was reset by a JS reload while reading page ${pageIndex + 1}; re-run the flow and call view-network-logs again.`;
     }
 
     const lines = data.entries.map(formatEntry);
