@@ -2,7 +2,13 @@ import { z } from "zod";
 import { type ToolCapability, type ToolContext, type ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import {
+  sendTouchEvent,
+  findOffScreenFinger,
+  describeOffScreenEdge,
+  type TwoFingerFrame,
+} from "../../utils/gesture-utils";
+import { InvalidToolInputError } from "../../utils/capability";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z
@@ -104,6 +110,36 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
     const radiusX = params.radiusX ?? params.radius!;
     const radiusY = params.radiusY ?? params.radius!;
 
+    // Build the swept frames before dispatching. Unlike a pinch, an arc is not
+    // monotonic between its endpoints — 0°→180° starts and ends near the centre
+    // line while passing a full radius away at 90° — so the only reliable check
+    // is over the frames that will actually be sent.
+    const frames: TwoFingerFrame[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
+      const angleRad = (angleDeg * Math.PI) / 180;
+
+      frames.push({
+        x1: params.centerX + radiusX * Math.cos(angleRad),
+        y1: params.centerY + radiusY * Math.sin(angleRad),
+        x2: params.centerX - radiusX * Math.cos(angleRad),
+        y2: params.centerY - radiusY * Math.sin(angleRad),
+      });
+    }
+
+    const offScreen = findOffScreenFinger(frames);
+    if (offScreen) {
+      const sweptDeg =
+        params.startAngle +
+        (params.endAngle - params.startAngle) * (offScreen.frameIndex / Math.max(1, steps));
+      throw new InvalidToolInputError(
+        `gesture-rotate: finger ${offScreen.axis} = ${offScreen.value} at ${Math.round(sweptDeg)}° of ` +
+          `the sweep is off-screen (${describeOffScreenEdge(offScreen.axis, offScreen.value)}); reduce ` +
+          `the radius, move the center, or sweep a narrower arc.`
+      );
+    }
+
     let timestampMs = 0;
     // Last dispatched positions, so an abort lifts from where the fingers are.
     let lastX1 = 0;
@@ -111,7 +147,7 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
     let lastX2 = 0;
     let lastY2 = 0;
 
-    for (let i = 0; i <= steps; i++) {
+    for (const [i, frame] of frames.entries()) {
       if (ctx?.signal?.aborted) {
         const err = new Error(
           `gesture-rotate aborted — cancelled mid-gesture after ${i} of ${steps + 1} frames`
@@ -130,23 +166,14 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
         throw err;
       }
 
-      const t = i / steps;
-      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
-      const angleRad = (angleDeg * Math.PI) / 180;
-
-      const x1 = params.centerX + radiusX * Math.cos(angleRad);
-      const y1 = params.centerY + radiusY * Math.sin(angleRad);
-      const x2 = params.centerX - radiusX * Math.cos(angleRad);
-      const y2 = params.centerY - radiusY * Math.sin(angleRad);
-
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      await sendTouchEvent(api, type, x1, y1, x2, y2);
-      lastX1 = x1;
-      lastY1 = y1;
-      lastX2 = x2;
-      lastY2 = y2;
+      await sendTouchEvent(api, type, frame.x1, frame.y1, frame.x2, frame.y2);
+      lastX1 = frame.x1;
+      lastY1 = frame.y1;
+      lastX2 = frame.x2;
+      lastY2 = frame.y2;
       if (i < steps) await sleep(16);
     }
 
