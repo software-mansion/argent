@@ -330,3 +330,32 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
     expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
   });
 });
+
+describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter under an unwritable ~/.argent", () => {
+  let argentDir: string;
+
+  beforeEach(() => {
+    argentDir = path.join(os.homedir(), ".argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.chmodSync(argentDir, 0o500);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(argentDir, 0o700);
+  });
+
+  it("counts entries without a file instead of throwing when the log directory cannot be created", () => {
+    let unwritable: LogFileWriter | undefined;
+    expect(() => {
+      unwritable = new LogFileWriter(9998);
+    }).not.toThrow();
+    const w = unwritable as LogFileWriter;
+
+    expect(fs.existsSync(path.dirname(w.getFilePath()))).toBe(false);
+    expect(w.hasFile()).toBe(false);
+    expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
+    expect(w.getStats().totalEntries).toBe(1);
+    expect(w.readAll()).toEqual([]);
+    w.close();
+  });
+});
