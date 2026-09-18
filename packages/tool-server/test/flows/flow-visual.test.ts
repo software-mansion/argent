@@ -294,6 +294,43 @@ describe("runSnapshot baselines", () => {
     });
   });
 
+  it("prints a sub-0.005% diff at the precision it failed on, not as 0.00%", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    // 25 pixels of a 1000x1336 capture — under a zero tolerance, which two
+    // decimals would round onto: `diff 0.00% > 0%`, whose expected/actual pair
+    // says the step should have passed.
+    h.mismatchPercentage = 0.00187;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0 }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("diff 0.002% > 0%");
+    expect(r).toMatchObject({ expected: "≤ 0%", actual: "0.002%" });
+  });
+
+  it("prints a diff that rounds onto a non-zero tolerance at more precision", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.mismatchPercentage = 0.5004;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0.5 }));
+
+    expect(r.status).toBe("fail");
+    expect(r).toMatchObject({ expected: "≤ 0.5%", actual: "0.5004%" });
+  });
+
+  it("keeps two decimals on a pass the rounding cannot contradict", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.mismatchPercentage = 0.4996;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0.5 }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("diff 0.50% ≤ 0.5%");
+  });
+
   it("fails without a diff artifact when the differ produced no context image", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());

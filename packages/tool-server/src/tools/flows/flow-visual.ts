@@ -125,6 +125,31 @@ async function cropPngFile(
 }
 
 /**
+ * The measured diff, printed with just enough decimals to stay on the side of
+ * the tolerance the comparison put it on.
+ *
+ * Two decimals read best, but the comparison runs at full precision, so a
+ * rounded value can contradict the verdict it is printed with: a 0.0028% diff
+ * against a `maxMismatch: 0` failed as `diff 0.00% > 0%`, and the step's own
+ * `expected: ≤ 0%` / `actual: 0.00%` pair then said the value found satisfied
+ * the value wanted. Any tolerance below 0.005% reads that way, and so does a
+ * real mismatch that rounds down onto the tolerance.
+ *
+ * Widening stops at 8 decimals. One pixel of the largest capture this runner
+ * takes is orders of magnitude above that, so a diff and a tolerance closer
+ * than 1e-8 of a percentage point cannot be measured apart; the exponential
+ * form is a last resort that keeps the value honest rather than exact.
+ */
+function formatMismatch(measured: number, tolerance: number): string {
+  const within = measured <= tolerance;
+  for (let decimals = 2; decimals <= 8; decimals += 1) {
+    const shown = measured.toFixed(decimals);
+    if (Number(shown) <= tolerance === within) return `${shown}%`;
+  }
+  return `${measured.toExponential(2)}%`;
+}
+
+/**
  * Capture the current screen and compare it to a stored baseline keyed by
  * authoring platform + resolution. A missing baseline FAILS the step — adopting
  * one is always an explicit `updateBaselines` gesture. The key is derived from the
@@ -383,7 +408,7 @@ export async function runSnapshot(
       }
 
       const within = result.mismatchPercentage <= opts.maxMismatch;
-      const measured = `${result.mismatchPercentage.toFixed(2)}%`;
+      const measured = formatMismatch(result.mismatchPercentage, opts.maxMismatch);
       const reason = `diff ${measured} ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason };
