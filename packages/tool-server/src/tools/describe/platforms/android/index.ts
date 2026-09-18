@@ -16,6 +16,35 @@ import {
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
+/**
+ * A read that saw only system chrome — the screen is off, or a lock screen is
+ * up — and therefore says nothing about the app.
+ *
+ * Decided from counts the helper already returns, so it costs no extra round
+ * trip: `nodeCount` is what the accessibility layer handed over, and
+ * `renderedChildren` is what survived pruning. Everything pruned means the only
+ * window on screen was `com.android.systemui`, which is exactly what both a
+ * powered-off display and a keyguard look like. Measured on a Pixel_9 emulator:
+ * app 62/2, launcher 64/7, screen off 28/0, keyguard 73/0.
+ *
+ * Note `windowCount` is NOT the signal — it stays 1 with the display off,
+ * because the keyguard window is still there.
+ */
+function blindReadHint(
+  nodeCount: number | undefined,
+  renderedChildren: number
+): string | undefined {
+  // Fail open on an unknown count — an older helper that does not report one
+  // must not turn every sparse screen into a blind read.
+  if (renderedChildren > 0 || !Number.isFinite(nodeCount) || (nodeCount ?? 0) <= 0) {
+    return undefined;
+  }
+  return (
+    "Blind read: only system UI is on screen (display off or locked), so this tree says nothing " +
+    "about the app; wake the device (`button` power), unlock, and describe again."
+  );
+}
+
 // Android TV keeps a readable uiautomator tree (unlike tvOS, which describe
 // short-circuits), so point at the focus-driven tools instead of blocking it.
 const ANDROID_TV_HINT =
@@ -46,16 +75,21 @@ export async function describeAndroid(
       const device = resolveDevice(serial);
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-      const [{ xml }, size] = await Promise.all([
+      const [hierarchy, size] = await Promise.all([
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
       const tree = await awaitWebViewPublished(
-        parseUiAutomatorDump(xml, size.width, size.height),
+        parseUiAutomatorDump(hierarchy.xml, size.width, size.height),
         async () =>
           parseUiAutomatorDump((await devtools.getHierarchy()).xml, size.width, size.height)
       );
-      return { tree, source: "android-devtools", hint };
+      const blindHint = blindReadHint(hierarchy.nodeCount, tree.children.length);
+      return {
+        tree,
+        source: "android-devtools",
+        hint: [hint, blindHint].filter(Boolean).join(" ") || undefined,
+      };
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
       // shouldn't leak into the per-call result.
