@@ -1,6 +1,6 @@
 {
   "name": "@argent/ios-device-runner",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "private": true,
   "description": "Argent's XCUITest on-device automation runner for physical iOS devices."
 }
