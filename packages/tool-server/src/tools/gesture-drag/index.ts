@@ -127,6 +127,13 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
       err.name = "AbortError";
       return err;
     };
+    // Marks the button up before dispatching, so a release that rejects is not
+    // retried by the recovery path below.
+    let buttonDown = false;
+    const release = async (x: number, y: number): Promise<void> => {
+      buttonDown = false;
+      await chromium.dispatchMouseEvent({ type: "mouseReleased", x, y, clickCount: 1 });
+    };
     // Release where the pointer is: the delivered press would otherwise capture
     // every later click, and releasing at the end point delivers travel the caller
     // cancelled. Best effort - a cancel is when the CDP session can be going away
@@ -135,12 +142,7 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     const releaseAndAbort = async (frame: number): Promise<never> => {
       const err = abortError(frame);
       try {
-        await chromium.dispatchMouseEvent({
-          type: "mouseReleased",
-          x: lastX,
-          y: lastY,
-          clickCount: 1,
-        });
+        await release(lastX, lastY);
       } catch (releaseErr) {
         err.cause = releaseErr;
       }
@@ -154,31 +156,36 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
       y: startPx.y,
       clickCount: 1,
     });
-    for (let i = 1; i < steps; i++) {
-      if (ctx?.signal?.aborted) await releaseAndAbort(i);
-      await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
-      const t = i / steps;
-      const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
-      const x = startPx.x + (endPx.x - startPx.x) * progress;
-      const y = startPx.y + (endPx.y - startPx.y) * progress;
-      await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
-      lastX = x;
-      lastY = y;
+    buttonDown = true;
+    try {
+      for (let i = 1; i < steps; i++) {
+        if (ctx?.signal?.aborted) await releaseAndAbort(i);
+        await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
+        const t = i / steps;
+        const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
+        const x = startPx.x + (endPx.x - startPx.x) * progress;
+        const y = startPx.y + (endPx.y - startPx.y) * progress;
+        await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
+        lastX = x;
+        lastY = y;
+      }
+      // The loop stops one short of the release, so the last frame is checked on
+      // both sides of its wait: before, to skip the wait; after, to catch an abort
+      // landing during it. Both report `steps` - a wait delivers no pointer events.
+      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
+      // Spend the last frame's wait here rather than on another move at the
+      // endpoint: a move followed by a still frame reads as a hold.
+      await sleep(Math.max(0, t0 + durationMs - Date.now()));
+      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
+      await release(endPx.x, endPx.y);
+    } catch (err) {
+      // A mid-drag dispatch that rejects leaves the renderer holding the button
+      // - the CDP session survives a timed-out send - and every later click on
+      // that page is then read as a drag. Best effort, and the caller keeps
+      // seeing the original failure.
+      if (buttonDown) await release(lastX, lastY).catch(() => {});
+      throw err;
     }
-    // The loop stops one short of the release, so the last frame is checked on
-    // both sides of its wait: before, to skip the wait; after, to catch an abort
-    // landing during it. Both report `steps` - a wait delivers no pointer events.
-    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-    // Spend the last frame's wait here rather than on another move at the
-    // endpoint: a move followed by a still frame reads as a hold.
-    await sleep(Math.max(0, t0 + durationMs - Date.now()));
-    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-    await chromium.dispatchMouseEvent({
-      type: "mouseReleased",
-      x: endPx.x,
-      y: endPx.y,
-      clickCount: 1,
-    });
     return { dragged: true, timestampMs };
   },
 };
