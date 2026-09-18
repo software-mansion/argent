@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 let currentTree: () => DescribeNode;
+/** The reader's own flags, set by the blind-read tests (Vega's shape). */
+let currentFlags: Pick<DescribeTreeData, "hint" | "should_restart"> = {};
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
       source: "native-devtools",
+      ...currentFlags,
     })
   ),
 }));
@@ -17,6 +20,7 @@ const { run, writeFlow } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-failure-details-",
   reset: () => {
     currentTree = () => screen([]);
+    currentFlags = {};
   },
 });
 
@@ -73,6 +77,65 @@ describe("tap-family selector misses", () => {
       );
     }
   }, 15_000);
+});
+
+describe("selector misses on a screen that was never read", () => {
+  // The reader answered with an empty tree AND its own "I could not see the app"
+  // flags — an unattached Vega toolkit, or an AX service asking for a relaunch.
+  // "no element matched" is a claim about what the screen holds, and this read
+  // supports no such claim.
+  const VEGA_HINT =
+    "No UI tree from the Vega automation toolkit. The toolkit attaches at app launch — " +
+    "relaunch the foreground app.";
+
+  it("refuses a verdict and gives the reader's repair, not the scroll-to advice", async () => {
+    currentTree = () => screen([]);
+    currentFlags = { hint: VEGA_HINT };
+    await writeFlow("blind-tap", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Home" } }],
+    });
+
+    const [step] = (await run("blind-tap")).steps;
+
+    expect(step).toMatchObject({ status: "fail", indeterminate: true, hint: VEGA_HINT });
+    expect(step.reason).toBe(
+      'the UI tree read back empty and degraded, so text="Home" was never looked for — this is ' +
+        "the reader reporting it could not see the app, not the app rendering nothing"
+    );
+    expect(step.reason).not.toContain("no element matched");
+  }, 20_000);
+
+  it("falls back to the shared re-run hint when the reader gave none", async () => {
+    currentTree = () => screen([]);
+    currentFlags = { should_restart: true };
+    await writeFlow("blind-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "search" }, text: "socks" }],
+    });
+
+    const [step] = (await run("blind-type")).steps;
+
+    expect(step).toMatchObject({ status: "fail", indeterminate: true, hint: INDETERMINATE_HINT });
+  }, 20_000);
+
+  it("still reports a genuinely empty screen as one, with the scroll-to hint", async () => {
+    // Same empty tree, no reader flags: the read IS evidence about the screen.
+    currentTree = () => screen([]);
+    await writeFlow("empty-tap", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Home" } }],
+    });
+
+    const [step] = (await run("empty-tap")).steps;
+
+    expect(step).toMatchObject({
+      status: "fail",
+      reason: 'no element matched selector text="Home"',
+      hint: "if it is off-screen, add a scroll-to step before this one",
+    });
+    expect(step).not.toHaveProperty("indeterminate");
+  }, 20_000);
 });
 
 describe("text check failures", () => {

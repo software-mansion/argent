@@ -466,10 +466,14 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
 /**
  * Re-read the describe tree until two consecutive reads are identical — the UI
  * has settled (a scroll's fling has stopped, an animation finished). Returns the
- * stable tree, the last tree read on timeout (best effort), or undefined if the
- * run was aborted. Resolving a frame from a settled tree is what keeps a tap
- * from landing mid-deceleration (where a scroll view swallows it) or acting on a
+ * stable read, the last read on timeout (best effort), or undefined if the run
+ * was aborted. Resolving a frame from a settled tree is what keeps a tap from
+ * landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
+ *
+ * The whole read, not just its tree: a caller that finds no element has to tell
+ * an empty SCREEN from a reader that could not see the app, and only the
+ * reader's own `hint` / `should_restart` flags say which it was.
  *
  * Throws when EVERY read attempt failed: that is a tree-source outage
  * (`fetchFlowTree` refuses to degrade to a trimmed tree), not a mid-animation
@@ -495,10 +499,10 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
 export async function settleTree(
   env: ActionEnv,
   opts: { skipProvenOutage?: boolean } = {}
-): Promise<DescribeNode | undefined> {
+): Promise<DescribeTreeData | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
-  let prevTree: DescribeNode | undefined;
+  let prevRead: DescribeTreeData | undefined;
   let lastError: Error | undefined;
   let reads = 0;
   for (;;) {
@@ -511,9 +515,9 @@ export async function settleTree(
     // of the window would fail the slow cold start #778 raised
     // `ViewHierarchy.getFullHierarchy` to a 15s RPC tier to ride out.
     const read = await settleWithin(readFlowTree(env), undefined, env.signal);
-    let tree: DescribeNode | undefined;
+    let data: DescribeTreeData | undefined;
     if (read.type === "value") {
-      tree = read.value.tree;
+      data = read.value;
     } else if (read.type === "error") {
       // transient describe failure mid-navigation — retry until the deadline
       lastError = read.cause;
@@ -524,22 +528,22 @@ export async function settleTree(
     // gesture would still be dispatched after cancellation with the step
     // recorded as a pass instead of the uniform aborted skip.
     if (env.signal?.aborted) return undefined;
-    if (tree !== undefined) {
-      const fp = treeFingerprint(tree);
-      if (prevFp !== undefined && fp === prevFp) return tree;
+    if (data !== undefined) {
+      const fp = treeFingerprint(data.tree);
+      if (prevFp !== undefined && fp === prevFp) return data;
       prevFp = fp;
-      prevTree = tree;
+      prevRead = data;
     }
     if (Date.now() >= deadline) {
       // Owed another attempt: retry back-to-back rather than sleeping out a
       // poll interval the window no longer has (`waitForCondition`'s final
       // poll does the same). Bounded — `reads` rises on every pass.
       if (reads < SETTLE_MIN_READS) continue;
-      if (prevTree === undefined && lastError !== undefined) {
+      if (prevRead === undefined && lastError !== undefined) {
         if (env.treeOutage) env.treeOutage.proven = { deviceId: env.device.id, error: lastError };
         throw lastError;
       }
-      return prevTree;
+      return prevRead;
     }
     if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
   }
@@ -564,20 +568,28 @@ async function waitForFrames(
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   let unresolved = pending[0].selector;
   let lastTree: DescribeNode | undefined;
+  // The last settled read, when the reader itself flagged it as blind. Carried
+  // into the miss so the caller reports an unreadable screen as one.
+  let blind: DescribeTreeData | undefined;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
-    if (tree) {
-      const frames = selectors.map((s) => (s ? flowSelectorToFrame(tree, s) : undefined));
+    const read = await settleTree(env);
+    if (read) {
+      const frames = selectors.map((s) => (s ? flowSelectorToFrame(read.tree, s) : undefined));
       const missing = pending.find(({ i }) => frames[i] === undefined);
       if (!missing) return frames;
       unresolved = missing.selector;
-      lastTree = tree;
+      lastTree = read.tree;
+      blind = isBlindTreeRead(read) ? read : undefined;
     } else if (env.signal?.aborted) {
       return "aborted"; // settleTree bailed on the abort, not on a blank read
     }
     if (Date.now() >= deadline) {
-      return { unresolved, matched: lastTree ? flowFindAll(lastTree, unresolved).length : 0 };
+      return {
+        unresolved,
+        matched: lastTree ? flowFindAll(lastTree, unresolved).length : 0,
+        ...(blind !== undefined && { blind: { hint: blind.hint } }),
+      };
     }
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
@@ -592,6 +604,12 @@ async function waitForFrames(
 interface FrameMiss {
   unresolved: FlowSelector;
   matched: number;
+  /**
+   * The screen was never read: the last settled read came back empty with the
+   * reader's own "I could not see the app" flags on it. `hint` is the reader's
+   * repair, when it gave one.
+   */
+  blind?: { hint?: string };
 }
 
 /**
@@ -798,8 +816,9 @@ async function scrollToVisible(
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
-    if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
+    const read = await settleTree(env);
+    if (!read) return { aborted: true }; // settleTree only returns undefined on abort
+    const tree = read.tree;
 
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
@@ -857,11 +876,27 @@ async function scrollToVisible(
 // A zero-area match gets a wider hint: a tree source can keep an
 // off-screen node at zero area, and the same frame also means an element that
 // is hidden or not laid out.
-export function selectorMiss({ unresolved, matched }: FrameMiss): {
-  reason: string;
-  hint: string;
-} {
+//
+// A blind read gets neither: "no element matched" is a claim about what the
+// screen HOLDS, and a read the reader flagged as blind supports no such claim —
+// nothing was ever looked at, so scrolling cannot help and editing the flow is
+// the wrong move. `assert` and `idle` already refuse a verdict on that read;
+// this is the same refusal for the steps that resolve a frame.
+export function selectorMiss({
+  unresolved,
+  matched,
+  blind,
+}: FrameMiss): Pick<DirectiveOutcome, "reason" | "hint" | "indeterminate"> {
   const sel = describeSelector(unresolved);
+  if (blind) {
+    return {
+      indeterminate: true,
+      reason:
+        `the UI tree read back empty and degraded, so ${sel} was never looked for — this is the ` +
+        `reader reporting it could not see the app, not the app rendering nothing`,
+      ...(blind.hint !== undefined && { hint: blind.hint }),
+    };
+  }
   if (matched === 0) {
     return {
       reason: `no element matched selector ${sel}`,

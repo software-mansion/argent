@@ -613,6 +613,24 @@ describe("runSnapshot cropOn", () => {
     expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
   });
 
+  it("refuses a verdict when the cropOn read was blind, and carries the reader's repair", async () => {
+    // On Vega this is the reachable blind-read call site: the touch directives
+    // are refused before they resolve a selector, so `cropOn` is the step that
+    // would otherwise claim the screen does not hold the element.
+    const relaunch = "The toolkit attaches at app launch — relaunch the foreground app.";
+    h.cropFrame = { unresolved: cropOn, matched: 0, blind: { hint: relaunch } };
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.indeterminate).toBe(true);
+    expect(r.hint).toBe(relaunch);
+    expect(r.reason).toContain("read back empty and degraded");
+    expect(r.reason).not.toContain("no element matched");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
   it("skips without capturing when the run is aborted while resolving cropOn", async () => {
     h.cropFrame = "aborted";
     vi.mocked(invokeOnDevice).mockClear();

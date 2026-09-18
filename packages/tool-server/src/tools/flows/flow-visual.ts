@@ -32,7 +32,10 @@ export interface SnapshotArtifacts {
   diff?: ArtifactHandle;
 }
 
-interface VisualOutcome extends Pick<DirectiveOutcome, "hint" | "expected" | "actual"> {
+interface VisualOutcome extends Pick<
+  DirectiveOutcome,
+  "hint" | "expected" | "actual" | "indeterminate"
+> {
   status: "pass" | "fail" | "skip";
   reason?: string;
   /**
