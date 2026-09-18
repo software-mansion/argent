@@ -149,8 +149,11 @@ export function start(): void {
     );
   });
 
-  const PORT = parseInt(process.env.ARGENT_PORT ?? DEFAULT_PORT, 10);
-  const HOST = process.env.ARGENT_HOST ?? DEFAULT_HOST;
+  // An empty or blank override is an unset one: `export ARGENT_HOST=` would
+  // otherwise reach listen(), which reads "" as "no host" and binds every
+  // interface, with auth off unless ARGENT_AUTH_TOKEN is set.
+  const PORT = parseInt(process.env.ARGENT_PORT?.trim() || DEFAULT_PORT, 10);
+  const HOST = process.env.ARGENT_HOST?.trim() || DEFAULT_HOST;
   const idleMinutes = parseInt(
     process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? DEFAULT_IDLE_TIMEOUT_MINUTES,
     10
