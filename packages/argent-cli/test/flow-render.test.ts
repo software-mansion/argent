@@ -296,6 +296,32 @@ describe("flow report rendering", () => {
     ]);
   });
 
+  it("renderStepDetailLines prints a pattern in slash delimiters, backslashes intact", () => {
+    // The step line one row above prints the same pattern as /^Taps: \d\d\d$/.
+    // JSON quoting doubled every backslash here, so the printed pattern matched
+    // a literal backslash followed by `d` when it was copied back into the YAML.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: "^Taps: \\d\\d\\d$",
+      expectedKind: "pattern",
+      actual: "Taps: 0",
+    };
+    expect(renderStepDetailLines(step, 3)).toEqual([
+      "       expected: /^Taps: \\d\\d\\d$/",
+      '       actual:   "Taps: 0"',
+    ]);
+    // A literal keeps the JSON quoting the step line uses for one.
+    expect(renderStepDetailLines({ ...step, expectedKind: undefined }, 3)[0]).toBe(
+      '       expected: "^Taps: \\\\d\\\\d\\\\d$"'
+    );
+    // A control character in a pattern still cannot break the line.
+    expect(renderStepDetailLines({ ...step, expected: "^a\nb$" }, 3)[0]).toBe(
+      "       expected: /^a\\nb$/"
+    );
+  });
+
   it("renderStepDetailLines keeps a whitespace-only difference visible", () => {
     // The found text differs from the wanted one only by a line break. These
     // two lines are the only place a reader of the CLI output sees it.

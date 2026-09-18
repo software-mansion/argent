@@ -30,6 +30,11 @@ export interface StepReport {
   hint?: string;
   expected?: string;
   actual?: string;
+  /**
+   * Set by the tool-server when `expected` holds a regex source rather than a
+   * value to compare literally.
+   */
+  expectedKind?: "pattern";
   tool?: string;
   flow?: string;
   message?: string;
@@ -266,6 +271,16 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
 }
 
 /**
+ * Escape only the control characters of a value printed without quotes, each in
+ * its JSON spelling (`\n`, `\t`, `\u0007`). Everything else — a backslash
+ * above all — stays as the device reported it.
+ */
+function escapeControls(v: string): string {
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\u0000-\u001f]/g, (c) => JSON.stringify(c).slice(1, -1));
+}
+
+/**
  * The `expected:`, `actual:` and `hint:` lines of a step that did not pass.
  *
  * A control character is ESCAPED, never replaced: these lines are the only
@@ -279,9 +294,14 @@ export function renderStepDetailLines(s: StepReport, n: number): string[] {
   // they were written; a quoted value escapes its quotes with the rest.
   const oneLine = (v: string): string => JSON.stringify(v).slice(1, -1).replace(/\\"/g, '"');
   const value = (v: string): string => (s.kind === "snapshot" ? oneLine(v) : JSON.stringify(v));
+  // A pattern prints as its source in slash delimiters — the spelling the step
+  // line and the reason use — so it can be copied back into `matches:`. JSON
+  // quoting would double each backslash, making `\d` a literal backslash.
+  const expected = (v: string): string =>
+    s.expectedKind === "pattern" ? `/${escapeControls(v)}/` : value(v);
   const lines: string[] = [];
   if (typeof s.expected === "string") {
-    lines.push(renderUnderStepLine(s, n, `expected: ${value(s.expected)}`));
+    lines.push(renderUnderStepLine(s, n, `expected: ${expected(s.expected)}`));
   }
   if (typeof s.actual === "string") {
     lines.push(renderUnderStepLine(s, n, `actual:   ${value(s.actual)}`));

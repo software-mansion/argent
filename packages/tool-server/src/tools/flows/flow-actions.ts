@@ -168,6 +168,14 @@ export interface DirectiveOutcome {
   hint?: string;
   expected?: string;
   actual?: string;
+  /**
+   * `expected` holds a regex source, not a value to compare literally. The
+   * renderers print it in slash delimiters, the spelling the step line and the
+   * reason already use for a pattern (see `describeTextExpectation`); without
+   * the marker they quote it as a literal and every backslash doubles, so the
+   * printed form is a valid-looking pattern that means something else.
+   */
+  expectedKind?: "pattern";
 }
 
 const MAX_ACTUAL_CHARS = 300;
@@ -2294,7 +2302,7 @@ function assertReason(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>
-): Pick<DirectiveOutcome, "reason" | "expected" | "actual" | "hint"> {
+): Pick<DirectiveOutcome, "reason" | "expected" | "actual" | "hint" | "expectedKind"> {
   const sel = describeSelector(selector);
   switch (condition) {
     case "exists":
@@ -2323,6 +2331,7 @@ function assertReason(
       return {
         reason: `element matched ${sel} but its text did not ${wanted}`,
         expected: expectedText ?? "",
+        ...(textMatch === "matches" && { expectedKind: "pattern" as const }),
         actual: capActual(shown),
         ...(own !== "" &&
           own !== shown && {

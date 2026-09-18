@@ -612,6 +612,31 @@ describe("flowRunToMcpContent", () => {
     ]);
   });
 
+  it("prints a pattern expectation in slash delimiters, backslashes intact", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          target: "id=count matches /^Taps: \\d\\d\\d$/",
+          reason: 'element matched id="count" but its text did not match /^Taps: \\d\\d\\d$/',
+          expected: "^Taps: \\d\\d\\d$",
+          expectedKind: "pattern",
+          actual: "Taps: 0",
+        },
+      ],
+    });
+
+    // The reason one block above spells the pattern the same way. JSON quoting
+    // doubled every backslash, so the printed pattern meant something else.
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: ["  expected: /^Taps: \\d\\d\\d$/", '  actual:   "Taps: 0"'].join("\n"),
+    });
+  });
+
   it("adds no detail block for detail values that are not strings", async () => {
     const hostile = await flowRunToMcpContent({
       flow: "f",

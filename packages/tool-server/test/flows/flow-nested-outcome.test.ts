@@ -155,6 +155,28 @@ describe("a nested flow-execute reports its own verdict", () => {
     expect(result.steps[0].indeterminate).toBe(true);
   });
 
+  it("carries the pattern marker so the outer step prints the pattern as one", async () => {
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          reason: 'element matched id="count" but its text did not match /^Taps: \\d$/',
+          expected: "^Taps: \\d$",
+          expectedKind: "pattern",
+          actual: "Taps: 42",
+        },
+      ],
+    });
+
+    expect(result.steps[0].expected).toBe("^Taps: \\d$");
+    expect(result.steps[0].expectedKind).toBe("pattern");
+    // A value the inner step did not mark stays unmarked.
+    expect(result.steps[0].actual).toBe("Taps: 42");
+  });
+
   it("carries no detail fields when the failed inner step has none", async () => {
     const { result } = await run("flow-execute", FAILED_SUBFLOW);
 

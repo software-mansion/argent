@@ -20,7 +20,7 @@ const { run, writeFlow } = createFlowTestHarness({
   },
 });
 
-const DETAIL_KEYS = ["hint", "expected", "actual", "indeterminate"] as const;
+const DETAIL_KEYS = ["hint", "expected", "actual", "expectedKind", "indeterminate"] as const;
 
 const INDETERMINATE_HINT =
   "check the app first — a crash, or a screen the app emptied itself, reads the same here as a " +
@@ -90,6 +90,8 @@ describe("text check failures", () => {
       actual: "Total $41.50",
       hint: `the element's own text is "$41.50"; the check accepts the subtree text or the own text`,
     });
+    // A literal expectation carries no pattern marker, so the renderers quote it.
+    expect(step).not.toHaveProperty("expectedKind");
   });
 
   it("caps a long actual text at 300 characters and keeps it out of the reason", async () => {

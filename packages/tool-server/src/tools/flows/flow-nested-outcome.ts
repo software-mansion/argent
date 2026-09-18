@@ -37,10 +37,14 @@ interface NestedOutcome {
   hint?: string;
   expected?: string;
   actual?: string;
+  expectedKind?: "pattern";
   indeterminate?: true;
 }
 
-type NestedDetails = Pick<NestedOutcome, "hint" | "expected" | "actual" | "indeterminate">;
+type NestedDetails = Pick<
+  NestedOutcome,
+  "hint" | "expected" | "actual" | "expectedKind" | "indeterminate"
+>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -67,6 +71,7 @@ function firstFailingStep(steps: unknown): ({ label: string } & NestedDetails) |
       label: `${what}: ${why}`,
       ...(hint !== undefined && { hint }),
       ...(expected !== undefined && { expected }),
+      ...(entry.expectedKind === "pattern" && { expectedKind: "pattern" as const }),
       ...(actual !== undefined && { actual }),
       ...(entry.indeterminate === true && { indeterminate: true as const }),
     };

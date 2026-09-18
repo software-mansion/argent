@@ -206,6 +206,8 @@ export interface StepReport {
   hint?: string;
   expected?: string;
   actual?: string;
+  /** `expected` holds a regex source: renderers print it in slash delimiters. */
+  expectedKind?: "pattern";
   indeterminate?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
@@ -2367,12 +2369,13 @@ const INDETERMINATE_HINT =
   "before you edit the flow";
 
 function outcomeDetails(
-  r: Pick<DirectiveOutcome, "indeterminate" | "hint" | "expected" | "actual">
-): Pick<StepReport, "hint" | "expected" | "actual" | "indeterminate"> {
+  r: Pick<DirectiveOutcome, "indeterminate" | "hint" | "expected" | "actual" | "expectedKind">
+): Pick<StepReport, "hint" | "expected" | "actual" | "expectedKind" | "indeterminate"> {
   const hint = r.hint ?? (r.indeterminate ? INDETERMINATE_HINT : undefined);
   return {
     ...(hint !== undefined && { hint }),
     ...(r.expected !== undefined && { expected: r.expected }),
+    ...(r.expectedKind !== undefined && { expectedKind: r.expectedKind }),
     ...(r.actual !== undefined && { actual: r.actual }),
     ...(r.indeterminate && { indeterminate: true as const }),
   };

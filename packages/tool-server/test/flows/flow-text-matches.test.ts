@@ -219,6 +219,10 @@ describe("text matches: execution", () => {
     expect(result.steps[0]).toMatchObject({
       reason: 'element matched id="counter" but its text did not match /^Taps: \\d$/',
       expected: "^Taps: \\d$",
+      // The renderers print `expected` in slash delimiters on this marker. Without
+      // it they quote the pattern as a literal and double every backslash, so the
+      // printed pattern matches a backslash followed by `d`.
+      expectedKind: "pattern",
       actual: "Taps: 42",
     });
   });
