@@ -2,7 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import {
-  assertAmStartOk,
+  assertAmStartLaunched,
   normalizeActivityComponent,
   resolveLauncherActivity,
 } from "../../launch-app/platforms/android";
@@ -27,8 +27,12 @@ export const androidImpl: PlatformImpl<
     const out = await adbShell(udid, `am start -W -n ${shellQuote(component)}`, {
       timeoutMs: 30_000,
     });
+    let note: string | undefined;
     try {
-      assertAmStartOk(out);
+      // `await` inside the try is load-bearing: without it the rejection would
+      // escape this handler entirely and a failed relaunch would return
+      // `restarted: true`.
+      note = await assertAmStartLaunched(udid, component, out);
     } catch (err) {
       throw new FailureError(
         `relaunch failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -41,6 +45,6 @@ export const androidImpl: PlatformImpl<
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
-    return { restarted: true, bundleId };
+    return { restarted: true, bundleId, ...(note ? { note } : {}) };
   },
 };
